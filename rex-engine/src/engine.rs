@@ -1217,6 +1217,78 @@ where
             }),
         );
 
+        this.register(
+            ns,
+            "list_max_by",
+            fn_async2(|ctx, f: Func<A, i64>, xs: Vec<A>| {
+                Box::pin(async move {
+                    if xs.is_empty() {
+                        return Err("List is empty".into());
+                    }
+
+                    let mut max_elem = xs[0].clone();
+                    let mut max_key = i64::try_decode(&apply(ctx, &f, &max_elem, None).await?)?;
+
+                    for x in &xs[1..] {
+                        let key = i64::try_decode(&apply(ctx, &f, x, None).await?)?;
+                        if key > max_key {
+                            max_key = key;
+                            max_elem = x.clone();
+                        }
+                    }
+                    Ok(max_elem)
+                })
+            }),
+        );
+
+        this.register(
+            ns,
+            "list_max_by",
+            fn_async2(|ctx, f: Func<A, u64>, xs: Vec<A>| {
+                Box::pin(async move {
+                    if xs.is_empty() {
+                        return Err("List is empty".into());
+                    }
+
+                    let mut max_elem = xs[0].clone();
+                    let mut max_key = u64::try_decode(&apply(ctx, &f, &max_elem, None).await?)?;
+
+                    for x in &xs[1..] {
+                        let key = u64::try_decode(&apply(ctx, &f, x, None).await?)?;
+                        if key > max_key {
+                            max_key = key;
+                            max_elem = x.clone();
+                        }
+                    }
+                    Ok(max_elem)
+                })
+            }),
+        );
+
+        this.register(
+            ns,
+            "list_max_by",
+            fn_async2(|ctx, f: Func<A, f64>, xs: Vec<A>| {
+                Box::pin(async move {
+                    if xs.is_empty() {
+                        return Err("List is empty".into());
+                    }
+
+                    let mut max_elem = xs[0].clone();
+                    let mut max_key = f64::try_decode(&apply(ctx, &f, &max_elem, None).await?)?;
+
+                    for x in &xs[1..] {
+                        let key = f64::try_decode(&apply(ctx, &f, x, None).await?)?;
+                        if key > max_key {
+                            max_key = key;
+                            max_elem = x.clone();
+                        }
+                    }
+                    Ok(max_elem)
+                })
+            }),
+        );
+
         Ok(this)
     }
 
