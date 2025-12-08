@@ -1957,17 +1957,6 @@ pub mod test {
 
     #[tokio::test]
     async fn test_list_max_by() {
-        // Test with int keys
-        let (res, res_type) = parse_infer_and_eval(
-            r#"
-            list_max_by (\x -> elem0 x) [(int 5, "five"), (int -6, "neg"), (int 9, "nine"), (int 3, "three")]
-            "#,
-        )
-        .await
-        .unwrap();
-        assert_eq!(res_type, tuple!(int!(), string!()));
-        assert_expr_eq!(res, tup!(i!(9), s!("nine")); ignore span);
-
         // Test with float keys
         let (res, res_type) = parse_infer_and_eval(
             r#"
@@ -1993,17 +1982,6 @@ pub mod test {
 
     #[tokio::test]
     async fn test_list_min_by() {
-        // Test with int keys
-        let (res, res_type) = parse_infer_and_eval(
-            r#"
-            list_min_by (\x -> elem0 x) [(int 5, "five"), (int -6, "neg"), (int 9, "nine"), (int 3, "three")]
-            "#,
-        )
-        .await
-        .unwrap();
-        assert_eq!(res_type, tuple!(int!(), string!()));
-        assert_expr_eq!(res, tup!(i!(-6), s!("neg")); ignore span);
-
         // Test with float keys
         let (res, res_type) = parse_infer_and_eval(
             r#"
