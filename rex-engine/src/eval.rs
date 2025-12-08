@@ -1956,6 +1956,56 @@ pub mod test {
     }
 
     #[tokio::test]
+    async fn test_list_max_by() {
+        // Test with float keys
+        let (res, res_type) = parse_infer_and_eval(
+            r#"
+            list_max_by (\x -> elem0 x) [(5.0, "five"), (9.5, "nine"), (-6.5, "neg"), (3.0, "three")]
+            "#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_type, tuple!(float!(), string!()));
+        assert_expr_eq!(res, tup!(f!(9.5), s!("nine")); ignore span);
+
+        // Test with more complex key function
+        let (res, res_type) = parse_infer_and_eval(
+            r#"
+            list_max_by (\x -> elem1 x) [("a", 5.0), ("b", 9.5), ("c", -6.5), ("d", 3.0)]
+            "#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_type, tuple!(string!(), float!()));
+        assert_expr_eq!(res, tup!(s!("b"), f!(9.5)); ignore span);
+    }
+
+    #[tokio::test]
+    async fn test_list_min_by() {
+        // Test with float keys
+        let (res, res_type) = parse_infer_and_eval(
+            r#"
+            list_min_by (\x -> elem0 x) [(5.0, "five"), (9.5, "nine"), (-6.5, "neg"), (3.0, "three")]
+            "#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_type, tuple!(float!(), string!()));
+        assert_expr_eq!(res, tup!(f!(-6.5), s!("neg")); ignore span);
+
+        // Test with more complex key function
+        let (res, res_type) = parse_infer_and_eval(
+            r#"
+            list_min_by (\x -> elem1 x) [("a", 5.0), ("b", 9.5), ("c", -6.5), ("d", 3.0)]
+            "#,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res_type, tuple!(string!(), float!()));
+        assert_expr_eq!(res, tup!(s!("c"), f!(-6.5)); ignore span);
+    }
+
+    #[tokio::test]
     async fn test_match_result() {
         let (res, res_type) = parse_infer_and_eval(
             r#"

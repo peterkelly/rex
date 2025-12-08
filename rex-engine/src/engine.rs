@@ -1217,6 +1217,60 @@ where
             }),
         );
 
+        // Note: list_max_by and list_min_by only support float (f64) return types.
+        // This limitation exists because the type system cannot disambiguate between
+        // i64, u64, and f64 overloads when the return type comes from a function argument.
+        // Functions like list_max work because they operate directly on lists where the
+        // element type disambiguates the overload.
+        this.register(
+            ns,
+            "list_max_by",
+            fn_async2(|ctx, f: Func<A, f64>, xs: Vec<A>| {
+                Box::pin(async move {
+                    if xs.is_empty() {
+                        return Err("List is empty".into());
+                    }
+
+                    let mut max_elem = xs[0].clone();
+                    let mut max_key = f64::try_decode(&apply(ctx, &f, &max_elem, None).await?)?;
+
+                    for x in &xs[1..] {
+                        let key = f64::try_decode(&apply(ctx, &f, x, None).await?)?;
+                        if key > max_key {
+                            max_key = key;
+                            max_elem = x.clone();
+                        }
+                    }
+                    Ok(max_elem)
+                })
+            }),
+        );
+
+        // See note above list_max_by regarding float-only limitation
+        this.register(
+            ns,
+            "list_min_by",
+            fn_async2(|ctx, f: Func<A, f64>, xs: Vec<A>| {
+                Box::pin(async move {
+                    if xs.is_empty() {
+                        return Err("List is empty".into());
+                    }
+
+                    let mut min_elem = xs[0].clone();
+                    let mut min_key = f64::try_decode(&apply(ctx, &f, &min_elem, None).await?)?;
+
+                    for x in &xs[1..] {
+                        let key = f64::try_decode(&apply(ctx, &f, x, None).await?)?;
+                        if key < min_key {
+                            min_key = key;
+                            min_elem = x.clone();
+                        }
+                    }
+                    Ok(min_elem)
+                })
+            }),
+        );
+
         Ok(this)
     }
 
