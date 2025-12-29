@@ -1,0 +1,9 @@
+[package]
+name = "rex"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rex-ast = { workspace = true }
+rex-lexer = { workspace = true }
+rex-parser = { workspace = true }
