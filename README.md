@@ -22,6 +22,17 @@ map (λx → 2 * x) [1, 2, 3, 4]
 map ((*) 2) [1, 2, 3, 4]
 ```
 
+## Syntax Reference
+
+- Programs are a single expression; whitespace (including newlines) is ignored outside of strings and comments. Block comments use `{- ... -}` and are stripped before parsing.
+- Identifiers start with `_` or a letter and can contain numbers and underscores. Operators such as `+`, `-`, `*`, `/`, `==`, `<`, `>`, `++`, `&&`, `||`, and `.` are parsed as infix functions, so `(+) 2` and `(-) 4` work for partial application.
+- Function application is left-associative: `f x y` is parsed as `(f x) y`. Parentheses control grouping when mixing applications and infix operators.
+- Operator precedence (high to low): `.` > `* / %` > `+ - ++` > `== != < <= > >=` > `&&` > `||`.
+- Core expression forms:
+  - Literals: booleans, integers, floats, strings, UUIDs, datetimes.
+  - Collections: tuples `(e1, e2)`, lists `[e1, e2]`, dictionaries `{ key = value }`.
+  - Functions and control flow: lambdas `\x y -> body` (also accepts `λ` and `→`), let-in bindings `let x = e1, y = e2 in body`, and conditionals `if cond then a else b`.
+
 ## Let-in
 
 We can assign variable names to expressions, allowing them to be re-used multiple times. This can help to simplify our Rex code. To create a variable, we need to use a let-in expression.
@@ -195,6 +206,37 @@ More clearly says "apply foo and then bar and then baz" than:
 
 ```rex
 foo x y (bar a (baz t u v my_value))
+```
+
+## Pattern Matching
+
+`match` performs structural pattern matching without braces. It takes a scrutinee expression followed by a comma-separated list of pattern arms:
+
+```rex
+match named
+  Ok x -> handle_ok x,
+  Err e -> handle_err e,
+  _ -> default
+```
+
+Supported patterns today:
+
+- Wildcards: `_`
+- Variables: `x`
+- Named constructors with one or more subpatterns: `Ok x`, `Pair (Just a) (Just b)`, `Node left right`
+- Lists with pattern elements: `[]`, `[x]`, `[x, y, z]`, `[head, _]` (any arity is allowed)
+- Cons with pattern parts: `x:xs`, `_ : rest`, `(Cons h t) : xs`
+- Dict key presence: `{foo, bar}` (keys are identifiers only)
+
+Another example on lists:
+
+```rex
+match list
+  [] -> "empty",
+  [x] -> x,
+  [x, y, z] -> z,
+  x:xs -> xs,
+  _ -> "catch-all"
 ```
 
 ## Contribute

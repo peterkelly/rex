@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, sync::Arc, vec};
 
-use rex_ast::expr::{Expr, Scope, Var};
+use rex_ast::expr::{Expr, Pattern, Scope, Var};
 use rex_lexer::{
     span::{Position, Span, Spanned},
     Token, Tokens,
@@ -206,45 +206,24 @@ impl Parser {
 
     fn parse_unary_expr(&mut self) -> Result<Expr, ParserErr> {
         // println!("parse_unary_expr: self.current_token() = {:#?}", self.current_token());
-        let mut call_base_expr = match self.current_token() {
-            Token::ParenL(..) => self.parse_paren_expr(),
-            Token::BracketL(..) => self.parse_bracket_expr(),
-            Token::BraceL(..) => self.parse_brace_expr(),
-            Token::Bool(..) => self.parse_literal_bool_expr(),
-            Token::Float(..) => self.parse_literal_float_expr(),
-            Token::Int(..) => self.parse_literal_int_expr(),
-            Token::String(..) => self.parse_literal_str_expr(),
-            Token::Ident(..) => self.parse_ident_expr(),
-            Token::BackSlash(..) => self.parse_lambda_expr(),
-            Token::Let(..) => self.parse_let_expr(),
-            Token::If(..) => self.parse_if_expr(),
-            Token::Sub(..) => self.parse_neg_expr(),
-            Token::Eof(span) => {
-                return Err(ParserErr::new(span, "unexpected EOF".to_string()));
-            }
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("unexpected {}", token),
-                ));
-            }
-        }?;
+        let mut call_base_expr = self.parse_atom_expr()?;
         let call_base_expr_span = *call_base_expr.span();
 
         let mut call_arg_exprs = VecDeque::new();
         loop {
             let call_arg_expr = match self.current_token() {
-                Token::ParenL(..) => self.parse_paren_expr(),
-                Token::BracketL(..) => self.parse_bracket_expr(),
-                Token::BraceL(..) => self.parse_brace_expr(),
-                Token::Bool(..) => self.parse_literal_bool_expr(),
-                Token::Float(..) => self.parse_literal_float_expr(),
-                Token::Int(..) => self.parse_literal_int_expr(),
-                Token::String(..) => self.parse_literal_str_expr(),
-                Token::Ident(..) => self.parse_ident_expr(),
-                Token::BackSlash(..) => self.parse_lambda_expr(),
-                Token::Let(..) => self.parse_let_expr(),
-                Token::If(..) => self.parse_if_expr(),
+                Token::ParenL(..)
+                | Token::BracketL(..)
+                | Token::BraceL(..)
+                | Token::Bool(..)
+                | Token::Float(..)
+                | Token::Int(..)
+                | Token::String(..)
+                | Token::Ident(..)
+                | Token::BackSlash(..)
+                | Token::Let(..)
+                | Token::If(..)
+                | Token::Match(..) => self.parse_atom_expr(),
                 _ => break,
             }?;
             call_arg_exprs.push_back(call_arg_expr);
@@ -259,6 +238,26 @@ impl Parser {
             );
         }
         Ok(call_base_expr)
+    }
+
+    fn parse_atom_expr(&mut self) -> Result<Expr, ParserErr> {
+        match self.current_token() {
+            Token::ParenL(..) => self.parse_paren_expr(),
+            Token::BracketL(..) => self.parse_bracket_expr(),
+            Token::BraceL(..) => self.parse_brace_expr(),
+            Token::Bool(..) => self.parse_literal_bool_expr(),
+            Token::Float(..) => self.parse_literal_float_expr(),
+            Token::Int(..) => self.parse_literal_int_expr(),
+            Token::String(..) => self.parse_literal_str_expr(),
+            Token::Ident(..) => self.parse_ident_expr(),
+            Token::BackSlash(..) => self.parse_lambda_expr(),
+            Token::Let(..) => self.parse_let_expr(),
+            Token::If(..) => self.parse_if_expr(),
+            Token::Match(..) => self.parse_match_expr(),
+            Token::Sub(..) => self.parse_neg_expr(),
+            Token::Eof(span) => Err(ParserErr::new(span, "unexpected EOF".to_string())),
+            token => Err(ParserErr::new(*token.span(), format!("unexpected {}", token))),
+        }
     }
 
     fn parse_paren_expr(&mut self) -> Result<Expr, ParserErr> {
@@ -763,6 +762,274 @@ impl Parser {
         ))
     }
 
+    fn parse_match_expr(&mut self) -> Result<Expr, ParserErr> {
+        // Eat the `match` token
+        let span_begin = match self.current_token() {
+            Token::Match(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `match` got {}", token),
+                ));
+            }
+        };
+
+        let scrutinee = self.parse_atom_expr()?;
+        let mut arms = Vec::new();
+        loop {
+            let pattern = self.parse_pattern()?;
+
+            match self.current_token() {
+                Token::ArrowR(..) => self.next_token(),
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `->` got {}", token),
+                    ));
+                }
+            }
+
+            let expr = self.parse_expr()?;
+            arms.push((pattern, Arc::new(expr)));
+
+            match self.current_token() {
+                Token::Comma(..) => {
+                    self.next_token();
+                }
+                _ => break,
+            }
+        }
+
+        let span_end = arms
+            .last()
+            .map(|(_, expr)| expr.span().end)
+            .unwrap_or_else(|| scrutinee.span().end);
+
+        Ok(Expr::Match(
+            Span::from_begin_end(span_begin, span_end),
+            Arc::new(scrutinee),
+            arms,
+        ))
+    }
+
+    fn parse_pattern(&mut self) -> Result<Pattern, ParserErr> {
+        self.parse_pattern_cons()
+    }
+
+    fn parse_pattern_cons(&mut self) -> Result<Pattern, ParserErr> {
+        let mut lhs = self.parse_pattern_app()?;
+        loop {
+            match self.current_token() {
+                Token::Colon(span_colon, ..) => {
+                    self.next_token();
+                    let rhs = self.parse_pattern_cons()?;
+                    let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
+                    lhs = Pattern::Cons(span, Box::new(lhs), Box::new(rhs));
+                    let _ = span_colon;
+                }
+                _ => break,
+            }
+        }
+        Ok(lhs)
+    }
+
+    fn parse_pattern_app(&mut self) -> Result<Pattern, ParserErr> {
+        let head = self.parse_pattern_atom()?;
+        let mut args = Vec::new();
+        loop {
+            match self.current_token() {
+                Token::Ident(..) | Token::BracketL(..) | Token::BraceL(..) | Token::ParenL(..) => {
+                    let arg = self.parse_pattern_atom()?;
+                    args.push(arg);
+                }
+                _ => break,
+            }
+        }
+
+        if args.is_empty() {
+            return Ok(head);
+        }
+
+        // If there are args, the head must be a constructor (identifier) pattern
+        if let Pattern::Var(var) = head {
+            let begin = var.span.begin;
+            let end = args.last().unwrap().span().end;
+            Ok(Pattern::Named(
+                Span::from_begin_end(begin, end),
+                var.name,
+                args,
+            ))
+        } else {
+            Err(ParserErr::new(
+                *args.first().unwrap().span(),
+                "constructor patterns must start with an identifier",
+            ))
+        }
+    }
+
+    fn parse_pattern_atom(&mut self) -> Result<Pattern, ParserErr> {
+        match self.current_token() {
+            Token::Ident(name, span, ..) if name == "_" => {
+                self.next_token();
+                Ok(Pattern::Wildcard(span))
+            }
+            Token::Ident(name, span, ..) => {
+                self.next_token();
+                Ok(Pattern::Var(Var::with_span(span, name)))
+            }
+            Token::BracketL(..) => self.parse_list_pattern(),
+            Token::BraceL(..) => self.parse_dict_pattern(),
+            Token::ParenL(..) => self.parse_paren_pattern(),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("unexpected {} in pattern", token),
+            )),
+        }
+    }
+
+    fn parse_list_pattern(&mut self) -> Result<Pattern, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::BracketL(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `[` got {}", token),
+                ));
+            }
+        };
+
+        if let Token::BracketR(span, ..) = self.current_token() {
+            self.next_token();
+            return Ok(Pattern::List(
+                Span::from_begin_end(span_begin, span.end),
+                Vec::new(),
+            ));
+        }
+
+        let mut patterns = Vec::new();
+        let span_end = loop {
+            patterns.push(self.parse_pattern()?);
+
+            match self.current_token() {
+                Token::Comma(..) => {
+                    self.next_token();
+                }
+                Token::BracketR(span, ..) => {
+                    self.next_token();
+                    break span.end;
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `,` or `]` got {}", token),
+                    ));
+                }
+            }
+        };
+
+        Ok(Pattern::List(
+            Span::from_begin_end(span_begin, span_end),
+            patterns,
+        ))
+    }
+
+    fn parse_dict_pattern(&mut self) -> Result<Pattern, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::BraceL(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `{{` got {}", token),
+                ));
+            }
+        };
+
+        if let Token::BraceR(span, ..) = self.current_token() {
+            self.next_token();
+            return Ok(Pattern::Dict(
+                Span::from_begin_end(span_begin, span.end),
+                Vec::new(),
+            ));
+        }
+
+        let mut keys = Vec::new();
+        let span_end = loop {
+            match self.current_token() {
+                Token::Ident(name, _key_span, ..) => {
+                    keys.push(name);
+                    self.next_token();
+                    match self.current_token() {
+                        Token::Comma(..) => {
+                            self.next_token();
+                        }
+                        Token::BraceR(span, ..) => {
+                            self.next_token();
+                            break span.end;
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `,` or `}}` got {}", token),
+                            ));
+                        }
+                    }
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected identifier in dict pattern got {}", token),
+                    ));
+                }
+            }
+        };
+
+        Ok(Pattern::Dict(
+            Span::from_begin_end(span_begin, span_end),
+            keys,
+        ))
+    }
+
+    fn parse_paren_pattern(&mut self) -> Result<Pattern, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::ParenL(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `(` got {}", token),
+                ));
+            }
+        };
+
+        let pat = self.parse_pattern()?;
+
+        let span_end = match self.current_token() {
+            Token::ParenR(span, ..) => {
+                self.next_token();
+                span.end
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `)` got {}", token),
+                ));
+            }
+        };
+
+        Ok(pat.with_span(Span::from_begin_end(span_begin, span_end)))
+    }
+
     //
     fn parse_literal_bool_expr(&mut self) -> Result<Expr, ParserErr> {
         let token = self.current_token();
@@ -831,11 +1098,30 @@ impl Parser {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::error::ParserErr;
-    use rex_ast::{app, assert_expr_eq, b, f, tup, u, v};
-    use rex_lexer::{span, Token};
+    use rex_ast::{
+        app, assert_expr_eq, b, d, f, l, s, tup, u, v,
+        expr::{Pattern, Scope, Var},
+    };
+    use rex_lexer::{span, span::Span, Token};
 
     use super::*;
+
+    fn parse(code: &str) -> Arc<Expr> {
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        parser.parse_program().unwrap()
+    }
+
+    fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
+        Arc::new(Expr::Lam(
+            Span::default(),
+            Scope::new_sync(),
+            Var::new(param),
+            body,
+        ))
+    }
 
     #[test]
     fn test_parse_comment() {
@@ -982,6 +1268,204 @@ mod tests {
                 f!(span!(1:4 - 1:7); 6.9)
             )
         );
+    }
+
+    #[test]
+    fn test_application_associativity() {
+        let expr = parse("f x y z");
+        let expected = app!(
+            app!(app!(v!("f"), v!("x")), v!("y")),
+            v!("z")
+        );
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_operator_precedence() {
+        let expr = parse("1 + 2 * 3 - 4");
+        let expected = app!(
+            app!(
+                v!("+"),
+                u!(1)
+            ),
+            app!(
+                app!(v!("-"), app!(app!(v!("*"), u!(2)), u!(3))),
+                u!(4)
+            )
+        );
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_collections_and_tuples() {
+        let expr = parse("([1, 2], { foo = \"bar\", baz = false }, (true, 9))");
+        let expected = tup!(
+            l!(u!(1), u!(2)),
+            d!(foo = s!("bar"), baz = b!(false)),
+            tup!(b!(true), u!(9))
+        );
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_lambda_and_let_chain() {
+        let expr = parse("let inc = \\x -> x + 1, dbl = \\x -> x * 2 in \\y -> inc (dbl y)");
+
+        let inc = lam("x", app!(app!(v!("+"), v!("x")), u!(1)));
+        let dbl = lam("x", app!(app!(v!("*"), v!("x")), u!(2)));
+        let body = lam("y", app!(v!("inc"), app!(v!("dbl"), v!("y"))));
+
+        let expected = Arc::new(Expr::Let(
+            Span::default(),
+            Var::new("inc"),
+            inc,
+            Arc::new(Expr::Let(
+                Span::default(),
+                Var::new("dbl"),
+                dbl,
+                body,
+            )),
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_match_named_patterns() {
+        let expr = parse("match named Ok x -> x, Err e -> e, _ -> default");
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            v!("named"),
+            vec![
+                (
+                    Pattern::Named(
+                        Span::default(),
+                        "Ok".into(),
+                        vec![Pattern::Var(Var::new("x"))],
+                    ),
+                    v!("x"),
+                ),
+                (
+                    Pattern::Named(
+                        Span::default(),
+                        "Err".into(),
+                        vec![Pattern::Var(Var::new("e"))],
+                    ),
+                    v!("e"),
+                ),
+                (Pattern::Wildcard(Span::default()), v!("default")),
+            ],
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_match_list_patterns() {
+        let expr = parse(
+            "match list [] -> empty, [x] -> x, [x, y, z] -> z, x:xs -> xs, _ -> fallback",
+        );
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            v!("list"),
+            vec![
+                (Pattern::List(Span::default(), vec![]), v!("empty")),
+                (
+                    Pattern::List(Span::default(), vec![Pattern::Var(Var::new("x"))]),
+                    v!("x"),
+                ),
+                (
+                    Pattern::List(
+                        Span::default(),
+                        vec![
+                            Pattern::Var(Var::new("x")),
+                            Pattern::Var(Var::new("y")),
+                            Pattern::Var(Var::new("z")),
+                        ],
+                    ),
+                    v!("z"),
+                ),
+                (
+                    Pattern::Cons(
+                        Span::default(),
+                        Box::new(Pattern::Var(Var::new("x"))),
+                        Box::new(Pattern::Var(Var::new("xs"))),
+                    ),
+                    v!("xs"),
+                ),
+                (Pattern::Wildcard(Span::default()), v!("fallback")),
+            ],
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_match_nested_patterns() {
+        let expr = parse("match t Cons x (Cons _ xs) -> xs, Pair (Just a) (Just b) -> a");
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            v!("t"),
+            vec![
+                (
+                    Pattern::Named(
+                        Span::default(),
+                        "Cons".into(),
+                        vec![
+                            Pattern::Var(Var::new("x")),
+                            Pattern::Named(
+                                Span::default(),
+                                "Cons".into(),
+                                vec![
+                                    Pattern::Wildcard(Span::default()),
+                                    Pattern::Var(Var::new("xs")),
+                                ],
+                            ),
+                        ],
+                    ),
+                    v!("xs"),
+                ),
+                (
+                    Pattern::Named(
+                        Span::default(),
+                        "Pair".into(),
+                        vec![
+                            Pattern::Named(
+                                Span::default(),
+                                "Just".into(),
+                                vec![Pattern::Var(Var::new("a"))],
+                            ),
+                            Pattern::Named(
+                                Span::default(),
+                                "Just".into(),
+                                vec![Pattern::Var(Var::new("b"))],
+                            ),
+                        ],
+                    ),
+                    v!("a"),
+                ),
+            ],
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_match_dict_pattern() {
+        let expr = parse("match obj {foo, bar} -> foo bar");
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            v!("obj"),
+            vec![(
+                Pattern::Dict(Span::default(), vec!["foo".into(), "bar".into()]),
+                app!(v!("foo"), v!("bar")),
+            )],
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
     }
 
     #[test]

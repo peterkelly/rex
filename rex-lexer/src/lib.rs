@@ -37,6 +37,7 @@ pub enum Token {
     Else(Span),
     For(Span),
     If(Span),
+    Match(Span),
     Then(Span),
 
     // Operators
@@ -129,6 +130,8 @@ impl Token {
                     Token::For(span)
                 } else if capture.name("If").is_some() {
                     Token::If(span)
+                } else if capture.name("Match").is_some() {
+                    Token::Match(span)
                 } else if capture.name("In").is_some() {
                     Token::In(span)
                 } else if capture.name("Then").is_some() {
@@ -268,6 +271,7 @@ impl Token {
             r"(?P<Else>\belse\b)|",
             r"(?P<For>\bfor\b)|",
             r"(?P<If>\bif\b)|",
+            r"(?P<Match>\bmatch\b)|",
             r"(?P<Then>\bthen\b)|",
             // Symbols
             r"(?P<ArrowL><-|←)|",
@@ -319,7 +323,7 @@ impl Token {
             r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
             r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
             // Idents
-            r"(?P<Ident>[_a-zA-Z]([:_a-zA-Z]|[0-9])*)|",
+            r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
             // Unexpected
             r"(.)",
         ))
@@ -356,6 +360,7 @@ impl Spanned for Token {
             Else(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Match(span, ..) => span,
             Then(span, ..) => span,
 
             // Symbols
@@ -425,6 +430,7 @@ impl Spanned for Token {
             Else(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Match(span, ..) => span,
             Then(span, ..) => span,
 
             // Symbols
@@ -496,6 +502,7 @@ impl Display for Token {
             Else(..) => write!(f, "else"),
             For(..) => write!(f, "for"),
             If(..) => write!(f, "if"),
+            Match(..) => write!(f, "match"),
             Then(..) => write!(f, "then"),
 
             // Symbols

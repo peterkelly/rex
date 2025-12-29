@@ -55,6 +55,97 @@ impl Display for Var {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Pattern {
+    Wildcard(Span),                             // _
+    Var(Var),                                   // x
+    Named(Span, String, Vec<Pattern>),          // Ok x y z
+    List(Span, Vec<Pattern>),                   // [x, y, z]
+    Cons(Span, Box<Pattern>, Box<Pattern>),     // x:xs
+    Dict(Span, Vec<String>),                    // {a, b, c}
+}
+
+impl Pattern {
+    pub fn span(&self) -> &Span {
+        match self {
+            Pattern::Wildcard(span, ..)
+            | Pattern::Var(Var { span, .. })
+            | Pattern::Named(span, ..)
+            | Pattern::List(span, ..)
+            | Pattern::Cons(span, ..)
+            | Pattern::Dict(span, ..) => span,
+        }
+    }
+
+    pub fn with_span(&self, span: Span) -> Pattern {
+        match self {
+            Pattern::Wildcard(..) => Pattern::Wildcard(span),
+            Pattern::Var(var) => Pattern::Var(Var::with_span(span, var.name.clone())),
+            Pattern::Named(_, name, ps) => Pattern::Named(span, name.clone(), ps.clone()),
+            Pattern::List(_, ps) => Pattern::List(span, ps.clone()),
+            Pattern::Cons(_, head, tail) => Pattern::Cons(span, head.clone(), tail.clone()),
+            Pattern::Dict(_, keys) => Pattern::Dict(span, keys.clone()),
+        }
+    }
+
+    pub fn reset_spans(&self) -> Pattern {
+        match self {
+            Pattern::Wildcard(..) => Pattern::Wildcard(Span::default()),
+            Pattern::Var(var) => Pattern::Var(var.reset_spans()),
+            Pattern::Named(_, name, ps) => {
+                Pattern::Named(Span::default(), name.clone(), ps.iter().map(|p| p.reset_spans()).collect())
+            }
+            Pattern::List(_, ps) => {
+                Pattern::List(Span::default(), ps.iter().map(|p| p.reset_spans()).collect())
+            }
+            Pattern::Cons(_, head, tail) => Pattern::Cons(
+                Span::default(),
+                Box::new(head.reset_spans()),
+                Box::new(tail.reset_spans()),
+            ),
+            Pattern::Dict(_, keys) => Pattern::Dict(Span::default(), keys.clone()),
+        }
+    }
+}
+
+impl Display for Pattern {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Pattern::Wildcard(..) => write!(f, "_"),
+            Pattern::Var(var) => var.fmt(f),
+            Pattern::Named(_, name, ps) => {
+                write!(f, "{}", name)?;
+                for p in ps {
+                    write!(f, " {}", p)?;
+                }
+                Ok(())
+            }
+            Pattern::List(_, ps) => {
+                '['.fmt(f)?;
+                for (i, p) in ps.iter().enumerate() {
+                    p.fmt(f)?;
+                    if i + 1 < ps.len() {
+                        ", ".fmt(f)?;
+                    }
+                }
+                ']'.fmt(f)
+            }
+            Pattern::Cons(_, head, tail) => write!(f, "{}:{}", head, tail),
+            Pattern::Dict(_, keys) => {
+                '{'.fmt(f)?;
+                for (i, key) in keys.iter().enumerate() {
+                    key.fmt(f)?;
+                    if i + 1 < keys.len() {
+                        ", ".fmt(f)?;
+                    }
+                }
+                '}'.fmt(f)
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Expr {
@@ -76,6 +167,7 @@ pub enum Expr {
     Lam(Span, Scope, Var, Arc<Expr>),           // λx → e
     Let(Span, Var, Arc<Expr>, Arc<Expr>),       // let x = e1 in e2
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>), // if e1 then e2 else e3
+    Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>), // match e1 with patterns
 }
 
 impl Expr {
@@ -96,7 +188,8 @@ impl Expr {
             | Self::App(span, ..)
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
-            | Self::Ite(span, ..) => span,
+            | Self::Ite(span, ..)
+            | Self::Match(span, ..) => span,
         }
     }
 
@@ -117,7 +210,8 @@ impl Expr {
             | Self::App(span, ..)
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
-            | Self::Ite(span, ..) => span,
+            | Self::Ite(span, ..)
+            | Self::Match(span, ..) => span,
         }
     }
 
@@ -160,6 +254,13 @@ impl Expr {
             Expr::Ite(_, cond, then, r#else) => {
                 Expr::Ite(span, cond.clone(), then.clone(), r#else.clone())
             }
+            Expr::Match(_, scrutinee, arms) => Expr::Match(
+                span,
+                scrutinee.clone(),
+                arms.iter()
+                    .map(|(pat, expr)| (pat.clone(), expr.clone()))
+                    .collect(),
+            ),
         }
     }
 
@@ -215,6 +316,13 @@ impl Expr {
                 Arc::new(cond.reset_spans()),
                 Arc::new(then.reset_spans()),
                 Arc::new(r#else.reset_spans()),
+            ),
+            Expr::Match(_, scrutinee, arms) => Expr::Match(
+                Span::default(),
+                Arc::new(scrutinee.reset_spans()),
+                arms.iter()
+                    .map(|(pat, expr)| (pat.reset_spans(), Arc::new(expr.reset_spans())))
+                    .collect(),
             ),
         }
     }
@@ -313,6 +421,20 @@ impl Display for Expr {
                 then.fmt(f)?;
                 " else ".fmt(f)?;
                 r#else.fmt(f)
+            }
+            Self::Match(_span, scrutinee, arms) => {
+                "match ".fmt(f)?;
+                scrutinee.fmt(f)?;
+                ' '.fmt(f)?;
+                for (i, (pat, expr)) in arms.iter().enumerate() {
+                    pat.fmt(f)?;
+                    " -> ".fmt(f)?;
+                    expr.fmt(f)?;
+                    if i + 1 < arms.len() {
+                        ", ".fmt(f)?;
+                    }
+                }
+                Ok(())
             }
         }
     }
