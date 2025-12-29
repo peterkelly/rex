@@ -1469,6 +1469,60 @@ mod tests {
     }
 
     #[test]
+    fn test_match_cons_associativity() {
+        let expr = parse("match xs h:t:u -> u");
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            v!("xs"),
+            vec![(
+                Pattern::Cons(
+                    Span::default(),
+                    Box::new(Pattern::Var(Var::new("h"))),
+                    Box::new(Pattern::Cons(
+                        Span::default(),
+                        Box::new(Pattern::Var(Var::new("t"))),
+                        Box::new(Pattern::Var(Var::new("u"))),
+                    )),
+                ),
+                v!("u"),
+            )],
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_match_wildcard_cons() {
+        let expr = parse("match xs (_:_) -> xs");
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            v!("xs"),
+            vec![(
+                Pattern::Cons(
+                    Span::default(),
+                    Box::new(Pattern::Wildcard(Span::default())),
+                    Box::new(Pattern::Wildcard(Span::default())),
+                ),
+                v!("xs"),
+            )],
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_match_empty_dict_pattern() {
+        let expr = parse("match obj {} -> obj");
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            v!("obj"),
+            vec![(Pattern::Dict(Span::default(), vec![]), v!("obj"))],
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
     fn test_errors() {
         let mut parser = Parser::new(Token::tokenize("1 + 2 + in + 3").unwrap());
         let res = parser.parse_program();
