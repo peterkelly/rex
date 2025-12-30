@@ -1006,22 +1006,47 @@ fn infer_expr(
             );
             Ok((s, preds, result_ty, typed))
         }
-        Expr::Let(_, var, def, body) => {
-            let (s1, p1, t1, typed_def) = infer_expr(supply, env, adts, def)?;
-            let env1 = env.apply(&s1);
-            let scheme = generalize(&env1, p1, t1.apply(&s1));
-            let mut env2 = env1.clone();
-            env2.extend(var.name.clone(), scheme);
-            let (s2, p2, t2, typed_body) = infer_expr(supply, &env2, adts, body)?;
-            let typed = TypedExpr::new(
-                t2.clone(),
-                TypedExprKind::Let {
-                    name: var.name.clone(),
-                    def: Box::new(typed_def),
-                    body: Box::new(typed_body),
-                },
-            );
-            Ok((compose_subst(s2, s1), p2, t2, typed))
+        Expr::Let(..) => {
+            let mut bindings = Vec::new();
+            let mut cur = expr;
+            loop {
+                match cur {
+                    Expr::Let(_, v, d, b) => {
+                        bindings.push((v.clone(), d.clone()));
+                        cur = b.as_ref();
+                    }
+                    _ => break,
+                }
+            }
+
+            let mut subst = Subst::new();
+            let mut env_cur = env.clone();
+            let mut typed_defs = Vec::new();
+            for (v, d) in bindings {
+                let (s1, p1, t1, typed_def) = infer_expr(supply, &env_cur, adts, &d)?;
+                let env1 = env_cur.apply(&s1);
+                let scheme = generalize(&env1, p1, t1.apply(&s1));
+                env_cur = env1.clone();
+                env_cur.extend(v.name.clone(), scheme);
+                typed_defs.push((v.name.clone(), typed_def));
+                subst = compose_subst(s1, subst);
+            }
+
+            let (s_body, p_body, t_body, typed_body) = infer_expr(supply, &env_cur, adts, cur)?;
+            subst = compose_subst(s_body.clone(), subst);
+
+            let mut typed = typed_body;
+            for (name, def) in typed_defs.into_iter().rev() {
+                typed = TypedExpr::new(
+                    t_body.clone(),
+                    TypedExprKind::Let {
+                        name,
+                        def: Box::new(def),
+                        body: Box::new(typed),
+                    },
+                );
+            }
+            Ok((subst, p_body, t_body, typed))
         }
         Expr::Ite(_, cond, then_expr, else_expr) => {
             let (s1, p1, t1, typed_cond) = infer_expr(supply, env, adts, cond)?;

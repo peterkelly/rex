@@ -228,10 +228,7 @@ impl NativeFn {
         }
         let (arg_ty, rest_ty) = split_fun(&self.typ)
             .ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = match arg_type {
-            Some(ty) => ty.clone(),
-            None => value_type(&arg)?,
-        };
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             name: self.name.clone(),
             expected: arg_ty.to_string(),
@@ -288,10 +285,7 @@ impl OverloadedFn {
     ) -> Result<Value, EngineError> {
         let (arg_ty, rest_ty) = split_fun(&self.typ)
             .ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = match arg_type {
-            Some(ty) => ty.clone(),
-            None => value_type(&arg)?,
-        };
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             name: self.name.clone(),
             expected: arg_ty.to_string(),
@@ -1577,6 +1571,17 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
         Value::Closure { .. } => Err(EngineError::UnknownType("closure".into())),
         Value::Native(..) => Err(EngineError::UnknownType("native".into())),
         Value::Overloaded(..) => Err(EngineError::UnknownType("overloaded".into())),
+    }
+}
+
+fn resolve_arg_type(arg_type: Option<&Type>, arg: &Value) -> Result<Type, EngineError> {
+    match arg_type {
+        Some(ty) if ty.ftv().is_empty() => Ok(ty.clone()),
+        Some(ty) => match value_type(arg) {
+            Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),
+            _ => Ok(ty.clone()),
+        },
+        None => value_type(arg),
     }
 }
 
@@ -4039,7 +4044,19 @@ fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError>
 }
 
 fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value, EngineError> {
-    match &expr.kind {
+    let mut env = env.clone();
+    let mut cur = expr;
+    loop {
+        match &cur.kind {
+            TypedExprKind::Let { name, def, body } => {
+                let value = eval_typed_expr(engine, &env, def)?;
+                env = env.extend(name.clone(), value);
+                cur = body;
+            }
+            _ => break,
+        }
+    }
+    match &cur.kind {
         TypedExprKind::Bool(v) => Ok(Value::Bool(*v)),
         TypedExprKind::Uint(v) => Ok(Value::I32(*v as i32)),
         TypedExprKind::Int(v) => Ok(Value::I32(*v as i32)),
@@ -4050,21 +4067,21 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
-                values.push(eval_typed_expr(engine, env, elem)?);
+                values.push(eval_typed_expr(engine, &env, elem)?);
             }
             Ok(Value::Tuple(values))
         }
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
-                values.push(eval_typed_expr(engine, env, elem)?);
+                values.push(eval_typed_expr(engine, &env, elem)?);
             }
             Ok(list_from_vec(values))
         }
         TypedExprKind::Dict(kvs) => {
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
-                out.insert(k.clone(), eval_typed_expr(engine, env, v)?);
+                out.insert(k.clone(), eval_typed_expr(engine, &env, v)?);
             }
             Ok(Value::Dict(out))
         }
@@ -4081,8 +4098,8 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
             }
         }
         TypedExprKind::App(f, x) => {
-            let func = eval_typed_expr(engine, env, f)?;
-            let arg = eval_typed_expr(engine, env, x)?;
+            let func = eval_typed_expr(engine, &env, f)?;
+            let arg = eval_typed_expr(engine, &env, x)?;
             apply(engine, func, arg, Some(&f.typ), Some(&x.typ))
         }
         TypedExprKind::Lam { param, body } => Ok(Value::Closure {
@@ -4094,25 +4111,20 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
             typ: expr.typ.clone(),
             body: Arc::new(body.as_ref().clone()),
         }),
-        TypedExprKind::Let { name, def, body } => {
-            let value = eval_typed_expr(engine, env, def)?;
-            let env = env.extend(name.clone(), value);
-            eval_typed_expr(engine, &env, body)
-        }
         TypedExprKind::Ite {
             cond,
             then_expr,
             else_expr,
         } => {
-            let value = eval_typed_expr(engine, env, cond)?;
+            let value = eval_typed_expr(engine, &env, cond)?;
             match value {
-                Value::Bool(true) => eval_typed_expr(engine, env, then_expr),
-                Value::Bool(false) => eval_typed_expr(engine, env, else_expr),
+                Value::Bool(true) => eval_typed_expr(engine, &env, then_expr),
+                Value::Bool(false) => eval_typed_expr(engine, &env, else_expr),
                 other => Err(EngineError::ExpectedBool(other.type_name().into())),
             }
         }
         TypedExprKind::Match { scrutinee, arms } => {
-            let value = eval_typed_expr(engine, env, scrutinee)?;
+            let value = eval_typed_expr(engine, &env, scrutinee)?;
             for (pat, expr) in arms {
                 if let Some(bindings) = match_pattern(pat, &value) {
                     let env = env.extend_many(bindings);
@@ -4121,6 +4133,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
             }
             Err(EngineError::MatchFailure)
         }
+        TypedExprKind::Let { .. } => unreachable!("let chain handled in eval_typed_expr loop"),
     }
 }
 
@@ -4148,10 +4161,7 @@ fn apply(
                 })?;
                 subst = compose_subst(s_fun, subst);
             }
-            let actual_ty = match arg_type {
-                Some(ty) => ty.clone(),
-                None => value_type(&arg)?,
-            };
+            let actual_ty = resolve_arg_type(arg_type, &arg)?;
             let param_ty = param_ty.apply(&subst);
             let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
                 name: param.clone(),
