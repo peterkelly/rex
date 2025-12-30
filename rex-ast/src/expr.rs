@@ -160,7 +160,6 @@ pub enum Expr {
     Tuple(Span, Vec<Arc<Expr>>),             // (e1, e2, e3)
     List(Span, Vec<Arc<Expr>>),              // [e1, e2, e3]
     Dict(Span, BTreeMap<String, Arc<Expr>>), // {k1 = v1, k2 = v2}
-    Named(Span, String, Option<Arc<Expr>>),  //  MyVariant1 {k1 = v1, k2 = v2}
 
     Var(Var),                                   // x
     App(Span, Arc<Expr>, Arc<Expr>),            // f x
@@ -183,7 +182,6 @@ impl Expr {
             | Self::Tuple(span, ..)
             | Self::List(span, ..)
             | Self::Dict(span, ..)
-            | Self::Named(span, ..)
             | Self::Var(Var { span, .. })
             | Self::App(span, ..)
             | Self::Lam(span, ..)
@@ -205,7 +203,6 @@ impl Expr {
             | Self::Tuple(span, ..)
             | Self::List(span, ..)
             | Self::Dict(span, ..)
-            | Self::Named(span, ..)
             | Self::Var(Var { span, .. })
             | Self::App(span, ..)
             | Self::Lam(span, ..)
@@ -244,7 +241,6 @@ impl Expr {
                 span,
                 BTreeMap::from_iter(kvs.iter().map(|(k, v)| (k.clone(), v.clone()))),
             ),
-            Expr::Named(_, name, inner) => Expr::Named(span, name.clone(), inner.as_ref().cloned()),
             Expr::Var(var) => Expr::Var(Var::with_span(span, &var.name)),
             Expr::App(_, f, x) => Expr::App(span, f.clone(), x.clone()),
             Expr::Lam(_, scope, param, body) => {
@@ -287,11 +283,6 @@ impl Expr {
                     kvs.iter()
                         .map(|(k, v)| (k.clone(), Arc::new(v.reset_spans()))),
                 ),
-            ),
-            Expr::Named(_, name, inner) => Expr::Named(
-                Span::default(),
-                name.clone(),
-                inner.as_ref().map(|x| Arc::new(x.reset_spans())),
             ),
             Expr::Var(var) => Expr::Var(var.reset_spans()),
             Expr::App(_, f, x) => Expr::App(
@@ -370,15 +361,6 @@ impl Display for Expr {
                 }
                 '}'.fmt(f)
             }
-            Self::Named(_span, name, inner) => {
-                name.fmt(f)?;
-                if let Some(inner) = inner {
-                    '('.fmt(f)?;
-                    inner.fmt(f)?;
-                    ')'.fmt(f)?;
-                }
-                Ok(())
-            }
             Self::Var(var) => var.fmt(f),
             Self::App(_span, g, x) => {
                 g.fmt(f)?;
@@ -427,11 +409,12 @@ impl Display for Expr {
                 scrutinee.fmt(f)?;
                 ' '.fmt(f)?;
                 for (i, (pat, expr)) in arms.iter().enumerate() {
+                    "when ".fmt(f)?;
                     pat.fmt(f)?;
                     " -> ".fmt(f)?;
                     expr.fmt(f)?;
                     if i + 1 < arms.len() {
-                        ", ".fmt(f)?;
+                        ' '.fmt(f)?;
                     }
                 }
                 Ok(())

@@ -38,6 +38,7 @@ pub enum Token {
     For(Span),
     If(Span),
     Match(Span),
+    When(Span),
     Then(Span),
 
     // Operators
@@ -132,6 +133,8 @@ impl Token {
                     Token::If(span)
                 } else if capture.name("Match").is_some() {
                     Token::Match(span)
+                } else if capture.name("When").is_some() {
+                    Token::When(span)
                 } else if capture.name("In").is_some() {
                     Token::In(span)
                 } else if capture.name("Then").is_some() {
@@ -272,6 +275,7 @@ impl Token {
             r"(?P<For>\bfor\b)|",
             r"(?P<If>\bif\b)|",
             r"(?P<Match>\bmatch\b)|",
+            r"(?P<When>\bwhen\b)|",
             r"(?P<Then>\bthen\b)|",
             // Symbols
             r"(?P<ArrowL><-|←)|",
@@ -361,6 +365,7 @@ impl Spanned for Token {
             For(span, ..) => span,
             If(span, ..) => span,
             Match(span, ..) => span,
+            When(span, ..) => span,
             Then(span, ..) => span,
 
             // Symbols
@@ -431,6 +436,7 @@ impl Spanned for Token {
             For(span, ..) => span,
             If(span, ..) => span,
             Match(span, ..) => span,
+            When(span, ..) => span,
             Then(span, ..) => span,
 
             // Symbols
@@ -503,6 +509,7 @@ impl Display for Token {
             For(..) => write!(f, "for"),
             If(..) => write!(f, "if"),
             Match(..) => write!(f, "match"),
+            When(..) => write!(f, "when"),
             Then(..) => write!(f, "then"),
 
             // Symbols

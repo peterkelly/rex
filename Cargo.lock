@@ -254,8 +254,10 @@ name = "rex"
 version = "0.1.0"
 dependencies = [
  "rex-ast",
+ "rex-engine",
  "rex-lexer",
  "rex-parser",
+ "rex-ts",
 ]
 
 [[package]]
@@ -272,6 +274,19 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "rex-engine"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rex-ast",
+ "rex-lexer",
+ "rex-parser",
+ "rex-ts",
+ "thiserror",
  "uuid",
 ]
 
@@ -293,6 +308,18 @@ dependencies = [
  "rex-ast",
  "rex-lexer",
  "thiserror",
+]
+
+[[package]]
+name = "rex-ts"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "rex-ast",
+ "rex-lexer",
+ "rex-parser",
+ "thiserror",
+ "uuid",
 ]
 
 [[package]]

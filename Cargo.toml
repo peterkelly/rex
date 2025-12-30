@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rex", "rex-ast",  "rex-lexer", "rex-parser"]
+members = ["rex", "rex-ast", "rex-engine",  "rex-lexer", "rex-parser", "rex-ts"]
 
 [workspace.dependencies]
 # External dependencies
@@ -30,7 +30,7 @@ rex-engine = { path = "rex-engine" }
 rex-lexer = { path = "rex-lexer" }
 rex-parser = { path = "rex-parser" }
 rex-proc-macro = { path = "rex-proc-macro" }
-rex-type-system = { path = "rex-type-system" }
+rex-ts = { path = "rex-ts" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"

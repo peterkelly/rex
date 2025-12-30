@@ -780,6 +780,18 @@ impl Parser {
         let scrutinee = self.parse_atom_expr()?;
         let mut arms = Vec::new();
         loop {
+            match self.current_token() {
+                Token::When(..) => {
+                    self.next_token();
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `when` got {}", token),
+                    ));
+                }
+            }
+
             let pattern = self.parse_pattern()?;
 
             match self.current_token() {
@@ -796,9 +808,7 @@ impl Parser {
             arms.push((pattern, Arc::new(expr)));
 
             match self.current_token() {
-                Token::Comma(..) => {
-                    self.next_token();
-                }
+                Token::When(..) => continue,
                 _ => break,
             }
         }
@@ -850,6 +860,17 @@ impl Parser {
         }
 
         if args.is_empty() {
+            if let Pattern::Var(var) = &head {
+                let is_constructor = var
+                    .name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false);
+                if is_constructor {
+                    return Ok(Pattern::Named(var.span, var.name.clone(), vec![]));
+                }
+            }
             return Ok(head);
         }
 
@@ -1335,7 +1356,7 @@ mod tests {
 
     #[test]
     fn test_match_named_patterns() {
-        let expr = parse("match named Ok x -> x, Err e -> e, _ -> default");
+        let expr = parse("match named when Ok x -> x when Err e -> e when _ -> default");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("named"),
@@ -1366,7 +1387,7 @@ mod tests {
     #[test]
     fn test_match_list_patterns() {
         let expr = parse(
-            "match list [] -> empty, [x] -> x, [x, y, z] -> z, x:xs -> xs, _ -> fallback",
+            "match list when [] -> empty when [x] -> x when [x, y, z] -> z when x:xs -> xs when _ -> fallback",
         );
         let expected = Arc::new(Expr::Match(
             Span::default(),
@@ -1405,7 +1426,7 @@ mod tests {
 
     #[test]
     fn test_match_nested_patterns() {
-        let expr = parse("match t Cons x (Cons _ xs) -> xs, Pair (Just a) (Just b) -> a");
+        let expr = parse("match t when Cons x (Cons _ xs) -> xs when Pair (Just a) (Just b) -> a");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("t"),
@@ -1455,7 +1476,7 @@ mod tests {
 
     #[test]
     fn test_match_dict_pattern() {
-        let expr = parse("match obj {foo, bar} -> foo bar");
+        let expr = parse("match obj when {foo, bar} -> foo bar");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("obj"),
@@ -1470,7 +1491,7 @@ mod tests {
 
     #[test]
     fn test_match_cons_associativity() {
-        let expr = parse("match xs h:t:u -> u");
+        let expr = parse("match xs when h:t:u -> u");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("xs"),
@@ -1493,7 +1514,7 @@ mod tests {
 
     #[test]
     fn test_match_wildcard_cons() {
-        let expr = parse("match xs (_:_) -> xs");
+        let expr = parse("match xs when (_:_) -> xs");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("xs"),
@@ -1512,7 +1533,7 @@ mod tests {
 
     #[test]
     fn test_match_empty_dict_pattern() {
-        let expr = parse("match obj {} -> obj");
+        let expr = parse("match obj when {} -> obj");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("obj"),

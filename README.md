@@ -82,6 +82,12 @@ We create lists using brackets:
 ["this", "is", "a", "list", "of", "strings" ]
 ```
 
+Lists can also be constructed explicitly using the prelude constructors:
+
+```rex
+Cons "this" (Cons "is" (Cons "a" Empty))
+```
+
 Similar to tuples, we can use the `get` function to get specific elements from the list:
 
 ```rex
@@ -210,13 +216,13 @@ foo x y (bar a (baz t u v my_value))
 
 ## Pattern Matching
 
-`match` performs structural pattern matching without braces. It takes a scrutinee expression followed by a comma-separated list of pattern arms:
+`match` performs structural pattern matching without braces. It takes a scrutinee expression followed by one or more `when` arms:
 
 ```rex
 match named
-  Ok x -> handle_ok x,
-  Err e -> handle_err e,
-  _ -> default
+  when Ok x -> handle_ok x
+  when Err e -> handle_err e
+  when _ -> default
 ```
 
 Supported patterns today:
@@ -232,12 +238,23 @@ Another example on lists:
 
 ```rex
 match list
-  [] -> "empty",
-  [x] -> x,
-  [x, y, z] -> z,
-  x:xs -> xs,
-  _ -> "catch-all"
+  when [] -> "empty"
+  when [x] -> x
+  when [x, y, z] -> z
+  when x:xs -> xs
+  when _ -> "catch-all"
 ```
+
+## Standard Library (Prelude)
+
+Rex ships with a small prelude of common helpers. The type system constrains these using type classes where appropriate.
+
+- Arithmetic: `+`, `-`, `*`, `/`, `negate`, `zero`, `one`
+- Equality: `==`, `!=`
+- Ordering: `<`, `<=`, `>`, `>=`
+- Booleans: `&&`, `||`
+- Collections (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `flat_map`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `and_then`, `or_else`
+- Option/Result helpers: `is_some`, `is_none`, `is_ok`, `is_err`
 
 ## Contribute
 

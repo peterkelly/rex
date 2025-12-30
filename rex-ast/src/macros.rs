@@ -166,32 +166,6 @@ macro_rules! d {
 }
 
 #[macro_export]
-macro_rules! n {
-    ($n: expr, $x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Named(
-            ::rex_lexer::span::Span::default(),
-            ($n).to_string(),
-            ($x).map(|x| x),
-        ))
-    };
-    ($span:expr; $n: expr, $x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Named(
-            ($span).into(),
-            ($n).to_string(),
-            ($x),
-        ))
-    };
-    ($id:expr, $span:expr; $n: expr, $x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Named(
-            ($id).into(),
-            ($span).into(),
-            ($n).to_string(),
-            ($x),
-        ))
-    };
-}
-
-#[macro_export]
 macro_rules! v {
     ($x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {

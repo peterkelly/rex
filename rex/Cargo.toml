@@ -7,3 +7,5 @@ edition = "2024"
 rex-ast = { workspace = true }
 rex-lexer = { workspace = true }
 rex-parser = { workspace = true }
+rex-engine = { workspace = true }
+rex-ts = { workspace = true }
