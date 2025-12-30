@@ -146,6 +146,51 @@ impl Display for Pattern {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TypeExpr {
+    Name(Span, String),
+    App(Span, Box<TypeExpr>, Box<TypeExpr>),
+    Tuple(Span, Vec<TypeExpr>),
+    Record(Span, Vec<(String, TypeExpr)>),
+}
+
+impl TypeExpr {
+    pub fn span(&self) -> &Span {
+        match self {
+            TypeExpr::Name(span, ..)
+            | TypeExpr::App(span, ..)
+            | TypeExpr::Tuple(span, ..)
+            | TypeExpr::Record(span, ..) => span,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TypeVariant {
+    pub name: String,
+    pub args: Vec<TypeExpr>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TypeDecl {
+    pub span: Span,
+    pub name: String,
+    pub params: Vec<String>,
+    pub variants: Vec<TypeVariant>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum Decl {
+    Type(TypeDecl),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct Program {
+    pub decls: Vec<Decl>,
+    pub expr: Arc<Expr>,
+}
+
 #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Expr {

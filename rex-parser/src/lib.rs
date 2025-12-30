@@ -1,6 +1,8 @@
 use std::{collections::VecDeque, sync::Arc, vec};
 
-use rex_ast::expr::{Expr, Pattern, Scope, Var};
+use rex_ast::expr::{
+    Decl, Expr, Pattern, Program, Scope, TypeDecl, TypeExpr, TypeVariant, Var,
+};
 use rex_lexer::{
     span::{Position, Span, Spanned},
     Token, Tokens,
@@ -85,29 +87,43 @@ impl Parser {
         self.errors.push(e);
     }
 
-    pub fn parse_program(&mut self) -> Result<Arc<Expr>, Vec<ParserErr>> {
-        match self.parse_expr() {
-            Ok(expr) => {
-                // Make sure there's no trailing tokens. The whole program
-                // should be one expression.
-                match self.current_token() {
-                    Token::Eof(..) => {}
-                    token => self.record_error(ParserErr::new(
-                        *token.span(),
-                        format!("unexpected {}", token),
-                    )),
-                }
-
-                if !self.errors.is_empty() {
-                    Err(self.errors.clone())
-                } else {
-                    Ok(Arc::new(expr))
+    pub fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
+        let mut decls = Vec::new();
+        while matches!(self.current_token(), Token::Type(..)) {
+            match self.parse_type_decl() {
+                Ok(decl) => decls.push(Decl::Type(decl)),
+                Err(e) => {
+                    self.record_error(e);
+                    break;
                 }
             }
+        }
+
+        let expr = match self.parse_expr() {
+            Ok(expr) => expr,
             Err(e) => {
                 self.record_error(e);
-                Err(self.errors.clone())
+                return Err(self.errors.clone());
             }
+        };
+
+        // Make sure there's no trailing tokens. The whole program
+        // should be one expression.
+        match self.current_token() {
+            Token::Eof(..) => {}
+            token => self.record_error(ParserErr::new(
+                *token.span(),
+                format!("unexpected {}", token),
+            )),
+        }
+
+        if !self.errors.is_empty() {
+            Err(self.errors.clone())
+        } else {
+            Ok(Program {
+                decls,
+                expr: Arc::new(expr),
+            })
         }
     }
 
@@ -825,6 +841,279 @@ impl Parser {
         ))
     }
 
+    fn parse_type_decl(&mut self) -> Result<TypeDecl, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::Type(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `type` got {}", token),
+                ));
+            }
+        };
+
+        let (name, _name_span) = match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                let name = name.clone();
+                let span = span;
+                self.next_token();
+                (name, span)
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected type name got {}", token),
+                ));
+            }
+        };
+
+        let mut params = Vec::new();
+        while let Token::Ident(_param, ..) = self.current_token() {
+            let name = match self.current_token() {
+                Token::Ident(param, ..) => param.clone(),
+                _ => unreachable!(),
+            };
+            self.next_token();
+            params.push(name);
+        }
+
+        match self.current_token() {
+            Token::Assign(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `=` got {}", token),
+                ));
+            }
+        }
+
+        let (first, first_span) = self.parse_type_variant()?;
+        let mut variants = vec![first];
+        let mut span_end = first_span.end;
+        loop {
+            match self.current_token() {
+                Token::Pipe(..) => {
+                    self.next_token();
+                    let (variant, vspan) = self.parse_type_variant()?;
+                    span_end = vspan.end;
+                    variants.push(variant);
+                    continue;
+                }
+                _ => break,
+            }
+        }
+
+        Ok(TypeDecl {
+            span: Span::from_begin_end(span_begin, span_end),
+            name,
+            params,
+            variants,
+        })
+    }
+
+    fn parse_type_variant(&mut self) -> Result<(TypeVariant, Span), ParserErr> {
+        let (name, name_span) = match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                let name = name.clone();
+                let span = span;
+                self.next_token();
+                (name, span)
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected constructor name got {}", token),
+                ));
+            }
+        };
+
+        let mut args = Vec::new();
+        let mut span_end = name_span.end;
+        loop {
+            match self.current_token() {
+                Token::Ident(..) | Token::ParenL(..) | Token::BraceL(..) => {
+                    let arg = self.parse_type_atom()?;
+                    span_end = arg.span().end;
+                    args.push(arg);
+                }
+                _ => break,
+            }
+        }
+
+        Ok((
+            TypeVariant { name, args },
+            Span::from_begin_end(name_span.begin, span_end),
+        ))
+    }
+
+    fn parse_type_expr(&mut self) -> Result<TypeExpr, ParserErr> {
+        let mut lhs = self.parse_type_atom()?;
+        loop {
+            match self.current_token() {
+                Token::Ident(..) | Token::ParenL(..) | Token::BraceL(..) => {
+                    let rhs = self.parse_type_atom()?;
+                    let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
+                    lhs = TypeExpr::App(span, Box::new(lhs), Box::new(rhs));
+                }
+                _ => break,
+            }
+        }
+        Ok(lhs)
+    }
+
+    fn parse_type_atom(&mut self) -> Result<TypeExpr, ParserErr> {
+        match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                let name = name.clone();
+                let span = span;
+                self.next_token();
+                Ok(TypeExpr::Name(span, name))
+            }
+            Token::ParenL(..) => self.parse_type_paren(),
+            Token::BraceL(..) => self.parse_type_record(),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("unexpected {} in type", token),
+            )),
+        }
+    }
+
+    fn parse_type_paren(&mut self) -> Result<TypeExpr, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::ParenL(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `(` got {}", token),
+                ));
+            }
+        };
+
+        let first = self.parse_type_expr()?;
+        let mut elems = Vec::new();
+        let span_end = match self.current_token() {
+            Token::Comma(..) => {
+                self.next_token();
+                elems.push(first);
+                loop {
+                    elems.push(self.parse_type_expr()?);
+                    match self.current_token() {
+                        Token::Comma(..) => {
+                            self.next_token();
+                            continue;
+                        }
+                        Token::ParenR(span, ..) => {
+                            self.next_token();
+                            break span.end;
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `)` got {}", token),
+                            ));
+                        }
+                    }
+                }
+            }
+            Token::ParenR(_span, ..) => {
+                self.next_token();
+                return Ok(first);
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `)` or `,` got {}", token),
+                ));
+            }
+        };
+
+        Ok(TypeExpr::Tuple(
+            Span::from_begin_end(span_begin, span_end),
+            elems,
+        ))
+    }
+
+    fn parse_type_record(&mut self) -> Result<TypeExpr, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::BraceL(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `{{` got {}", token),
+                ));
+            }
+        };
+
+        let mut fields = Vec::new();
+        if let Token::BraceR(span, ..) = self.current_token() {
+            self.next_token();
+            return Ok(TypeExpr::Record(
+                Span::from_begin_end(span_begin, span.end),
+                fields,
+            ));
+        }
+
+        let span_end = loop {
+            let (name, _span) = match self.current_token() {
+                Token::Ident(name, span, ..) => {
+                    let name = name.clone();
+                    let span = span;
+                    self.next_token();
+                    (name, span)
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected field name got {}", token),
+                    ));
+                }
+            };
+
+            match self.current_token() {
+                Token::Colon(..) => self.next_token(),
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `:` got {}", token),
+                    ));
+                }
+            }
+
+            let ty = self.parse_type_expr()?;
+            fields.push((name, ty));
+
+            match self.current_token() {
+                Token::Comma(..) => {
+                    self.next_token();
+                }
+                Token::BraceR(span, ..) => {
+                    self.next_token();
+                    break span.end;
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `}}` got {}", token),
+                    ));
+                }
+            }
+        };
+
+        Ok(TypeExpr::Record(
+            Span::from_begin_end(span_begin, span_end),
+            fields,
+        ))
+    }
+
     fn parse_pattern(&mut self) -> Result<Pattern, ParserErr> {
         self.parse_pattern_cons()
     }
@@ -1124,7 +1413,7 @@ mod tests {
     use crate::error::ParserErr;
     use rex_ast::{
         app, assert_expr_eq, b, d, f, l, s, tup, u, v,
-        expr::{Pattern, Scope, Var},
+        expr::{Decl, Pattern, Scope, TypeExpr, Var},
     };
     use rex_lexer::{span, span::Span, Token};
 
@@ -1132,7 +1421,7 @@ mod tests {
 
     fn parse(code: &str) -> Arc<Expr> {
         let mut parser = Parser::new(Token::tokenize(code).unwrap());
-        parser.parse_program().unwrap()
+        parser.parse_program().unwrap().expr
     }
 
     fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
@@ -1147,15 +1436,15 @@ mod tests {
     #[test]
     fn test_parse_comment() {
         let mut parser = Parser::new(Token::tokenize("true {- this is a boolean -}").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(expr, b!(span!(1:1 - 1:5); true));
 
         let mut parser = Parser::new(Token::tokenize("{- this is a boolean -} false").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(expr, b!(span!(1:25 - 1:30); false));
 
         let mut parser = Parser::new(Token::tokenize("(3.54 {- this is a float -}, {- this is an int -} 42, false {- this is a boolean -})").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             tup!(
@@ -1170,7 +1459,7 @@ mod tests {
     #[test]
     fn test_add() {
         let mut parser = Parser::new(Token::tokenize("1 + 2").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1185,7 +1474,7 @@ mod tests {
         );
 
         let mut parser = Parser::new(Token::tokenize("(6.9 + 3.14)").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1200,7 +1489,7 @@ mod tests {
         );
 
         let mut parser = Parser::new(Token::tokenize("(+) 420").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1212,9 +1501,41 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_type_decl() {
+        let code = r#"
+        type MyADT a b c = MyCtor1 | MyCtor2 a b | MyCtor3 { field1: c }
+        42
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Type(decl) => {
+                assert_eq!(decl.name, "MyADT");
+                assert_eq!(decl.params, vec!["a", "b", "c"]);
+                assert_eq!(decl.variants.len(), 3);
+                assert_eq!(decl.variants[0].name, "MyCtor1");
+                assert!(decl.variants[0].args.is_empty());
+                assert_eq!(decl.variants[1].name, "MyCtor2");
+                assert_eq!(decl.variants[1].args.len(), 2);
+                assert_eq!(decl.variants[2].name, "MyCtor3");
+                match &decl.variants[2].args[0] {
+                    TypeExpr::Record(_, fields) => {
+                        assert_eq!(fields.len(), 1);
+                        assert_eq!(fields[0].0, "field1");
+                        assert!(matches!(fields[0].1, TypeExpr::Name(_, ref n) if n == "c"));
+                    }
+                    other => panic!("expected record type, got {other:?}"),
+                }
+            }
+        }
+        assert_expr_eq!(program.expr, u!(span!(3:9 - 3:11); 42));
+    }
+
+    #[test]
     fn test_sub() {
         let mut parser = Parser::new(Token::tokenize("1 - 2").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1229,7 +1550,7 @@ mod tests {
         );
 
         let mut parser = Parser::new(Token::tokenize("(6.9 - 3.14)").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1244,7 +1565,7 @@ mod tests {
         );
 
         let mut parser = Parser::new(Token::tokenize("(-) 4.20").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1258,7 +1579,7 @@ mod tests {
     #[test]
     fn test_negate() {
         let mut parser = Parser::new(Token::tokenize("-1").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1269,7 +1590,7 @@ mod tests {
         );
 
         let mut parser = Parser::new(Token::tokenize("(-1)").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(
@@ -1280,7 +1601,7 @@ mod tests {
         );
 
         let mut parser = Parser::new(Token::tokenize("(- 6.9)").unwrap());
-        let expr = parser.parse_program().unwrap();
+        let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
             app!(

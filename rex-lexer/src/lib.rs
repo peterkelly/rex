@@ -38,6 +38,7 @@ pub enum Token {
     For(Span),
     If(Span),
     Match(Span),
+    Type(Span),
     When(Span),
     Then(Span),
 
@@ -133,6 +134,8 @@ impl Token {
                     Token::If(span)
                 } else if capture.name("Match").is_some() {
                     Token::Match(span)
+                } else if capture.name("Type").is_some() {
+                    Token::Type(span)
                 } else if capture.name("When").is_some() {
                     Token::When(span)
                 } else if capture.name("In").is_some() {
@@ -275,6 +278,7 @@ impl Token {
             r"(?P<For>\bfor\b)|",
             r"(?P<If>\bif\b)|",
             r"(?P<Match>\bmatch\b)|",
+            r"(?P<Type>\btype\b)|",
             r"(?P<When>\bwhen\b)|",
             r"(?P<Then>\bthen\b)|",
             // Symbols
@@ -297,7 +301,6 @@ impl Token {
             r"(?P<LambdaR>->)|",
             r"(?P<ParenL>\()|",
             r"(?P<ParenR>\))|",
-            // r"(?P<Pipe>\|)|",
             r"(?P<Question>\?)|",
             r"(?P<SemiColon>;)|",
             r"(?P<Whitespace>( |\t))|",
@@ -318,6 +321,7 @@ impl Token {
             r"(?P<Mod>%)|",
             r"(?P<Mul>\*)|",
             r"(?P<Or>\|\|)|",
+            r"(?P<Pipe>\|)|",
             r"(?P<Sub>-)|",
             // Literals (with word boundaries for bool and null)
             r"(?P<Bool>\b(true|false)\b)|",
@@ -365,6 +369,7 @@ impl Spanned for Token {
             For(span, ..) => span,
             If(span, ..) => span,
             Match(span, ..) => span,
+            Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
 
@@ -436,6 +441,7 @@ impl Spanned for Token {
             For(span, ..) => span,
             If(span, ..) => span,
             Match(span, ..) => span,
+            Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
 
@@ -509,6 +515,7 @@ impl Display for Token {
             For(..) => write!(f, "for"),
             If(..) => write!(f, "if"),
             Match(..) => write!(f, "match"),
+            Type(..) => write!(f, "type"),
             When(..) => write!(f, "when"),
             Then(..) => write!(f, "then"),
 

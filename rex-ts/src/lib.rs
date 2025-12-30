@@ -11,7 +11,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Expr, Pattern};
+use rex_ast::expr::{Expr, Pattern, TypeDecl, TypeExpr};
 use rex_lexer::span::Span;
 use uuid::Uuid;
 
@@ -308,6 +308,8 @@ pub enum TypeError {
     UnknownClass(String),
     #[error("no instance for {0} {1}")]
     NoInstance(String, String),
+    #[error("unknown type {0}")]
+    UnknownTypeName(String),
     #[error("unbound variable {0}")]
     UnknownVar(String),
     #[error("ambiguous overload for {0}")]
@@ -682,6 +684,97 @@ impl TypeSystem {
         }
     }
 
+    pub fn adt_from_decl(&mut self, decl: &TypeDecl) -> Result<AdtDecl, TypeError> {
+        let params: Vec<&str> = decl.params.iter().map(|p| p.as_str()).collect();
+        let mut adt = AdtDecl::new(&decl.name, &params, &mut self.supply);
+        let mut param_map = HashMap::new();
+        for param in &adt.params {
+            param_map.insert(param.name.clone(), param.var.clone());
+        }
+
+        for variant in &decl.variants {
+            let mut args = Vec::new();
+            for arg in &variant.args {
+                let ty = self.type_from_expr(decl, &param_map, arg)?;
+                args.push(ty);
+            }
+            adt.add_variant(variant.name.clone(), args);
+        }
+        Ok(adt)
+    }
+
+    pub fn inject_type_decl(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
+        let adt = self.adt_from_decl(decl)?;
+        self.inject_adt(&adt);
+        Ok(())
+    }
+
+    fn type_from_expr(
+        &mut self,
+        decl: &TypeDecl,
+        params: &HashMap<String, TypeVar>,
+        expr: &TypeExpr,
+    ) -> Result<Type, TypeError> {
+        let span = *expr.span();
+        let res = (|| match expr {
+            TypeExpr::Name(_, name) => {
+                if let Some(tv) = params.get(name) {
+                    Ok(Type::Var(tv.clone()))
+                } else if let Some(arity) = self.type_arity(decl, name) {
+                    Ok(Type::con(name, arity))
+                } else {
+                    Err(TypeError::UnknownTypeName(name.clone()))
+                }
+            }
+            TypeExpr::App(_, fun, arg) => {
+                let fty = self.type_from_expr(decl, params, fun)?;
+                let aty = self.type_from_expr(decl, params, arg)?;
+                Ok(Type::app(fty, aty))
+            }
+            TypeExpr::Tuple(_, elems) => {
+                let mut out = Vec::new();
+                for elem in elems {
+                    out.push(self.type_from_expr(decl, params, elem)?);
+                }
+                Ok(Type::Tuple(out))
+            }
+            TypeExpr::Record(_, fields) => {
+                if fields.is_empty() {
+                    let tv = self.supply.fresh(Some("v".into()));
+                    return Ok(Type::app(Type::con("Dict", 1), Type::Var(tv)));
+                }
+                let mut subst = Subst::new();
+                let mut types = Vec::new();
+                for (_, ty) in fields {
+                    types.push(self.type_from_expr(decl, params, ty)?);
+                }
+                let mut cur = types[0].clone();
+                for ty in types.iter().skip(1) {
+                    let s_next = unify(&cur.apply(&subst), &ty.apply(&subst))?;
+                    subst = compose_subst(s_next, subst);
+                    cur = cur.apply(&subst);
+                }
+                Ok(Type::app(Type::con("Dict", 1), cur.apply(&subst)))
+            }
+        })();
+        res.map_err(|err| with_span(&span, err))
+    }
+
+    fn type_arity(&self, decl: &TypeDecl, name: &str) -> Option<usize> {
+        if decl.name == name {
+            return Some(decl.params.len());
+        }
+        if let Some(adt) = self.adts.get(name) {
+            return Some(adt.params.len());
+        }
+        match name {
+            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64"
+            | "bool" | "string" | "uuid" | "datetime" => Some(0),
+            "Dict" | "Array" => Some(1),
+            _ => None,
+        }
+    }
+
     fn register_value_scheme(&mut self, name: &str, scheme: Scheme) {
         match self.env.lookup(name) {
             None => self.env.extend(name.to_string(), scheme),
@@ -700,12 +793,76 @@ impl TypeSystem {
     ) -> Result<(TypedExpr, Vec<Predicate>, Type), TypeError> {
         let (s, preds, t, typed) = infer_expr(&mut self.supply, &self.env, &self.adts, expr)
             .map_err(|err| with_span(expr.span(), err))?;
-        Ok((typed.apply(&s), preds.apply(&s), t.apply(&s)))
+        let mut typed = typed.apply(&s);
+        let mut preds = preds.apply(&s);
+        let mut t = t.apply(&s);
+        let improve = improve_indexable(&preds)?;
+        if !improve.is_empty() {
+            typed = typed.apply(&improve);
+            preds = preds.apply(&improve);
+            t = t.apply(&improve);
+        }
+        Ok((typed, preds, t))
     }
 
     pub fn infer(&mut self, expr: &Expr) -> Result<(Vec<Predicate>, Type), TypeError> {
         let (_typed, preds, t) = self.infer_typed(expr)?;
         Ok((preds, t))
+    }
+}
+
+fn improve_indexable(preds: &[Predicate]) -> Result<Subst, TypeError> {
+    let mut subst = Subst::new();
+    loop {
+        let mut changed = false;
+        for pred in preds {
+            let pred = pred.apply(&subst);
+            if pred.class != "Indexable" {
+                continue;
+            }
+            let Type::Tuple(parts) = &pred.typ else {
+                continue;
+            };
+            if parts.len() != 2 {
+                continue;
+            }
+            let container = parts[0].clone();
+            let elem = parts[1].clone();
+            let s = indexable_elem_subst(&container, &elem)?;
+            if !s.is_empty() {
+                subst = compose_subst(s, subst);
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(subst)
+}
+
+fn indexable_elem_subst(container: &Type, elem: &Type) -> Result<Subst, TypeError> {
+    match container {
+        Type::App(head, arg) => match head.as_ref() {
+            Type::Con(tc) if tc.name == "List" || tc.name == "Array" => unify(elem, arg),
+            _ => Ok(Subst::new()),
+        },
+        Type::Tuple(elems) => {
+            if elems.is_empty() {
+                return Ok(Subst::new());
+            }
+            let mut subst = Subst::new();
+            let mut cur = elems[0].clone();
+            for ty in elems.iter().skip(1) {
+                let s_next = unify(&cur.apply(&subst), &ty.apply(&subst))?;
+                subst = compose_subst(s_next, subst);
+                cur = cur.apply(&subst);
+            }
+            let elem = elem.apply(&subst);
+            let s_elem = unify(&elem, &cur.apply(&subst))?;
+            Ok(compose_subst(s_elem, subst))
+        }
+        _ => Ok(Subst::new()),
     }
 }
 
@@ -715,7 +872,8 @@ fn infer_expr(
     adts: &HashMap<String, AdtDecl>,
     expr: &Expr,
 ) -> Result<(Subst, Vec<Predicate>, Type, TypedExpr), TypeError> {
-    let res = match expr {
+    let span = *expr.span();
+    let res = (|| match expr {
         Expr::Bool(_, v) => {
             let t = Type::con("bool", 0);
             Ok((
@@ -974,8 +1132,8 @@ fn infer_expr(
             );
             Ok((subst, preds, out_ty, typed))
         }
-    };
-    res.map_err(|err| with_span(expr.span(), err))
+    })();
+    res.map_err(|err| with_span(&span, err))
 }
 
 fn decompose_fun(typ: &Type, arity: usize) -> Option<(Vec<Type>, Type)> {
@@ -999,7 +1157,8 @@ fn infer_pattern(
     pat: &Pattern,
     scrutinee_ty: &Type,
 ) -> Result<(Subst, Vec<Predicate>, Vec<(String, Type)>), TypeError> {
-    let res = match pat {
+    let span = *pat.span();
+    let res = (|| match pat {
         Pattern::Wildcard(..) => Ok((Subst::new(), vec![], vec![])),
         Pattern::Var(var) => Ok((
             Subst::new(),
@@ -1090,8 +1249,8 @@ fn infer_pattern(
                 .collect();
             Ok((s0, vec![], bindings))
         }
-    };
-    res.map_err(|err| with_span(pat.span(), err))
+    })();
+    res.map_err(|err| with_span(&span, err))
 }
 
 fn type_head_name(typ: &Type) -> Option<&str> {
@@ -1222,6 +1381,7 @@ fn build_prelude(ts: &mut TypeSystem) {
         vec!["AdditiveGroup".into(), "MultiplicativeMonoid".into()],
     );
     ts.inject_class("Field", vec!["Ring".into()]);
+    ts.inject_class("Integral", vec![]);
     ts.inject_class("Eq", vec![]);
     ts.inject_class("Ord", vec!["Eq".into()]);
     ts.inject_class("Functor", vec![]);
@@ -1231,12 +1391,14 @@ fn build_prelude(ts: &mut TypeSystem) {
     ts.inject_class("Filterable", vec!["Functor".into()]);
     ts.inject_class("Sequence", vec!["Functor".into(), "Foldable".into()]);
     ts.inject_class("Alternative", vec!["Applicative".into()]);
+    ts.inject_class("Indexable", vec![]);
 
     let numeric = |name: &str| Type::con(name, 0);
     let list_of = |t: Type| Type::app(list_con.clone(), t);
     let option_of = |t: Type| Type::app(option_con.clone(), t);
     let result_of = |t: Type, e: Type| Type::app(Type::app(result_con.clone(), e), t);
     let array_of = |t: Type| Type::app(array_con.clone(), t);
+    let indexable_of = |container: Type, elem: Type| Type::Tuple(vec![container, elem]);
 
     let additive_only = ["string"];
     for name in additive_only {
@@ -1293,6 +1455,15 @@ fn build_prelude(ts: &mut TypeSystem) {
                 vec![Predicate::new("Ring", ty.clone())],
                 Predicate::new("Field", ty.clone()),
             ),
+        );
+    }
+
+    let integral_types = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"];
+    for name in integral_types {
+        let ty = numeric(name);
+        ts.inject_instance(
+            "Integral",
+            Instance::new(vec![], Predicate::new("Integral", ty)),
         );
     }
 
@@ -1415,11 +1586,42 @@ fn build_prelude(ts: &mut TypeSystem) {
         }
     }
 
+    // Indexable instances for list, array, and homogeneous tuples (up to 32).
+    {
+        let a_tv = fresh_tv(ts, "a");
+        let a = Type::Var(a_tv.clone());
+        ts.inject_instance(
+            "Indexable",
+            Instance::new(vec![], Predicate::new("Indexable", indexable_of(list_of(a.clone()), a.clone()))),
+        );
+        let a_tv = fresh_tv(ts, "a");
+        let a = Type::Var(a_tv.clone());
+        ts.inject_instance(
+            "Indexable",
+            Instance::new(vec![], Predicate::new("Indexable", indexable_of(array_of(a.clone()), a.clone()))),
+        );
+
+        for size in 2..=32 {
+            let a_tv = fresh_tv(ts, "a");
+            let a = Type::Var(a_tv.clone());
+            let elems = vec![a.clone(); size];
+            let tuple_ty = Type::Tuple(elems);
+            ts.inject_instance(
+                "Indexable",
+                Instance::new(
+                    vec![],
+                    Predicate::new("Indexable", indexable_of(tuple_ty, a.clone())),
+                ),
+            );
+        }
+    }
+
     // Inject provided function declarations and operator schemes.
     let a_tv = ts.supply.fresh(Some("a".into()));
     let a = Type::Var(a_tv.clone());
     let add_monoid_a = Predicate::new("AdditiveMonoid", a.clone());
     let add_group_a = Predicate::new("AdditiveGroup", a.clone());
+    let integral_a = Predicate::new("Integral", a.clone());
     let plus_scheme = Scheme::new(
         vec![a_tv.clone()],
         vec![add_monoid_a],
@@ -1433,6 +1635,13 @@ fn build_prelude(ts: &mut TypeSystem) {
         Type::fun(a.clone(), Type::fun(a.clone(), a.clone())),
     );
     ts.add_value("*", mul_scheme);
+
+    let mod_scheme = Scheme::new(
+        vec![a_tv.clone()],
+        vec![integral_a],
+        Type::fun(a.clone(), Type::fun(a.clone(), a.clone())),
+    );
+    ts.add_value("%", mod_scheme);
 
     let negate_scheme = Scheme::new(
         vec![a_tv.clone()],
@@ -1721,6 +1930,23 @@ fn build_prelude(ts: &mut TypeSystem) {
         );
     }
 
+    // Indexable access
+    {
+        let t_tv = fresh_tv(ts, "t");
+        let a_tv = fresh_tv(ts, "a");
+        let t = Type::Var(t_tv.clone());
+        let a = Type::Var(a_tv.clone());
+        let pred = Predicate::new("Indexable", indexable_of(t.clone(), a.clone()));
+        ts.add_value(
+            "get",
+            Scheme::new(
+                vec![t_tv, a_tv],
+                vec![pred],
+                Type::fun(Type::con("i32", 0), Type::fun(t, a)),
+            ),
+        );
+    }
+
     // Option helpers
     {
         let a_tv = fresh_tv(ts, "a");
@@ -1847,7 +2073,7 @@ mod tests {
 
     fn parse_expr(code: &str) -> std::sync::Arc<rex_ast::expr::Expr> {
         let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
-        parser.parse_program().unwrap()
+        parser.parse_program().unwrap().expr
     }
 
     fn strip_span(mut err: TypeError) -> TypeError {
@@ -1949,6 +2175,25 @@ mod tests {
     }
 
     #[test]
+    fn infer_integral_constraint() {
+        let expr = parse_expr("\\x y -> x % y");
+        let mut ts = TypeSystem::with_prelude();
+        let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].class, "Integral");
+
+        if let Type::Fun(a, rest) = ty {
+            if let Type::Fun(b, c) = *rest {
+                assert_eq!(*a, *b);
+                assert_eq!(*b, *c);
+                assert_eq!(preds[0].typ, *a);
+                return;
+            }
+        }
+        panic!("expected a -> a -> a");
+    }
+
+    #[test]
     fn infer_literal_addition_defaults() {
         let expr = parse_expr("1 + 2");
         let mut ts = TypeSystem::with_prelude();
@@ -1957,6 +2202,40 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class, "AdditiveMonoid");
         assert_eq!(preds[0].typ, Type::con("i32", 0));
+        assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+    }
+
+    #[test]
+    fn infer_mod_defaults() {
+        let expr = parse_expr("1 % 2");
+        let mut ts = TypeSystem::with_prelude();
+        let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].class, "Integral");
+        assert_eq!(preds[0].typ, Type::con("i32", 0));
+        assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+    }
+
+    #[test]
+    fn infer_get_list_type() {
+        let expr = parse_expr("get 1 [1, 2, 3]");
+        let mut ts = TypeSystem::with_prelude();
+        let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].class, "Indexable");
+        assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+    }
+
+    #[test]
+    fn infer_get_tuple_type() {
+        let expr = parse_expr("get 1 (1, 2, 3)");
+        let mut ts = TypeSystem::with_prelude();
+        let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(preds.len(), 1);
+        assert_eq!(preds[0].class, "Indexable");
         assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
     }
 

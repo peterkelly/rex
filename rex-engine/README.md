@@ -14,7 +14,8 @@ engine.inject_fn2("(+)", |x: i32, y: i32| -> i32 { x + y });
 engine.inject_value("answer", 42i32);
 
 let mut parser = Parser::new(Token::tokenize("answer + 1").unwrap());
-let expr = parser.parse_program().unwrap();
+let program = parser.parse_program().unwrap();
+let expr = program.expr;
 let value = engine.eval(expr.as_ref()).unwrap();
 
 assert!(matches!(value, Value::I32(43)));

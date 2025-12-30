@@ -1,9 +1,11 @@
 use std::env;
 use std::fs;
 
+use rex_ast::expr::Decl;
 use rex_engine::Engine;
 use rex_lexer::Token;
 use rex_parser::Parser;
+use rex_ts::TypeSystem;
 
 fn main() {
     if let Err(err) = run() {
@@ -36,11 +38,15 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let mut code: Option<String> = None;
     let mut file: Option<String> = None;
     let mut emit_ast = false;
+    let mut emit_type = false;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--emit-ast" => {
                 emit_ast = true;
+            }
+            "--type" => {
+                emit_type = true;
             }
             "-c" | "--code" => {
                 if code.is_some() {
@@ -79,17 +85,38 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
 
     let tokens = Token::tokenize(&source).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
-    let expr = parser
+    let program = parser
         .parse_program()
         .map_err(|errs| format_parse_errors(&errs))?;
 
     if emit_ast {
-        println!("{expr:#?}");
+        println!("{program:#?}");
+    }
+
+    if emit_type {
+        let mut ts = TypeSystem::with_prelude();
+        inject_type_decls(&mut ts, &program.decls).map_err(|e| format!("{e}"))?;
+        let (preds, ty) = ts.infer(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
+        if preds.is_empty() {
+            println!("{ty}");
+        } else {
+            let constraints = preds
+                .iter()
+                .map(|p| format!("{} {}", p.class, p.typ))
+                .collect::<Vec<_>>()
+                .join(", ");
+            println!("type: {ty}");
+            println!("constraints: {constraints}");
+        }
+    }
+
+    if emit_ast || emit_type {
         return Ok(());
     }
 
     let mut engine = Engine::with_prelude();
-    let value = engine.eval(expr.as_ref()).map_err(|e| format!("{e}"))?;
+    inject_engine_decls(&mut engine, &program.decls).map_err(|e| format!("{e}"))?;
+    let value = engine.eval(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
     println!("{value}");
     Ok(())
 }
@@ -102,6 +129,22 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     out
 }
 
+fn inject_type_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
+    for decl in decls {
+        let Decl::Type(ty) = decl;
+        ts.inject_type_decl(ty)?;
+    }
+    Ok(())
+}
+
+fn inject_engine_decls(engine: &mut Engine, decls: &[Decl]) -> Result<(), rex_engine::EngineError> {
+    for decl in decls {
+        let Decl::Type(ty) = decl;
+        engine.inject_type_decl(ty)?;
+    }
+    Ok(())
+}
+
 fn print_usage() {
     eprintln!(
         "Usage:\n  rex run <file>\n  rex run -c <code>\n\nRun with -h/--help for more."
@@ -110,6 +153,6 @@ fn print_usage() {
 
 fn print_run_usage() {
     eprintln!(
-        "Usage:\n  rex run <file>\n  rex run -c <code>\n\nOptions:\n  --emit-ast   Print the parsed AST and exit"
+        "Usage:\n  rex run <file>\n  rex run -c <code>\n\nOptions:\n  --emit-ast   Print the parsed AST and exit\n  --type       Print the inferred type and exit"
     );
 }
