@@ -253,6 +253,30 @@ impl Parser {
                 Arc::new(call_arg_expr),
             );
         }
+        loop {
+            match self.current_token() {
+                Token::Colon(..) => {
+                    self.next_token();
+                }
+                _ => break,
+            }
+            let field = match self.current_token() {
+                Token::Ident(name, span, ..) => {
+                    let name = name.clone();
+                    let end = span.end;
+                    self.next_token();
+                    (name, end)
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        "expected field name after `:`",
+                    ));
+                }
+            };
+            let span = Span::from_begin_end(call_base_expr.span().begin, field.1);
+            call_base_expr = Expr::Project(span, Arc::new(call_base_expr), field.0);
+        }
         Ok(call_base_expr)
     }
 
@@ -1413,7 +1437,7 @@ mod tests {
     use crate::error::ParserErr;
     use rex_ast::{
         app, assert_expr_eq, b, d, f, l, s, tup, u, v,
-        expr::{Decl, Pattern, Scope, TypeExpr, Var},
+        expr::{Decl, Expr, Pattern, Scope, TypeExpr, Var},
     };
     use rex_lexer::{span, span::Span, Token};
 
@@ -1619,6 +1643,18 @@ mod tests {
             app!(app!(v!("f"), v!("x")), v!("y")),
             v!("z")
         );
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_projection_expr() {
+        let expr = parse("x:field");
+        let expected = Arc::new(Expr::Project(
+            Span::default(),
+            v!("x"),
+            "field".to_string(),
+        ));
 
         assert_expr_eq!(expr, expected; ignore span);
     }

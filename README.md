@@ -245,6 +245,34 @@ match list
   when _ -> "catch-all"
 ```
 
+## Record Field Projection
+
+ADT variants can declare record fields with `{ field: Type }`. When a value is *definitely* that record variant, you can project fields with `x:field`.
+
+Single-variant ADT:
+
+```rex
+type Boxed = Boxed { value: i32 }
+
+let
+  x = Boxed { value = 1 }
+in
+  x:value
+```
+
+Multi-variant ADT (projection is only valid in a branch that proves the constructor):
+
+```rex
+type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32
+
+let
+  x = MyVariant1 { field1 = 1 }
+in
+  match x
+    when MyVariant1 { field1 } -> x:field1
+    when MyVariant2 _ -> 0
+```
+
 ## Standard Library (Prelude)
 
 Rex ships with a small prelude of common helpers. The type system constrains these using type classes where appropriate.

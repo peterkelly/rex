@@ -9,6 +9,7 @@ rex-ast = { workspace = true }
 rex-lexer = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
+rpds = { workspace = true }
 
 [lints]
 workspace = true

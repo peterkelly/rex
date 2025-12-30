@@ -46,6 +46,8 @@ pub enum EngineError {
     InvalidInjection { name: String, typ: String },
     #[error("unknown type for value in `{0}`")]
     UnknownType(String),
+    #[error("unknown field `{field}` on {value}")]
+    UnknownField { field: String, value: String },
     #[error("unsupported expression")]
     UnsupportedExpr,
     #[error("empty sequence")]
@@ -1065,6 +1067,10 @@ impl Engine {
                     walk(engine, x, bound)?;
                     Ok(())
                 }
+                TypedExprKind::Project { expr, .. } => {
+                    walk(engine, expr, bound)?;
+                    Ok(())
+                }
                 TypedExprKind::Lam { param, body } => {
                     bound.push(param.clone());
                     let res = walk(engine, body, bound);
@@ -1213,12 +1219,12 @@ fn default_ambiguous_types(
         push_unique_type(&mut candidates, ty);
     }
 
-    let mut subst = Subst::new();
+    let mut subst = Subst::new_sync();
     loop {
         let vars: Vec<_> = preds.ftv().into_iter().collect();
         let mut progress = false;
         for tv in vars {
-            if subst.contains_key(&tv) {
+            if subst.get(&tv).is_some() {
                 continue;
             }
             let mut relevant = Vec::new();
@@ -1242,8 +1248,8 @@ fn default_ambiguous_types(
                 continue;
             }
             if let Some(choice) = choose_default_type(engine, &relevant, &candidates)? {
-                let mut next = Subst::new();
-                next.insert(tv, choice.clone());
+                let mut next = Subst::new_sync();
+                next = next.insert(tv, choice.clone());
                 preds = preds.apply(&next);
                 subst = compose_subst(next, subst);
                 progress = true;
@@ -1290,6 +1296,9 @@ fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
         TypedExprKind::App(f, x) => {
             collect_default_candidates(f, out);
             collect_default_candidates(x, out);
+        }
+        TypedExprKind::Project { expr, .. } => {
+            collect_default_candidates(expr, out);
         }
         TypedExprKind::Lam { body, .. } => collect_default_candidates(body, out),
         TypedExprKind::Let { def, body, .. } => {
@@ -1419,7 +1428,7 @@ fn type_arity(typ: &Type) -> usize {
     let mut cur = typ;
     while let Type::Fun(_, next) = cur {
         count += 1;
-        cur = next;
+        cur = next.as_ref();
     }
     count
 }
@@ -4102,6 +4111,28 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
             let arg = eval_typed_expr(engine, &env, x)?;
             apply(engine, func, arg, Some(&f.typ), Some(&x.typ))
         }
+        TypedExprKind::Project { expr, field } => {
+            let value = eval_typed_expr(engine, &env, expr)?;
+            match value {
+                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
+                    Value::Dict(map) => map
+                        .get(field)
+                        .cloned()
+                        .ok_or_else(|| EngineError::UnknownField {
+                            field: field.clone(),
+                            value: "record".into(),
+                        }),
+                    other => Err(EngineError::UnknownField {
+                        field: field.clone(),
+                        value: other.type_name().into(),
+                    }),
+                },
+                other => Err(EngineError::UnknownField {
+                    field: field.clone(),
+                    value: other.type_name().into(),
+                }),
+            }
+        }
         TypedExprKind::Lam { param, body } => Ok(Value::Closure {
             env: env.clone(),
             param: param.clone(),
@@ -4152,7 +4183,7 @@ fn apply(
             typ,
             body,
         } => {
-            let mut subst = Subst::new();
+            let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
                     name: param.clone(),
@@ -4513,6 +4544,57 @@ mod tests {
         }
         let value = engine.eval(program.expr.as_ref()).unwrap();
         assert!(matches!(value, Value::I32(42)));
+    }
+
+    #[test]
+    fn eval_adt_record_projection_single_variant() {
+        let program = parse_program(
+            r#"
+            type MyADT = MyVariant1 { field1: i32, field2: f32 }
+            let
+                x = MyVariant1 { field1 = 1, field2 = 2.0 }
+            in
+                (x:field1, x:field2)
+            "#,
+        );
+        let mut engine = Engine::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(ty) = decl;
+            engine.inject_type_decl(ty).unwrap();
+        }
+        let value = engine.eval(program.expr.as_ref()).unwrap();
+        match value {
+            Value::Tuple(xs) => {
+                assert!(matches!(xs[0], Value::I32(1)));
+                match xs[1] {
+                    Value::F32(v) => assert!((v - 2.0).abs() < 1e-3),
+                    _ => panic!("expected f32 field"),
+                }
+            }
+            _ => panic!("expected tuple result"),
+        }
+    }
+
+    #[test]
+    fn eval_adt_record_projection_match_arm() {
+        let program = parse_program(
+            r#"
+            type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32
+            let
+                x = MyVariant1 { field1 = 1 }
+            in
+                match x
+                    when MyVariant1 { field1 } -> x:field1
+                    when MyVariant2 _ -> 0
+            "#,
+        );
+        let mut engine = Engine::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(ty) = decl;
+            engine.inject_type_decl(ty).unwrap();
+        }
+        let value = engine.eval(program.expr.as_ref()).unwrap();
+        assert!(matches!(value, Value::I32(1)));
     }
 
     #[test]

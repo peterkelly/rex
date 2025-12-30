@@ -318,6 +318,7 @@ dependencies = [
  "rex-ast",
  "rex-lexer",
  "rex-parser",
+ "rpds",
  "thiserror",
  "uuid",
 ]

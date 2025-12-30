@@ -208,6 +208,7 @@ pub enum Expr {
 
     Var(Var),                                   // x
     App(Span, Arc<Expr>, Arc<Expr>),            // f x
+    Project(Span, Arc<Expr>, String),           // x:field
     Lam(Span, Scope, Var, Arc<Expr>),           // λx → e
     Let(Span, Var, Arc<Expr>, Arc<Expr>),       // let x = e1 in e2
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>), // if e1 then e2 else e3
@@ -229,6 +230,7 @@ impl Expr {
             | Self::Dict(span, ..)
             | Self::Var(Var { span, .. })
             | Self::App(span, ..)
+            | Self::Project(span, ..)
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
             | Self::Ite(span, ..)
@@ -250,6 +252,7 @@ impl Expr {
             | Self::Dict(span, ..)
             | Self::Var(Var { span, .. })
             | Self::App(span, ..)
+            | Self::Project(span, ..)
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
             | Self::Ite(span, ..)
@@ -288,6 +291,7 @@ impl Expr {
             ),
             Expr::Var(var) => Expr::Var(Var::with_span(span, &var.name)),
             Expr::App(_, f, x) => Expr::App(span, f.clone(), x.clone()),
+            Expr::Project(_, base, field) => Expr::Project(span, base.clone(), field.clone()),
             Expr::Lam(_, scope, param, body) => {
                 Expr::Lam(span, scope.clone(), param.clone(), body.clone())
             }
@@ -334,6 +338,11 @@ impl Expr {
                 Span::default(),
                 Arc::new(f.reset_spans()),
                 Arc::new(x.reset_spans()),
+            ),
+            Expr::Project(_, base, field) => Expr::Project(
+                Span::default(),
+                Arc::new(base.reset_spans()),
+                field.clone(),
             ),
             Expr::Lam(_, scope, param, body) => Expr::Lam(
                 Span::default(),
@@ -419,6 +428,7 @@ impl Display for Expr {
                     | Self::List(..)
                     | Self::Tuple(..)
                     | Self::Dict(..)
+                    | Self::Project(..)
                     | Self::Var(..) => x.fmt(f),
                     _ => {
                         '('.fmt(f)?;
@@ -463,6 +473,11 @@ impl Display for Expr {
                     }
                 }
                 Ok(())
+            }
+            Self::Project(_span, base, field) => {
+                base.fmt(f)?;
+                ":".fmt(f)?;
+                field.fmt(f)
             }
         }
     }

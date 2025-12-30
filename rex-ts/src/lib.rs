@@ -9,8 +9,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
+use rpds::HashTrieMapSync;
 use rex_ast::expr::{Expr, Pattern, TypeDecl, TypeExpr};
 use rex_lexer::span::Span;
 use uuid::Uuid;
@@ -42,9 +44,10 @@ pub struct TypeConst {
 pub enum Type {
     Var(TypeVar),
     Con(TypeConst),
-    App(Box<Type>, Box<Type>),
-    Fun(Box<Type>, Box<Type>),
+    App(Arc<Type>, Arc<Type>),
+    Fun(Arc<Type>, Arc<Type>),
     Tuple(Vec<Type>),
+    Record(Vec<(String, Type)>),
 }
 
 impl Type {
@@ -56,11 +59,72 @@ impl Type {
     }
 
     pub fn fun(a: Type, b: Type) -> Self {
-        Type::Fun(Box::new(a), Box::new(b))
+        Type::Fun(Arc::new(a), Arc::new(b))
     }
 
     pub fn app(f: Type, arg: Type) -> Self {
-        Type::App(Box::new(f), Box::new(arg))
+        Type::App(Arc::new(f), Arc::new(arg))
+    }
+
+    pub fn record(mut fields: Vec<(String, Type)>) -> Self {
+        fields.sort_by(|a, b| a.0.cmp(&b.0));
+        Type::Record(fields)
+    }
+
+    fn apply_with_change(&self, s: &Subst) -> (Type, bool) {
+        match self {
+            Type::Var(tv) => match s.get(&tv.id) {
+                Some(ty) => (ty.clone(), true),
+                None => (self.clone(), false),
+            },
+            Type::Con(_) => (self.clone(), false),
+            Type::App(l, r) => {
+                let (l_new, l_changed) = l.as_ref().apply_with_change(s);
+                let (r_new, r_changed) = r.as_ref().apply_with_change(s);
+                if l_changed || r_changed {
+                    (Type::app(l_new, r_new), true)
+                } else {
+                    (self.clone(), false)
+                }
+            }
+            Type::Fun(a, b) => {
+                let (a_new, a_changed) = a.as_ref().apply_with_change(s);
+                let (b_new, b_changed) = b.as_ref().apply_with_change(s);
+                if a_changed || b_changed {
+                    (Type::fun(a_new, b_new), true)
+                } else {
+                    (self.clone(), false)
+                }
+            }
+            Type::Tuple(ts) => {
+                let mut changed = false;
+                let mut out = Vec::with_capacity(ts.len());
+                for t in ts {
+                    let (t_new, t_changed) = t.apply_with_change(s);
+                    changed |= t_changed;
+                    out.push(t_new);
+                }
+                if changed {
+                    (Type::Tuple(out), true)
+                } else {
+                    (self.clone(), false)
+                }
+            }
+            Type::Record(fields) => {
+                let mut changed = false;
+                let mut out = Vec::with_capacity(fields.len());
+                for (k, v) in fields {
+                    let (v_new, v_changed) = v.apply_with_change(s);
+                    changed |= v_changed;
+                    out.push((k.clone(), v_new));
+                }
+                if changed {
+                    (Type::Record(out), true)
+                } else {
+                    (self.clone(), false)
+                }
+            }
+        }
     }
 }
 
@@ -72,8 +136,8 @@ impl Display for Type {
                 None => write!(f, "t{}", tv.id),
             },
             Type::Con(c) => write!(f, "{}", c.name),
-            Type::App(l, r) => write!(f, "({} {})", l, r),
-            Type::Fun(a, b) => write!(f, "({} -> {})", a, b),
+            Type::App(l, r) => write!(f, "({} {})", l.as_ref(), r.as_ref()),
+            Type::Fun(a, b) => write!(f, "({} -> {})", a.as_ref(), b.as_ref()),
             Type::Tuple(elems) => {
                 write!(f, "(")?;
                 for (i, t) in elems.iter().enumerate() {
@@ -83,6 +147,16 @@ impl Display for Type {
                     }
                 }
                 write!(f, ")")
+            }
+            Type::Record(fields) => {
+                write!(f, "{{")?;
+                for (i, (name, ty)) in fields.iter().enumerate() {
+                    write!(f, "{}: {}", name, ty)?;
+                    if i + 1 < fields.len() {
+                        write!(f, ", ")?;
+                    }
+                }
+                write!(f, "}}")
             }
         }
     }
@@ -116,7 +190,7 @@ impl Scheme {
     }
 }
 
-pub type Subst = HashMap<TypeVarId, Type>;
+pub type Subst = HashTrieMapSync<TypeVarId, Type>;
 
 pub trait Types: Sized {
     fn apply(&self, s: &Subst) -> Self;
@@ -125,22 +199,17 @@ pub trait Types: Sized {
 
 impl Types for Type {
     fn apply(&self, s: &Subst) -> Self {
-        match self {
-            Type::Var(tv) => s.get(&tv.id).cloned().unwrap_or_else(|| self.clone()),
-            Type::Con(_) => self.clone(),
-            Type::App(l, r) => Type::app(l.apply(s), r.apply(s)),
-            Type::Fun(a, b) => Type::fun(a.apply(s), b.apply(s)),
-            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| t.apply(s)).collect()),
-        }
+        self.apply_with_change(s).0
     }
 
     fn ftv(&self) -> HashSet<TypeVarId> {
         match self {
             Type::Var(tv) => [tv.id].into_iter().collect(),
             Type::Con(_) => HashSet::new(),
-            Type::App(l, r) => l.ftv().union(&r.ftv()).copied().collect(),
-            Type::Fun(a, b) => a.ftv().union(&b.ftv()).copied().collect(),
+            Type::App(l, r) => l.as_ref().ftv().union(&r.as_ref().ftv()).copied().collect(),
+            Type::Fun(a, b) => a.as_ref().ftv().union(&b.as_ref().ftv()).copied().collect(),
             Type::Tuple(ts) => ts.iter().flat_map(Types::ftv).collect(),
+            Type::Record(fields) => fields.iter().flat_map(|(_, ty)| ty.ftv()).collect(),
         }
     }
 }
@@ -157,11 +226,12 @@ impl Types for Predicate {
 
 impl Types for Scheme {
     fn apply(&self, s: &Subst) -> Self {
-        let s_pruned: Subst = s
-            .iter()
-            .filter(|(k, _)| !self.vars.iter().any(|v| &v.id == *k))
-            .map(|(k, v)| (*k, v.clone()))
-            .collect();
+        let mut s_pruned = Subst::new_sync();
+        for (k, v) in s.iter() {
+            if !self.vars.iter().any(|var| var.id == *k) {
+                s_pruned = s_pruned.insert(*k, v.clone());
+            }
+        }
         Scheme::new(
             self.vars.clone(),
             self.preds.iter().map(|p| p.apply(&s_pruned)).collect(),
@@ -232,6 +302,10 @@ impl TypedExpr {
             TypedExprKind::App(f, x) => {
                 TypedExprKind::App(Box::new(f.apply(s)), Box::new(x.apply(s)))
             }
+            TypedExprKind::Project { expr, field } => TypedExprKind::Project {
+                expr: Box::new(expr.apply(s)),
+                field: field.clone(),
+            },
             TypedExprKind::Lam { param, body } => TypedExprKind::Lam {
                 param: param.clone(),
                 body: Box::new(body.apply(s)),
@@ -273,6 +347,7 @@ pub enum TypedExprKind {
     Dict(BTreeMap<String, TypedExpr>),
     Var { name: String, overloads: Vec<Type> },
     App(Box<TypedExpr>, Box<TypedExpr>),
+    Project { expr: Box<TypedExpr>, field: String },
     Lam { param: String, body: Box<TypedExpr> },
     Let {
         name: String,
@@ -291,11 +366,35 @@ pub enum TypedExprKind {
 }
 
 pub fn compose_subst(a: Subst, b: Subst) -> Subst {
-    let mut res: Subst = b.into_iter().map(|(k, v)| (k, v.apply(&a))).collect();
-    for (k, v) in a {
-        res.insert(k, v);
+    if subst_is_empty(&a) {
+        return b;
+    }
+    if subst_is_empty(&b) {
+        return a;
+    }
+    let mut res = Subst::new_sync();
+    for (k, v) in b.iter() {
+        res = res.insert(*k, v.apply(&a));
+    }
+    for (k, v) in a.iter() {
+        res = res.insert(*k, v.clone());
     }
     res
+}
+
+fn subst_is_empty(s: &Subst) -> bool {
+    s.iter().next().is_none()
+}
+
+fn dedup_preds(preds: Vec<Predicate>) -> Vec<Predicate> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(preds.len());
+    for pred in preds {
+        if seen.insert(pred.clone()) {
+            out.push(pred);
+        }
+    }
+    out
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -316,6 +415,10 @@ pub enum TypeError {
     AmbiguousOverload(String),
     #[error("unsupported expression {0}")]
     UnsupportedExpr(&'static str),
+    #[error("unknown field `{field}` on {typ}")]
+    UnknownField { field: String, typ: String },
+    #[error("field `{field}` is not definitely available on {typ}")]
+    FieldNotKnown { field: String, typ: String },
     #[error("non-exhaustive match for {typ}: missing {missing:?}")]
     NonExhaustiveMatch { typ: String, missing: Vec<String> },
     #[error("at {span}: {error}")]
@@ -332,38 +435,237 @@ fn with_span(span: &Span, err: TypeError) -> TypeError {
     }
 }
 
+#[derive(Default, Debug)]
+struct Unifier {
+    subs: Vec<Option<Type>>,
+}
+
+impl Unifier {
+    fn new() -> Self {
+        Self { subs: Vec::new() }
+    }
+
+    fn bind_var(&mut self, id: TypeVarId, ty: Type) {
+        if id >= self.subs.len() {
+            self.subs.resize(id + 1, None);
+        }
+        self.subs[id] = Some(ty);
+    }
+
+    fn prune(&mut self, ty: &Type) -> Type {
+        match ty {
+            Type::Var(tv) => {
+                let bound = self.subs.get(tv.id).and_then(|t| t.clone());
+                match bound {
+                    Some(bound) => {
+                        let pruned = self.prune(&bound);
+                        self.bind_var(tv.id, pruned.clone());
+                        pruned
+                    }
+                    None => ty.clone(),
+                }
+            }
+            Type::Con(_) => ty.clone(),
+            Type::App(l, r) => {
+                let l = self.prune(l.as_ref());
+                let r = self.prune(r.as_ref());
+                Type::app(l, r)
+            }
+            Type::Fun(a, b) => {
+                let a = self.prune(a.as_ref());
+                let b = self.prune(b.as_ref());
+                Type::fun(a, b)
+            }
+            Type::Tuple(ts) => Type::Tuple(ts.iter().map(|t| self.prune(t)).collect()),
+            Type::Record(fields) => Type::Record(
+                fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), self.prune(ty)))
+                    .collect(),
+            ),
+        }
+    }
+
+    fn apply_type(&mut self, ty: &Type) -> Type {
+        self.prune(ty)
+    }
+
+    fn occurs(&mut self, id: TypeVarId, ty: &Type) -> bool {
+        match self.prune(ty) {
+            Type::Var(tv) => tv.id == id,
+            Type::Con(_) => false,
+            Type::App(l, r) => self.occurs(id, l.as_ref()) || self.occurs(id, r.as_ref()),
+            Type::Fun(a, b) => self.occurs(id, a.as_ref()) || self.occurs(id, b.as_ref()),
+            Type::Tuple(ts) => ts.iter().any(|t| self.occurs(id, t)),
+            Type::Record(fields) => fields.iter().any(|(_, ty)| self.occurs(id, ty)),
+        }
+    }
+
+    fn unify(&mut self, t1: &Type, t2: &Type) -> Result<(), TypeError> {
+        let t1 = self.prune(t1);
+        let t2 = self.prune(t2);
+        match (&t1, &t2) {
+            (Type::Var(a), Type::Var(b)) if a.id == b.id => Ok(()),
+            (Type::Var(tv), other) | (other, Type::Var(tv)) => {
+                if self.occurs(tv.id, other) {
+                    Err(TypeError::Occurs(tv.id, other.to_string()))
+                } else {
+                    self.bind_var(tv.id, other.clone());
+                    Ok(())
+                }
+            }
+            (Type::Con(c1), Type::Con(c2)) if c1 == c2 => Ok(()),
+            (Type::App(l1, r1), Type::App(l2, r2)) => {
+                self.unify(l1.as_ref(), l2.as_ref())?;
+                self.unify(r1.as_ref(), r2.as_ref())
+            }
+            (Type::Fun(a1, b1), Type::Fun(a2, b2)) => {
+                self.unify(a1.as_ref(), a2.as_ref())?;
+                self.unify(b1.as_ref(), b2.as_ref())
+            }
+            (Type::Tuple(ts1), Type::Tuple(ts2)) => {
+                if ts1.len() != ts2.len() {
+                    return Err(TypeError::Unification(t1.to_string(), t2.to_string()));
+                }
+                for (a, b) in ts1.iter().zip(ts2.iter()) {
+                    self.unify(a, b)?;
+                }
+                Ok(())
+            }
+            (Type::Record(f1), Type::Record(f2)) => {
+                if f1.len() != f2.len() {
+                    return Err(TypeError::Unification(t1.to_string(), t2.to_string()));
+                }
+                for ((n1, t1), (n2, t2)) in f1.iter().zip(f2.iter()) {
+                    if n1 != n2 {
+                        return Err(TypeError::Unification(t1.to_string(), t2.to_string()));
+                    }
+                    self.unify(t1, t2)?;
+                }
+                Ok(())
+            }
+            (Type::Record(fields), Type::App(head, arg))
+            | (Type::App(head, arg), Type::Record(fields)) => match head.as_ref() {
+                Type::Con(c) if c.name == "Dict" => {
+                    let elem_ty = record_elem_type_unifier(fields, self)?;
+                    self.unify(arg.as_ref(), &elem_ty)
+                }
+                Type::Var(tv) => {
+                    self.unify(&Type::Var(tv.clone()), &Type::con("Dict", 1))?;
+                    let elem_ty = record_elem_type_unifier(fields, self)?;
+                    self.unify(arg.as_ref(), &elem_ty)
+                }
+                _ => Err(TypeError::Unification(t1.to_string(), t2.to_string())),
+            },
+            _ => Err(TypeError::Unification(t1.to_string(), t2.to_string())),
+        }
+    }
+
+    fn into_subst(mut self) -> Subst {
+        let mut out = Subst::new_sync();
+        for id in 0..self.subs.len() {
+            if let Some(ty) = self.subs[id].clone() {
+                let pruned = self.prune(&ty);
+                out = out.insert(id, pruned);
+            }
+        }
+        out
+    }
+}
+
+fn record_elem_type_unifier(
+    fields: &[(String, Type)],
+    unifier: &mut Unifier,
+) -> Result<Type, TypeError> {
+    let mut iter = fields.iter();
+    let first = match iter.next() {
+        Some((_, ty)) => ty.clone(),
+        None => return Err(TypeError::UnsupportedExpr("empty record")),
+    };
+    for (_, ty) in iter {
+        unifier.unify(&first, ty)?;
+    }
+    Ok(unifier.apply_type(&first))
+}
+
 fn bind(tv: &TypeVar, t: &Type) -> Result<Subst, TypeError> {
     if let Type::Var(var) = t {
         if var.id == tv.id {
-            return Ok(Subst::new());
+            return Ok(Subst::new_sync());
         }
     }
     if t.ftv().contains(&tv.id) {
         Err(TypeError::Occurs(tv.id, t.to_string()))
     } else {
-        let mut s = Subst::new();
-        s.insert(tv.id, t.clone());
-        Ok(s)
+        Ok(Subst::new_sync().insert(tv.id, t.clone()))
     }
+}
+
+fn record_elem_type(fields: &[(String, Type)]) -> Result<(Subst, Type), TypeError> {
+    let mut iter = fields.iter();
+    let first = match iter.next() {
+        Some((_, ty)) => ty.clone(),
+        None => return Err(TypeError::UnsupportedExpr("empty record")),
+    };
+    let mut subst = Subst::new_sync();
+    let mut current = first;
+    for (_, ty) in iter {
+        let s_next = unify(&current.apply(&subst), &ty.apply(&subst))?;
+        subst = compose_subst(s_next, subst);
+        current = current.apply(&subst);
+    }
+    Ok((subst.clone(), current.apply(&subst)))
 }
 
 pub fn unify(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
     match (t1, t2) {
         (Type::Fun(l1, r1), Type::Fun(l2, r2)) => {
-            let s1 = unify(l1, l2)?;
-            let s2 = unify(&r1.apply(&s1), &r2.apply(&s1))?;
+            let s1 = unify(l1.as_ref(), l2.as_ref())?;
+            let s2 = unify(&r1.as_ref().apply(&s1), &r2.as_ref().apply(&s1))?;
             Ok(compose_subst(s2, s1))
         }
+        (Type::Record(f1), Type::Record(f2)) => {
+            if f1.len() != f2.len() {
+                return Err(TypeError::Unification(t1.to_string(), t2.to_string()));
+            }
+            let mut subst = Subst::new_sync();
+            for ((n1, t1), (n2, t2)) in f1.iter().zip(f2.iter()) {
+                if n1 != n2 {
+                    return Err(TypeError::Unification(t1.to_string(), t2.to_string()));
+                }
+                let s_next = unify(&t1.apply(&subst), &t2.apply(&subst))?;
+                subst = compose_subst(s_next, subst);
+            }
+            Ok(subst)
+        }
+        (Type::Record(fields), Type::App(head, arg))
+        | (Type::App(head, arg), Type::Record(fields)) => {
+            match head.as_ref() {
+                Type::Con(c) if c.name == "Dict" => {
+                    let (s_fields, elem_ty) = record_elem_type(fields)?;
+                    let s_arg = unify(&arg.as_ref().apply(&s_fields), &elem_ty)?;
+                    Ok(compose_subst(s_arg, s_fields))
+                }
+                Type::Var(tv) => {
+                    let s_head = bind(tv, &Type::con("Dict", 1))?;
+                    let arg = arg.as_ref().apply(&s_head);
+                    let (s_fields, elem_ty) = record_elem_type(fields)?;
+                    let s_arg = unify(&arg.apply(&s_fields), &elem_ty)?;
+                    Ok(compose_subst(s_arg, compose_subst(s_fields, s_head)))
+                }
+                _ => Err(TypeError::Unification(t1.to_string(), t2.to_string())),
+            }
+        }
         (Type::App(l1, r1), Type::App(l2, r2)) => {
-            let s1 = unify(l1, l2)?;
-            let s2 = unify(&r1.apply(&s1), &r2.apply(&s1))?;
+            let s1 = unify(l1.as_ref(), l2.as_ref())?;
+            let s2 = unify(&r1.as_ref().apply(&s1), &r2.as_ref().apply(&s1))?;
             Ok(compose_subst(s2, s1))
         }
         (Type::Tuple(ts1), Type::Tuple(ts2)) => {
             if ts1.len() != ts2.len() {
                 return Err(TypeError::Unification(t1.to_string(), t2.to_string()));
             }
-            let mut s = Subst::new();
+            let mut s = Subst::new_sync();
             for (a, b) in ts1.iter().zip(ts2.iter()) {
                 let s_next = unify(&a.apply(&s), &b.apply(&s))?;
                 s = compose_subst(s_next, s);
@@ -371,29 +673,32 @@ pub fn unify(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
             Ok(s)
         }
         (Type::Var(tv), t) | (t, Type::Var(tv)) => bind(tv, t),
-        (Type::Con(c1), Type::Con(c2)) if c1 == c2 => Ok(Subst::new()),
+        (Type::Con(c1), Type::Con(c2)) if c1 == c2 => Ok(Subst::new_sync()),
         _ => Err(TypeError::Unification(t1.to_string(), t2.to_string())),
     }
 }
 
 #[derive(Default, Debug, Clone)]
 pub struct TypeEnv {
-    pub values: HashMap<String, Vec<Scheme>>,
+    pub values: HashTrieMapSync<String, Vec<Scheme>>,
 }
 
 impl TypeEnv {
     pub fn new() -> Self {
         Self {
-            values: HashMap::new(),
+            values: HashTrieMapSync::new_sync(),
         }
     }
 
     pub fn extend(&mut self, name: impl Into<String>, scheme: Scheme) {
-        self.values.insert(name.into(), vec![scheme]);
+        self.values = self.values.insert(name.into(), vec![scheme]);
     }
 
     pub fn extend_overload(&mut self, name: impl Into<String>, scheme: Scheme) {
-        self.values.entry(name.into()).or_default().push(scheme);
+        let name = name.into();
+        let mut schemes = self.values.get(&name).cloned().unwrap_or_default();
+        schemes.push(scheme);
+        self.values = self.values.insert(name, schemes);
     }
 
     pub fn lookup(&self, name: &str) -> Option<&[Scheme]> {
@@ -403,21 +708,38 @@ impl TypeEnv {
 
 impl Types for TypeEnv {
     fn apply(&self, s: &Subst) -> Self {
-        let values = self
-            .values
-            .iter()
-            .map(|(k, v)| (k.clone(), v.iter().map(|scheme| scheme.apply(s)).collect()))
-            .collect();
+        let mut values = HashTrieMapSync::new_sync();
+        for (k, v) in self.values.iter() {
+            let updated = v
+                .iter()
+                .map(|scheme| {
+                    if scheme.vars.is_empty() && !subst_is_empty(s) {
+                        scheme.apply(s)
+                    } else {
+                        scheme.clone()
+                    }
+                })
+                .collect();
+            values = values.insert(k.clone(), updated);
+        }
         TypeEnv { values }
     }
 
     fn ftv(&self) -> HashSet<TypeVarId> {
         self.values
-            .values()
-            .flat_map(|schemes| schemes.iter().flat_map(Types::ftv))
+            .iter()
+            .flat_map(|(_, schemes)| schemes.iter().flat_map(Types::ftv))
             .collect()
     }
 }
+
+#[derive(Clone, Debug)]
+struct KnownVariant {
+    adt: String,
+    variant: String,
+}
+
+type KnownVariants = HashMap<String, KnownVariant>;
 
 #[derive(Default, Debug, Clone)]
 pub struct TypeVarSupply {
@@ -436,6 +758,61 @@ impl TypeVarSupply {
     }
 }
 
+fn apply_scheme_with_unifier(scheme: &Scheme, unifier: &mut Unifier) -> Scheme {
+    let preds = scheme
+        .preds
+        .iter()
+        .map(|pred| Predicate::new(pred.class.clone(), unifier.apply_type(&pred.typ)))
+        .collect();
+    let typ = unifier.apply_type(&scheme.typ);
+    Scheme::new(scheme.vars.clone(), preds, typ)
+}
+
+fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier) -> HashSet<TypeVarId> {
+    let mut ftv = unifier.apply_type(&scheme.typ).ftv();
+    for pred in &scheme.preds {
+        ftv.extend(unifier.apply_type(&pred.typ).ftv());
+    }
+    for var in &scheme.vars {
+        ftv.remove(&var.id);
+    }
+    ftv
+}
+
+fn env_ftv_with_unifier(env: &TypeEnv, unifier: &mut Unifier) -> HashSet<TypeVarId> {
+    let mut out = HashSet::new();
+    for (_name, schemes) in env.values.iter() {
+        for scheme in schemes {
+            out.extend(scheme_ftv_with_unifier(scheme, unifier));
+        }
+    }
+    out
+}
+
+fn generalize_with_unifier(
+    env: &TypeEnv,
+    preds: Vec<Predicate>,
+    typ: Type,
+    unifier: &mut Unifier,
+) -> Scheme {
+    let preds: Vec<Predicate> = preds
+        .into_iter()
+        .map(|pred| Predicate::new(pred.class, unifier.apply_type(&pred.typ)))
+        .collect();
+    let typ = unifier.apply_type(&typ);
+    let mut vars: Vec<TypeVar> = typ
+        .ftv()
+        .union(&preds.ftv())
+        .copied()
+        .collect::<HashSet<_>>()
+        .difference(&env_ftv_with_unifier(env, unifier))
+        .cloned()
+        .map(|id| TypeVar::new(id, None))
+        .collect();
+    vars.sort_by_key(|v| v.id);
+    Scheme::new(vars, preds, typ)
+}
+
 pub fn generalize(env: &TypeEnv, preds: Vec<Predicate>, typ: Type) -> Scheme {
     let mut vars: Vec<TypeVar> = typ
         .ftv()
@@ -451,9 +828,9 @@ pub fn generalize(env: &TypeEnv, preds: Vec<Predicate>, typ: Type) -> Scheme {
 }
 
 pub fn instantiate(scheme: &Scheme, supply: &mut TypeVarSupply) -> (Vec<Predicate>, Type) {
-    let mut subst = Subst::new();
+    let mut subst = Subst::new_sync();
     for v in &scheme.vars {
-        subst.insert(v.id, Type::Var(supply.fresh(v.name.clone())));
+        subst = subst.insert(v.id, Type::Var(supply.fresh(v.name.clone())));
     }
     (scheme.preds.apply(&subst), scheme.typ.apply(&subst))
 }
@@ -739,22 +1116,11 @@ impl TypeSystem {
                 Ok(Type::Tuple(out))
             }
             TypeExpr::Record(_, fields) => {
-                if fields.is_empty() {
-                    let tv = self.supply.fresh(Some("v".into()));
-                    return Ok(Type::app(Type::con("Dict", 1), Type::Var(tv)));
+                let mut out = Vec::new();
+                for (name, ty) in fields {
+                    out.push((name.clone(), self.type_from_expr(decl, params, ty)?));
                 }
-                let mut subst = Subst::new();
-                let mut types = Vec::new();
-                for (_, ty) in fields {
-                    types.push(self.type_from_expr(decl, params, ty)?);
-                }
-                let mut cur = types[0].clone();
-                for ty in types.iter().skip(1) {
-                    let s_next = unify(&cur.apply(&subst), &ty.apply(&subst))?;
-                    subst = compose_subst(s_next, subst);
-                    cur = cur.apply(&subst);
-                }
-                Ok(Type::app(Type::con("Dict", 1), cur.apply(&subst)))
+                Ok(Type::record(out))
             }
         })();
         res.map_err(|err| with_span(&span, err))
@@ -791,28 +1157,44 @@ impl TypeSystem {
         &mut self,
         expr: &Expr,
     ) -> Result<(TypedExpr, Vec<Predicate>, Type), TypeError> {
-        let (s, preds, t, typed) = infer_expr(&mut self.supply, &self.env, &self.adts, expr)
-            .map_err(|err| with_span(expr.span(), err))?;
-        let mut typed = typed.apply(&s);
-        let mut preds = preds.apply(&s);
-        let mut t = t.apply(&s);
+        let known = KnownVariants::new();
+        let mut unifier = Unifier::new();
+        let (preds, t, typed) =
+            infer_expr(&mut unifier, &mut self.supply, &self.env, &self.adts, &known, expr)
+                .map_err(|err| with_span(expr.span(), err))?;
+        let subst = unifier.into_subst();
+        let mut typed = typed.apply(&subst);
+        let mut preds = dedup_preds(preds.apply(&subst));
+        let mut t = t.apply(&subst);
         let improve = improve_indexable(&preds)?;
-        if !improve.is_empty() {
+        if !subst_is_empty(&improve) {
             typed = typed.apply(&improve);
-            preds = preds.apply(&improve);
+            preds = dedup_preds(preds.apply(&improve));
             t = t.apply(&improve);
         }
         Ok((typed, preds, t))
     }
 
     pub fn infer(&mut self, expr: &Expr) -> Result<(Vec<Predicate>, Type), TypeError> {
-        let (_typed, preds, t) = self.infer_typed(expr)?;
+        let known = KnownVariants::new();
+        let mut unifier = Unifier::new();
+        let (preds, t) =
+            infer_expr_type(&mut unifier, &mut self.supply, &self.env, &self.adts, &known, expr)
+                .map_err(|err| with_span(expr.span(), err))?;
+        let subst = unifier.into_subst();
+        let mut preds = dedup_preds(preds.apply(&subst));
+        let mut t = t.apply(&subst);
+        let improve = improve_indexable(&preds)?;
+        if !subst_is_empty(&improve) {
+            preds = dedup_preds(preds.apply(&improve));
+            t = t.apply(&improve);
+        }
         Ok((preds, t))
     }
 }
 
 fn improve_indexable(preds: &[Predicate]) -> Result<Subst, TypeError> {
-    let mut subst = Subst::new();
+    let mut subst = Subst::new_sync();
     loop {
         let mut changed = false;
         for pred in preds {
@@ -829,7 +1211,7 @@ fn improve_indexable(preds: &[Predicate]) -> Result<Subst, TypeError> {
             let container = parts[0].clone();
             let elem = parts[1].clone();
             let s = indexable_elem_subst(&container, &elem)?;
-            if !s.is_empty() {
+            if !subst_is_empty(&s) {
                 subst = compose_subst(s, subst);
                 changed = true;
             }
@@ -844,14 +1226,14 @@ fn improve_indexable(preds: &[Predicate]) -> Result<Subst, TypeError> {
 fn indexable_elem_subst(container: &Type, elem: &Type) -> Result<Subst, TypeError> {
     match container {
         Type::App(head, arg) => match head.as_ref() {
-            Type::Con(tc) if tc.name == "List" || tc.name == "Array" => unify(elem, arg),
-            _ => Ok(Subst::new()),
+            Type::Con(tc) if tc.name == "List" || tc.name == "Array" => unify(elem, arg.as_ref()),
+            _ => Ok(Subst::new_sync()),
         },
         Type::Tuple(elems) => {
             if elems.is_empty() {
-                return Ok(Subst::new());
+                return Ok(Subst::new_sync());
             }
-            let mut subst = Subst::new();
+            let mut subst = Subst::new_sync();
             let mut cur = elems[0].clone();
             for ty in elems.iter().skip(1) {
                 let s_next = unify(&cur.apply(&subst), &ty.apply(&subst))?;
@@ -862,112 +1244,43 @@ fn indexable_elem_subst(container: &Type, elem: &Type) -> Result<Subst, TypeErro
             let s_elem = unify(&elem, &cur.apply(&subst))?;
             Ok(compose_subst(s_elem, subst))
         }
-        _ => Ok(Subst::new()),
+        _ => Ok(Subst::new_sync()),
     }
 }
 
-fn infer_expr(
+fn infer_expr_type(
+    unifier: &mut Unifier,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &HashMap<String, AdtDecl>,
+    known: &KnownVariants,
     expr: &Expr,
-) -> Result<(Subst, Vec<Predicate>, Type, TypedExpr), TypeError> {
+) -> Result<(Vec<Predicate>, Type), TypeError> {
     let span = *expr.span();
     let res = (|| match expr {
-        Expr::Bool(_, v) => {
-            let t = Type::con("bool", 0);
-            Ok((
-                Subst::new(),
-                vec![],
-                t.clone(),
-                TypedExpr::new(t, TypedExprKind::Bool(*v)),
-            ))
-        }
-        Expr::Uint(_, v) => {
-            let t = Type::con("i32", 0);
-            Ok((
-                Subst::new(),
-                vec![],
-                t.clone(),
-                TypedExpr::new(t, TypedExprKind::Uint(*v)),
-            ))
-        }
-        Expr::Int(_, v) => {
-            let t = Type::con("i32", 0);
-            Ok((
-                Subst::new(),
-                vec![],
-                t.clone(),
-                TypedExpr::new(t, TypedExprKind::Int(*v)),
-            ))
-        }
-        Expr::Float(_, v) => {
-            let t = Type::con("f32", 0);
-            Ok((
-                Subst::new(),
-                vec![],
-                t.clone(),
-                TypedExpr::new(t, TypedExprKind::Float(*v)),
-            ))
-        }
-        Expr::String(_, v) => {
-            let t = Type::con("string", 0);
-            Ok((
-                Subst::new(),
-                vec![],
-                t.clone(),
-                TypedExpr::new(t, TypedExprKind::String(v.clone())),
-            ))
-        }
-        Expr::Uuid(_, v) => {
-            let t = Type::con("uuid", 0);
-            Ok((
-                Subst::new(),
-                vec![],
-                t.clone(),
-                TypedExpr::new(t, TypedExprKind::Uuid(*v)),
-            ))
-        }
-        Expr::DateTime(_, v) => {
-            let t = Type::con("datetime", 0);
-            Ok((
-                Subst::new(),
-                vec![],
-                t.clone(),
-                TypedExpr::new(t, TypedExprKind::DateTime(*v)),
-            ))
-        }
+        Expr::Bool(_, _) => Ok((vec![], Type::con("bool", 0))),
+        Expr::Uint(_, _) => Ok((vec![], Type::con("i32", 0))),
+        Expr::Int(_, _) => Ok((vec![], Type::con("i32", 0))),
+        Expr::Float(_, _) => Ok((vec![], Type::con("f32", 0))),
+        Expr::String(_, _) => Ok((vec![], Type::con("string", 0))),
+        Expr::Uuid(_, _) => Ok((vec![], Type::con("uuid", 0))),
+        Expr::DateTime(_, _) => Ok((vec![], Type::con("datetime", 0))),
         Expr::Var(var) => {
             let schemes = env
                 .lookup(&var.name)
                 .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
             if schemes.len() == 1 {
-                let (preds, t) = instantiate(&schemes[0], supply);
-                let typed = TypedExpr::new(
-                    t.clone(),
-                    TypedExprKind::Var {
-                        name: var.name.clone(),
-                        overloads: vec![],
-                    },
-                );
-                Ok((Subst::new(), preds, t, typed))
+                let scheme = apply_scheme_with_unifier(&schemes[0], unifier);
+                let (preds, t) = instantiate(&scheme, supply);
+                Ok((preds, t))
             } else {
-                let mut overloads = Vec::new();
                 for scheme in schemes {
                     if !scheme.vars.is_empty() || !scheme.preds.is_empty() {
                         return Err(TypeError::AmbiguousOverload(var.name.clone()));
                     }
-                    overloads.push(scheme.typ.clone());
                 }
                 let t = Type::Var(supply.fresh(Some(var.name.clone())));
-                let typed = TypedExpr::new(
-                    t.clone(),
-                    TypedExprKind::Var {
-                        name: var.name.clone(),
-                        overloads,
-                    },
-                );
-                Ok((Subst::new(), vec![], t, typed))
+                Ok((vec![], t))
             }
         }
         Expr::Lam(_, _scope, param, body) => {
@@ -977,34 +1290,82 @@ fn infer_expr(
                 param.name.clone(),
                 Scheme::new(vec![], vec![], param_ty.clone()),
             );
-            let (s1, preds, body_ty, typed_body) = infer_expr(supply, &env1, adts, body)?;
-            let fun_ty = Type::fun(param_ty.apply(&s1), body_ty.clone());
-            let typed = TypedExpr::new(
-                fun_ty.clone(),
-                TypedExprKind::Lam {
-                    param: param.name.clone(),
-                    body: Box::new(typed_body),
-                },
+            let mut known_body = known.clone();
+            known_body.remove(&param.name);
+            let (preds, body_ty) =
+                infer_expr_type(unifier, supply, &env1, adts, &known_body, body)?;
+            let fun_ty = Type::fun(
+                unifier.apply_type(&param_ty),
+                unifier.apply_type(&body_ty),
             );
-            Ok((s1.clone(), preds, fun_ty, typed))
+            Ok((preds, fun_ty))
         }
         Expr::App(_, f, x) => {
-            let (s1, p1, t1, typed_f) = infer_expr(supply, env, adts, f)?;
-            let (s2, p2, t2, typed_x) = infer_expr(supply, &env.apply(&s1), adts, x)?;
-            let res_ty = Type::Var(supply.fresh(Some("r".into())));
-            let s3 = unify(&t1.apply(&s2), &Type::fun(t2.clone(), res_ty.clone()))?;
-            let s = compose_subst(s3.clone(), compose_subst(s2, s1));
-            let preds = {
-                let mut out = p1.apply(&s3);
-                out.extend(p2.apply(&s3));
-                out
+            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, f)?;
+            let arg_hint = match unifier.apply_type(&t1) {
+                Type::Fun(arg, _) => Some(arg.as_ref().clone()),
+                _ => None,
             };
-            let result_ty = res_ty.apply(&s3);
-            let typed = TypedExpr::new(
-                result_ty.clone(),
-                TypedExprKind::App(Box::new(typed_f), Box::new(typed_x)),
-            );
-            Ok((s, preds, result_ty, typed))
+            let (p2, t2) = match (arg_hint, x.as_ref()) {
+                (Some(Type::Record(fields)), Expr::Dict(_, kvs)) => {
+                    let expected: HashMap<_, _> =
+                        fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    let mut seen = HashSet::new();
+                    let mut preds = Vec::new();
+                    for (k, v) in kvs {
+                        let expected_ty = expected
+                            .get(k)
+                            .ok_or_else(|| TypeError::UnknownField {
+                                field: k.clone(),
+                                typ: Type::Record(fields.clone()).to_string(),
+                            })?
+                            .clone();
+                        let (p1, t1) =
+                            infer_expr_type(unifier, supply, env, adts, known, v)?;
+                        unifier.unify(&t1, &expected_ty)?;
+                        preds.extend(p1);
+                        seen.insert(k.clone());
+                    }
+                    for key in expected.keys() {
+                        if !seen.contains(key) {
+                            return Err(TypeError::UnknownField {
+                                field: key.clone(),
+                                typ: Type::Record(fields.clone()).to_string(),
+                            });
+                        }
+                    }
+                    let record_ty = Type::Record(
+                        fields
+                            .iter()
+                            .map(|(k, v)| (k.clone(), unifier.apply_type(v)))
+                            .collect(),
+                    );
+                    Ok((preds, record_ty))
+                }
+                _ => infer_expr_type(unifier, supply, env, adts, known, x),
+            }?;
+            let res_ty = Type::Var(supply.fresh(Some("r".into())));
+            unifier.unify(&t1, &Type::fun(t2.clone(), res_ty.clone()))?;
+            let result_ty = unifier.apply_type(&res_ty);
+            let mut preds = p1;
+            preds.extend(p2);
+            Ok((preds, result_ty))
+        }
+        Expr::Project(_, base, field) => {
+            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, base)?;
+            let base_ty = unifier.apply_type(&t1);
+            let mut known_variant = None;
+            if let Expr::Var(var) = base.as_ref() {
+                if let Some(info) = known.get(&var.name) {
+                    known_variant = Some(info.clone());
+                }
+            }
+            if known_variant.is_none() {
+                known_variant = known_variant_from_expr(base, &base_ty, adts);
+            }
+            let field_ty =
+                resolve_projection(unifier, supply, adts, &base_ty, known_variant, field)?;
+            Ok((p1, field_ty))
         }
         Expr::Let(..) => {
             let mut bindings = Vec::new();
@@ -1019,21 +1380,348 @@ fn infer_expr(
                 }
             }
 
-            let mut subst = Subst::new();
             let mut env_cur = env.clone();
-            let mut typed_defs = Vec::new();
+            let mut known_cur = known.clone();
             for (v, d) in bindings {
-                let (s1, p1, t1, typed_def) = infer_expr(supply, &env_cur, adts, &d)?;
-                let env1 = env_cur.apply(&s1);
-                let scheme = generalize(&env1, p1, t1.apply(&s1));
-                env_cur = env1.clone();
+                let (p1, t1) = infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?;
+                let def_ty = unifier.apply_type(&t1);
+                let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
                 env_cur.extend(v.name.clone(), scheme);
-                typed_defs.push((v.name.clone(), typed_def));
-                subst = compose_subst(s1, subst);
+                if let Some(known_variant) = known_variant_from_expr(&d, &def_ty, adts) {
+                    known_cur.insert(
+                        v.name.clone(),
+                        KnownVariant {
+                            adt: known_variant.adt,
+                            variant: known_variant.variant,
+                        },
+                    );
+                } else {
+                    known_cur.remove(&v.name);
+                }
             }
 
-            let (s_body, p_body, t_body, typed_body) = infer_expr(supply, &env_cur, adts, cur)?;
-            subst = compose_subst(s_body.clone(), subst);
+            let (p_body, t_body) =
+                infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, cur)?;
+            Ok((p_body, t_body))
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, cond)?;
+            unifier.unify(&t1, &Type::con("bool", 0))?;
+            let (p2, t2) = infer_expr_type(unifier, supply, env, adts, known, then_expr)?;
+            let (p3, t3) = infer_expr_type(unifier, supply, env, adts, known, else_expr)?;
+            unifier.unify(&t2, &t3)?;
+            let out_ty = unifier.apply_type(&t2);
+            let mut preds = p1;
+            preds.extend(p2);
+            preds.extend(p3);
+            Ok((preds, out_ty))
+        }
+        Expr::Tuple(_, elems) => {
+            let mut preds = Vec::new();
+            let mut types = Vec::new();
+            for elem in elems {
+                let (p1, t1) =
+                    infer_expr_type(unifier, supply, env, adts, known, elem)?;
+                preds.extend(p1);
+                types.push(unifier.apply_type(&t1));
+            }
+            let tuple_ty = Type::Tuple(types);
+            Ok((preds, tuple_ty))
+        }
+        Expr::List(_, elems) => {
+            let elem_tv = Type::Var(supply.fresh(Some("a".into())));
+            let mut preds = Vec::new();
+            for elem in elems {
+                let (p1, t1) =
+                    infer_expr_type(unifier, supply, env, adts, known, elem)?;
+                unifier.unify(&t1, &elem_tv)?;
+                preds.extend(p1);
+            }
+            let list_ty = Type::app(Type::con("List", 1), unifier.apply_type(&elem_tv));
+            Ok((preds, list_ty))
+        }
+        Expr::Dict(_, kvs) => {
+            let elem_tv = Type::Var(supply.fresh(Some("v".into())));
+            let mut preds = Vec::new();
+            for (_k, v) in kvs {
+                let (p1, t1) =
+                    infer_expr_type(unifier, supply, env, adts, known, v)?;
+                unifier.unify(&t1, &elem_tv)?;
+                preds.extend(p1);
+            }
+            let dict_ty = Type::app(Type::con("Dict", 1), unifier.apply_type(&elem_tv));
+            Ok((preds, dict_ty))
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, scrutinee)?;
+            let mut preds = p1;
+            let res_ty = Type::Var(supply.fresh(Some("match".into())));
+            let patterns: Vec<Pattern> = arms.iter().map(|(pat, _)| pat.clone()).collect();
+
+            for (pat, expr) in arms {
+                let scrutinee_ty = unifier.apply_type(&t1);
+                let (p_pat, binds) = infer_pattern(unifier, supply, env, pat, &scrutinee_ty)?;
+                preds.extend(p_pat);
+
+                let mut env_arm = env.clone();
+                for (name, ty) in binds {
+                    env_arm.extend(name, Scheme::new(vec![], vec![], unifier.apply_type(&ty)));
+                }
+                let mut known_arm = known.clone();
+                if let Expr::Var(var) = scrutinee.as_ref() {
+                    match pat {
+                        Pattern::Named(_, name, _) => {
+                            if let Some((adt, _variant)) = ctor_lookup(adts, name) {
+                                known_arm.insert(
+                                    var.name.clone(),
+                                    KnownVariant {
+                                        adt: adt.name.clone(),
+                                        variant: name.clone(),
+                                    },
+                                );
+                            } else {
+                                known_arm.remove(&var.name);
+                            }
+                        }
+                        _ => {
+                            known_arm.remove(&var.name);
+                        }
+                    }
+                }
+                let (p_expr, t_expr) =
+                    infer_expr_type(unifier, supply, &env_arm, adts, &known_arm, expr)?;
+                unifier.unify(&res_ty, &t_expr)?;
+                preds.extend(p_expr);
+            }
+
+            let scrutinee_ty = unifier.apply_type(&t1);
+            check_match_exhaustive(adts, &scrutinee_ty, &patterns)?;
+            let out_ty = unifier.apply_type(&res_ty);
+            Ok((preds, out_ty))
+        }
+    })();
+    res.map_err(|err| with_span(&span, err))
+}
+
+fn infer_expr(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &HashMap<String, AdtDecl>,
+    known: &KnownVariants,
+    expr: &Expr,
+) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
+    let span = *expr.span();
+    let res = (|| match expr {
+        Expr::Bool(_, v) => {
+            let t = Type::con("bool", 0);
+            Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Bool(*v))))
+        }
+        Expr::Uint(_, v) => {
+            let t = Type::con("i32", 0);
+            Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Uint(*v))))
+        }
+        Expr::Int(_, v) => {
+            let t = Type::con("i32", 0);
+            Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Int(*v))))
+        }
+        Expr::Float(_, v) => {
+            let t = Type::con("f32", 0);
+            Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Float(*v))))
+        }
+        Expr::String(_, v) => {
+            let t = Type::con("string", 0);
+            Ok((
+                vec![],
+                t.clone(),
+                TypedExpr::new(t, TypedExprKind::String(v.clone())),
+            ))
+        }
+        Expr::Uuid(_, v) => {
+            let t = Type::con("uuid", 0);
+            Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Uuid(*v))))
+        }
+        Expr::DateTime(_, v) => {
+            let t = Type::con("datetime", 0);
+            Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::DateTime(*v))))
+        }
+        Expr::Var(var) => {
+            let schemes = env
+                .lookup(&var.name)
+                .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
+            if schemes.len() == 1 {
+                let scheme = apply_scheme_with_unifier(&schemes[0], unifier);
+                let (preds, t) = instantiate(&scheme, supply);
+                let typed = TypedExpr::new(
+                    t.clone(),
+                    TypedExprKind::Var {
+                        name: var.name.clone(),
+                        overloads: vec![],
+                    },
+                );
+                Ok((preds, t, typed))
+            } else {
+                let mut overloads = Vec::new();
+                for scheme in schemes {
+                    if !scheme.vars.is_empty() || !scheme.preds.is_empty() {
+                        return Err(TypeError::AmbiguousOverload(var.name.clone()));
+                    }
+                    let scheme = apply_scheme_with_unifier(scheme, unifier);
+                    overloads.push(scheme.typ);
+                }
+                let t = Type::Var(supply.fresh(Some(var.name.clone())));
+                let typed = TypedExpr::new(
+                    t.clone(),
+                    TypedExprKind::Var {
+                        name: var.name.clone(),
+                        overloads,
+                    },
+                );
+                Ok((vec![], t, typed))
+            }
+        }
+        Expr::Lam(_, _scope, param, body) => {
+            let param_ty = Type::Var(supply.fresh(Some(param.name.clone())));
+            let mut env1 = env.clone();
+            env1.extend(
+                param.name.clone(),
+                Scheme::new(vec![], vec![], param_ty.clone()),
+            );
+            let mut known_body = known.clone();
+            known_body.remove(&param.name);
+            let (preds, body_ty, typed_body) =
+                infer_expr(unifier, supply, &env1, adts, &known_body, body)?;
+            let fun_ty = Type::fun(
+                unifier.apply_type(&param_ty),
+                unifier.apply_type(&body_ty),
+            );
+            let typed = TypedExpr::new(
+                fun_ty.clone(),
+                TypedExprKind::Lam {
+                    param: param.name.clone(),
+                    body: Box::new(typed_body),
+                },
+            );
+            Ok((preds, fun_ty, typed))
+        }
+        Expr::App(_, f, x) => {
+            let (p1, t1, typed_f) = infer_expr(unifier, supply, env, adts, known, f)?;
+            let arg_hint = match unifier.apply_type(&t1) {
+                Type::Fun(arg, _) => Some(arg.as_ref().clone()),
+                _ => None,
+            };
+            let (p2, t2, typed_x) = match (arg_hint, x.as_ref()) {
+                (Some(Type::Record(fields)), Expr::Dict(_, kvs)) => {
+                    let mut preds = Vec::new();
+                    let mut typed_kvs = BTreeMap::new();
+                    let expected: HashMap<_, _> =
+                        fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    for (k, v) in kvs {
+                        let expected_ty = expected
+                            .get(k)
+                            .ok_or_else(|| TypeError::UnknownField {
+                                field: k.clone(),
+                                typ: Type::Record(fields.clone()).to_string(),
+                            })?
+                            .clone();
+                        let (p1, t1, typed_v) =
+                            infer_expr(unifier, supply, env, adts, known, v)?;
+                        unifier.unify(&t1, &expected_ty)?;
+                        preds.extend(p1);
+                        typed_kvs.insert(k.clone(), typed_v);
+                    }
+                    for key in expected.keys() {
+                        if !typed_kvs.contains_key(key) {
+                            return Err(TypeError::UnknownField {
+                                field: key.clone(),
+                                typ: Type::Record(fields.clone()).to_string(),
+                            });
+                        }
+                    }
+                    let record_ty = Type::Record(
+                        fields
+                            .iter()
+                            .map(|(k, v)| (k.clone(), unifier.apply_type(v)))
+                            .collect(),
+                    );
+                    let typed =
+                        TypedExpr::new(record_ty.clone(), TypedExprKind::Dict(typed_kvs));
+                    Ok((preds, record_ty, typed))
+                }
+                _ => infer_expr(unifier, supply, env, adts, known, x),
+            }?;
+            let res_ty = Type::Var(supply.fresh(Some("r".into())));
+            unifier.unify(&t1, &Type::fun(t2.clone(), res_ty.clone()))?;
+            let result_ty = unifier.apply_type(&res_ty);
+            let mut preds = p1;
+            preds.extend(p2);
+            let typed = TypedExpr::new(
+                result_ty.clone(),
+                TypedExprKind::App(Box::new(typed_f), Box::new(typed_x)),
+            );
+            Ok((preds, result_ty, typed))
+        }
+        Expr::Project(_, base, field) => {
+            let (p1, t1, typed_base) = infer_expr(unifier, supply, env, adts, known, base)?;
+            let base_ty = unifier.apply_type(&t1);
+            let mut known_variant = None;
+            if let Expr::Var(var) = base.as_ref() {
+                if let Some(info) = known.get(&var.name) {
+                    known_variant = Some(info.clone());
+                }
+            }
+            if known_variant.is_none() {
+                known_variant = known_variant_from_expr(base, &base_ty, adts);
+            }
+            let field_ty =
+                resolve_projection(unifier, supply, adts, &base_ty, known_variant, field)?;
+            let typed = TypedExpr::new(
+                field_ty.clone(),
+                TypedExprKind::Project {
+                    expr: Box::new(typed_base),
+                    field: field.clone(),
+                },
+            );
+            Ok((p1, field_ty, typed))
+        }
+        Expr::Let(..) => {
+            let mut bindings = Vec::new();
+            let mut cur = expr;
+            loop {
+                match cur {
+                    Expr::Let(_, v, d, b) => {
+                        bindings.push((v.clone(), d.clone()));
+                        cur = b.as_ref();
+                    }
+                    _ => break,
+                }
+            }
+
+            let mut env_cur = env.clone();
+            let mut known_cur = known.clone();
+            let mut typed_defs = Vec::new();
+            for (v, d) in bindings {
+                let (p1, t1, typed_def) =
+                    infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?;
+                let def_ty = unifier.apply_type(&t1);
+                let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
+                env_cur.extend(v.name.clone(), scheme);
+                if let Some(known_variant) = known_variant_from_expr(&d, &def_ty, adts) {
+                    known_cur.insert(
+                        v.name.clone(),
+                        KnownVariant {
+                            adt: known_variant.adt,
+                            variant: known_variant.variant,
+                        },
+                    );
+                } else {
+                    known_cur.remove(&v.name);
+                }
+                typed_defs.push((v.name.clone(), typed_def));
+            }
+
+            let (p_body, t_body, typed_body) =
+                infer_expr(unifier, supply, &env_cur, adts, &known_cur, cur)?;
 
             let mut typed = typed_body;
             for (name, def) in typed_defs.into_iter().rev() {
@@ -1046,20 +1734,21 @@ fn infer_expr(
                     },
                 );
             }
-            Ok((subst, p_body, t_body, typed))
+            Ok((p_body, t_body, typed))
         }
         Expr::Ite(_, cond, then_expr, else_expr) => {
-            let (s1, p1, t1, typed_cond) = infer_expr(supply, env, adts, cond)?;
-            let s2 = unify(&t1, &Type::con("bool", 0))?;
-            let env1 = env.apply(&compose_subst(s2.clone(), s1.clone()));
-            let (s3, p2, t2, typed_then) = infer_expr(supply, &env1, adts, then_expr)?;
-            let (s4, p3, t3, typed_else) = infer_expr(supply, &env1.apply(&s3), adts, else_expr)?;
-            let s5 = unify(&t2.apply(&s4), &t3.apply(&s4))?;
-            let s = compose_subst(s5.clone(), compose_subst(s4, compose_subst(s3, s2)));
+            let (p1, t1, typed_cond) =
+                infer_expr(unifier, supply, env, adts, known, cond)?;
+            unifier.unify(&t1, &Type::con("bool", 0))?;
+            let (p2, t2, typed_then) =
+                infer_expr(unifier, supply, env, adts, known, then_expr)?;
+            let (p3, t3, typed_else) =
+                infer_expr(unifier, supply, env, adts, known, else_expr)?;
+            unifier.unify(&t2, &t3)?;
+            let out_ty = unifier.apply_type(&t2);
             let mut preds = p1;
             preds.extend(p2);
             preds.extend(p3);
-            let out_ty = t3.apply(&s5);
             let typed = TypedExpr::new(
                 out_ty.clone(),
                 TypedExprKind::Ite {
@@ -1068,86 +1757,101 @@ fn infer_expr(
                     else_expr: Box::new(typed_else),
                 },
             );
-            Ok((s, preds.apply(&s5), out_ty, typed))
+            Ok((preds, out_ty, typed))
         }
         Expr::Tuple(_, elems) => {
-            let mut subst = Subst::new();
             let mut preds = Vec::new();
             let mut types = Vec::new();
             let mut typed_elems = Vec::new();
             for elem in elems {
-                let (s1, p1, t1, typed_elem) = infer_expr(supply, &env.apply(&subst), adts, elem)?;
-                subst = compose_subst(s1.clone(), subst);
-                preds.extend(p1.apply(&s1));
-                types.push(t1.apply(&s1));
+                let (p1, t1, typed_elem) =
+                    infer_expr(unifier, supply, env, adts, known, elem)?;
+                preds.extend(p1);
+                types.push(unifier.apply_type(&t1));
                 typed_elems.push(typed_elem);
             }
             let tuple_ty = Type::Tuple(types);
             let typed = TypedExpr::new(tuple_ty.clone(), TypedExprKind::Tuple(typed_elems));
-            Ok((subst, preds, tuple_ty, typed))
+            Ok((preds, tuple_ty, typed))
         }
         Expr::List(_, elems) => {
             let elem_tv = Type::Var(supply.fresh(Some("a".into())));
-            let mut subst = Subst::new();
             let mut preds = Vec::new();
             let mut typed_elems = Vec::new();
             for elem in elems {
-                let (s1, p1, t1, typed_elem) = infer_expr(supply, &env.apply(&subst), adts, elem)?;
-                let s2 = unify(&t1.apply(&s1), &elem_tv.apply(&subst))?;
-                subst = compose_subst(s2, compose_subst(s1, subst));
+                let (p1, t1, typed_elem) =
+                    infer_expr(unifier, supply, env, adts, known, elem)?;
+                unifier.unify(&t1, &elem_tv)?;
                 preds.extend(p1);
                 typed_elems.push(typed_elem);
             }
-            let list_ty = Type::app(Type::con("List", 1), elem_tv.apply(&subst));
+            let list_ty = Type::app(Type::con("List", 1), unifier.apply_type(&elem_tv));
             let typed = TypedExpr::new(list_ty.clone(), TypedExprKind::List(typed_elems));
-            Ok((subst.clone(), preds.apply(&subst), list_ty, typed))
+            Ok((preds, list_ty, typed))
         }
         Expr::Dict(_, kvs) => {
             let elem_tv = Type::Var(supply.fresh(Some("v".into())));
-            let mut subst = Subst::new();
             let mut preds = Vec::new();
             let mut typed_kvs = BTreeMap::new();
             for (k, v) in kvs {
-                let (s1, p1, t1, typed_v) = infer_expr(supply, &env.apply(&subst), adts, v)?;
-                let s2 = unify(&t1.apply(&s1), &elem_tv.apply(&subst))?;
-                subst = compose_subst(s2, compose_subst(s1, subst));
+                let (p1, t1, typed_v) =
+                    infer_expr(unifier, supply, env, adts, known, v)?;
+                unifier.unify(&t1, &elem_tv)?;
                 preds.extend(p1);
                 typed_kvs.insert(k.clone(), typed_v);
             }
-            let dict_ty = Type::app(Type::con("Dict", 1), elem_tv.apply(&subst));
+            let dict_ty = Type::app(Type::con("Dict", 1), unifier.apply_type(&elem_tv));
             let typed = TypedExpr::new(dict_ty.clone(), TypedExprKind::Dict(typed_kvs));
-            Ok((subst.clone(), preds.apply(&subst), dict_ty, typed))
+            Ok((preds, dict_ty, typed))
         }
         Expr::Match(_, scrutinee, arms) => {
-            let (s1, p1, t1, typed_scrutinee) = infer_expr(supply, env, adts, scrutinee)?;
-            let mut subst = s1;
+            let (p1, t1, typed_scrutinee) =
+                infer_expr(unifier, supply, env, adts, known, scrutinee)?;
             let mut preds = p1;
             let mut typed_arms = Vec::new();
             let res_ty = Type::Var(supply.fresh(Some("match".into())));
             let patterns: Vec<Pattern> = arms.iter().map(|(pat, _)| pat.clone()).collect();
 
             for (pat, expr) in arms {
-                let scrutinee_ty = t1.apply(&subst);
-                let (s_pat, p_pat, binds) = infer_pattern(supply, env, pat, &scrutinee_ty)?;
-                subst = compose_subst(s_pat.clone(), subst);
+                let scrutinee_ty = unifier.apply_type(&t1);
+                let (p_pat, binds) = infer_pattern(unifier, supply, env, pat, &scrutinee_ty)?;
                 preds.extend(p_pat);
 
-                let mut env_arm = env.apply(&subst);
+                let mut env_arm = env.clone();
                 for (name, ty) in binds {
-                    env_arm.extend(name, Scheme::new(vec![], vec![], ty));
+                    env_arm.extend(name, Scheme::new(vec![], vec![], unifier.apply_type(&ty)));
                 }
-                let (s_expr, p_expr, t_expr, typed_expr) =
-                    infer_expr(supply, &env_arm, adts, expr)?;
-                let res_ty = res_ty.apply(&subst);
-                let s_unify = unify(&res_ty, &t_expr.apply(&s_expr))?;
-                subst = compose_subst(s_unify.clone(), compose_subst(s_expr, subst));
+                let mut known_arm = known.clone();
+                if let Expr::Var(var) = scrutinee.as_ref() {
+                    match pat {
+                        Pattern::Named(_, name, _) => {
+                            if let Some((adt, _variant)) = ctor_lookup(adts, name) {
+                                known_arm.insert(
+                                    var.name.clone(),
+                                    KnownVariant {
+                                        adt: adt.name.clone(),
+                                        variant: name.clone(),
+                                    },
+                                );
+                            } else {
+                                known_arm.remove(&var.name);
+                            }
+                        }
+                        _ => {
+                            known_arm.remove(&var.name);
+                        }
+                    }
+                }
+                let (p_expr, t_expr, typed_expr) =
+                    infer_expr(unifier, supply, &env_arm, adts, &known_arm, expr)?;
+                unifier.unify(&res_ty, &t_expr)?;
                 preds.extend(p_expr);
                 typed_arms.push((pat.clone(), typed_expr));
             }
 
-            let scrutinee_ty = t1.apply(&subst);
+            let scrutinee_ty = unifier.apply_type(&t1);
             check_match_exhaustive(adts, &scrutinee_ty, &patterns)?;
-            let out_ty = res_ty.apply(&subst);
+            let out_ty = unifier.apply_type(&res_ty);
             let typed = TypedExpr::new(
                 out_ty.clone(),
                 TypedExprKind::Match {
@@ -1155,10 +1859,164 @@ fn infer_expr(
                     arms: typed_arms,
                 },
             );
-            Ok((subst, preds, out_ty, typed))
+            Ok((preds, out_ty, typed))
         }
     })();
     res.map_err(|err| with_span(&span, err))
+}
+
+fn ctor_lookup<'a>(
+    adts: &'a HashMap<String, AdtDecl>,
+    name: &str,
+) -> Option<(&'a AdtDecl, &'a AdtVariant)> {
+    let mut found = None;
+    for adt in adts.values() {
+        if let Some(variant) = adt.variants.iter().find(|v| v.name == name) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some((adt, variant));
+        }
+    }
+    found
+}
+
+fn record_fields(variant: &AdtVariant) -> Option<&[(String, Type)]> {
+    if variant.args.len() != 1 {
+        return None;
+    }
+    match &variant.args[0] {
+        Type::Record(fields) => Some(fields),
+        _ => None,
+    }
+}
+
+fn instantiate_variant_fields(
+    adt: &AdtDecl,
+    variant: &AdtVariant,
+    supply: &mut TypeVarSupply,
+) -> Option<(Type, Vec<(String, Type)>)> {
+    let fields = record_fields(variant)?;
+    let mut subst = Subst::new_sync();
+    for param in &adt.params {
+        let fresh = Type::Var(supply.fresh(param.var.name.clone()));
+        subst = subst.insert(param.var.id, fresh);
+    }
+    let result_ty = adt.result_type().apply(&subst);
+    let fields = fields
+        .iter()
+        .map(|(name, ty)| (name.clone(), ty.apply(&subst)))
+        .collect();
+    Some((result_ty, fields))
+}
+
+fn known_variant_from_expr(
+    expr: &Expr,
+    expr_ty: &Type,
+    adts: &HashMap<String, AdtDecl>,
+) -> Option<KnownVariant> {
+    if matches!(expr_ty, Type::Fun(..)) {
+        return None;
+    }
+    let ctor = match expr {
+        Expr::App(_, f, _) => match f.as_ref() {
+            Expr::Var(var) => var.name.clone(),
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let (adt, variant) = ctor_lookup(adts, &ctor)?;
+    if record_fields(variant).is_none() {
+        return None;
+    }
+    Some(KnownVariant {
+        adt: adt.name.clone(),
+        variant: variant.name.clone(),
+    })
+}
+
+fn resolve_projection(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    adts: &HashMap<String, AdtDecl>,
+    base_ty: &Type,
+    known_variant: Option<KnownVariant>,
+    field: &str,
+) -> Result<Type, TypeError> {
+    let (adt, variant) = if let Some(info) = known_variant {
+        let adt = adts
+            .get(&info.adt)
+            .ok_or_else(|| TypeError::UnknownTypeName(info.adt.clone()))?;
+        let variant = adt
+            .variants
+            .iter()
+            .find(|v| v.name == info.variant)
+            .ok_or_else(|| TypeError::UnknownField {
+                field: field.to_string(),
+                typ: base_ty.to_string(),
+            })?;
+        (adt, variant)
+    } else if let Some(adt_name) = type_head_name(base_ty) {
+        let adt = adts.get(adt_name).ok_or_else(|| TypeError::UnknownField {
+            field: field.to_string(),
+            typ: base_ty.to_string(),
+        })?;
+        if adt.variants.len() == 1 {
+            (adt, &adt.variants[0])
+        } else {
+            return Err(TypeError::FieldNotKnown {
+                field: field.to_string(),
+                typ: base_ty.to_string(),
+            });
+        }
+    } else if matches!(base_ty, Type::Var(_)) {
+        let mut candidates = Vec::new();
+        for adt in adts.values() {
+            if adt.variants.len() != 1 {
+                continue;
+            }
+            let variant = &adt.variants[0];
+            if let Some(fields) = record_fields(variant) {
+                if fields.iter().any(|(name, _)| name == field) {
+                    candidates.push((adt, variant));
+                }
+            }
+        }
+        if candidates.len() == 1 {
+            candidates.remove(0)
+        } else if candidates.is_empty() {
+            return Err(TypeError::UnknownField {
+                field: field.to_string(),
+                typ: base_ty.to_string(),
+            });
+        } else {
+            return Err(TypeError::FieldNotKnown {
+                field: field.to_string(),
+                typ: base_ty.to_string(),
+            });
+        }
+    } else {
+        return Err(TypeError::UnknownField {
+            field: field.to_string(),
+            typ: base_ty.to_string(),
+        });
+    };
+
+    let (result_ty, fields) = instantiate_variant_fields(adt, variant, supply)
+        .ok_or_else(|| TypeError::UnknownField {
+            field: field.to_string(),
+            typ: base_ty.to_string(),
+        })?;
+    let field_ty = fields
+        .iter()
+        .find(|(name, _)| name == field)
+        .map(|(_, ty)| ty.clone())
+        .ok_or_else(|| TypeError::UnknownField {
+            field: field.to_string(),
+            typ: base_ty.to_string(),
+        })?;
+    unifier.unify(base_ty, &result_ty)?;
+    Ok(unifier.apply_type(&field_ty))
 }
 
 fn decompose_fun(typ: &Type, arity: usize) -> Option<(Vec<Type>, Type)> {
@@ -1167,8 +2025,8 @@ fn decompose_fun(typ: &Type, arity: usize) -> Option<(Vec<Type>, Type)> {
     for _ in 0..arity {
         match cur {
             Type::Fun(a, b) => {
-                args.push(*a);
-                cur = *b;
+                args.push(a.as_ref().clone());
+                cur = b.as_ref().clone();
             }
             _ => return None,
         }
@@ -1177,18 +2035,18 @@ fn decompose_fun(typ: &Type, arity: usize) -> Option<(Vec<Type>, Type)> {
 }
 
 fn infer_pattern(
+    unifier: &mut Unifier,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     pat: &Pattern,
     scrutinee_ty: &Type,
-) -> Result<(Subst, Vec<Predicate>, Vec<(String, Type)>), TypeError> {
+) -> Result<(Vec<Predicate>, Vec<(String, Type)>), TypeError> {
     let span = *pat.span();
     let res = (|| match pat {
-        Pattern::Wildcard(..) => Ok((Subst::new(), vec![], vec![])),
+        Pattern::Wildcard(..) => Ok((vec![], vec![])),
         Pattern::Var(var) => Ok((
-            Subst::new(),
             vec![],
-            vec![(var.name.clone(), scrutinee_ty.clone())],
+            vec![(var.name.clone(), unifier.apply_type(scrutinee_ty))],
         )),
         Pattern::Named(_, name, ps) => {
             let schemes = env
@@ -1197,82 +2055,92 @@ fn infer_pattern(
             if schemes.len() != 1 {
                 return Err(TypeError::AmbiguousOverload(name.clone()));
             }
-            let (preds, ctor_ty) = instantiate(&schemes[0], supply);
+            let scheme = apply_scheme_with_unifier(&schemes[0], unifier);
+            let (preds, ctor_ty) = instantiate(&scheme, supply);
             let (arg_tys, res_ty) = decompose_fun(&ctor_ty, ps.len())
                 .ok_or(TypeError::UnsupportedExpr("pattern constructor"))?;
-            let s0 = unify(&res_ty, scrutinee_ty)?;
-            let mut subst = s0.clone();
-            let mut all_preds = preds.apply(&s0);
+            unifier.unify(&res_ty, scrutinee_ty)?;
+            let mut all_preds = preds;
             let mut bindings = Vec::new();
             for (p, arg_ty) in ps.iter().zip(arg_tys.iter()) {
-                let arg_ty = arg_ty.apply(&subst);
-                let (s1, p1, binds1) = infer_pattern(supply, env, p, &arg_ty)?;
-                subst = compose_subst(s1.clone(), subst);
-                all_preds.extend(p1.apply(&s1));
+                let arg_ty = unifier.apply_type(arg_ty);
+                let (p1, binds1) = infer_pattern(unifier, supply, env, p, &arg_ty)?;
+                all_preds.extend(p1);
                 bindings.extend(binds1);
             }
             let bindings = bindings
                 .into_iter()
-                .map(|(name, ty)| (name, ty.apply(&subst)))
+                .map(|(name, ty)| (name, unifier.apply_type(&ty)))
                 .collect();
-            Ok((subst, all_preds, bindings))
+            Ok((all_preds, bindings))
         }
         Pattern::List(_, ps) => {
             let elem_tv = Type::Var(supply.fresh(Some("a".into())));
             let list_ty = Type::app(Type::con("List", 1), elem_tv.clone());
-            let s0 = unify(scrutinee_ty, &list_ty)?;
-            let mut subst = s0.clone();
+            unifier.unify(scrutinee_ty, &list_ty)?;
             let mut preds = Vec::new();
             let mut bindings = Vec::new();
             for p in ps {
-                let elem_ty = elem_tv.apply(&subst);
-                let (s1, p1, binds1) = infer_pattern(supply, env, p, &elem_ty)?;
-                subst = compose_subst(s1.clone(), subst);
-                preds.extend(p1.apply(&s1));
+                let elem_ty = unifier.apply_type(&elem_tv);
+                let (p1, binds1) = infer_pattern(unifier, supply, env, p, &elem_ty)?;
+                preds.extend(p1);
                 bindings.extend(binds1);
             }
             let bindings = bindings
                 .into_iter()
-                .map(|(name, ty)| (name, ty.apply(&subst)))
+                .map(|(name, ty)| (name, unifier.apply_type(&ty)))
                 .collect();
-            Ok((subst, preds, bindings))
+            Ok((preds, bindings))
         }
         Pattern::Cons(_, head, tail) => {
             let elem_tv = Type::Var(supply.fresh(Some("a".into())));
             let list_ty = Type::app(Type::con("List", 1), elem_tv.clone());
-            let s0 = unify(scrutinee_ty, &list_ty)?;
-            let mut subst = s0.clone();
+            unifier.unify(scrutinee_ty, &list_ty)?;
             let mut preds = Vec::new();
             let mut bindings = Vec::new();
 
-            let head_ty = elem_tv.apply(&subst);
-            let (s1, p1, binds1) = infer_pattern(supply, env, head, &head_ty)?;
-            subst = compose_subst(s1.clone(), subst);
-            preds.extend(p1.apply(&s1));
+            let head_ty = unifier.apply_type(&elem_tv);
+            let (p1, binds1) = infer_pattern(unifier, supply, env, head, &head_ty)?;
+            preds.extend(p1);
             bindings.extend(binds1);
 
-            let tail_ty = Type::app(Type::con("List", 1), elem_tv.apply(&subst));
-            let (s2, p2, binds2) = infer_pattern(supply, env, tail, &tail_ty)?;
-            subst = compose_subst(s2.clone(), subst);
-            preds.extend(p2.apply(&s2));
+            let tail_ty = Type::app(Type::con("List", 1), unifier.apply_type(&elem_tv));
+            let (p2, binds2) = infer_pattern(unifier, supply, env, tail, &tail_ty)?;
+            preds.extend(p2);
             bindings.extend(binds2);
 
             let bindings = bindings
                 .into_iter()
-                .map(|(name, ty)| (name, ty.apply(&subst)))
+                .map(|(name, ty)| (name, unifier.apply_type(&ty)))
                 .collect();
-            Ok((subst, preds, bindings))
+            Ok((preds, bindings))
         }
         Pattern::Dict(_, keys) => {
-            let elem_tv = Type::Var(supply.fresh(Some("v".into())));
-            let dict_ty = Type::app(Type::con("Dict", 1), elem_tv.clone());
-            let s0 = unify(scrutinee_ty, &dict_ty)?;
-            let elem_ty = elem_tv.apply(&s0);
-            let bindings = keys
-                .iter()
-                .map(|k| (k.clone(), elem_ty.clone()))
-                .collect();
-            Ok((s0, vec![], bindings))
+            if let Type::Record(fields) = scrutinee_ty {
+                let mut bindings = Vec::new();
+                for key in keys {
+                    let ty = fields
+                        .iter()
+                        .find(|(name, _)| name == key)
+                        .map(|(_, ty)| unifier.apply_type(ty))
+                        .ok_or_else(|| TypeError::UnknownField {
+                            field: key.clone(),
+                            typ: scrutinee_ty.to_string(),
+                        })?;
+                    bindings.push((key.clone(), ty));
+                }
+                Ok((vec![], bindings))
+            } else {
+                let elem_tv = Type::Var(supply.fresh(Some("v".into())));
+                let dict_ty = Type::app(Type::con("Dict", 1), elem_tv.clone());
+                unifier.unify(scrutinee_ty, &dict_ty)?;
+                let elem_ty = unifier.apply_type(&elem_tv);
+                let bindings = keys
+                    .iter()
+                    .map(|k| (k.clone(), elem_ty.clone()))
+                    .collect();
+                Ok((vec![], bindings))
+            }
         }
     })();
     res.map_err(|err| with_span(&span, err))
@@ -1281,7 +2149,7 @@ fn infer_pattern(
 fn type_head_name(typ: &Type) -> Option<&str> {
     let mut cur = typ;
     while let Type::App(head, _) = cur {
-        cur = head;
+        cur = head.as_ref();
     }
     match cur {
         Type::Con(tc) => Some(tc.name.as_str()),
@@ -2043,7 +2911,7 @@ mod tests {
         let (preds, inst) = instantiate(&scheme, &mut supply);
         assert!(preds.is_empty());
         if let Type::Fun(l, r) = inst {
-            match (*l, *r) {
+            match (l.as_ref(), r.as_ref()) {
                 (Type::Var(_), Type::Var(_)) => {}
                 _ => panic!("expected polymorphic identity"),
             }
@@ -2101,6 +2969,11 @@ mod tests {
         parser.parse_program().unwrap().expr
     }
 
+    fn parse_program(code: &str) -> rex_ast::expr::Program {
+        let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
+        parser.parse_program().unwrap()
+    }
+
     fn strip_span(mut err: TypeError) -> TypeError {
         while let TypeError::Spanned { error, .. } = err {
             err = *error;
@@ -2143,6 +3016,214 @@ mod tests {
     }
 
     #[test]
+    fn infer_project_single_variant_let() {
+        let program = parse_program(
+            r#"
+            type MyADT = MyVariant1 { field1: i32, field2: f32 }
+            let
+                x = MyVariant1 { field1 = 1, field2 = 2.0 }
+            in
+                (x:field1, x:field2)
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(decl) = decl;
+            ts.inject_type_decl(decl).unwrap();
+        }
+        let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
+        let expected = Type::Tuple(vec![Type::con("i32", 0), Type::con("f32", 0)]);
+        assert_eq!(ty, expected);
+    }
+
+    #[test]
+    fn infer_project_known_variant_let() {
+        let program = parse_program(
+            r#"
+            type MyADT = MyVariant1 { field1: i32, field2: f32 } | MyVariant2 i32 f32
+            let
+                x = MyVariant1 { field1 = 1, field2 = 2.0 }
+            in
+                x:field1
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(decl) = decl;
+            ts.inject_type_decl(decl).unwrap();
+        }
+        let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_project_unknown_variant_error() {
+        let program = parse_program(
+            r#"
+            type MyADT = MyVariant1 { field1: i32, field2: f32 } | MyVariant2 i32 f32
+            let
+                x = MyVariant2 1 2.0
+            in
+                x:field1
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(decl) = decl;
+            ts.inject_type_decl(decl).unwrap();
+        }
+        let err = strip_span(ts.infer(program.expr.as_ref()).unwrap_err());
+        assert!(matches!(err, TypeError::FieldNotKnown { .. }));
+    }
+
+    #[test]
+    fn infer_project_lambda_param_single_variant() {
+        let program = parse_program(
+            r#"
+            type Boxed = Boxed { value: i32 }
+            let
+                f = \x -> x:value
+            in
+                f (Boxed { value = 1 })
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(decl) = decl;
+            ts.inject_type_decl(decl).unwrap();
+        }
+        let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_project_in_match_arm() {
+        let program = parse_program(
+            r#"
+            type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32
+            let
+                x = MyVariant1 { field1 = 1 }
+            in
+                match x
+                    when MyVariant1 { field1 } -> x:field1
+                    when MyVariant2 _ -> 0
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(decl) = decl;
+            ts.inject_type_decl(decl).unwrap();
+        }
+        let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_nested_let_lambda_match_option() {
+            let expr = parse_expr(
+            r#"
+            let
+                choose = \flag a b -> if flag then a else b,
+                build = \flag ->
+                    let
+                        pick = choose flag,
+                        val = pick 1 2
+                    in
+                        Some val
+            in
+                match (build true)
+                    when Some x -> x
+                    when None -> 0
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_polymorphic_apply_in_tuple() {
+        let expr = parse_expr(
+            r#"
+            let
+                apply = \f x -> f x,
+                id = \x -> x,
+                wrap = \x -> (x, x)
+            in
+                (apply id 1, apply id "hi", apply wrap true)
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        let expected = Type::Tuple(vec![
+            Type::con("i32", 0),
+            Type::con("string", 0),
+            Type::Tuple(vec![Type::con("bool", 0), Type::con("bool", 0)]),
+        ]);
+        assert_eq!(ty, expected);
+    }
+
+    #[test]
+    fn infer_nested_result_option_match() {
+        let expr = parse_expr(
+            r#"
+            let
+                unwrap = \x ->
+                    match x
+                        when Ok (Some v) -> v
+                        when Ok None -> 0
+                        when Err _ -> 0
+            in
+                unwrap (Ok (Some 5))
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_head_or_list_match() {
+        let expr = parse_expr(
+            r#"
+            let
+                head_or = \fallback xs ->
+                    match xs
+                        when [] -> fallback
+                        when x:xs -> x
+            in
+                (head_or 0 [1, 2, 3], head_or 0 [])
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        let expected = Type::Tuple(vec![Type::con("i32", 0), Type::con("i32", 0)]);
+        assert_eq!(ty, expected);
+    }
+
+    #[test]
+    fn infer_record_pattern_in_lambda() {
+        let program = parse_program(
+            r#"
+            type Pair = Pair { left: i32, right: i32 }
+            let
+                sum = \p ->
+                    match p
+                        when Pair { left, right } -> left + right
+            in
+                sum (Pair { left = 1, right = 2 })
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        for decl in &program.decls {
+            let rex_ast::expr::Decl::Type(decl) = decl;
+            ts.inject_type_decl(decl).unwrap();
+        }
+        let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
     fn infer_additive_monoid_constraint() {
         let expr = parse_expr("\\x y -> x + y");
         let mut ts = TypeSystem::with_prelude();
@@ -2151,10 +3232,10 @@ mod tests {
         assert_eq!(preds[0].class, "AdditiveMonoid");
 
         if let Type::Fun(a, rest) = ty {
-            if let Type::Fun(b, c) = *rest {
-                assert_eq!(*a, *b);
-                assert_eq!(*b, *c);
-                assert_eq!(preds[0].typ, *a);
+            if let Type::Fun(b, c) = rest.as_ref() {
+                assert_eq!(a.as_ref(), b.as_ref());
+                assert_eq!(b.as_ref(), c.as_ref());
+                assert_eq!(preds[0].typ, a.as_ref().clone());
                 return;
             }
         }
@@ -2170,10 +3251,10 @@ mod tests {
         assert_eq!(preds[0].class, "MultiplicativeMonoid");
 
         if let Type::Fun(a, rest) = ty {
-            if let Type::Fun(b, c) = *rest {
-                assert_eq!(*a, *b);
-                assert_eq!(*b, *c);
-                assert_eq!(preds[0].typ, *a);
+            if let Type::Fun(b, c) = rest.as_ref() {
+                assert_eq!(a.as_ref(), b.as_ref());
+                assert_eq!(b.as_ref(), c.as_ref());
+                assert_eq!(preds[0].typ, a.as_ref().clone());
                 return;
             }
         }
@@ -2189,10 +3270,10 @@ mod tests {
         assert_eq!(preds[0].class, "AdditiveGroup");
 
         if let Type::Fun(a, rest) = ty {
-            if let Type::Fun(b, c) = *rest {
-                assert_eq!(*a, *b);
-                assert_eq!(*b, *c);
-                assert_eq!(preds[0].typ, *a);
+            if let Type::Fun(b, c) = rest.as_ref() {
+                assert_eq!(a.as_ref(), b.as_ref());
+                assert_eq!(b.as_ref(), c.as_ref());
+                assert_eq!(preds[0].typ, a.as_ref().clone());
                 return;
             }
         }
@@ -2208,10 +3289,10 @@ mod tests {
         assert_eq!(preds[0].class, "Integral");
 
         if let Type::Fun(a, rest) = ty {
-            if let Type::Fun(b, c) = *rest {
-                assert_eq!(*a, *b);
-                assert_eq!(*b, *c);
-                assert_eq!(preds[0].typ, *a);
+            if let Type::Fun(b, c) = rest.as_ref() {
+                assert_eq!(a.as_ref(), b.as_ref());
+                assert_eq!(b.as_ref(), c.as_ref());
+                assert_eq!(preds[0].typ, a.as_ref().clone());
                 return;
             }
         }
