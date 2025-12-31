@@ -317,14 +317,70 @@ pub struct TypeDecl {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct FnDecl {
+    pub span: Span,
+    pub name: Var,
+    pub params: Vec<(Var, TypeExpr)>,
+    pub ret: TypeExpr,
+    pub constraints: Vec<TypeConstraint>,
+    pub body: Arc<Expr>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Decl {
     Type(TypeDecl),
+    Fn(FnDecl),
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Program {
     pub decls: Vec<Decl>,
     pub expr: Arc<Expr>,
+}
+
+impl Program {
+    /// Lower top-level `fn` declarations into nested `let` bindings around `expr`.
+    ///
+    /// This keeps the surface syntax (`Decl::Fn`) intact for tools, while giving
+    /// the type checker and evaluator a plain expression to work with.
+    pub fn expr_with_fns(&self) -> Arc<Expr> {
+        let mut out = self.expr.clone();
+        for decl in self.decls.iter().rev() {
+            let Decl::Fn(fd) = decl else {
+                continue;
+            };
+
+            let mut lam_body = fd.body.clone();
+            let mut lam_end = lam_body.span().end;
+            for (idx, (param, ann)) in fd.params.iter().enumerate().rev() {
+                let lam_constraints = if idx == 0 {
+                    fd.constraints.clone()
+                } else {
+                    Vec::new()
+                };
+                let span = Span::from_begin_end(param.span.begin, lam_end);
+                lam_body = Arc::new(Expr::Lam(
+                    span,
+                    Scope::new_sync(),
+                    param.clone(),
+                    Some(ann.clone()),
+                    lam_constraints,
+                    lam_body,
+                ));
+                lam_end = lam_body.span().end;
+            }
+
+            let mut sig = fd.ret.clone();
+            for (_, ann) in fd.params.iter().rev() {
+                let span = Span::from_begin_end(ann.span().begin, sig.span().end);
+                sig = TypeExpr::Fun(span, Box::new(ann.clone()), Box::new(sig));
+            }
+
+            let span = Span::from_begin_end(fd.span.begin, out.span().end);
+            out = Arc::new(Expr::Let(span, fd.name.clone(), Some(sig), lam_body, out));
+        }
+        out
+    }
 }
 
 #[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]

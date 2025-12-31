@@ -4,7 +4,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use rex_ast::expr::{Decl, Expr, Pattern, Program, TypeDecl, TypeExpr};
 use rex_lexer::{
-    span::{Position as RexPosition, Span},
+    span::{Position as RexPosition, Span, Spanned},
     LexicalError, Token, Tokens,
 };
 use rex_parser::Parser;
@@ -13,10 +13,10 @@ use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
     CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
     Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, Hover, HoverContents, HoverParams, HoverProviderCapability,
-    InitializeParams, InitializeResult, InitializedParams, MarkupContent, MarkupKind, MessageType,
-    Position, Range, ServerCapabilities, ServerInfo, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Url,
+    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    Location, MarkupContent, MarkupKind, MessageType, OneOf, Position, Range, ServerCapabilities,
+    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
@@ -61,6 +61,7 @@ impl LanguageServer for RexServer {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..CompletionOptions::default()
                 }),
+                definition_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -149,6 +150,57 @@ impl LanguageServer for RexServer {
         let items = completion_items(&text, position);
         Ok(Some(CompletionResponse::Array(items)))
     }
+
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = params.text_document_position_params.text_document.uri;
+        let position = params.text_document_position_params.position;
+        let text = { self.documents.read().await.get(&uri).cloned() };
+
+        let Some(text) = text else {
+            return Ok(None);
+        };
+
+        let Ok(tokens) = Token::tokenize(&text) else {
+            return Ok(None);
+        };
+
+        let Some((ident, _token_span)) = ident_token_at_position(&tokens, position) else {
+            return Ok(None);
+        };
+
+        // Parse on-demand. This keeps steady-state typing latency low; “go to
+        // definition” is an explicit user action where a little work is fine.
+        let Ok(tokens_for_parse) = Token::tokenize(&text) else {
+            return Ok(None);
+        };
+        let mut parser = Parser::new(tokens_for_parse);
+        let Ok(program) = parser.parse_program() else {
+            return Ok(None);
+        };
+
+        let (type_defs, ctor_defs) = index_type_and_constructor_spans(&program, &tokens);
+        let pos = lsp_to_rex_position(position);
+
+        let expr = program.expr_with_fns();
+        let value_def =
+            definition_span_for_value_ident(&expr, pos, &ident, &mut Vec::new(), &tokens);
+        let target_span = value_def
+            .or_else(|| ctor_defs.get(&ident).copied())
+            .or_else(|| type_defs.get(&ident).copied());
+
+        let Some(target_span) = target_span else {
+            return Ok(None);
+        };
+
+        let location = Location {
+            uri,
+            range: span_to_range(target_span),
+        };
+        Ok(Some(GotoDefinitionResponse::Scalar(location)))
+    }
 }
 
 fn diagnostics_from_text(text: &str) -> Vec<Diagnostic> {
@@ -223,6 +275,29 @@ fn diagnostic_for_span(span: Span, message: impl Into<String>) -> Diagnostic {
         source: Some("rex-lsp".to_string()),
         ..Diagnostic::default()
     }
+}
+
+fn range_contains_position(range: Range, position: Position) -> bool {
+    let after_start = position.line > range.start.line
+        || (position.line == range.start.line && position.character >= range.start.character);
+    let before_end = position.line < range.end.line
+        || (position.line == range.end.line && position.character < range.end.character);
+    after_start && before_end
+}
+
+fn range_touches_position(range: Range, position: Position) -> bool {
+    // LSP ranges are end-exclusive, but VS Code often sends positions at the
+    // *end* of a word (especially for single-character identifiers). For user
+    // interactions like go-to-definition, treating `position == end` as “still
+    // on that token” is a better UX trade.
+    if range_contains_position(range, position) {
+        return true;
+    }
+    if position.line != range.end.line || position.character != range.end.character {
+        return false;
+    }
+    // Exclude the degenerate case (empty range), just in case.
+    position.line != range.start.line || position.character != range.start.character
 }
 
 fn span_to_range(span: Span) -> Range {
@@ -355,19 +430,26 @@ fn completion_items_from_program(
         return Vec::new();
     }
 
-    let scope_vars = scope_at_position(program, position);
-    let mut value_names: BTreeSet<String> = scope_vars.into_iter().collect();
-    value_names.extend(BUILTIN_VALUES.iter().map(|value| value.to_string()));
-    value_names.extend(collect_constructors(program));
+    let mut value_kinds = values_in_scope_at_position(program, position);
+    for value in BUILTIN_VALUES {
+        value_kinds
+            .entry((*value).to_string())
+            .or_insert(CompletionItemKind::VARIABLE);
+    }
+    for ctor in collect_constructors(program) {
+        value_kinds
+            .entry(ctor)
+            .or_insert(CompletionItemKind::CONSTRUCTOR);
+    }
 
     let mut type_names = collect_type_names(program);
     type_names.extend(BUILTIN_TYPES.iter().map(|value| value.to_string()));
 
     let mut items = Vec::new();
     items.extend(
-        value_names
+        value_kinds
             .into_iter()
-            .map(|label| completion_item(label, CompletionItemKind::VARIABLE)),
+            .map(|(label, kind)| completion_item(label, kind)),
     );
     items.extend(
         type_names
@@ -383,13 +465,17 @@ fn completion_items_fallback(
     base_ident: Option<&str>,
     field_mode: bool,
 ) -> Vec<CompletionItem> {
-    let mut identifiers = BTreeSet::new();
+    let mut identifiers: HashMap<String, CompletionItemKind> = HashMap::new();
 
     if let Ok(tokens) = Token::tokenize(text) {
+        identifiers.extend(function_defs_from_tokens(&tokens));
+
         let mut index = 0usize;
         while index < tokens.items.len() {
             if let Token::Ident(name, ..) = &tokens.items[index] {
-                identifiers.insert(name.clone());
+                identifiers
+                    .entry(name.clone())
+                    .or_insert(CompletionItemKind::VARIABLE);
             }
             index += 1;
         }
@@ -410,7 +496,7 @@ fn completion_items_fallback(
 
     let mut items: Vec<CompletionItem> = identifiers
         .into_iter()
-        .map(|label| completion_item(label, CompletionItemKind::VARIABLE))
+        .map(|(label, kind)| completion_item(label, kind))
         .collect();
     items.extend(
         BUILTIN_TYPES
@@ -428,11 +514,234 @@ fn completion_item(label: String, kind: CompletionItemKind) -> CompletionItem {
     }
 }
 
+fn values_in_scope_at_position(
+    program: &Program,
+    position: Position,
+) -> HashMap<String, CompletionItemKind> {
+    let pos = lsp_to_rex_position(position);
+    let expr = program.expr_with_fns();
+    values_in_scope_at_expr(&expr, pos, &mut Vec::new()).unwrap_or_default()
+}
+
+fn values_in_scope_at_expr(
+    expr: &Expr,
+    position: RexPosition,
+    scope: &mut Vec<(String, CompletionItemKind)>,
+) -> Option<HashMap<String, CompletionItemKind>> {
+    if !position_in_span(position, *expr.span()) {
+        return None;
+    }
+
+    fn scope_to_map(scope: &[(String, CompletionItemKind)]) -> HashMap<String, CompletionItemKind> {
+        // If a name appears multiple times, prefer the most “specific” kind.
+        // (A function is still a value, but it’s nicer to present it as a function.)
+        let mut map = HashMap::new();
+        for (name, kind) in scope {
+            let slot = map.entry(name.clone()).or_insert(*kind);
+            if *slot != CompletionItemKind::FUNCTION && *kind == CompletionItemKind::FUNCTION {
+                *slot = *kind;
+            }
+        }
+        map
+    }
+
+    match expr {
+        Expr::Let(_span, var, _ann, def, body) => {
+            if position_in_span(position, *def.span()) {
+                return values_in_scope_at_expr(def, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+
+            if position_in_span(position, *body.span()) {
+                let kind = matches!(def.as_ref(), Expr::Lam(..))
+                    .then_some(CompletionItemKind::FUNCTION)
+                    .unwrap_or(CompletionItemKind::VARIABLE);
+                scope.push((var.name.to_string(), kind));
+                let out = values_in_scope_at_expr(body, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+                scope.pop();
+                return out;
+            }
+
+            Some(scope_to_map(scope))
+        }
+        Expr::Lam(_span, _scope, param, _ann, _constraints, body) => {
+            if position_in_span(position, *body.span()) {
+                scope.push((param.name.to_string(), CompletionItemKind::VARIABLE));
+                let out = values_in_scope_at_expr(body, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+                scope.pop();
+                return out;
+            }
+            Some(scope_to_map(scope))
+        }
+        Expr::Match(_span, scrutinee, arms) => {
+            if position_in_span(position, *scrutinee.span()) {
+                return values_in_scope_at_expr(scrutinee, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            for (pattern, arm) in arms {
+                if position_in_span(position, *pattern.span()) {
+                    return Some(scope_to_map(scope));
+                }
+                if position_in_span(position, *arm.span()) {
+                    let base_len = scope.len();
+                    scope.extend(
+                        pattern_vars(pattern)
+                            .into_iter()
+                            .map(|name| (name, CompletionItemKind::VARIABLE)),
+                    );
+                    let out = values_in_scope_at_expr(arm, position, scope)
+                        .or_else(|| Some(scope_to_map(scope)));
+                    scope.truncate(base_len);
+                    return out;
+                }
+            }
+            Some(scope_to_map(scope))
+        }
+        Expr::App(_span, fun, arg) => {
+            if position_in_span(position, *fun.span()) {
+                return values_in_scope_at_expr(fun, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            if position_in_span(position, *arg.span()) {
+                return values_in_scope_at_expr(arg, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            Some(scope_to_map(scope))
+        }
+        Expr::Project(_span, base, _field) => {
+            if position_in_span(position, *base.span()) {
+                return values_in_scope_at_expr(base, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            Some(scope_to_map(scope))
+        }
+        Expr::Tuple(_span, elems) | Expr::List(_span, elems) => {
+            for elem in elems {
+                if position_in_span(position, *elem.span()) {
+                    return values_in_scope_at_expr(elem, position, scope)
+                        .or_else(|| Some(scope_to_map(scope)));
+                }
+            }
+            Some(scope_to_map(scope))
+        }
+        Expr::Dict(_span, entries) => {
+            for value in entries.values() {
+                if position_in_span(position, *value.span()) {
+                    return values_in_scope_at_expr(value, position, scope)
+                        .or_else(|| Some(scope_to_map(scope)));
+                }
+            }
+            Some(scope_to_map(scope))
+        }
+        Expr::Ite(_span, cond, then_expr, else_expr) => {
+            if position_in_span(position, *cond.span()) {
+                return values_in_scope_at_expr(cond, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            if position_in_span(position, *then_expr.span()) {
+                return values_in_scope_at_expr(then_expr, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            if position_in_span(position, *else_expr.span()) {
+                return values_in_scope_at_expr(else_expr, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            Some(scope_to_map(scope))
+        }
+        Expr::Ann(_span, inner, _ann) => {
+            if position_in_span(position, *inner.span()) {
+                return values_in_scope_at_expr(inner, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+            }
+            Some(scope_to_map(scope))
+        }
+        _ => Some(scope_to_map(scope)),
+    }
+}
+
+fn function_defs_from_tokens(tokens: &Tokens) -> HashMap<String, CompletionItemKind> {
+    // Heuristic fallback when parsing fails: detect `let name = \...` and mark
+    // `name` as a function completion.
+    //
+    // Also detects `fn name ...` declarations.
+    //
+    // This keeps completion useful while the user is mid-edit and the AST is
+    // temporarily invalid.
+    let mut out = HashMap::new();
+    let items = &tokens.items;
+    let mut index = 0usize;
+
+    let next_non_ws = |mut i: usize| -> Option<usize> {
+        while i < items.len() && items[i].is_whitespace() {
+            i += 1;
+        }
+        (i < items.len()).then_some(i)
+    };
+
+    while index < items.len() {
+        if matches!(items[index], Token::Fn(..)) {
+            let Some(i) = next_non_ws(index + 1) else {
+                break;
+            };
+            if let Token::Ident(name, ..) = &items[i] {
+                out.insert(name.clone(), CompletionItemKind::FUNCTION);
+            }
+            index += 1;
+            continue;
+        }
+
+        if !matches!(items[index], Token::Let(..)) {
+            index += 1;
+            continue;
+        }
+
+        let Some(mut i) = next_non_ws(index + 1) else {
+            break;
+        };
+
+        let name = match &items[i] {
+            Token::Ident(name, ..) => name.clone(),
+            _ => {
+                index += 1;
+                continue;
+            }
+        };
+
+        // Walk to `=` (skipping whitespace) and then check if the next token is `\` / `λ`.
+        i += 1;
+        loop {
+            let Some(j) = next_non_ws(i) else {
+                break;
+            };
+            match &items[j] {
+                Token::Assign(..) => {
+                    let Some(k) = next_non_ws(j + 1) else {
+                        break;
+                    };
+                    if matches!(items[k], Token::BackSlash(..)) {
+                        out.insert(name, CompletionItemKind::FUNCTION);
+                    }
+                    break;
+                }
+                Token::SemiColon(..) => break,
+                _ => i = j + 1,
+            }
+        }
+
+        index += 1;
+    }
+
+    out
+}
+
 fn collect_type_names(program: &Program) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for decl in &program.decls {
-        let Decl::Type(TypeDecl { name, .. }) = decl;
-        names.insert(name.to_string());
+        if let Decl::Type(TypeDecl { name, .. }) = decl {
+            names.insert(name.to_string());
+        }
     }
     names
 }
@@ -440,9 +749,10 @@ fn collect_type_names(program: &Program) -> BTreeSet<String> {
 fn collect_constructors(program: &Program) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
     for decl in &program.decls {
-        let Decl::Type(TypeDecl { variants, .. }) = decl;
-        for variant in variants {
-            names.insert(variant.name.to_string());
+        if let Decl::Type(TypeDecl { variants, .. }) = decl {
+            for variant in variants {
+                names.insert(variant.name.to_string());
+            }
         }
     }
     names
@@ -481,7 +791,8 @@ fn field_completion_for_position(
     let env = field_env_at_position(program, position, &type_fields);
     let pos = lsp_to_rex_position(position);
 
-    if let Some(base) = project_base_at_position(&program.expr, pos) {
+    let expr = program.expr_with_fns();
+    if let Some(base) = project_base_at_position(&expr, pos) {
         if let Some(fields) = fields_for_expr(base, &env, &type_fields) {
             return Some(fields);
         }
@@ -502,15 +813,16 @@ fn field_completion_for_position(
 fn type_fields_map(program: &Program) -> HashMap<String, BTreeSet<String>> {
     let mut map = HashMap::new();
     for decl in &program.decls {
-        let Decl::Type(TypeDecl { name, variants, .. }) = decl;
-        let mut fields = BTreeSet::new();
-        for variant in variants {
-            for arg in &variant.args {
-                collect_fields_type_expr(arg, &mut fields);
+        if let Decl::Type(TypeDecl { name, variants, .. }) = decl {
+            let mut fields = BTreeSet::new();
+            for variant in variants {
+                for arg in &variant.args {
+                    collect_fields_type_expr(arg, &mut fields);
+                }
             }
-        }
-        if !fields.is_empty() {
-            map.insert(name.to_string(), fields);
+            if !fields.is_empty() {
+                map.insert(name.to_string(), fields);
+            }
         }
     }
     map
@@ -522,7 +834,8 @@ fn field_env_at_position(
     type_fields: &HashMap<String, BTreeSet<String>>,
 ) -> HashMap<String, BTreeSet<String>> {
     let pos = lsp_to_rex_position(position);
-    field_env_at_expr(&program.expr, pos, &HashMap::new(), type_fields).unwrap_or_default()
+    let expr = program.expr_with_fns();
+    field_env_at_expr(&expr, pos, &HashMap::new(), type_fields).unwrap_or_default()
 }
 
 fn field_env_at_expr(
@@ -922,113 +1235,272 @@ fn is_word_byte(byte: u8) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
-fn scope_at_position(program: &Program, position: Position) -> Vec<String> {
-    let pos = lsp_to_rex_position(position);
-    scope_at_expr(&program.expr, pos, &Vec::new()).unwrap_or_default()
+fn ident_token_at_position(tokens: &Tokens, position: Position) -> Option<(String, Span)> {
+    for token in &tokens.items {
+        let Token::Ident(name, span, ..) = token else {
+            continue;
+        };
+        if range_touches_position(span_to_range(*span), position) {
+            return Some((name.clone(), *span));
+        }
+    }
+    None
 }
 
-fn scope_at_expr(expr: &Expr, position: RexPosition, scope: &Vec<String>) -> Option<Vec<String>> {
+fn index_type_and_constructor_spans(
+    program: &Program,
+    tokens: &Tokens,
+) -> (HashMap<String, Span>, HashMap<String, Span>) {
+    fn span_contains_span(outer: Span, inner: Span) -> bool {
+        position_leq(outer.begin, inner.begin) && position_leq(inner.end, outer.end)
+    }
+
+    let mut type_defs = HashMap::new();
+    let mut ctor_defs = HashMap::new();
+
+    for decl in &program.decls {
+        let Decl::Type(td) = decl else {
+            continue;
+        };
+        let decl_span = td.span;
+
+        let mut expect_type_name = false;
+        let mut expect_ctor_name = false;
+
+        for token in &tokens.items {
+            let token_span = *token.span();
+            if !span_contains_span(decl_span, token_span) {
+                continue;
+            }
+
+            match token {
+                Token::Type(..) => {
+                    expect_type_name = true;
+                    expect_ctor_name = false;
+                }
+                Token::Ident(name, span, ..) if expect_type_name => {
+                    type_defs.insert(name.clone(), *span);
+                    expect_type_name = false;
+                }
+                Token::Assign(..) | Token::Pipe(..) => {
+                    expect_ctor_name = true;
+                }
+                Token::Ident(name, span, ..) if expect_ctor_name => {
+                    ctor_defs.insert(name.clone(), *span);
+                    expect_ctor_name = false;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    (type_defs, ctor_defs)
+}
+
+fn definition_span_for_value_ident(
+    expr: &Expr,
+    position: RexPosition,
+    ident: &str,
+    bindings: &mut Vec<(String, Span)>,
+    tokens: &Tokens,
+) -> Option<Span> {
     if !position_in_span(position, *expr.span()) {
         return None;
     }
 
+    fn span_contains_span(outer: Span, inner: Span) -> bool {
+        position_leq(outer.begin, inner.begin) && position_leq(inner.end, outer.end)
+    }
+
+    fn lookup_binding(bindings: &[(String, Span)], ident: &str) -> Option<Span> {
+        bindings
+            .iter()
+            .rev()
+            .find_map(|(name, span)| (name == ident).then_some(*span))
+    }
+
+    fn token_span_for_ident_in_span(tokens: &Tokens, within: Span, ident: &str) -> Option<Span> {
+        tokens.items.iter().find_map(|t| match t {
+            Token::Ident(name, span, ..) if name == ident && span_contains_span(within, *span) => {
+                Some(*span)
+            }
+            _ => None,
+        })
+    }
+
+    fn definition_in_pattern(
+        pat: &Pattern,
+        position: RexPosition,
+        ident: &str,
+        tokens: &Tokens,
+    ) -> Option<Span> {
+        if !position_in_span(position, *pat.span()) {
+            return None;
+        }
+
+        match pat {
+            Pattern::Var(var) => (var.name.as_ref() == ident).then_some(var.span),
+            Pattern::Named(_span, _name, args) => args
+                .iter()
+                .find_map(|arg| definition_in_pattern(arg, position, ident, tokens)),
+            Pattern::List(_span, elems) => elems
+                .iter()
+                .find_map(|elem| definition_in_pattern(elem, position, ident, tokens)),
+            Pattern::Cons(_span, head, tail) => {
+                definition_in_pattern(head, position, ident, tokens)
+                    .or_else(|| definition_in_pattern(tail, position, ident, tokens))
+            }
+            Pattern::Dict(span, keys) => {
+                if keys.iter().any(|k| k.as_ref() == ident) {
+                    token_span_for_ident_in_span(tokens, *span, ident).or(Some(*span))
+                } else {
+                    None
+                }
+            }
+            Pattern::Wildcard(..) => None,
+        }
+    }
+
+    fn push_pattern_bindings(pat: &Pattern, bindings: &mut Vec<(String, Span)>, tokens: &Tokens) {
+        match pat {
+            Pattern::Var(var) => bindings.push((var.name.to_string(), var.span)),
+            Pattern::Named(_span, _name, args) => {
+                for arg in args {
+                    push_pattern_bindings(arg, bindings, tokens);
+                }
+            }
+            Pattern::List(_span, elems) => {
+                for elem in elems {
+                    push_pattern_bindings(elem, bindings, tokens);
+                }
+            }
+            Pattern::Cons(_span, head, tail) => {
+                push_pattern_bindings(head, bindings, tokens);
+                push_pattern_bindings(tail, bindings, tokens);
+            }
+            Pattern::Dict(span, keys) => {
+                for key in keys {
+                    let key_span =
+                        token_span_for_ident_in_span(tokens, *span, key.as_ref()).unwrap_or(*span);
+                    bindings.push((key.to_string(), key_span));
+                }
+            }
+            Pattern::Wildcard(..) => {}
+        }
+    }
+
     match expr {
-        Expr::Let(_, var, _ann, def, body) => {
+        Expr::Var(var) => {
+            if position_in_span(position, var.span) && var.name.as_ref() == ident {
+                return lookup_binding(bindings, ident);
+            }
+            None
+        }
+        Expr::Let(_span, var, _ann, def, body) => {
+            if position_in_span(position, var.span) && var.name.as_ref() == ident {
+                return Some(var.span);
+            }
+
             if position_in_span(position, *def.span()) {
-                return scope_at_expr(def, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(def, position, ident, bindings, tokens);
             }
             if position_in_span(position, *body.span()) {
-                let mut scope_with = scope.clone();
-                scope_with.push(var.name.to_string());
-                if let Some(inner) = scope_at_expr(body, position, &scope_with) {
-                    return Some(inner);
-                }
-                return Some(scope_with);
+                bindings.push((var.name.to_string(), var.span));
+                let out = definition_span_for_value_ident(body, position, ident, bindings, tokens);
+                bindings.pop();
+                return out;
             }
-            Some(scope.clone())
+            None
         }
-        Expr::Lam(_, _scope, param, _ann, _constraints, body) => {
+        Expr::Lam(_span, _scope, param, _ann, _constraints, body) => {
+            if position_in_span(position, param.span) && param.name.as_ref() == ident {
+                return Some(param.span);
+            }
+
             if position_in_span(position, *body.span()) {
-                let mut scope_with = scope.clone();
-                scope_with.push(param.name.to_string());
-                if let Some(inner) = scope_at_expr(body, position, &scope_with) {
-                    return Some(inner);
-                }
-                return Some(scope_with);
+                bindings.push((param.name.to_string(), param.span));
+                let out = definition_span_for_value_ident(body, position, ident, bindings, tokens);
+                bindings.pop();
+                return out;
             }
-            Some(scope.clone())
+            None
         }
-        Expr::Match(_, scrutinee, arms) => {
+        Expr::Match(_span, scrutinee, arms) => {
             if position_in_span(position, *scrutinee.span()) {
-                return scope_at_expr(scrutinee, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(
+                    scrutinee, position, ident, bindings, tokens,
+                );
             }
-            for (pattern, arm) in arms {
-                if position_in_span(position, *pattern.span()) {
-                    return Some(scope.clone());
+
+            for (pat, arm) in arms {
+                if position_in_span(position, *pat.span()) {
+                    return definition_in_pattern(pat, position, ident, tokens);
                 }
+
                 if position_in_span(position, *arm.span()) {
-                    let mut scope_with = scope.clone();
-                    scope_with.extend(pattern_vars(pattern));
-                    if let Some(inner) = scope_at_expr(arm, position, &scope_with) {
-                        return Some(inner);
-                    }
-                    return Some(scope_with);
+                    let base_len = bindings.len();
+                    push_pattern_bindings(pat, bindings, tokens);
+                    let out =
+                        definition_span_for_value_ident(arm, position, ident, bindings, tokens);
+                    bindings.truncate(base_len);
+                    return out;
                 }
             }
-            Some(scope.clone())
+            None
         }
-        Expr::App(_, fun, arg) => {
+        Expr::App(_span, fun, arg) => {
             if position_in_span(position, *fun.span()) {
-                return scope_at_expr(fun, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(fun, position, ident, bindings, tokens);
             }
             if position_in_span(position, *arg.span()) {
-                return scope_at_expr(arg, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(arg, position, ident, bindings, tokens);
             }
-            Some(scope.clone())
+            None
         }
-        Expr::Project(_, base, _field) => {
+        Expr::Project(_span, base, _field) => {
             if position_in_span(position, *base.span()) {
-                return scope_at_expr(base, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(base, position, ident, bindings, tokens);
             }
-            Some(scope.clone())
+            None
         }
-        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
-            for elem in elems {
-                if position_in_span(position, *elem.span()) {
-                    return scope_at_expr(elem, position, scope).or_else(|| Some(scope.clone()));
-                }
-            }
-            Some(scope.clone())
-        }
-        Expr::Dict(_, entries) => {
-            for value in entries.values() {
-                if position_in_span(position, *value.span()) {
-                    return scope_at_expr(value, position, scope).or_else(|| Some(scope.clone()));
-                }
-            }
-            Some(scope.clone())
-        }
-        Expr::Ite(_, cond, then_expr, else_expr) => {
+        Expr::Tuple(_span, elems) | Expr::List(_span, elems) => elems.iter().find_map(|elem| {
+            position_in_span(position, *elem.span())
+                .then(|| definition_span_for_value_ident(elem, position, ident, bindings, tokens))
+                .flatten()
+        }),
+        Expr::Dict(_span, entries) => entries.values().find_map(|value| {
+            position_in_span(position, *value.span())
+                .then(|| definition_span_for_value_ident(value, position, ident, bindings, tokens))
+                .flatten()
+        }),
+        Expr::Ite(_span, cond, then_expr, else_expr) => {
             if position_in_span(position, *cond.span()) {
-                return scope_at_expr(cond, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(cond, position, ident, bindings, tokens);
             }
             if position_in_span(position, *then_expr.span()) {
-                return scope_at_expr(then_expr, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(
+                    then_expr, position, ident, bindings, tokens,
+                );
             }
             if position_in_span(position, *else_expr.span()) {
-                return scope_at_expr(else_expr, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(
+                    else_expr, position, ident, bindings, tokens,
+                );
             }
-            Some(scope.clone())
+            None
         }
-        Expr::Ann(_, inner, _ann) => {
+        Expr::Ann(_span, inner, _ann) => {
             if position_in_span(position, *inner.span()) {
-                return scope_at_expr(inner, position, scope).or_else(|| Some(scope.clone()));
+                return definition_span_for_value_ident(inner, position, ident, bindings, tokens);
             }
-            Some(scope.clone())
+            None
         }
-        _ => Some(scope.clone()),
+        _ => None,
     }
 }
+
+// Note: completion uses `values_in_scope_at_position` instead of a plain list of
+// names so it can classify `fn`/`let name = \...` as `CompletionItemKind::FUNCTION`.
 
 fn pattern_vars(pattern: &Pattern) -> Vec<String> {
     let mut vars = Vec::new();

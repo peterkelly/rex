@@ -1399,6 +1399,14 @@ fn type_from_annotation_expr_vars(
             } else if let Some(tv) = vars.get(&name) {
                 Ok(Type::var(tv.clone()))
             } else {
+                let is_upper = name
+                    .chars()
+                    .next()
+                    .map(|c| c.is_uppercase())
+                    .unwrap_or(false);
+                if is_upper {
+                    return Err(TypeError::UnknownTypeName(name));
+                }
                 let tv = supply.fresh(Some(name.clone()));
                 vars.insert(name.clone(), tv.clone());
                 Ok(Type::var(tv))
@@ -1650,7 +1658,8 @@ fn infer_expr_type(
             for (v, ann, d) in bindings {
                 let (p1, t1) = infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?;
                 if let Some(ann) = ann {
-                    let ann_ty = type_from_annotation_expr(adts, &ann)?;
+                    let mut ann_vars = HashMap::new();
+                    let ann_ty = type_from_annotation_expr_vars(adts, &ann, &mut ann_vars, supply)?;
                     unifier.unify(&t1, &ann_ty)?;
                 }
                 let def_ty = unifier.apply_type(&t1);
@@ -2017,7 +2026,8 @@ fn infer_expr(
                 let (p1, t1, typed_def) =
                     infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?;
                 if let Some(ann) = ann {
-                    let ann_ty = type_from_annotation_expr(adts, &ann)?;
+                    let mut ann_vars = HashMap::new();
+                    let ann_ty = type_from_annotation_expr_vars(adts, &ann, &mut ann_vars, supply)?;
                     unifier.unify(&t1, &ann_ty)?;
                 }
                 let def_ty = unifier.apply_type(&t1);
@@ -3501,8 +3511,9 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(decl) = decl;
-            ts.inject_type_decl(decl).unwrap();
+            if let rex_ast::expr::Decl::Type(decl) = decl {
+                ts.inject_type_decl(decl).unwrap();
+            }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![Type::con("i32", 0), Type::con("f32", 0)]);
@@ -3522,8 +3533,9 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(decl) = decl;
-            ts.inject_type_decl(decl).unwrap();
+            if let rex_ast::expr::Decl::Type(decl) = decl {
+                ts.inject_type_decl(decl).unwrap();
+            }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
@@ -3542,8 +3554,9 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(decl) = decl;
-            ts.inject_type_decl(decl).unwrap();
+            if let rex_ast::expr::Decl::Type(decl) = decl {
+                ts.inject_type_decl(decl).unwrap();
+            }
         }
         let err = strip_span(ts.infer(program.expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::FieldNotKnown { .. }));
@@ -3562,8 +3575,9 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(decl) = decl;
-            ts.inject_type_decl(decl).unwrap();
+            if let rex_ast::expr::Decl::Type(decl) = decl {
+                ts.inject_type_decl(decl).unwrap();
+            }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
@@ -3584,8 +3598,9 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(decl) = decl;
-            ts.inject_type_decl(decl).unwrap();
+            if let rex_ast::expr::Decl::Type(decl) = decl {
+                ts.inject_type_decl(decl).unwrap();
+            }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
@@ -3689,11 +3704,43 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(decl) = decl;
-            ts.inject_type_decl(decl).unwrap();
+            if let rex_ast::expr::Decl::Type(decl) = decl {
+                ts.inject_type_decl(decl).unwrap();
+            }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_fn_decl_simple() {
+        let program = parse_program(
+            r#"
+            fn add (x: i32, y: i32) -> i32 = x + y
+            add 1 2
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        let expr = program.expr_with_fns();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_fn_decl_polymorphic_where_constraints() {
+        let program = parse_program(
+            r#"
+            fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y
+            (my_add 1 2, my_add 1.0 2.0)
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        let expr = program.expr_with_fns();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(
+            ty,
+            Type::tuple(vec![Type::con("i32", 0), Type::con("f32", 0)])
+        );
     }
 
     #[test]

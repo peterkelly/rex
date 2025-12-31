@@ -4738,11 +4738,50 @@ mod tests {
         );
         let mut engine = Engine::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(ty) = decl;
-            engine.inject_type_decl(ty).unwrap();
+            if let rex_ast::expr::Decl::Type(ty) = decl {
+                engine.inject_type_decl(ty).unwrap();
+            }
         }
         let value = engine.eval(program.expr.as_ref()).unwrap();
         assert!(matches!(value, Value::I32(42)));
+    }
+
+    #[test]
+    fn eval_fn_decl_simple() {
+        let program = parse_program(
+            r#"
+            fn add (x: i32, y: i32) -> i32 = x + y
+            add 1 2
+            "#,
+        );
+        let mut engine = Engine::with_prelude();
+        for decl in &program.decls {
+            if let rex_ast::expr::Decl::Type(ty) = decl {
+                engine.inject_type_decl(ty).unwrap();
+            }
+        }
+        let expr = program.expr_with_fns();
+        let value = engine.eval(expr.as_ref()).unwrap();
+        assert!(matches!(value, Value::I32(3)));
+    }
+
+    #[test]
+    fn eval_fn_decl_with_where_constraints() {
+        let program = parse_program(
+            r#"
+            fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y
+            my_add 1 2
+            "#,
+        );
+        let mut engine = Engine::with_prelude();
+        for decl in &program.decls {
+            if let rex_ast::expr::Decl::Type(ty) = decl {
+                engine.inject_type_decl(ty).unwrap();
+            }
+        }
+        let expr = program.expr_with_fns();
+        let value = engine.eval(expr.as_ref()).unwrap();
+        assert!(matches!(value, Value::I32(3)));
     }
 
     #[test]
@@ -4758,8 +4797,9 @@ mod tests {
         );
         let mut engine = Engine::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(ty) = decl;
-            engine.inject_type_decl(ty).unwrap();
+            if let rex_ast::expr::Decl::Type(ty) = decl {
+                engine.inject_type_decl(ty).unwrap();
+            }
         }
         let value = engine.eval(program.expr.as_ref()).unwrap();
         match value {
@@ -4789,8 +4829,9 @@ mod tests {
         );
         let mut engine = Engine::with_prelude();
         for decl in &program.decls {
-            let rex_ast::expr::Decl::Type(ty) = decl;
-            engine.inject_type_decl(ty).unwrap();
+            if let rex_ast::expr::Decl::Type(ty) = decl {
+                engine.inject_type_decl(ty).unwrap();
+            }
         }
         let value = engine.eval(program.expr.as_ref()).unwrap();
         assert!(matches!(value, Value::I32(1)));

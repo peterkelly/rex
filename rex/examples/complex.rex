@@ -4,6 +4,8 @@ type Tree
     = Leaf { value: i32 }
     | Node { left: Tree, right: Tree }
 
+fn foo(x: i32, y: i32) -> i32 = x * 2
+
 let
     t = Node { 
         left = Node { 
@@ -47,4 +49,4 @@ in
     in
         match opt
             when Some x → x + alt
-            when None → 0
+            when None → foo 0 0

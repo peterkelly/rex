@@ -24,8 +24,9 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
 
 fn inject_type_decls_ts(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
     for decl in decls {
-        let Decl::Type(ty) = decl;
-        ts.inject_type_decl(ty)?;
+        if let Decl::Type(ty) = decl {
+            ts.inject_type_decl(ty)?;
+        }
     }
     Ok(())
 }
@@ -35,8 +36,9 @@ fn inject_type_decls_engine(
     decls: &[Decl],
 ) -> Result<(), rex_engine::EngineError> {
     for decl in decls {
-        let Decl::Type(ty) = decl;
-        engine.inject_type_decl(ty)?;
+        if let Decl::Type(ty) = decl {
+            engine.inject_type_decl(ty)?;
+        }
     }
     Ok(())
 }
@@ -65,7 +67,8 @@ fn assert_example_ok(name: &str) {
             let mut ts = TypeSystem::with_prelude();
             inject_type_decls_ts(&mut ts, &program.decls)
                 .unwrap_or_else(|err| panic!("type decl error in {}: {err}", path.display()));
-            ts.infer(program.expr.as_ref())
+            let expr = program.expr_with_fns();
+            ts.infer(expr.as_ref())
                 .unwrap_or_else(|err| panic!("type error in {}: {err}", path.display()));
 
             let mut engine = Engine::with_prelude();
@@ -73,7 +76,7 @@ fn assert_example_ok(name: &str) {
                 panic!("engine type decl error in {}: {err}", path.display())
             });
             engine
-                .eval(program.expr.as_ref())
+                .eval(expr.as_ref())
                 .unwrap_or_else(|err| panic!("eval error in {}: {err}", path.display()));
         })
         .unwrap();

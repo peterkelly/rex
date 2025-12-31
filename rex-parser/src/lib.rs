@@ -8,8 +8,8 @@
 use std::{collections::VecDeque, sync::Arc, vec};
 
 use rex_ast::expr::{
-    intern, Decl, Expr, Pattern, Program, Scope, TypeConstraint, TypeDecl, TypeExpr, TypeVariant,
-    Var,
+    intern, Decl, Expr, FnDecl, Pattern, Program, Scope, TypeConstraint, TypeDecl, TypeExpr,
+    TypeVariant, Var,
 };
 use rex_lexer::{
     span::{Position, Span, Spanned},
@@ -97,13 +97,23 @@ impl Parser {
 
     pub fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
         let mut decls = Vec::new();
-        while matches!(self.current_token(), Token::Type(..)) {
-            match self.parse_type_decl() {
-                Ok(decl) => decls.push(Decl::Type(decl)),
-                Err(e) => {
-                    self.record_error(e);
-                    break;
-                }
+        loop {
+            match self.current_token() {
+                Token::Type(..) => match self.parse_type_decl() {
+                    Ok(decl) => decls.push(Decl::Type(decl)),
+                    Err(e) => {
+                        self.record_error(e);
+                        break;
+                    }
+                },
+                Token::Fn(..) => match self.parse_fn_decl() {
+                    Ok(decl) => decls.push(Decl::Fn(decl)),
+                    Err(e) => {
+                        self.record_error(e);
+                        break;
+                    }
+                },
+                _ => break,
             }
         }
 
@@ -1001,6 +1011,245 @@ impl Parser {
         ))
     }
 
+    fn parse_type_expr_slice(&self, slice: &[Token]) -> Result<TypeExpr, ParserErr> {
+        if slice.is_empty() {
+            return Err(ParserErr::new(self.eof, "expected type".to_string()));
+        }
+        let eof = *slice.last().unwrap().span();
+        let tokens = Tokens {
+            items: slice.to_vec(),
+            eof,
+        };
+        let mut parser = Parser::new(tokens);
+        let expr = parser.parse_type_expr()?;
+        match parser.current_token() {
+            Token::Eof(..) => Ok(expr),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("unexpected {} in type", token),
+            )),
+        }
+    }
+
+    fn parse_expr_slice(&self, slice: &[Token]) -> Result<Expr, ParserErr> {
+        if slice.is_empty() {
+            return Err(ParserErr::new(self.eof, "expected expression".to_string()));
+        }
+        let eof = *slice.last().unwrap().span();
+        let tokens = Tokens {
+            items: slice.to_vec(),
+            eof,
+        };
+        let mut parser = Parser::new(tokens);
+        let expr = parser.parse_expr()?;
+        match parser.current_token() {
+            Token::Eof(..) => Ok(expr),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("unexpected {} in expression", token),
+            )),
+        }
+    }
+
+    fn parse_fn_decl(&mut self) -> Result<FnDecl, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::Fn(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `fn` got {}", token),
+                ));
+            }
+        };
+
+        let (name, name_span) = match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                let span = span;
+                self.next_token();
+                (name, span)
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected function name got {}", token),
+                ));
+            }
+        };
+
+        let name_var = Var::with_span(name_span, name);
+        let mut params: Vec<(Var, TypeExpr)> = Vec::new();
+
+        // (x: a, y: b)
+        match self.current_token() {
+            Token::ParenL(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `(` got {}", token),
+                ));
+            }
+        }
+
+        if !matches!(self.current_token(), Token::ParenR(..)) {
+            loop {
+                let (param_name, param_span) = match self.current_token() {
+                    Token::Ident(name, span, ..) => {
+                        let span = span;
+                        self.next_token();
+                        (name, span)
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected parameter name got {}", token),
+                        ));
+                    }
+                };
+                match self.current_token() {
+                    Token::Colon(..) => self.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `:` got {}", token),
+                        ));
+                    }
+                }
+                let ann = self.parse_type_expr()?;
+                params.push((Var::with_span(param_span, param_name), ann));
+                match self.current_token() {
+                    Token::Comma(..) => {
+                        self.next_token();
+                        continue;
+                    }
+                    Token::ParenR(..) => break,
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `,` or `)` got {}", token),
+                        ));
+                    }
+                }
+            }
+        }
+
+        match self.current_token() {
+            Token::ParenR(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `)` got {}", token),
+                ));
+            }
+        }
+
+        // `->`
+        match self.current_token() {
+            Token::ArrowR(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `->` got {}", token),
+                ));
+            }
+        }
+
+        // Find `=` and (optional) `where` between return type and `=`.
+        let ret_start = self.token_cursor;
+        let mut depth = 0usize;
+        let mut assign_idx = None;
+        for i in ret_start..self.tokens.len() {
+            match self.tokens[i] {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                Token::Assign(..) if depth == 0 => {
+                    assign_idx = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let assign_idx = assign_idx.ok_or_else(|| {
+            ParserErr::new(self.eof, "expected `=` in function declaration".to_string())
+        })?;
+
+        let mut where_idx = None;
+        depth = 0;
+        for i in ret_start..assign_idx {
+            match self.tokens[i] {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                Token::Where(..) if depth == 0 => {
+                    where_idx = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let ret_end = where_idx.unwrap_or(assign_idx);
+        let ret = self.parse_type_expr_slice(&self.tokens[ret_start..ret_end])?;
+        self.token_cursor = ret_end;
+
+        let mut constraints = Vec::new();
+        if matches!(self.current_token(), Token::Where(..)) {
+            self.next_token();
+            constraints = self.parse_type_constraints()?;
+        }
+
+        // `=`
+        match self.current_token() {
+            Token::Assign(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `=` got {}", token),
+                ));
+            }
+        }
+
+        // Parse a body expression, delimited by newline (unless inside parens/brackets/braces).
+        let body_start = self.token_cursor;
+        let body_line = match self.tokens.get(body_start) {
+            Some(tok) => tok.span().begin.line,
+            None => return Err(ParserErr::new(self.eof, "unexpected EOF".to_string())),
+        };
+        let mut depth = 0usize;
+        let mut body_end = body_start;
+        for i in body_start..self.tokens.len() {
+            let tok = &self.tokens[i];
+            if depth == 0 && tok.span().begin.line > body_line {
+                break;
+            }
+            match tok {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                _ => {}
+            }
+            body_end = i + 1;
+        }
+        let body = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
+        self.token_cursor = body_end;
+        let span_end = body.span().end;
+
+        Ok(FnDecl {
+            span: Span::from_begin_end(span_begin, span_end),
+            name: name_var,
+            params,
+            ret,
+            constraints,
+            body: Arc::new(body),
+        })
+    }
+
     fn parse_type_decl(&mut self) -> Result<TypeDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Type(span, ..) => {
@@ -1711,8 +1960,69 @@ mod tests {
                     other => panic!("expected record type, got {other:?}"),
                 }
             }
+            other => panic!("expected type decl, got {other:?}"),
         }
         assert_expr_eq!(program.expr, u!(span!(3:9 - 3:11); 42));
+    }
+
+    #[test]
+    fn test_parse_fn_decl_simple() {
+        let code = r#"
+        fn add (x: i32, y: i32) -> i32 = x + y
+        add 1 2
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("add"));
+                assert_eq!(fd.params.len(), 2);
+                assert_eq!(fd.params[0].0.name, intern("x"));
+                assert!(matches!(
+                    fd.params[0].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
+                ));
+                assert_eq!(fd.params[1].0.name, intern("y"));
+                assert!(matches!(
+                    fd.params[1].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
+                ));
+                assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "i32"));
+                assert!(fd.constraints.is_empty());
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fn_decl_where_constraints() {
+        let code = r#"
+        fn my_fun (x: a, y: b) -> c where Iterable (a, b) = x
+        my_fun
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("my_fun"));
+                assert_eq!(fd.params.len(), 2);
+                assert!(matches!(
+                    fd.constraints[0].class,
+                    ref n if n.as_ref() == "Iterable"
+                ));
+                match &fd.constraints[0].typ {
+                    TypeExpr::Tuple(_, elems) => {
+                        assert_eq!(elems.len(), 2);
+                        assert!(matches!(elems[0], TypeExpr::Name(_, ref n) if n.as_ref() == "a"));
+                        assert!(matches!(elems[1], TypeExpr::Name(_, ref n) if n.as_ref() == "b"));
+                    }
+                    other => panic!("expected tuple constraint type, got {other:?}"),
+                }
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
     }
 
     #[test]
