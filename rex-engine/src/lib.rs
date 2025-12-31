@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use rex_ast::expr::{
@@ -341,6 +341,27 @@ impl OverloadedFn {
         for arg_ty in self.applied_types.iter().rev() {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
+        if engine.types.class_methods.contains_key(&self.name) {
+            // Defer typeclass method selection until we have concrete argument
+            // types. This mirrors the native-overload behavior and keeps
+            // polymorphic code runnable without guessing an instance.
+            let mut func = engine.resolve_class_method_value(&self.name, &full_ty)?;
+            let mut cur_ty = full_ty;
+            for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
+                let (arg_ty, rest_ty) = split_fun(&cur_ty)
+                    .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
+                let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
+                    name: self.name.clone(),
+                    expected: arg_ty.to_string(),
+                    got: applied_ty.to_string(),
+                })?;
+                let rest_ty = rest_ty.apply(&subst);
+                func = apply(engine, func, applied, Some(&cur_ty), Some(applied_ty))?;
+                cur_ty = rest_ty;
+            }
+            return Ok(func);
+        }
+
         let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
         (imp.func)(engine, &full_ty, &self.applied)
     }
@@ -823,6 +844,7 @@ pub struct Engine {
     natives: NativeRegistry,
     typeclasses: TypeclassRegistry,
     types: TypeSystem,
+    typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Value>>>,
 }
 
 impl Engine {
@@ -832,6 +854,7 @@ impl Engine {
             natives: NativeRegistry::default(),
             typeclasses: TypeclassRegistry::default(),
             types: TypeSystem::new(),
+            typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -841,6 +864,7 @@ impl Engine {
             natives: NativeRegistry::default(),
             typeclasses: TypeclassRegistry::default(),
             types: TypeSystem::with_prelude(),
+            typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
         };
         engine.inject_prelude().expect("prelude injection failed");
         engine
@@ -1092,6 +1116,26 @@ impl Engine {
         inject_numeric_ops(self)?;
         inject_list_builtins(self)?;
         inject_option_result_builtins(self)?;
+        self.register_prelude_typeclass_instances()?;
+        Ok(())
+    }
+
+    fn register_prelude_typeclass_instances(&mut self) -> Result<(), EngineError> {
+        // The type system prelude injects the *heads* of the standard instances.
+        // The evaluator also needs the *method bodies* so class method lookup can
+        // produce actual values at runtime.
+        let program = rex_ts::prelude_typeclasses_program();
+        for decl in &program.decls {
+            let Decl::Instance(inst_decl) = decl else { continue };
+            if inst_decl.methods.is_empty() {
+                continue;
+            }
+            let prepared = self
+                .types
+                .prepare_instance_decl(inst_decl)
+                .map_err(EngineError::Type)?;
+            self.register_typeclass_instance(inst_decl, &prepared)?;
+        }
         Ok(())
     }
 
@@ -1332,6 +1376,48 @@ impl Engine {
         }
 
         self.typeclasses.resolve(&info.class, name, &param_type)
+    }
+
+    fn resolve_class_method_value(&self, name: &Symbol, typ: &Type) -> Result<Value, EngineError> {
+        if typ.ftv().is_empty() {
+            if let Ok(cache) = self.typeclass_cache.lock() {
+                if let Some(value) = cache.get(&(name.clone(), typ.clone())) {
+                    return Ok(value.clone());
+                }
+            }
+        }
+
+        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
+            Ok(res) => res,
+            Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
+                return Ok(Value::Overloaded(OverloadedFn::new(name.clone(), typ.clone())));
+            }
+            Err(err) => return Err(err),
+        };
+        let specialized = typed.as_ref().apply(&s);
+        let value = eval_typed_expr(self, &def_env, &specialized)?;
+
+        if typ.ftv().is_empty() {
+            if let Ok(mut cache) = self.typeclass_cache.lock() {
+                cache.insert((name.clone(), typ.clone()), value.clone());
+            }
+        }
+        Ok(value)
+    }
+
+    fn resolve_global_value(&self, name: &Symbol, typ: &Type) -> Result<Value, EngineError> {
+        if let Some(value) = self.env.get(name) {
+            match value {
+                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                    native.call_zero(self)
+                }
+                _ => Ok(value),
+            }
+        } else if self.types.class_methods.contains_key(name) {
+            self.resolve_class_method_value(name, typ)
+        } else {
+            self.resolve_native_value(name.as_ref(), typ)
+        }
     }
 
     fn has_impl(&self, name: &str, typ: &Type) -> bool {
@@ -1806,7 +1892,35 @@ fn resolve_arg_type(arg_type: Option<&Type>, arg: &Value) -> Result<Type, Engine
 
 fn resolve_binary_op(engine: &Engine, name: &str, elem_ty: &Type) -> Result<Value, EngineError> {
     let op_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
-    engine.resolve_native_value(name, &op_ty)
+    engine.resolve_global_value(&sym(name), &op_ty)
+}
+
+fn eq_via_class(
+    engine: &Engine,
+    op_name: &Symbol,
+    typ: &Type,
+    lhs: &Value,
+    rhs: &Value,
+) -> Result<bool, EngineError> {
+    let bool_ty = Type::con("bool", 0);
+    let eq_ty = Type::fun(typ.clone(), Type::fun(typ.clone(), bool_ty.clone()));
+    let func = engine.resolve_global_value(&sym("=="), &eq_ty)?;
+    let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
+    let res = apply(
+        engine,
+        step,
+        rhs.clone(),
+        Some(&Type::fun(typ.clone(), bool_ty)),
+        Some(typ),
+    )?;
+    match res {
+        Value::Bool(b) => Ok(b),
+        other => Err(EngineError::NativeType {
+            name: op_name.clone(),
+            expected: "bool".into(),
+            got: other.type_name().into(),
+        }),
+    }
 }
 
 fn len_value_for_type(elem_ty: &Type, len: usize, name: &str) -> Result<Value, EngineError> {
@@ -2133,27 +2247,11 @@ fn eq_value_by_type(
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
-            _ => {
-                let eq_ty = Type::fun(typ.clone(), Type::fun(typ.clone(), Type::con("bool", 0)));
-                let eq_name = sym("==");
-                let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
-                let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
-                let res = apply(
-                    engine,
-                    step,
-                    rhs.clone(),
-                    Some(&Type::fun(typ.clone(), Type::con("bool", 0))),
-                    Some(typ),
-                )?;
-                match res {
-                    Value::Bool(b) => Ok(b),
-                    other => Err(EngineError::NativeType {
-                        name: op_name.clone(),
-                        expected: "bool".into(),
-                        got: other.type_name().into(),
-                    }),
-                }
-            }
+            _ => Err(EngineError::NativeType {
+                name: op_name.clone(),
+                expected: tc.name.to_string(),
+                got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
+            }),
         },
         TypeKind::App(head, elem) => {
             if let TypeKind::Con(tc) = head.as_ref() {
@@ -2164,7 +2262,7 @@ fn eq_value_by_type(
                         return Ok(false);
                     }
                     for (l, r) in left.iter().zip(right.iter()) {
-                        if !eq_value_by_type(engine, op_name, elem, l, r)? {
+                        if !eq_via_class(engine, op_name, elem, l, r)? {
                             return Ok(false);
                         }
                     }
@@ -2182,7 +2280,7 @@ fn eq_value_by_type(
                                     got: lhs.type_name().into(),
                                 });
                             }
-                            eq_value_by_type(engine, op_name, elem, &args_a[0], &args_b[0])
+                            eq_via_class(engine, op_name, elem, &args_a[0], &args_b[0])
                         }
                         _ => Err(EngineError::NativeType {
                             name: op_name.clone(),
@@ -2198,7 +2296,7 @@ fn eq_value_by_type(
                                 return Ok(false);
                             }
                             for (l, r) in left.iter().zip(right.iter()) {
-                                if !eq_value_by_type(engine, op_name, elem, l, r)? {
+                                if !eq_via_class(engine, op_name, elem, l, r)? {
                                     return Ok(false);
                                 }
                             }
@@ -2229,7 +2327,7 @@ fn eq_value_by_type(
                                         got: lhs.type_name().into(),
                                     });
                                 }
-                                eq_value_by_type(engine, op_name, elem, &args_a[0], &args_b[0])
+                                eq_via_class(engine, op_name, elem, &args_a[0], &args_b[0])
                             }
                             (Value::Adt(tag, args_a), Value::Adt(_, args_b))
                                 if sym_eq(tag, "Err") =>
@@ -2241,7 +2339,7 @@ fn eq_value_by_type(
                                         got: lhs.type_name().into(),
                                     });
                                 }
-                                eq_value_by_type(engine, op_name, err_ty, &args_a[0], &args_b[0])
+                                eq_via_class(engine, op_name, err_ty, &args_a[0], &args_b[0])
                             }
                             _ => Err(EngineError::NativeType {
                                 name: op_name.clone(),
@@ -2252,46 +2350,18 @@ fn eq_value_by_type(
                     }
                 }
             }
-            let eq_ty = Type::fun(typ.clone(), Type::fun(typ.clone(), Type::con("bool", 0)));
-            let eq_name = sym("==");
-            let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
-            let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
-            let res = apply(
-                engine,
-                step,
-                rhs.clone(),
-                Some(&Type::fun(typ.clone(), Type::con("bool", 0))),
-                Some(typ),
-            )?;
-            match res {
-                Value::Bool(b) => Ok(b),
-                other => Err(EngineError::NativeType {
-                    name: op_name.clone(),
-                    expected: "bool".into(),
-                    got: other.type_name().into(),
-                }),
-            }
+            Err(EngineError::NativeType {
+                name: op_name.clone(),
+                expected: typ.to_string(),
+                got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
+            })
         }
         _ => {
-            let eq_ty = Type::fun(typ.clone(), Type::fun(typ.clone(), Type::con("bool", 0)));
-            let eq_name = sym("==");
-            let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
-            let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
-            let res = apply(
-                engine,
-                step,
-                rhs.clone(),
-                Some(&Type::fun(typ.clone(), Type::con("bool", 0))),
-                Some(typ),
-            )?;
-            match res {
-                Value::Bool(b) => Ok(b),
-                other => Err(EngineError::NativeType {
-                    name: op_name.clone(),
-                    expected: "bool".into(),
-                    got: other.type_name().into(),
-                }),
-            }
+            Err(EngineError::NativeType {
+                name: op_name.clone(),
+                expected: typ.to_string(),
+                got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
+            })
         }
     }
 }
@@ -2419,8 +2489,8 @@ fn cmp_value_by_type(
 }
 
 fn eq_impl(engine: &Engine, call_type: &Type, args: &[Value]) -> Result<Value, EngineError> {
-    let eq_name = sym("==");
-    let (lhs_ty, rhs_ty) = binary_arg_types("==", call_type)?;
+    let eq_name = sym("prim_eq");
+    let (lhs_ty, rhs_ty) = binary_arg_types(eq_name.as_ref(), call_type)?;
     let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
         name: eq_name.clone(),
         expected: lhs_ty.to_string(),
@@ -2432,8 +2502,8 @@ fn eq_impl(engine: &Engine, call_type: &Type, args: &[Value]) -> Result<Value, E
 }
 
 fn ne_impl(engine: &Engine, call_type: &Type, args: &[Value]) -> Result<Value, EngineError> {
-    let ne_name = sym("!=");
-    let (lhs_ty, rhs_ty) = binary_arg_types("!=", call_type)?;
+    let ne_name = sym("prim_ne");
+    let (lhs_ty, rhs_ty) = binary_arg_types(ne_name.as_ref(), call_type)?;
     let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
         name: ne_name.clone(),
         expected: lhs_ty.to_string(),
@@ -2493,14 +2563,14 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
             vec![],
             Type::fun(typ.clone(), Type::fun(typ.clone(), bool_ty.clone())),
         );
-        engine.inject_native_scheme_typed("(==)", scheme, 2, eq_impl)?;
+        engine.inject_native_scheme_typed("prim_eq", scheme, 2, eq_impl)?;
 
         let scheme = Scheme::new(
             vec![],
             vec![],
             Type::fun(typ.clone(), Type::fun(typ, bool_ty.clone())),
         );
-        engine.inject_native_scheme_typed("(!=)", scheme, 2, ne_impl)?;
+        engine.inject_native_scheme_typed("prim_ne", scheme, 2, ne_impl)?;
     }
 
     let a_tv = engine.types.supply.fresh(Some(sym("a")));
@@ -2511,8 +2581,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
         vec![Predicate::new("Eq", a.clone())],
         Type::fun(list_ty.clone(), Type::fun(list_ty, bool_ty.clone())),
     );
-    engine.inject_native_scheme_typed("(==)", list_scheme.clone(), 2, eq_impl)?;
-    engine.inject_native_scheme_typed("(!=)", list_scheme, 2, ne_impl)?;
+    engine.inject_native_scheme_typed("prim_eq", list_scheme.clone(), 2, eq_impl)?;
+    engine.inject_native_scheme_typed("prim_ne", list_scheme, 2, ne_impl)?;
 
     let a_tv = engine.types.supply.fresh(Some(sym("a")));
     let a = Type::var(a_tv.clone());
@@ -2522,8 +2592,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
         vec![Predicate::new("Eq", a.clone())],
         Type::fun(option_ty.clone(), Type::fun(option_ty, bool_ty.clone())),
     );
-    engine.inject_native_scheme_typed("(==)", option_scheme.clone(), 2, eq_impl)?;
-    engine.inject_native_scheme_typed("(!=)", option_scheme, 2, ne_impl)?;
+    engine.inject_native_scheme_typed("prim_eq", option_scheme.clone(), 2, eq_impl)?;
+    engine.inject_native_scheme_typed("prim_ne", option_scheme, 2, ne_impl)?;
 
     let a_tv = engine.types.supply.fresh(Some(sym("a")));
     let a = Type::var(a_tv.clone());
@@ -2533,8 +2603,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
         vec![Predicate::new("Eq", a)],
         Type::fun(array_ty.clone(), Type::fun(array_ty, bool_ty.clone())),
     );
-    engine.inject_native_scheme_typed("(==)", array_scheme.clone(), 2, eq_impl)?;
-    engine.inject_native_scheme_typed("(!=)", array_scheme, 2, ne_impl)?;
+    engine.inject_native_scheme_typed("prim_eq", array_scheme.clone(), 2, eq_impl)?;
+    engine.inject_native_scheme_typed("prim_ne", array_scheme, 2, ne_impl)?;
 
     let ok_tv = engine.types.supply.fresh(Some(sym("a")));
     let ok = Type::var(ok_tv.clone());
@@ -2549,8 +2619,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(result_ty, Type::con("bool", 0)),
         ),
     );
-    engine.inject_native_scheme_typed("(==)", result_scheme.clone(), 2, eq_impl)?;
-    engine.inject_native_scheme_typed("(!=)", result_scheme, 2, ne_impl)?;
+    engine.inject_native_scheme_typed("prim_eq", result_scheme.clone(), 2, eq_impl)?;
+    engine.inject_native_scheme_typed("prim_ne", result_scheme, 2, ne_impl)?;
 
     Ok(())
 }
@@ -2583,29 +2653,59 @@ fn inject_order_ops(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(typ.clone(), Type::fun(typ.clone(), bool_ty.clone())),
         );
         engine.inject_native_scheme_typed(
-            "(<)",
+            "prim_lt",
             scheme.clone(),
             2,
             make_impl("<", |ord| ord == std::cmp::Ordering::Less),
         )?;
         engine.inject_native_scheme_typed(
-            "(<=)",
+            "prim_le",
             scheme.clone(),
             2,
             make_impl("<=", |ord| ord != std::cmp::Ordering::Greater),
         )?;
         engine.inject_native_scheme_typed(
-            "(>)",
+            "prim_gt",
             scheme.clone(),
             2,
             make_impl(">", |ord| ord == std::cmp::Ordering::Greater),
         )?;
         engine.inject_native_scheme_typed(
-            "(>=)",
+            "prim_ge",
             scheme.clone(),
             2,
             make_impl(">=", |ord| ord != std::cmp::Ordering::Less),
         )?;
+    }
+
+    // `cmp` returns i32 (-1, 0, 1), matching the surface prelude signature.
+    for prim in ord_types {
+        let typ = Type::con(prim, 0);
+        let scheme = Scheme::new(
+            vec![],
+            vec![],
+            Type::fun(
+                typ.clone(),
+                Type::fun(typ.clone(), Type::con("i32", 0)),
+            ),
+        );
+        engine.inject_native_scheme_typed("prim_cmp", scheme, 2, |_engine, call_type, args| {
+            let op_name = sym("prim_cmp");
+            let (lhs_ty, rhs_ty) = binary_arg_types(op_name.as_ref(), call_type)?;
+            let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
+                name: op_name.clone(),
+                expected: lhs_ty.to_string(),
+                got: rhs_ty.to_string(),
+            })?;
+            let lhs_ty = lhs_ty.apply(&subst);
+            let ord = cmp_value_by_type(&op_name, &lhs_ty, &args[0], &args[1])?;
+            let out = match ord {
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            };
+            Ok(Value::I32(out))
+        })?;
     }
 
     Ok(())
@@ -2618,26 +2718,81 @@ fn inject_boolean_ops(engine: &mut Engine) -> Result<(), EngineError> {
 }
 
 fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError> {
-    engine.inject_value("zero", 0i32)?;
-    engine.inject_value("zero", 0.0f32)?;
-    engine.inject_value("zero", String::new())?;
-    engine.inject_value("one", 1i32)?;
-    engine.inject_value("one", 1.0f32)?;
+    // Additive identity
+    engine.inject_value("prim_zero", String::new())?;
+    engine.inject_value("prim_zero", 0u8)?;
+    engine.inject_value("prim_zero", 0u16)?;
+    engine.inject_value("prim_zero", 0u32)?;
+    engine.inject_value("prim_zero", 0u64)?;
+    engine.inject_value("prim_zero", 0i8)?;
+    engine.inject_value("prim_zero", 0i16)?;
+    engine.inject_value("prim_zero", 0i32)?;
+    engine.inject_value("prim_zero", 0i64)?;
+    engine.inject_value("prim_zero", 0.0f32)?;
+    engine.inject_value("prim_zero", 0.0f64)?;
 
-    engine.inject_fn2("(+)", |a: i32, b: i32| -> i32 { a + b })?;
-    engine.inject_fn2("(+)", |a: f32, b: f32| -> f32 { a + b })?;
-    engine.inject_fn2("(+)", |a: String, b: String| -> String {
-        format!("{}{}", a, b)
-    })?;
+    // Multiplicative identity
+    engine.inject_value("prim_one", 1u8)?;
+    engine.inject_value("prim_one", 1u16)?;
+    engine.inject_value("prim_one", 1u32)?;
+    engine.inject_value("prim_one", 1u64)?;
+    engine.inject_value("prim_one", 1i8)?;
+    engine.inject_value("prim_one", 1i16)?;
+    engine.inject_value("prim_one", 1i32)?;
+    engine.inject_value("prim_one", 1i64)?;
+    engine.inject_value("prim_one", 1.0f32)?;
+    engine.inject_value("prim_one", 1.0f64)?;
 
-    engine.inject_fn2("(-)", |a: i32, b: i32| -> i32 { a - b })?;
-    engine.inject_fn2("(-)", |a: f32, b: f32| -> f32 { a - b })?;
-    engine.inject_fn2("(*)", |a: i32, b: i32| -> i32 { a * b })?;
-    engine.inject_fn2("(*)", |a: f32, b: f32| -> f32 { a * b })?;
-    engine.inject_fn2("(/)", |a: f32, b: f32| -> f32 { a / b })?;
-    engine.inject_fn2("(%)", |a: i32, b: i32| -> i32 { a % b })?;
-    engine.inject_fn1("negate", |a: i32| -> i32 { -a })?;
-    engine.inject_fn1("negate", |a: f32| -> f32 { -a })?;
+    // Addition
+    engine.inject_fn2("prim_add", |a: u8, b: u8| -> u8 { a + b })?;
+    engine.inject_fn2("prim_add", |a: u16, b: u16| -> u16 { a + b })?;
+    engine.inject_fn2("prim_add", |a: u32, b: u32| -> u32 { a + b })?;
+    engine.inject_fn2("prim_add", |a: u64, b: u64| -> u64 { a + b })?;
+    engine.inject_fn2("prim_add", |a: i8, b: i8| -> i8 { a + b })?;
+    engine.inject_fn2("prim_add", |a: i16, b: i16| -> i16 { a + b })?;
+    engine.inject_fn2("prim_add", |a: i32, b: i32| -> i32 { a + b })?;
+    engine.inject_fn2("prim_add", |a: i64, b: i64| -> i64 { a + b })?;
+    engine.inject_fn2("prim_add", |a: f32, b: f32| -> f32 { a + b })?;
+    engine.inject_fn2("prim_add", |a: f64, b: f64| -> f64 { a + b })?;
+    engine.inject_fn2("prim_add", |a: String, b: String| -> String { format!("{}{}", a, b) })?;
+
+    // Subtraction and negation
+    engine.inject_fn2("prim_sub", |a: i8, b: i8| -> i8 { a - b })?;
+    engine.inject_fn2("prim_sub", |a: i16, b: i16| -> i16 { a - b })?;
+    engine.inject_fn2("prim_sub", |a: i32, b: i32| -> i32 { a - b })?;
+    engine.inject_fn2("prim_sub", |a: i64, b: i64| -> i64 { a - b })?;
+    engine.inject_fn2("prim_sub", |a: f32, b: f32| -> f32 { a - b })?;
+    engine.inject_fn2("prim_sub", |a: f64, b: f64| -> f64 { a - b })?;
+    engine.inject_fn1("prim_negate", |a: i8| -> i8 { -a })?;
+    engine.inject_fn1("prim_negate", |a: i16| -> i16 { -a })?;
+    engine.inject_fn1("prim_negate", |a: i32| -> i32 { -a })?;
+    engine.inject_fn1("prim_negate", |a: i64| -> i64 { -a })?;
+    engine.inject_fn1("prim_negate", |a: f32| -> f32 { -a })?;
+    engine.inject_fn1("prim_negate", |a: f64| -> f64 { -a })?;
+
+    // Multiplication and division
+    engine.inject_fn2("prim_mul", |a: u8, b: u8| -> u8 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: u16, b: u16| -> u16 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: u32, b: u32| -> u32 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: u64, b: u64| -> u64 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: i8, b: i8| -> i8 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: i16, b: i16| -> i16 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: i32, b: i32| -> i32 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: i64, b: i64| -> i64 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: f32, b: f32| -> f32 { a * b })?;
+    engine.inject_fn2("prim_mul", |a: f64, b: f64| -> f64 { a * b })?;
+    engine.inject_fn2("prim_div", |a: f32, b: f32| -> f32 { a / b })?;
+    engine.inject_fn2("prim_div", |a: f64, b: f64| -> f64 { a / b })?;
+
+    // Remainder
+    engine.inject_fn2("prim_mod", |a: u8, b: u8| -> u8 { a % b })?;
+    engine.inject_fn2("prim_mod", |a: u16, b: u16| -> u16 { a % b })?;
+    engine.inject_fn2("prim_mod", |a: u32, b: u32| -> u32 { a % b })?;
+    engine.inject_fn2("prim_mod", |a: u64, b: u64| -> u64 { a % b })?;
+    engine.inject_fn2("prim_mod", |a: i8, b: i8| -> i8 { a % b })?;
+    engine.inject_fn2("prim_mod", |a: i16, b: i16| -> i16 { a % b })?;
+    engine.inject_fn2("prim_mod", |a: i32, b: i32| -> i32 { a % b })?;
+    engine.inject_fn2("prim_mod", |a: i64, b: i64| -> i64 { a % b })?;
     Ok(())
 }
 
@@ -3734,7 +3889,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = list_elem_type(&list_ty, "sum")?;
             let mut values = list_to_vec(&args[0], "sum")?;
             if values.is_empty() {
-                return engine.resolve_native_value("zero", &elem_ty);
+                return engine.resolve_global_value(&sym("zero"), &elem_ty);
             }
             let plus = resolve_binary_op(engine, "+", &elem_ty)?;
             let plus_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
@@ -3763,7 +3918,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = array_elem_type(&array_ty, "sum")?;
             let mut values = expect_array(&args[0], "sum")?;
             if values.is_empty() {
-                return engine.resolve_native_value("zero", &elem_ty);
+                return engine.resolve_global_value(&sym("zero"), &elem_ty);
             }
             let plus = resolve_binary_op(engine, "+", &elem_ty)?;
             let plus_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
@@ -3792,7 +3947,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = option_elem_type(&opt_ty, "sum")?;
             match option_value(&args[0])? {
                 Some(v) => Ok(v),
-                None => engine.resolve_native_value("zero", &elem_ty),
+                None => engine.resolve_global_value(&sym("zero"), &elem_ty),
             }
         })?;
     }
@@ -4474,9 +4629,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
                     _ => Ok(value),
                 }
             } else if engine.types.class_methods.contains_key(name) {
-                let (def_env, typed, s) = engine.resolve_typeclass_method_impl(name, &cur.typ)?;
-                let specialized = typed.as_ref().apply(&s);
-                eval_typed_expr(engine, &def_env, &specialized)
+                engine.resolve_class_method_value(name, &cur.typ)
             } else {
                 engine.resolve_native_value(name.as_ref(), &cur.typ)
             }

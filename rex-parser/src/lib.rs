@@ -9,7 +9,7 @@ use std::{collections::VecDeque, sync::Arc, vec};
 
 use rex_ast::expr::{
     intern, ClassDecl, ClassMethodSig, Decl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
-    Pattern, Program, Scope, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
+    Pattern, Program, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_lexer::{
     span::{Position, Span, Spanned},
@@ -29,6 +29,46 @@ pub struct Parser {
 }
 
 impl Parser {
+    fn operator_token_name(token: &Token) -> Option<(&'static str, Span)> {
+        match token {
+            Token::Add(span, ..) => Some(("+", *span)),
+            Token::And(span, ..) => Some(("&&", *span)),
+            Token::Concat(span, ..) => Some(("++", *span)),
+            Token::Div(span, ..) => Some(("/", *span)),
+            Token::Eq(span, ..) => Some(("==", *span)),
+            Token::Ne(span, ..) => Some(("!=", *span)),
+            Token::Ge(span, ..) => Some((">=", *span)),
+            Token::Gt(span, ..) => Some((">", *span)),
+            Token::Le(span, ..) => Some(("<=", *span)),
+            Token::Lt(span, ..) => Some(("<", *span)),
+            Token::Mod(span, ..) => Some(("%", *span)),
+            Token::Mul(span, ..) => Some(("*", *span)),
+            Token::Or(span, ..) => Some(("||", *span)),
+            Token::Sub(span, ..) => Some(("-", *span)),
+            _ => None,
+        }
+    }
+
+    fn parse_value_name(&mut self) -> Result<(Symbol, Span), ParserErr> {
+        match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                let span = span;
+                self.next_token();
+                Ok((intern(&name), span))
+            }
+            token if Self::operator_token_name(&token).is_some() => {
+                let (name, span) = Self::operator_token_name(&token)
+                    .expect("checked operator_token_name is_some");
+                self.next_token();
+                Ok((intern(name), span))
+            }
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("expected identifier or operator name got {}", token),
+            )),
+        }
+    }
+
     pub fn new(tokens: Tokens) -> Parser {
         let mut parser = Parser {
             token_cursor: 0,
@@ -87,6 +127,16 @@ impl Parser {
     fn next_token(&mut self) {
         self.token_cursor += 1;
         self.skip_newlines();
+    }
+
+    // Advances by exactly one token and does *not* skip newlines.
+    //
+    // We use this for layout-sensitive headers (`class`/`instance`) where the
+    // newline boundary matters. Most of the parser treats newlines as whitespace,
+    // but for optional-`where` method blocks we need to know what was on the
+    // header line vs. what starts the indented block.
+    fn next_token_raw(&mut self) {
+        self.token_cursor += 1;
     }
 
     fn strip_comments(&mut self) {
@@ -1066,6 +1116,49 @@ impl Parser {
         }
     }
 
+    fn parse_type_app_slice(&self, slice: &[Token]) -> Result<TypeExpr, ParserErr> {
+        if slice.is_empty() {
+            return Err(ParserErr::new(self.eof, "expected type".to_string()));
+        }
+        let eof = *slice.last().unwrap().span();
+        let tokens = Tokens {
+            items: slice.to_vec(),
+            eof,
+        };
+        let mut parser = Parser::new(tokens);
+        let expr = parser.parse_type_app()?;
+        match parser.current_token() {
+            Token::Eof(..) => Ok(expr),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("unexpected {} in type", token),
+            )),
+        }
+    }
+
+    fn parse_type_constraints_slice(&self, slice: &[Token]) -> Result<Vec<TypeConstraint>, ParserErr> {
+        if slice.is_empty() {
+            return Err(ParserErr::new(
+                self.eof,
+                "expected type constraint".to_string(),
+            ));
+        }
+        let eof = *slice.last().unwrap().span();
+        let tokens = Tokens {
+            items: slice.to_vec(),
+            eof,
+        };
+        let mut parser = Parser::new(tokens);
+        let constraints = parser.parse_type_constraints()?;
+        match parser.current_token() {
+            Token::Eof(..) => Ok(constraints),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("unexpected {} in type constraints", token),
+            )),
+        }
+    }
+
     fn parse_expr_slice(&self, slice: &[Token]) -> Result<Expr, ParserErr> {
         if slice.is_empty() {
             return Err(ParserErr::new(self.eof, "expected expression".to_string()));
@@ -1103,7 +1196,7 @@ impl Parser {
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
                 let span = span;
-                self.next_token();
+                self.next_token_raw();
                 (intern(&name), span)
             }
             token => {
@@ -1114,48 +1207,94 @@ impl Parser {
             }
         };
 
+        let class_indent = span_begin.column;
+        let header_line = name_span.begin.line;
+        let mut header_end = name_span.end;
+
         let mut params = Vec::new();
-        while let Token::Ident(p, ..) = self.current_token() {
-            // Stop before `where` / `<=` if they were lexed as identifiers (they aren't).
+        while let Some(Token::Ident(p, span, ..)) = self.tokens.get(self.token_cursor).cloned() {
+            // Parameters only live on the header line. Newlines are significant
+            // here because `where` is optional and the next line may be a method
+            // block.
+            if span.begin.line != header_line {
+                break;
+            }
+            header_end = header_end.max(span.end);
             params.push(intern(&p));
-            self.next_token();
+            self.next_token_raw();
         }
 
         let mut supers = Vec::new();
-        if matches!(self.current_token(), Token::Le(..)) {
-            self.next_token();
-            supers = self.parse_type_constraints()?;
+        if let Some(Token::Le(span, ..)) = self.tokens.get(self.token_cursor).cloned() {
+            if span.begin.line == header_line {
+                self.next_token_raw();
+                let start_idx = self.token_cursor;
+                let end_idx = find_layout_header_clause_end(&self.tokens, start_idx, |t| {
+                    matches!(t, Token::Where(..))
+                });
+                supers = self.parse_type_constraints_slice(&self.tokens[start_idx..end_idx])?;
+                self.token_cursor = end_idx;
+            }
+            if let Some(last) = supers.last() {
+                header_end = header_end.max(last.typ.span().end);
+            }
         }
 
+        // `where` is optional. If it is omitted, we only treat the following
+        // layout block as a list of method signatures when it is clearly a
+        // method block:
+        // - It is indented more than the `class` keyword, AND
+        // - It starts with `name : ...` (operator names allowed).
+        //
+        // This keeps parsing unambiguous and prevents accidentally consuming
+        // the program expression as if it were method signatures.
+        let mut saw_where = false;
         let where_span = match self.current_token() {
             Token::Where(span, ..) => {
                 self.next_token();
+                header_end = header_end.max(span.end);
+                saw_where = true;
                 span
             }
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected `where` got {}", token),
-                ));
-            }
+            _ => Span::default(),
         };
 
         // Method signatures are a layout block: each signature starts at the
-        // indentation of the first method name after `where`.
+        // indentation of the first method name after `where` (or after the
+        // class header if `where` is omitted).
         let mut methods = Vec::new();
-        let block_indent = match self.current_token() {
-            Token::Ident(_, span, ..) => Some(span.begin.column),
-            _ => None,
+        let implicit_method_start = if saw_where {
+            false
+        } else {
+            let token = self.current_token();
+            let token_span = *token.span();
+            let next = self.peek_token(1);
+            token_span.begin.column > class_indent
+                && ((matches!(token, Token::Ident(..)) && matches!(next, Token::Colon(..)))
+                    || (Self::operator_token_name(&token).is_some()
+                        && matches!(next, Token::Colon(..))))
+        };
+        let has_method_block = saw_where || implicit_method_start;
+        let block_indent = if has_method_block {
+            match self.current_token() {
+                Token::Ident(_, span, ..) => Some(span.begin.column),
+                token => Self::operator_token_name(&token).map(|(_, span)| span.begin.column),
+            }
+        } else {
+            None
         };
 
-        while let Token::Ident(m, span, ..) = self.current_token() {
+        while has_method_block
+            && (matches!(self.current_token(), Token::Ident(..))
+                || Self::operator_token_name(&self.current_token()).is_some())
+        {
+            let span = *self.current_token().span();
             if let Some(indent) = block_indent {
                 if span.begin.column != indent {
                     break;
                 }
             }
-            let m_name = intern(&m);
-            self.next_token();
+            let (m_name, _name_span) = self.parse_value_name()?;
 
             match self.current_token() {
                 Token::Colon(..) => self.next_token(),
@@ -1170,6 +1309,7 @@ impl Parser {
             let start_idx = self.token_cursor;
             let end_idx = find_layout_expr_end(&self.tokens, start_idx, block_indent, |t, next| {
                 matches!(t, Token::Ident(..)) && matches!(next, Token::Colon(..))
+                    || Self::operator_token_name(t).is_some() && matches!(next, Token::Colon(..))
             });
             let typ = self.parse_type_expr_slice(&self.tokens[start_idx..end_idx])?;
             self.token_cursor = end_idx;
@@ -1181,7 +1321,7 @@ impl Parser {
             .last()
             .map(|m| m.typ.span().end)
             .or_else(|| supers.last().map(|s| s.typ.span().end))
-            .unwrap_or(name_span.end.max(where_span.end));
+            .unwrap_or(header_end.max(where_span.end));
 
         Ok(ClassDecl {
             span: Span::from_begin_end(span_begin, span_end),
@@ -1206,10 +1346,11 @@ impl Parser {
             }
         };
 
-        let class = match self.current_token() {
-            Token::Ident(name, ..) => {
-                self.next_token();
-                intern(&name)
+        let (class, class_span) = match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                let span = span;
+                self.next_token_raw();
+                (intern(&name), span)
             }
             token => {
                 return Err(ParserErr::new(
@@ -1219,43 +1360,92 @@ impl Parser {
             }
         };
 
-        let head = self.parse_type_app()?;
+        let instance_indent = span_begin.column;
+        let header_line = class_span.begin.line;
+
+        let start_idx = self.token_cursor;
+        let end_idx = find_layout_header_clause_end(&self.tokens, start_idx, |t| {
+            matches!(t, Token::Le(..) | Token::Where(..))
+        });
+        if end_idx == start_idx {
+            let span = self
+                .tokens
+                .get(start_idx)
+                .map(|t| *t.span())
+                .unwrap_or(self.eof);
+            return Err(ParserErr::new(span, "expected type".to_string()));
+        }
+        let head = self.parse_type_app_slice(&self.tokens[start_idx..end_idx])?;
+        self.token_cursor = end_idx;
+        let mut header_end = head.span().end;
 
         let mut context = Vec::new();
-        if matches!(self.current_token(), Token::Le(..)) {
-            self.next_token();
-            context = self.parse_type_constraints()?;
+        if let Some(Token::Le(span, ..)) = self.tokens.get(self.token_cursor).cloned() {
+            if span.begin.line == header_line {
+                self.next_token_raw();
+                let start_idx = self.token_cursor;
+                let end_idx = find_layout_header_clause_end(&self.tokens, start_idx, |t| {
+                    matches!(t, Token::Where(..))
+                });
+                context = self.parse_type_constraints_slice(&self.tokens[start_idx..end_idx])?;
+                self.token_cursor = end_idx;
+                if let Some(last) = context.last() {
+                    header_end = header_end.max(last.typ.span().end);
+                }
+            }
         }
 
+        // `where` is optional. If it is omitted, we only treat the following
+        // layout block as a list of method implementations when it is clearly
+        // a method block:
+        // - It is indented more than the `instance` keyword, AND
+        // - It starts with `name = ...` (operator names allowed).
+        let mut saw_where = false;
         let where_span = match self.current_token() {
             Token::Where(span, ..) => {
                 self.next_token();
+                header_end = header_end.max(span.end);
+                saw_where = true;
                 span
             }
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected `where` got {}", token),
-                ));
-            }
+            _ => Span::default(),
         };
 
         // Instance method implementations are a layout block. We rely on
         // indentation (token column) to decide where the block ends.
-        let block_indent = match self.current_token() {
-            Token::Ident(_, span, ..) => Some(span.begin.column),
-            _ => None,
+        let has_method_block = if saw_where {
+            true
+        } else {
+            let token = self.current_token();
+            let token_span = *token.span();
+            let next = self.peek_token(1);
+            token_span.begin.column > instance_indent
+                && ((matches!(token, Token::Ident(..)) && matches!(next, Token::Assign(..)))
+                    || (Self::operator_token_name(&token).is_some()
+                        && matches!(next, Token::Assign(..))))
+        };
+
+        let block_indent = if has_method_block {
+            match self.current_token() {
+                Token::Ident(_, span, ..) => Some(span.begin.column),
+                token => Self::operator_token_name(&token).map(|(_, span)| span.begin.column),
+            }
+        } else {
+            None
         };
 
         let mut methods = Vec::new();
-        while let Token::Ident(name, span, ..) = self.current_token() {
+        while has_method_block
+            && (matches!(self.current_token(), Token::Ident(..))
+                || Self::operator_token_name(&self.current_token()).is_some())
+        {
+            let span = *self.current_token().span();
             if let Some(indent) = block_indent {
                 if span.begin.column != indent {
                     break;
                 }
             }
-            let name = intern(&name);
-            self.next_token();
+            let (name, _name_span) = self.parse_value_name()?;
 
             match self.current_token() {
                 Token::Assign(..) => self.next_token(),
@@ -1270,6 +1460,7 @@ impl Parser {
             let start_idx = self.token_cursor;
             let end_idx = find_layout_expr_end(&self.tokens, start_idx, block_indent, |t, next| {
                 matches!(t, Token::Ident(..)) && matches!(next, Token::Assign(..))
+                    || Self::operator_token_name(t).is_some() && matches!(next, Token::Assign(..))
             });
             let body = self.parse_expr_slice(&self.tokens[start_idx..end_idx])?;
             self.token_cursor = end_idx;
@@ -1285,7 +1476,7 @@ impl Parser {
             .last()
             .map(|m| m.body.span().end)
             .or_else(|| context.last().map(|c| c.typ.span().end))
-            .unwrap_or(head.span().end.max(where_span.end));
+            .unwrap_or(header_end.max(where_span.end));
 
         Ok(InstanceDecl {
             span: Span::from_begin_end(span_begin, span_end),
@@ -2219,6 +2410,36 @@ fn find_layout_expr_end(
     tokens.len()
 }
 
+fn find_layout_header_clause_end(
+    tokens: &[Token],
+    start_idx: usize,
+    is_terminator: impl Fn(&Token) -> bool,
+) -> usize {
+    // Scan forward until we hit:
+    // - a newline at depth 0 (end of the header line), OR
+    // - a terminator token at depth 0 (e.g. `where` or `<=`).
+    //
+    // This is intentionally small and explicit: the parser mostly ignores
+    // newlines, but `class`/`instance` headers need to stop on the newline so
+    // optional-`where` layout blocks don't accidentally get pulled into the
+    // header.
+    let mut depth = 0usize;
+    let mut idx = start_idx;
+    while idx < tokens.len() {
+        match &tokens[idx] {
+            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+            Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                depth = depth.saturating_sub(1)
+            }
+            Token::WhitespaceNewline(..) if depth == 0 => return idx,
+            token if depth == 0 && is_terminator(token) => return idx,
+            _ => {}
+        }
+        idx += 1;
+    }
+    tokens.len()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -2902,5 +3123,58 @@ mod tests {
                 ParserErr::new(Span::new(4, 38, 4, 39), "expected `=`")
             ])
         );
+    }
+
+    #[test]
+    fn test_typeclass_where_is_optional() {
+        let code = r#"
+class Default a
+    default : a
+
+instance Default i32
+    default = 0
+
+default
+"#;
+
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 2);
+
+        match &program.decls[0] {
+            Decl::Class(decl) => {
+                assert_eq!(decl.name, intern("Default"));
+                assert_eq!(decl.methods.len(), 1);
+                assert_eq!(decl.methods[0].name, intern("default"));
+            }
+            other => panic!("expected class decl, got {other:?}"),
+        }
+
+        match &program.decls[1] {
+            Decl::Instance(decl) => {
+                assert_eq!(decl.class, intern("Default"));
+                assert_eq!(decl.methods.len(), 1);
+                assert_eq!(decl.methods[0].name, intern("default"));
+            }
+            other => panic!("expected instance decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_typeclass_where_optional_does_not_force_method_block() {
+        // Without `where`, an indented expression after a class/instance header
+        // is not treated as a method block unless it looks like `name :` / `name =`.
+        let code = r#"
+class Marker a
+
+instance Marker i32
+
+    true
+"#;
+
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 2);
+        assert!(matches!(program.expr.as_ref(), Expr::Bool(..)));
     }
 }

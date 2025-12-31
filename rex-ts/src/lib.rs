@@ -10,12 +10,12 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl, Pattern,
-    Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
+    Program, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
 };
 use rex_lexer::{Token, span::Span};
 use rex_parser::Parser;
@@ -1301,6 +1301,50 @@ impl TypeSystem {
             }
 
             self.classes.add_instance(decl.class.clone(), inst);
+            Ok(PreparedInstanceDecl {
+                span,
+                class: decl.class.clone(),
+                head,
+                context,
+            })
+        })()
+        .map_err(|err| with_span(&span, err))
+    }
+
+    pub fn prepare_instance_decl(&mut self, decl: &InstanceDecl) -> Result<PreparedInstanceDecl, TypeError> {
+        let span = decl.span;
+        (|| {
+            let class = decl.class.clone();
+            if !self.class_info.contains_key(&class) && !self.classes.classes.contains_key(&class) {
+                return Err(TypeError::UnknownClass(class));
+            }
+
+            let mut vars: HashMap<Symbol, TypeVar> = HashMap::new();
+            let head =
+                type_from_annotation_expr_vars(&self.adts, &decl.head, &mut vars, &mut self.supply)?;
+            let context =
+                predicates_from_constraints(&self.adts, &decl.context, &mut vars, &mut self.supply)?;
+
+            // Validate method list against the class declaration if present.
+            if let Some(info) = self.class_info.get(&decl.class) {
+                for method in &decl.methods {
+                    if !info.methods.contains_key(&method.name) {
+                        return Err(TypeError::UnknownInstanceMethod {
+                            class: decl.class.clone(),
+                            method: method.name.clone(),
+                        });
+                    }
+                }
+                for method_name in info.methods.keys() {
+                    if !decl.methods.iter().any(|m| &m.name == method_name) {
+                        return Err(TypeError::MissingInstanceMethod {
+                            class: decl.class.clone(),
+                            method: method_name.clone(),
+                        });
+                    }
+                }
+            }
+
             Ok(PreparedInstanceDecl {
                 span,
                 class: decl.class.clone(),
@@ -2883,18 +2927,7 @@ fn check_match_exhaustive(
 }
 
 fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) {
-    let source = include_str!("prelude_typeclasses.rex");
-    let tokens = Token::tokenize(source).expect("failed to lex Rex prelude type class source");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap_or_else(|errs| {
-        let mut out = String::from("failed to parse Rex prelude type class source:");
-        for err in errs {
-            out.push_str(&format!("\n  {err}"));
-        }
-        panic!("{out}");
-    });
-
-    for decl in &program.decls {
+    for decl in &prelude_typeclasses_program().decls {
         match decl {
             Decl::Class(class_decl) => ts
                 .inject_class_decl(class_decl)
@@ -2904,6 +2937,126 @@ fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) {
                     .expect("failed to inject prelude instance decl");
             }
             Decl::Type(..) | Decl::Fn(..) => {}
+        }
+    }
+}
+
+pub fn prelude_typeclasses_program() -> &'static Program {
+    static PROGRAM: OnceLock<Program> = OnceLock::new();
+    PROGRAM.get_or_init(|| {
+        let source = include_str!("prelude_typeclasses.rex");
+        let tokens = Token::tokenize(source).expect("failed to lex Rex prelude type class source");
+        let mut parser = Parser::new(tokens);
+        parser.parse_program().unwrap_or_else(|errs| {
+            let mut out = String::from("failed to parse Rex prelude type class source:");
+            for err in errs {
+                out.push_str(&format!("\n  {err}"));
+            }
+            panic!("{out}");
+        })
+    })
+}
+
+fn inject_prelude_primops(ts: &mut TypeSystem) {
+    // Rust-backed intrinsics used by `rex-ts/src/prelude_typeclasses.rex`.
+    //
+    // These intentionally carry no typeclass predicates. An instance method
+    // body should not need to assume the class it is defining.
+    let bool_ty = Type::con("bool", 0);
+    let i32_ty = Type::con("i32", 0);
+
+    // Polymorphic equality intrinsics.
+    {
+        let a_tv = ts.supply.fresh(Some(sym("a")));
+        let a = Type::var(a_tv.clone());
+        ts.add_value(
+            "prim_eq",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(a.clone(), Type::fun(a.clone(), bool_ty.clone())),
+            ),
+        );
+        ts.add_value(
+            "prim_ne",
+            Scheme::new(
+                vec![a_tv],
+                vec![],
+                Type::fun(a.clone(), Type::fun(a, bool_ty.clone())),
+            ),
+        );
+    }
+
+    // Numeric intrinsics (monomorphic overloads).
+    {
+        let additive = [
+            "string", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+        ];
+        for prim in additive {
+            let t = Type::con(prim, 0);
+            ts.add_value("prim_zero", Scheme::new(vec![], vec![], t.clone()));
+            ts.add_value(
+                "prim_add",
+                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+            );
+        }
+
+        let multiplicative = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64"];
+        for prim in multiplicative {
+            let t = Type::con(prim, 0);
+            ts.add_value("prim_one", Scheme::new(vec![], vec![], t.clone()));
+            ts.add_value(
+                "prim_mul",
+                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+            );
+        }
+
+        let signed = ["i8", "i16", "i32", "i64", "f32", "f64"];
+        for prim in signed {
+            let t = Type::con(prim, 0);
+            ts.add_value(
+                "prim_sub",
+                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+            );
+            ts.add_value(
+                "prim_negate",
+                Scheme::new(vec![], vec![], Type::fun(t.clone(), t.clone())),
+            );
+        }
+
+        for prim in ["f32", "f64"] {
+            let t = Type::con(prim, 0);
+            ts.add_value(
+                "prim_div",
+                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+            );
+        }
+
+        let integral = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"];
+        for prim in integral {
+            let t = Type::con(prim, 0);
+            ts.add_value(
+                "prim_mod",
+                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+            );
+        }
+    }
+
+    // Ordering intrinsics (monomorphic overloads).
+    {
+        let ord = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string"];
+        for prim in ord {
+            let t = Type::con(prim, 0);
+            ts.add_value(
+                "prim_cmp",
+                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), i32_ty.clone()))),
+            );
+            for name in ["prim_lt", "prim_le", "prim_gt", "prim_ge"] {
+                ts.add_value(
+                    name,
+                    Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), bool_ty.clone()))),
+                );
+            }
         }
     }
 }
@@ -2958,6 +3111,7 @@ fn build_prelude(ts: &mut TypeSystem) {
         ts.inject_adt(&result_adt);
     }
 
+    inject_prelude_primops(ts);
     inject_prelude_classes_and_instances(ts);
 
     // Helper constructors used to describe prelude schemes below.
@@ -2966,130 +3120,7 @@ fn build_prelude(ts: &mut TypeSystem) {
     let result_of = |t: Type, e: Type| Type::app(Type::app(result_con.clone(), e), t);
     let indexable_of = |container: Type, elem: Type| Type::tuple(vec![container, elem]);
 
-    // Inject provided function declarations and operator schemes.
-    let a_tv = ts.supply.fresh(Some("a".into()));
-    let a = Type::var(a_tv.clone());
-    let add_monoid_a = Predicate::new("AdditiveMonoid", a.clone());
-    let add_group_a = Predicate::new("AdditiveGroup", a.clone());
-    let integral_a = Predicate::new("Integral", a.clone());
-    let plus_scheme = Scheme::new(
-        vec![a_tv.clone()],
-        vec![add_monoid_a],
-        Type::fun(a.clone(), Type::fun(a.clone(), a.clone())),
-    );
-    ts.add_value(sym("+"), plus_scheme.clone());
-
-    let mul_scheme = Scheme::new(
-        vec![a_tv.clone()],
-        vec![Predicate::new("MultiplicativeMonoid", a.clone())],
-        Type::fun(a.clone(), Type::fun(a.clone(), a.clone())),
-    );
-    ts.add_value(sym("*"), mul_scheme);
-
-    let mod_scheme = Scheme::new(
-        vec![a_tv.clone()],
-        vec![integral_a],
-        Type::fun(a.clone(), Type::fun(a.clone(), a.clone())),
-    );
-    ts.add_value(sym("%"), mod_scheme);
-
-    let negate_scheme = Scheme::new(
-        vec![a_tv.clone()],
-        vec![add_group_a.clone()],
-        Type::fun(a.clone(), a.clone()),
-    );
-    ts.add_value(sym("negate"), negate_scheme);
-
-    let minus_scheme = Scheme::new(
-        vec![a_tv.clone()],
-        vec![add_group_a],
-        Type::fun(a.clone(), Type::fun(a.clone(), a.clone())),
-    );
-    ts.add_value(sym("-"), minus_scheme.clone());
-    ts.add_value(sym("(-)"), minus_scheme);
-
-    let b_tv = ts.supply.fresh(Some("b".into()));
-    let b = Type::var(b_tv.clone());
-    let field_b = Predicate::new("Field", b.clone());
-    let div_scheme = Scheme::new(
-        vec![b_tv.clone()],
-        vec![field_b],
-        Type::fun(b.clone(), Type::fun(b.clone(), b.clone())),
-    );
-    ts.add_value(sym("/"), div_scheme.clone());
-    ts.add_value(sym("(/)"), div_scheme);
-
-    // zero/one for monoids
-    ts.add_value(
-        "zero",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![Predicate::new("AdditiveMonoid", a.clone())],
-            a.clone(),
-        ),
-    );
-    ts.add_value(
-        "one",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![Predicate::new("MultiplicativeMonoid", a.clone())],
-            a.clone(),
-        ),
-    );
-
-    // Equality operators
-    let eq_a = Predicate::new("Eq", a.clone());
-    ts.add_value(
-        "==",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![eq_a.clone()],
-            Type::fun(a.clone(), Type::fun(a.clone(), Type::con("bool", 0))),
-        ),
-    );
-    ts.add_value(
-        "!=",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![eq_a],
-            Type::fun(a.clone(), Type::fun(a.clone(), Type::con("bool", 0))),
-        ),
-    );
-
-    // Ordering operators
-    let ord_a = Predicate::new("Ord", a.clone());
-    ts.add_value(
-        "<",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![ord_a.clone()],
-            Type::fun(a.clone(), Type::fun(a.clone(), Type::con("bool", 0))),
-        ),
-    );
-    ts.add_value(
-        "<=",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![ord_a.clone()],
-            Type::fun(a.clone(), Type::fun(a.clone(), Type::con("bool", 0))),
-        ),
-    );
-    ts.add_value(
-        ">",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![ord_a.clone()],
-            Type::fun(a.clone(), Type::fun(a.clone(), Type::con("bool", 0))),
-        ),
-    );
-    ts.add_value(
-        ">=",
-        Scheme::new(
-            vec![a_tv.clone()],
-            vec![ord_a],
-            Type::fun(a.clone(), Type::fun(a.clone(), Type::con("bool", 0))),
-        ),
-    );
+    // Inject provided function declarations and schemes.
 
     // Boolean operators
     let bool_ty = Type::con("bool", 0);
@@ -3448,8 +3479,8 @@ mod tests {
     #[test]
     fn prelude_injects_functions() {
         let ts = TypeSystem::with_prelude();
-        let minus = ts.env.lookup(&sym("(-)")).expect("minus in env");
-        let div = ts.env.lookup(&sym("(/)")).expect("div in env");
+        let minus = ts.env.lookup(&sym("-")).expect("minus in env");
+        let div = ts.env.lookup(&sym("/")).expect("div in env");
         assert_eq!(minus.len(), 1);
         assert_eq!(div.len(), 1);
         let minus = &minus[0];

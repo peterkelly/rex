@@ -38,19 +38,25 @@ map ((*) 2) [1, 2, 3, 4]
 Rex supports Haskell-style type classes with `class` and `instance`. Superclasses and instance contexts use `<=` (read it as “requires”).
 
 ```rex
-class Default a where
+class Default a
     default : a
 
-class Ord a <= Eq a where
+class Ord a <= Eq a
     cmp : a -> a -> i32
 
-instance Default (List a) <= Default a where
+instance Default (List a) <= Default a
     default = []
 ```
 
+The `where` keyword is optional. A class/instance method block is recognized by layout:
+- It must be indented more than the `class`/`instance` header.
+- Class methods start with `name : ...` and instance methods start with `name = ...` (operator names are allowed for `name`).
+
 Class methods are values: using `default` produces a `Default T` constraint, and evaluation resolves the right instance based on the inferred type `T`.
 
-Prelude type classes and instances live in `rex-ts/src/prelude_typeclasses.rex` and are injected by `TypeSystem::with_prelude()`.
+Prelude type classes and instances (including the methods for numeric operators and comparisons) live in `rex-ts/src/prelude_typeclasses.rex` and are injected by `TypeSystem::with_prelude()`.
+
+The prelude instances typically point at Rust-backed intrinsics with the `prim_` prefix (for example `prim_add`, `prim_zero`, `prim_eq`). Think of these as the Rex equivalent of GHC primops: the surface language stays “single source” (classes + instances are Rex), but the lowest-level implementations are still provided by the host.
 
 ## Let-in
 

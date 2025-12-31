@@ -201,7 +201,7 @@ fn superclass_and_instance_context() {
             eq : a -> a -> bool
 
         class MyOrd a <= MyEq a where
-            cmp : a -> a -> i32
+            my_cmp : a -> a -> i32
 
         type Color = Red | Green | Blue
 
@@ -216,14 +216,14 @@ fn superclass_and_instance_context() {
                         let r = match y when Blue -> true when _ -> false in r
 
         instance MyOrd Color <= MyEq Color where
-            cmp = \x y ->
+            my_cmp = \x y ->
                 if eq x y then 0 else
                 match x
                     when Red -> -1
                     when Green -> if eq y Red then 1 else -1
                     when Blue -> 1
 
-        (eq Red Blue, eq Blue Blue, cmp Red Green, cmp Blue Red)
+        (eq Red Blue, eq Blue Blue, my_cmp Red Green, my_cmp Blue Red)
         "#,
         "(false, true, -1i32, 1i32)",
     );
