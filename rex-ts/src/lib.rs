@@ -6,6 +6,7 @@
 //! - Type classes with superclass relationships and instance resolution.
 //! - Basic ADTs (List, Result, Option) and numeric/string primitives in the prelude.
 //! - Utilities to register additional function/type declarations (e.g. `(-)`, `(/)`).
+#![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
@@ -54,6 +55,10 @@ pub enum TypeKind {
     App(Type, Type),
     Fun(Type, Type),
     Tuple(Vec<Type>),
+    /// Record type `{a: T, b: U}`.
+    ///
+    /// Invariant: fields are sorted by name. This makes record equality and
+    /// unification a cheap zip over two vectors, and it makes printing stable.
     Record(Vec<(Symbol, Type)>),
 }
 
@@ -86,6 +91,8 @@ impl Type {
     }
 
     pub fn record(mut fields: Vec<(Symbol, Type)>) -> Self {
+        // Canonicalize records so downstream code can rely on “same shape means
+        // same ordering”. (This is a correctness invariant, not a nicety.)
         fields.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
         Type::new(TypeKind::Record(fields))
     }
@@ -408,6 +415,10 @@ pub enum TypedExprKind {
     },
 }
 
+/// Compose substitutions `a` after `b`.
+///
+/// If `t.apply(&b)` is “apply `b` first”, then:
+/// `t.apply(&compose_subst(a, b)) == t.apply(&b).apply(&a)`.
 pub fn compose_subst(a: Subst, b: Subst) -> Subst {
     if subst_is_empty(&a) {
         return b;
@@ -480,6 +491,12 @@ fn with_span(span: &Span, err: TypeError) -> TypeError {
 
 #[derive(Default, Debug)]
 struct Unifier {
+    // `subs[id] = Some(t)` means type variable `id` has been bound to `t`.
+    //
+    // This is intentionally a dense `Vec` rather than a `HashMap`: inference
+    // generates `TypeVarId`s from a monotonic counter, so the common case is
+    // “small id space, lots of lookups”. This makes the cost model obvious:
+    // you pay O(max_id) space, and you get O(1) binds/queries.
     subs: Vec<Option<Type>>,
 }
 
@@ -665,6 +682,12 @@ fn record_elem_type(fields: &[(Symbol, Type)]) -> Result<(Subst, Type), TypeErro
     Ok((subst.clone(), current.apply(&subst)))
 }
 
+/// Compute a most-general unifier for two types.
+///
+/// This is the “pure” unifier: it returns an explicit substitution map and is
+/// easy to read/compose in isolation. The type inference engine uses `Unifier`
+/// directly to avoid allocating and composing persistent maps at every
+/// unification step.
 pub fn unify(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
     match (t1.as_ref(), t2.as_ref()) {
         (TypeKind::Fun(l1, r1), TypeKind::Fun(l2, r2)) => {
@@ -758,6 +781,8 @@ impl Types for TypeEnv {
             let updated = v
                 .iter()
                 .map(|scheme| {
+                    // Most schemes in environments are monomorphic. Don't walk
+                    // and rebuild trees unless we actually have work to do.
                     if scheme.vars.is_empty() && !subst_is_empty(s) {
                         scheme.apply(s)
                     } else {
@@ -840,6 +865,9 @@ fn generalize_with_unifier(
     typ: Type,
     unifier: &mut Unifier,
 ) -> Scheme {
+    // This is `generalize`, but operating in the “imperative unifier world”.
+    // It avoids constructing intermediate `Subst` maps while inference is
+    // still mutating type variables.
     let preds: Vec<Predicate> = preds
         .into_iter()
         .map(|pred| Predicate::new(pred.class, unifier.apply_type(&pred.typ)))
@@ -858,6 +886,8 @@ fn generalize_with_unifier(
     Scheme::new(vars, preds, typ)
 }
 
+/// Turn a monotype `typ` (plus constraints `preds`) into a polymorphic `Scheme`
+/// by quantifying over the type variables not free in `env`.
 pub fn generalize(env: &TypeEnv, preds: Vec<Predicate>, typ: Type) -> Scheme {
     let mut vars: Vec<TypeVar> = typ
         .ftv()
@@ -873,6 +903,8 @@ pub fn generalize(env: &TypeEnv, preds: Vec<Predicate>, typ: Type) -> Scheme {
 }
 
 pub fn instantiate(scheme: &Scheme, supply: &mut TypeVarSupply) -> (Vec<Predicate>, Type) {
+    // Instantiate replaces all quantified variables with fresh unification
+    // variables, preserving the original name as a debugging hint.
     let mut subst = Subst::new_sync();
     for v in &scheme.vars {
         subst = subst.insert(v.id, Type::var(supply.fresh(v.name.clone())));

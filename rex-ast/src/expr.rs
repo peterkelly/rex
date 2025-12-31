@@ -13,6 +13,15 @@ use uuid::Uuid;
 pub type Symbol = Arc<str>;
 pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;
 
+// Global symbol interner.
+//
+// Design constraints:
+// - Symbols are `Arc<str>` so cloning them is cheap and comparisons are fast.
+// - The table is process-global and monotonically grows; that's fine for a
+//   typical “compile a program, then exit” workflow.
+// - Locking makes the cost model explicit (and obvious in profiles). If this
+//   ever shows up hot, the first step is usually “reduce calls to `intern`”,
+//   not “invent a clever interner”.
 static INTERNER: OnceLock<Mutex<HashMap<String, Symbol>>> = OnceLock::new();
 
 pub fn intern(name: &str) -> Symbol {
@@ -74,12 +83,12 @@ impl Display for Var {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Pattern {
-    Wildcard(Span),                             // _
-    Var(Var),                                   // x
-    Named(Span, Symbol, Vec<Pattern>),          // Ok x y z
-    List(Span, Vec<Pattern>),                   // [x, y, z]
-    Cons(Span, Box<Pattern>, Box<Pattern>),     // x:xs
-    Dict(Span, Vec<Symbol>),                    // {a, b, c}
+    Wildcard(Span),                         // _
+    Var(Var),                               // x
+    Named(Span, Symbol, Vec<Pattern>),      // Ok x y z
+    List(Span, Vec<Pattern>),               // [x, y, z]
+    Cons(Span, Box<Pattern>, Box<Pattern>), // x:xs
+    Dict(Span, Vec<Symbol>),                // {a, b, c}
 }
 
 impl Pattern {
@@ -112,12 +121,15 @@ impl Pattern {
         match self {
             Pattern::Wildcard(..) => Pattern::Wildcard(Span::default()),
             Pattern::Var(var) => Pattern::Var(var.reset_spans()),
-            Pattern::Named(_, name, ps) => {
-                Pattern::Named(Span::default(), name.clone(), ps.iter().map(|p| p.reset_spans()).collect())
-            }
-            Pattern::List(_, ps) => {
-                Pattern::List(Span::default(), ps.iter().map(|p| p.reset_spans()).collect())
-            }
+            Pattern::Named(_, name, ps) => Pattern::Named(
+                Span::default(),
+                name.clone(),
+                ps.iter().map(|p| p.reset_spans()).collect(),
+            ),
+            Pattern::List(_, ps) => Pattern::List(
+                Span::default(),
+                ps.iter().map(|p| p.reset_spans()).collect(),
+            ),
             Pattern::Cons(_, head, tail) => Pattern::Cons(
                 Span::default(),
                 Box::new(head.reset_spans()),
@@ -229,9 +241,10 @@ impl Display for TypeExpr {
                 }
                 ' '.fmt(f)?;
                 match arg.as_ref() {
-                    TypeExpr::Name(..) | TypeExpr::App(..) | TypeExpr::Tuple(..) | TypeExpr::Record(..) => {
-                        arg.fmt(f)
-                    }
+                    TypeExpr::Name(..)
+                    | TypeExpr::App(..)
+                    | TypeExpr::Tuple(..)
+                    | TypeExpr::Record(..) => arg.fmt(f),
                     _ => {
                         '('.fmt(f)?;
                         arg.fmt(f)?;
@@ -329,14 +342,21 @@ pub enum Expr {
     List(Span, Vec<Arc<Expr>>),              // [e1, e2, e3]
     Dict(Span, BTreeMap<Symbol, Arc<Expr>>), // {k1 = v1, k2 = v2}
 
-    Var(Var),                                   // x
-    App(Span, Arc<Expr>, Arc<Expr>),            // f x
-    Project(Span, Arc<Expr>, Symbol),           // x.field
-    Lam(Span, Scope, Var, Option<TypeExpr>, Vec<TypeConstraint>, Arc<Expr>), // λx → e
+    Var(Var),                         // x
+    App(Span, Arc<Expr>, Arc<Expr>),  // f x
+    Project(Span, Arc<Expr>, Symbol), // x.field
+    Lam(
+        Span,
+        Scope,
+        Var,
+        Option<TypeExpr>,
+        Vec<TypeConstraint>,
+        Arc<Expr>,
+    ), // λx → e
     Let(Span, Var, Option<TypeExpr>, Arc<Expr>, Arc<Expr>), // let x = e1 in e2
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>), // if e1 then e2 else e3
     Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>), // match e1 with patterns
-    Ann(Span, Arc<Expr>, TypeExpr),             // e is t
+    Ann(Span, Arc<Expr>, TypeExpr),   // e is t
 }
 
 impl Expr {
@@ -476,11 +496,9 @@ impl Expr {
                 Arc::new(f.reset_spans()),
                 Arc::new(x.reset_spans()),
             ),
-            Expr::Project(_, base, field) => Expr::Project(
-                Span::default(),
-                Arc::new(base.reset_spans()),
-                field.clone(),
-            ),
+            Expr::Project(_, base, field) => {
+                Expr::Project(Span::default(), Arc::new(base.reset_spans()), field.clone())
+            }
             Expr::Lam(_, scope, param, ann, constraints, body) => Expr::Lam(
                 Span::default(),
                 scope.clone(),
@@ -515,9 +533,11 @@ impl Expr {
                     .map(|(pat, expr)| (pat.reset_spans(), Arc::new(expr.reset_spans())))
                     .collect(),
             ),
-            Expr::Ann(_, expr, ann) => {
-                Expr::Ann(Span::default(), Arc::new(expr.reset_spans()), ann.reset_spans())
-            }
+            Expr::Ann(_, expr, ann) => Expr::Ann(
+                Span::default(),
+                Arc::new(expr.reset_spans()),
+                ann.reset_spans(),
+            ),
         }
     }
 }

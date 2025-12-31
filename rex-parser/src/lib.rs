@@ -1,3 +1,10 @@
+#![forbid(unsafe_code)]
+
+//! Parsing for Rex.
+//!
+//! The parser is written to be straightforward to step through in a debugger:
+//! no parser-generator indirection, and (mostly) explicit control flow.
+
 use std::{collections::VecDeque, sync::Arc, vec};
 
 use rex_ast::expr::{
@@ -307,7 +314,10 @@ impl Parser {
             Token::Match(..) => self.parse_match_expr(),
             Token::Sub(..) => self.parse_neg_expr(),
             Token::Eof(span) => Err(ParserErr::new(span, "unexpected EOF".to_string())),
-            token => Err(ParserErr::new(*token.span(), format!("unexpected {}", token))),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("unexpected {}", token),
+            )),
         }
     }
 
@@ -1579,8 +1589,9 @@ mod tests {
 
     use crate::error::ParserErr;
     use rex_ast::{
-        app, assert_expr_eq, b, d, f, l, s, tup, u, v,
+        app, assert_expr_eq, b, d,
         expr::{Decl, Expr, Pattern, Scope, TypeExpr, Var},
+        f, l, s, tup, u, v,
     };
     use rex_lexer::{span, span::Span, Token};
 
@@ -1681,10 +1692,7 @@ mod tests {
         match &program.decls[0] {
             Decl::Type(decl) => {
                 assert_eq!(decl.name, intern("MyADT"));
-                assert_eq!(
-                    decl.params,
-                    vec![intern("a"), intern("b"), intern("c")]
-                );
+                assert_eq!(decl.params, vec![intern("a"), intern("b"), intern("c")]);
                 assert_eq!(decl.variants.len(), 3);
                 assert_eq!(decl.variants[0].name, intern("MyCtor1"));
                 assert!(decl.variants[0].args.is_empty());
@@ -1790,10 +1798,7 @@ mod tests {
     #[test]
     fn test_application_associativity() {
         let expr = parse("f x y z");
-        let expected = app!(
-            app!(app!(v!("f"), v!("x")), v!("y")),
-            v!("z")
-        );
+        let expected = app!(app!(app!(v!("f"), v!("x")), v!("y")), v!("z"));
 
         assert_expr_eq!(expr, expected; ignore span);
     }
@@ -1801,11 +1806,7 @@ mod tests {
     #[test]
     fn test_projection_expr() {
         let expr = parse("x.field");
-        let expected = Arc::new(Expr::Project(
-            Span::default(),
-            v!("x"),
-            intern("field"),
-        ));
+        let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("field")));
 
         assert_expr_eq!(expr, expected; ignore span);
     }
@@ -1813,11 +1814,7 @@ mod tests {
     #[test]
     fn test_projection_expr_colon() {
         let expr = parse("x:field");
-        let expected = Arc::new(Expr::Project(
-            Span::default(),
-            v!("x"),
-            intern("field"),
-        ));
+        let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("field")));
 
         assert_expr_eq!(expr, expected; ignore span);
     }
@@ -1826,14 +1823,8 @@ mod tests {
     fn test_operator_precedence() {
         let expr = parse("1 + 2 * 3 - 4");
         let expected = app!(
-            app!(
-                v!("+"),
-                u!(1)
-            ),
-            app!(
-                app!(v!("-"), app!(app!(v!("*"), u!(2)), u!(3))),
-                u!(4)
-            )
+            app!(v!("+"), u!(1)),
+            app!(app!(v!("-"), app!(app!(v!("*"), u!(2)), u!(3))), u!(4))
         );
 
         assert_expr_eq!(expr, expected; ignore span);
@@ -1864,13 +1855,7 @@ mod tests {
             Var::new("inc"),
             None,
             inc,
-            Arc::new(Expr::Let(
-                Span::default(),
-                Var::new("dbl"),
-                None,
-                dbl,
-                body,
-            )),
+            Arc::new(Expr::Let(Span::default(), Var::new("dbl"), None, dbl, body)),
         ));
 
         assert_expr_eq!(expr, expected; ignore span);

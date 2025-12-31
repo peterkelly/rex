@@ -1,5 +1,10 @@
+#![forbid(unsafe_code)]
+
+//! Lexical analysis for Rex.
+
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use span::{Span, Spanned};
 
@@ -27,7 +32,7 @@ impl Precedence {
     }
 }
 
-/// A Token represents a lexical token in the Arvo programming language. It
+/// A Token represents a lexical token in the Rex programming language. It
 /// includes the values of literals, identifiers, and comments.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -114,16 +119,25 @@ impl Token {
         let mut tokens = Vec::new();
 
         for capture in Token::regex().captures_iter(input) {
+            let lexeme = capture
+                .get(0)
+                .expect("token regex always has capture group 0")
+                .as_str();
             let begin_line = line;
             let begin_column = column;
-            column += capture[0].to_string().chars().count();
+            column += lexeme.chars().count();
             let span = Span::new(begin_line, begin_column, line, column);
-            if &capture[0] == "\n" {
+            if lexeme == "\n" {
                 line += 1;
                 column = 1;
             }
 
-            // be careful of the ordering of these groups
+            // Be careful of the ordering of these groups.
+            //
+            // This lexer uses a single alternation regex. When multiple token
+            // kinds could match at the same position, the *earlier* named group
+            // wins. That means `==` must be checked before `=`, `::` before `:`,
+            // etc. Keep the match chain and the regex in sync.
             let token =
                 // Reserved keywords
                 if capture.name("As").is_some() {
@@ -206,7 +220,7 @@ impl Token {
                     Token::Add(span)
                 } else if capture.name("And").is_some() {
                     Token::And(span)
-                }else if capture.name("Div").is_some() {
+                } else if capture.name("Div").is_some() {
                     Token::Div(span)
                 } else if capture.name("Dot").is_some() {
                     Token::Dot(span)
@@ -235,23 +249,26 @@ impl Token {
                 }
 
                 // Literals
-                else if capture.name("Bool").is_some() {
-                    Token::Bool(bool::from_str(capture.name("Bool").unwrap().as_str()).unwrap(), span)
-                } else if capture.name("Float").is_some() {
-                    Token::Float(f64::from_str(capture.name("Float").unwrap().as_str()).unwrap(), span)
-                } else if capture.name("Int").is_some() {
-                    Token::Int(u64::from_str(capture.name("Int").unwrap().as_str()).unwrap(), span)
+                else if let Some(m) = capture.name("Bool") {
+                    let v = bool::from_str(m.as_str()).expect("Bool capture matches true|false");
+                    Token::Bool(v, span)
+                } else if let Some(m) = capture.name("Float") {
+                    let v = f64::from_str(m.as_str()).expect("Float capture is valid f64");
+                    Token::Float(v, span)
+                } else if let Some(m) = capture.name("Int") {
+                    let v = u64::from_str(m.as_str()).expect("Int capture is valid u64");
+                    Token::Int(v, span)
                 } else if capture.name("Null").is_some() {
                     Token::Null(span)
-                } else if capture.name("DoubleString").is_some() {
-                    Token::String(capture.name("DoubleString").unwrap().as_str().to_string(), span)
-                } else if capture.name("SingleString").is_some() {
-                    Token::String(capture.name("SingleString").unwrap().as_str().to_string(), span)
+                } else if let Some(m) = capture.name("DoubleString") {
+                    Token::String(m.as_str().to_string(), span)
+                } else if let Some(m) = capture.name("SingleString") {
+                    Token::String(m.as_str().to_string(), span)
                 }
 
                 // Idents
-                else if capture.name("Ident").is_some() {
-                    Token::Ident(capture.name("Ident").unwrap().as_str().to_string(), span)
+                else if let Some(m) = capture.name("Ident") {
+                    Token::Ident(m.as_str().to_string(), span)
                 }
 
                 // Other
@@ -277,73 +294,78 @@ impl Token {
     /// # Return
     /// An unwrapped Regex object.
     pub fn regex() -> regex::Regex {
-        regex::Regex::from_str(concat!(
-            // Reserved keywords (with word boundaries)
-            r"(?P<As>\bas\b)|",
-            r"(?P<Else>\belse\b)|",
-            r"(?P<For>\bfor\b)|",
-            r"(?P<If>\bif\b)|",
-            r"(?P<Is>\bis\b)|",
-            r"(?P<Match>\bmatch\b)|",
-            r"(?P<Type>\btype\b)|",
-            r"(?P<When>\bwhen\b)|",
-            r"(?P<Then>\bthen\b)|",
-            r"(?P<Where>\bwhere\b)|",
-            // Symbols
-            r"(?P<ArrowL><-|←)|",
-            r"(?P<ArrowR>->|→)|",
-            r"(?P<BackSlash>\\|λ)|",
-            r"(?P<CommentL>\{-)|",
-            r"(?P<CommentR>-\})|",
-            r"(?P<BraceL>\{)|",
-            r"(?P<BraceR>\})|",
-            r"(?P<BracketL>\[)|",
-            r"(?P<BracketR>\])|",
-            r"(?P<ColonColon>::)|", // Must go before :
-            r"(?P<Colon>:)|",
-            r"(?P<Comma>,)|",
-            r"(?P<DotDot>\.\.)|",
-            r"(?P<HashTag>\#)|",
-            r"(?P<In>\bin\b)|",   // Added word boundaries
-            r"(?P<Let>\blet\b)|", // Added word boundaries
-            r"(?P<LambdaR>->)|",
-            r"(?P<ParenL>\()|",
-            r"(?P<ParenR>\))|",
-            r"(?P<Question>\?)|",
-            r"(?P<SemiColon>;)|",
-            r"(?P<Whitespace>( |\t))|",
-            r"(?P<WhitespaceNewline>(\n|\r))|",
-            // Operators
-            r"(?P<Concat>\+\+)|",
-            r"(?P<Add>\+)|",
-            r"(?P<And>&&)|",
-            r"(?P<Div>/)|",
-            r"(?P<Dot>\.)|",
-            r"(?P<Equal>==)|",
-            r"(?P<Assign>=)|", // Must come after `==`
-            r"(?P<NotEqual>!=)|",
-            r"(?P<LessThanEq><=)|",
-            r"(?P<LessThan><)|",
-            r"(?P<GreaterThanEq>>=)|",
-            r"(?P<GreaterThan>>)|",
-            r"(?P<Mod>%)|",
-            r"(?P<Mul>\*)|",
-            r"(?P<Or>\|\|)|",
-            r"(?P<Pipe>\|)|",
-            r"(?P<Sub>-)|",
-            // Literals (with word boundaries for bool and null)
-            r"(?P<Bool>\b(true|false)\b)|",
-            r"(?P<Float>[0-9]+\.[0-9]+)|",
-            r"(?P<Int>[0-9]+)|",
-            r"(?P<Null>\bnull\b)|",
-            r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
-            r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
-            // Idents
-            r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
-            // Unexpected
-            r"(.)",
-        ))
-        .unwrap()
+        static TOKEN_REGEX: OnceLock<regex::Regex> = OnceLock::new();
+        TOKEN_REGEX
+            .get_or_init(|| {
+                regex::Regex::from_str(concat!(
+                    // Reserved keywords (with word boundaries)
+                    r"(?P<As>\bas\b)|",
+                    r"(?P<Else>\belse\b)|",
+                    r"(?P<For>\bfor\b)|",
+                    r"(?P<If>\bif\b)|",
+                    r"(?P<Is>\bis\b)|",
+                    r"(?P<Match>\bmatch\b)|",
+                    r"(?P<Type>\btype\b)|",
+                    r"(?P<When>\bwhen\b)|",
+                    r"(?P<Then>\bthen\b)|",
+                    r"(?P<Where>\bwhere\b)|",
+                    // Symbols
+                    r"(?P<ArrowL><-|←)|",
+                    r"(?P<ArrowR>->|→)|",
+                    r"(?P<BackSlash>\\|λ)|",
+                    r"(?P<CommentL>\{-)|",
+                    r"(?P<CommentR>-\})|",
+                    r"(?P<BraceL>\{)|",
+                    r"(?P<BraceR>\})|",
+                    r"(?P<BracketL>\[)|",
+                    r"(?P<BracketR>\])|",
+                    r"(?P<ColonColon>::)|", // Must go before :
+                    r"(?P<Colon>:)|",
+                    r"(?P<Comma>,)|",
+                    r"(?P<DotDot>\.\.)|",
+                    r"(?P<HashTag>\#)|",
+                    r"(?P<In>\bin\b)|",   // Added word boundaries
+                    r"(?P<Let>\blet\b)|", // Added word boundaries
+                    r"(?P<LambdaR>->)|",
+                    r"(?P<ParenL>\()|",
+                    r"(?P<ParenR>\))|",
+                    r"(?P<Question>\?)|",
+                    r"(?P<SemiColon>;)|",
+                    r"(?P<Whitespace>( |\t))|",
+                    r"(?P<WhitespaceNewline>(\n|\r))|",
+                    // Operators
+                    r"(?P<Concat>\+\+)|",
+                    r"(?P<Add>\+)|",
+                    r"(?P<And>&&)|",
+                    r"(?P<Div>/)|",
+                    r"(?P<Dot>\.)|",
+                    r"(?P<Equal>==)|",
+                    r"(?P<Assign>=)|", // Must come after `==`
+                    r"(?P<NotEqual>!=)|",
+                    r"(?P<LessThanEq><=)|",
+                    r"(?P<LessThan><)|",
+                    r"(?P<GreaterThanEq>>=)|",
+                    r"(?P<GreaterThan>>)|",
+                    r"(?P<Mod>%)|",
+                    r"(?P<Mul>\*)|",
+                    r"(?P<Or>\|\|)|",
+                    r"(?P<Pipe>\|)|",
+                    r"(?P<Sub>-)|",
+                    // Literals (with word boundaries for bool and null)
+                    r"(?P<Bool>\b(true|false)\b)|",
+                    r"(?P<Float>[0-9]+\.[0-9]+)|",
+                    r"(?P<Int>[0-9]+)|",
+                    r"(?P<Null>\bnull\b)|",
+                    r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
+                    r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
+                    // Idents
+                    r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
+                    // Unexpected
+                    r"(.)",
+                ))
+                .expect("token regex is valid")
+            })
+            .clone()
     }
 
     pub fn precedence(&self) -> Precedence {

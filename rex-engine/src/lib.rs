@@ -1,12 +1,16 @@
+#![forbid(unsafe_code)]
+
+//! Evaluation engine for Rex.
+
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{intern, Expr, Pattern, Symbol, TypeDecl};
+use rex_ast::expr::{Expr, Pattern, Symbol, TypeDecl, intern};
 use rex_ts::{
-    entails, instantiate, compose_subst, AdtDecl, Instance, Predicate, Scheme, Subst, Type,
-    TypeError, TypeKind, TypeSystem, TypeVarSupply, Types, TypedExpr, TypedExprKind, unify,
+    AdtDecl, Instance, Predicate, Scheme, Subst, Type, TypeError, TypeKind, TypeSystem,
+    TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails, instantiate, unify,
 };
 use uuid::Uuid;
 
@@ -240,8 +244,8 @@ impl NativeFn {
                 got: 1,
             });
         }
-        let (arg_ty, rest_ty) = split_fun(&self.typ)
-            .ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             name: self.name.clone(),
@@ -297,8 +301,8 @@ impl OverloadedFn {
         arg: Value,
         arg_type: Option<&Type>,
     ) -> Result<Value, EngineError> {
-        let (arg_ty, rest_ty) = split_fun(&self.typ)
-            .ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             name: self.name.clone(),
@@ -737,9 +741,7 @@ impl Engine {
             natives: NativeRegistry::default(),
             types: TypeSystem::with_prelude(),
         };
-        engine
-            .inject_prelude()
-            .expect("prelude injection failed");
+        engine.inject_prelude().expect("prelude injection failed");
         engine
     }
 
@@ -752,9 +754,7 @@ impl Engine {
         let typ = V::rex_type();
         let value = value.into_value();
         let func =
-            Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Value]| {
-                Ok(value.clone())
-            });
+            Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Value]| Ok(value.clone()));
         let scheme = Scheme::new(vec![], vec![], typ);
         self.register_native(name, scheme, 0, func)
     }
@@ -767,9 +767,7 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let name = normalize_name(name);
         let func =
-            Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Value]| {
-                Ok(value.clone())
-            });
+            Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Value]| Ok(value.clone()));
         let scheme = Scheme::new(vec![], vec![], typ);
         self.register_native(name, scheme, 0, func)
     }
@@ -859,9 +857,7 @@ impl Engine {
     {
         let name = normalize_name(name);
         let scheme = Scheme::new(vec![], vec![], typ);
-        let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Value]| {
-            func(engine, args)
-        });
+        let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Value]| func(engine, args));
         self.register_native(name, scheme, arity, func)
     }
 
@@ -876,9 +872,7 @@ impl Engine {
         F: Fn(&Engine, &[Value]) -> Result<Value, EngineError> + Send + Sync + 'static,
     {
         let name = normalize_name(name);
-        let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Value]| {
-            func(engine, args)
-        });
+        let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Value]| func(engine, args));
         self.register_native(name, scheme, arity, func)
     }
 
@@ -972,7 +966,11 @@ impl Engine {
         self.natives.insert(name, imp)
     }
 
-    fn register_type_scheme(&mut self, name: &Symbol, injected: &Scheme) -> Result<(), EngineError> {
+    fn register_type_scheme(
+        &mut self,
+        name: &Symbol,
+        injected: &Scheme,
+    ) -> Result<(), EngineError> {
         let schemes = self.types.env.lookup(name);
         match schemes {
             None => {
@@ -1042,9 +1040,7 @@ impl Engine {
                         return Err(EngineError::UnknownVar(name.clone()));
                     }
                     if !overloads.is_empty() {
-                        if expr.typ.ftv().is_empty()
-                            && !overloads.iter().any(|t| t == &expr.typ)
-                        {
+                        if expr.typ.ftv().is_empty() && !overloads.iter().any(|t| t == &expr.typ) {
                             return Err(EngineError::MissingImpl {
                                 name: name.clone(),
                                 typ: expr.typ.to_string(),
@@ -1197,9 +1193,7 @@ impl Engine {
                         typ.clone(),
                     )))
                 } else {
-                    Err(EngineError::AmbiguousOverload {
-                        name: sym_name,
-                    })
+                    Err(EngineError::AmbiguousOverload { name: sym_name })
                 }
             }
         }
@@ -1279,12 +1273,7 @@ fn default_ambiguous_types(
 fn defaultable_class(class: &Symbol) -> bool {
     matches!(
         class.as_ref(),
-        "AdditiveMonoid"
-            | "MultiplicativeMonoid"
-            | "AdditiveGroup"
-            | "Ring"
-            | "Field"
-            | "Integral"
+        "AdditiveMonoid" | "MultiplicativeMonoid" | "AdditiveGroup" | "Ring" | "Field" | "Integral"
     )
 }
 
@@ -1372,11 +1361,7 @@ fn choose_default_type(
     Ok(None)
 }
 
-fn scheme_accepts(
-    ts: &TypeSystem,
-    scheme: &Scheme,
-    typ: &Type,
-) -> Result<bool, EngineError> {
+fn scheme_accepts(ts: &TypeSystem, scheme: &Scheme, typ: &Type) -> Result<bool, EngineError> {
     let mut supply = TypeVarSupply::new();
     let (preds, scheme_ty) = instantiate(scheme, &mut supply);
     let subst = match unify(&scheme_ty, typ) {
@@ -1406,9 +1391,7 @@ fn lookup_scheme(engine: &Engine, name: &Symbol) -> Result<Scheme, EngineError> 
         .lookup(name)
         .ok_or_else(|| EngineError::UnknownVar(name.clone()))?;
     if schemes.len() != 1 {
-        return Err(EngineError::AmbiguousOverload {
-            name: name.clone(),
-        });
+        return Err(EngineError::AmbiguousOverload { name: name.clone() });
     }
     Ok(schemes[0].clone())
 }
@@ -1475,7 +1458,7 @@ fn list_to_vec(value: &Value, name: &str) -> Result<Vec<Value>, EngineError> {
                     name: sym(name),
                     expected: "list".into(),
                     got: value.type_name().into(),
-                })
+                });
             }
         }
     }
@@ -1572,7 +1555,9 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
         Value::Adt(tag, args) if (sym_eq(tag, "Ok") || sym_eq(tag, "Err")) && args.len() == 1 => {
             Err(EngineError::UnknownType(sym("result")))
         }
-        Value::Adt(tag, args) if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 => {
+        Value::Adt(tag, args)
+            if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 =>
+        {
             let elems = list_to_vec(value, "list")?;
             let first = elems
                 .get(0)
@@ -1670,9 +1655,7 @@ fn option_from_value(value: Option<Value>) -> Value {
 
 fn result_value(value: &Value) -> Result<Result<Value, Value>, EngineError> {
     match value {
-        Value::Adt(name, args) if sym_eq(name, "Ok") && args.len() == 1 => {
-            Ok(Ok(args[0].clone()))
-        }
+        Value::Adt(name, args) if sym_eq(name, "Ok") && args.len() == 1 => Ok(Ok(args[0].clone())),
         Value::Adt(name, args) if sym_eq(name, "Err") && args.len() == 1 => {
             Ok(Err(args[0].clone()))
         }
@@ -1705,11 +1688,7 @@ fn binary_arg_types(name: &str, typ: &Type) -> Result<(Type, Type), EngineError>
     Ok((lhs, rhs))
 }
 
-fn split_fun_chain(
-    name: &str,
-    typ: &Type,
-    count: usize,
-) -> Result<(Vec<Type>, Type), EngineError> {
+fn split_fun_chain(name: &str, typ: &Type, count: usize) -> Result<(Vec<Type>, Type), EngineError> {
     let mut args = Vec::with_capacity(count);
     let mut cur = typ.clone();
     for _ in 0..count {
@@ -1742,9 +1721,7 @@ fn result_type(ok: Type, err: Type) -> Type {
 
 fn list_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem)
-            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "List")) =>
-        {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "List")) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -1757,9 +1734,7 @@ fn list_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 
 fn array_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem)
-            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Array")) =>
-        {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Array")) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -1772,9 +1747,7 @@ fn array_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 
 fn option_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem)
-            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option")) =>
-        {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option")) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -1788,9 +1761,7 @@ fn option_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 fn result_types(typ: &Type, name: &str) -> Result<(Type, Type), EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, ok) => match head.as_ref() {
-            TypeKind::App(head, err)
-                if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Result")) =>
-            {
+            TypeKind::App(head, err) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Result")) => {
                 Ok((ok.clone(), err.clone()))
             }
             _ => Err(EngineError::NativeType {
@@ -1952,10 +1923,7 @@ fn eq_value_by_type(
                 }),
             },
             _ => {
-                let eq_ty = Type::fun(
-                    typ.clone(),
-                    Type::fun(typ.clone(), Type::con("bool", 0)),
-                );
+                let eq_ty = Type::fun(typ.clone(), Type::fun(typ.clone(), Type::con("bool", 0)));
                 let eq_name = sym("==");
                 let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
                 let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
@@ -1993,9 +1961,7 @@ fn eq_value_by_type(
                 }
                 if sym_eq(&tc.name, "Option") {
                     return match (lhs, rhs) {
-                        (Value::Adt(tag_a, _), Value::Adt(tag_b, _)) if tag_a != tag_b => {
-                            Ok(false)
-                        }
+                        (Value::Adt(tag_a, _), Value::Adt(tag_b, _)) if tag_a != tag_b => Ok(false),
                         (Value::Adt(tag, _), Value::Adt(_, _)) if sym_eq(tag, "None") => Ok(true),
                         (Value::Adt(tag, args_a), Value::Adt(_, args_b)) if sym_eq(tag, "Some") => {
                             if args_a.len() != 1 || args_b.len() != 1 {
@@ -2039,9 +2005,7 @@ fn eq_value_by_type(
                 if let TypeKind::Con(tc) = head.as_ref() {
                     if sym_eq(&tc.name, "Result") {
                         return match (lhs, rhs) {
-                            (Value::Adt(tag_a, _), Value::Adt(tag_b, _))
-                                if tag_a != tag_b =>
-                            {
+                            (Value::Adt(tag_a, _), Value::Adt(tag_b, _)) if tag_a != tag_b => {
                                 Ok(false)
                             }
                             (Value::Adt(tag, args_a), Value::Adt(_, args_b))
@@ -2054,13 +2018,7 @@ fn eq_value_by_type(
                                         got: lhs.type_name().into(),
                                     });
                                 }
-                                eq_value_by_type(
-                                    engine,
-                                    op_name,
-                                    elem,
-                                    &args_a[0],
-                                    &args_b[0],
-                                )
+                                eq_value_by_type(engine, op_name, elem, &args_a[0], &args_b[0])
                             }
                             (Value::Adt(tag, args_a), Value::Adt(_, args_b))
                                 if sym_eq(tag, "Err") =>
@@ -2072,13 +2030,7 @@ fn eq_value_by_type(
                                         got: lhs.type_name().into(),
                                     });
                                 }
-                                eq_value_by_type(
-                                    engine,
-                                    op_name,
-                                    err_ty,
-                                    &args_a[0],
-                                    &args_b[0],
-                                )
+                                eq_value_by_type(engine, op_name, err_ty, &args_a[0], &args_b[0])
                             }
                             _ => Err(EngineError::NativeType {
                                 name: op_name.clone(),
@@ -2089,10 +2041,7 @@ fn eq_value_by_type(
                     }
                 }
             }
-            let eq_ty = Type::fun(
-                typ.clone(),
-                Type::fun(typ.clone(), Type::con("bool", 0)),
-            );
+            let eq_ty = Type::fun(typ.clone(), Type::fun(typ.clone(), Type::con("bool", 0)));
             let eq_name = sym("==");
             let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
             let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
@@ -2113,10 +2062,7 @@ fn eq_value_by_type(
             }
         }
         _ => {
-            let eq_ty = Type::fun(
-                typ.clone(),
-                Type::fun(typ.clone(), Type::con("bool", 0)),
-            );
+            let eq_ty = Type::fun(typ.clone(), Type::fun(typ.clone(), Type::con("bool", 0)));
             let eq_name = sym("==");
             let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
             let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
@@ -2212,13 +2158,13 @@ fn cmp_value_by_type(
                 }),
             },
             "f32" => match (lhs, rhs) {
-                (Value::F32(a), Value::F32(b)) => a.partial_cmp(b).ok_or_else(|| {
-                    EngineError::NativeType {
+                (Value::F32(a), Value::F32(b)) => {
+                    a.partial_cmp(b).ok_or_else(|| EngineError::NativeType {
                         name: op_name.clone(),
                         expected: tc.name.to_string(),
                         got: "nan".into(),
-                    }
-                }),
+                    })
+                }
                 _ => Err(EngineError::NativeType {
                     name: op_name.clone(),
                     expected: tc.name.to_string(),
@@ -2226,13 +2172,13 @@ fn cmp_value_by_type(
                 }),
             },
             "f64" => match (lhs, rhs) {
-                (Value::F64(a), Value::F64(b)) => a.partial_cmp(b).ok_or_else(|| {
-                    EngineError::NativeType {
+                (Value::F64(a), Value::F64(b)) => {
+                    a.partial_cmp(b).ok_or_else(|| EngineError::NativeType {
                         name: op_name.clone(),
                         expected: tc.name.to_string(),
                         got: "nan".into(),
-                    }
-                }),
+                    })
+                }
                 _ => Err(EngineError::NativeType {
                     name: op_name.clone(),
                     expected: tc.name.to_string(),
@@ -2425,10 +2371,30 @@ fn inject_order_ops(engine: &mut Engine) -> Result<(), EngineError> {
             vec![],
             Type::fun(typ.clone(), Type::fun(typ.clone(), bool_ty.clone())),
         );
-        engine.inject_native_scheme_typed("(<)", scheme.clone(), 2, make_impl("<", |ord| ord == std::cmp::Ordering::Less))?;
-        engine.inject_native_scheme_typed("(<=)", scheme.clone(), 2, make_impl("<=", |ord| ord != std::cmp::Ordering::Greater))?;
-        engine.inject_native_scheme_typed("(>)", scheme.clone(), 2, make_impl(">", |ord| ord == std::cmp::Ordering::Greater))?;
-        engine.inject_native_scheme_typed("(>=)", scheme.clone(), 2, make_impl(">=", |ord| ord != std::cmp::Ordering::Less))?;
+        engine.inject_native_scheme_typed(
+            "(<)",
+            scheme.clone(),
+            2,
+            make_impl("<", |ord| ord == std::cmp::Ordering::Less),
+        )?;
+        engine.inject_native_scheme_typed(
+            "(<=)",
+            scheme.clone(),
+            2,
+            make_impl("<=", |ord| ord != std::cmp::Ordering::Greater),
+        )?;
+        engine.inject_native_scheme_typed(
+            "(>)",
+            scheme.clone(),
+            2,
+            make_impl(">", |ord| ord == std::cmp::Ordering::Greater),
+        )?;
+        engine.inject_native_scheme_typed(
+            "(>=)",
+            scheme.clone(),
+            2,
+            make_impl(">=", |ord| ord != std::cmp::Ordering::Less),
+        )?;
     }
 
     Ok(())
@@ -2449,7 +2415,9 @@ fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError> {
 
     engine.inject_fn2("(+)", |a: i32, b: i32| -> i32 { a + b })?;
     engine.inject_fn2("(+)", |a: f32, b: f32| -> f32 { a + b })?;
-    engine.inject_fn2("(+)", |a: String, b: String| -> String { format!("{}{}", a, b) })?;
+    engine.inject_fn2("(+)", |a: String, b: String| -> String {
+        format!("{}{}", a, b)
+    })?;
 
     engine.inject_fn2("(-)", |a: i32, b: i32| -> i32 { a - b })?;
     engine.inject_fn2("(-)", |a: f32, b: f32| -> f32 { a - b })?;
@@ -2473,7 +2441,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), b.clone()), Type::fun(list_a.clone(), list_b)),
+            Type::fun(
+                Type::fun(a.clone(), b.clone()),
+                Type::fun(list_a.clone(), list_b),
+            ),
         );
         engine.inject_native_scheme_typed("map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("map", call_type, 2)?;
@@ -2482,7 +2453,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = list_elem_type(&list_ty, "map")?;
             let mut out = Vec::new();
             for value in list_to_vec(&args[1], "map")? {
-                let mapped = apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 out.push(mapped);
             }
             Ok(list_from_vec(out))
@@ -2499,7 +2476,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), b.clone()), Type::fun(array_a.clone(), array_b)),
+            Type::fun(
+                Type::fun(a.clone(), b.clone()),
+                Type::fun(array_a.clone(), array_b),
+            ),
         );
         engine.inject_native_scheme_typed("map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("map", call_type, 2)?;
@@ -2508,7 +2488,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = array_elem_type(&array_ty, "map")?;
             let mut out = Vec::new();
             for value in expect_array(&args[1], "map")? {
-                let mapped = apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 out.push(mapped);
             }
             Ok(Value::Array(out))
@@ -2525,7 +2511,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), b.clone()), Type::fun(opt_a.clone(), opt_b)),
+            Type::fun(
+                Type::fun(a.clone(), b.clone()),
+                Type::fun(opt_a.clone(), opt_b),
+            ),
         );
         engine.inject_native_scheme_typed("map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("map", call_type, 2)?;
@@ -2534,8 +2523,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = option_elem_type(&opt_ty, "map")?;
             match option_value(&args[1])? {
                 Some(v) => {
-                    let mapped =
-                        apply(engine, args[0].clone(), v, Some(&func_ty), Some(&elem_ty))?;
+                    let mapped = apply(engine, args[0].clone(), v, Some(&func_ty), Some(&elem_ty))?;
                     Ok(option_from_value(Some(mapped)))
                 }
                 None => Ok(option_from_value(None)),
@@ -2555,7 +2543,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv, e_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), b.clone()), Type::fun(result_a.clone(), result_b)),
+            Type::fun(
+                Type::fun(a.clone(), b.clone()),
+                Type::fun(result_a.clone(), result_b),
+            ),
         );
         engine.inject_native_scheme_typed("map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("map", call_type, 2)?;
@@ -2564,8 +2555,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let (ok_ty, _err_ty) = result_types(&result_ty, "map")?;
             match result_value(&args[1])? {
                 Ok(v) => {
-                    let mapped =
-                        apply(engine, args[0].clone(), v, Some(&func_ty), Some(&ok_ty))?;
+                    let mapped = apply(engine, args[0].clone(), v, Some(&func_ty), Some(&ok_ty))?;
                     Ok(result_from_value(Ok(mapped)))
                 }
                 Err(e) => Ok(result_from_value(Err(e))),
@@ -2717,7 +2707,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let mut acc = args[1].clone();
             let values = list_to_vec(&args[2], "foldr")?;
             for value in values.into_iter().rev() {
-                let step = apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let step = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 acc = apply(engine, step, acc, Some(&step_ty), Some(&acc_ty))?;
             }
             Ok(acc)
@@ -2755,7 +2751,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let mut acc = args[1].clone();
             let values = expect_array(&args[2], "foldr")?;
             for value in values.into_iter().rev() {
-                let step = apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let step = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 acc = apply(engine, step, acc, Some(&step_ty), Some(&acc_ty))?;
             }
             Ok(acc)
@@ -2793,7 +2795,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let acc = args[1].clone();
             match option_value(&args[2])? {
                 Some(value) => {
-                    let step = apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                    let step = apply(
+                        engine,
+                        args[0].clone(),
+                        value,
+                        Some(&func_ty),
+                        Some(&elem_ty),
+                    )?;
                     apply(engine, step, acc, Some(&step_ty), Some(&acc_ty))
                 }
                 None => Ok(acc),
@@ -2921,7 +2929,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::fun(a.clone(), Type::con("bool", 0)), Type::fun(list_a.clone(), list_a)),
+            Type::fun(
+                Type::fun(a.clone(), Type::con("bool", 0)),
+                Type::fun(list_a.clone(), list_a),
+            ),
         );
         engine.inject_native_scheme_typed("filter", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("filter", call_type, 2)?;
@@ -2952,7 +2963,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::fun(a.clone(), Type::con("bool", 0)), Type::fun(array_a.clone(), array_a)),
+            Type::fun(
+                Type::fun(a.clone(), Type::con("bool", 0)),
+                Type::fun(array_a.clone(), array_a),
+            ),
         );
         engine.inject_native_scheme_typed("filter", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("filter", call_type, 2)?;
@@ -2983,7 +2997,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::fun(a.clone(), Type::con("bool", 0)), Type::fun(opt_a.clone(), opt_a)),
+            Type::fun(
+                Type::fun(a.clone(), Type::con("bool", 0)),
+                Type::fun(opt_a.clone(), opt_a),
+            ),
         );
         engine.inject_native_scheme_typed("filter", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("filter", call_type, 2)?;
@@ -2992,8 +3009,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = option_elem_type(&opt_ty, "filter")?;
             match option_value(&args[1])? {
                 Some(v) => {
-                    let keep =
-                        apply(engine, args[0].clone(), v, Some(&func_ty), Some(&elem_ty))?;
+                    let keep = apply(engine, args[0].clone(), v, Some(&func_ty), Some(&elem_ty))?;
                     if expect_bool(&keep, "filter")? {
                         Ok(args[1].clone())
                     } else {
@@ -3027,8 +3043,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = list_elem_type(&list_ty, "filter_map")?;
             let mut out = Vec::new();
             for value in list_to_vec(&args[1], "filter_map")? {
-                let mapped =
-                    apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 if let Some(v) = option_value(&mapped)? {
                     out.push(v);
                 }
@@ -3059,8 +3080,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = array_elem_type(&array_ty, "filter_map")?;
             let mut out = Vec::new();
             for value in expect_array(&args[1], "filter_map")? {
-                let mapped =
-                    apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 if let Some(v) = option_value(&mapped)? {
                     out.push(v);
                 }
@@ -3091,8 +3117,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = option_elem_type(&opt_ty, "filter_map")?;
             match option_value(&args[1])? {
                 Some(v) => {
-                    let mapped =
-                        apply(engine, args[0].clone(), v, Some(&func_ty), Some(&elem_ty))?;
+                    let mapped = apply(engine, args[0].clone(), v, Some(&func_ty), Some(&elem_ty))?;
                     Ok(mapped)
                 }
                 None => Ok(option_from_value(None)),
@@ -3110,7 +3135,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), list_b.clone()), Type::fun(list_a.clone(), list_b)),
+            Type::fun(
+                Type::fun(a.clone(), list_b.clone()),
+                Type::fun(list_a.clone(), list_b),
+            ),
         );
         engine.inject_native_scheme_typed("flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("flat_map", call_type, 2)?;
@@ -3119,8 +3147,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = list_elem_type(&list_ty, "flat_map")?;
             let mut out = Vec::new();
             for value in list_to_vec(&args[1], "flat_map")? {
-                let mapped =
-                    apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 let mut inner = list_to_vec(&mapped, "flat_map")?;
                 out.append(&mut inner);
             }
@@ -3138,7 +3171,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), array_b.clone()), Type::fun(array_a.clone(), array_b)),
+            Type::fun(
+                Type::fun(a.clone(), array_b.clone()),
+                Type::fun(array_a.clone(), array_b),
+            ),
         );
         engine.inject_native_scheme_typed("flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("flat_map", call_type, 2)?;
@@ -3147,8 +3183,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = array_elem_type(&array_ty, "flat_map")?;
             let mut out = Vec::new();
             for value in expect_array(&args[1], "flat_map")? {
-                let mapped =
-                    apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 let mut inner = expect_array(&mapped, "flat_map")?;
                 out.append(&mut inner);
             }
@@ -3166,7 +3207,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), opt_b.clone()), Type::fun(opt_a.clone(), opt_b)),
+            Type::fun(
+                Type::fun(a.clone(), opt_b.clone()),
+                Type::fun(opt_a.clone(), opt_b),
+            ),
         );
         engine.inject_native_scheme_typed("flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("flat_map", call_type, 2)?;
@@ -3192,7 +3236,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv, e_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), result_b.clone()), Type::fun(result_a.clone(), result_b)),
+            Type::fun(
+                Type::fun(a.clone(), result_b.clone()),
+                Type::fun(result_a.clone(), result_b),
+            ),
         );
         engine.inject_native_scheme_typed("flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("flat_map", call_type, 2)?;
@@ -3201,8 +3248,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let (ok_ty, _err_ty) = result_types(&result_ty, "flat_map")?;
             match result_value(&args[1])? {
                 Ok(v) => {
-                    let mapped =
-                        apply(engine, args[0].clone(), v, Some(&func_ty), Some(&ok_ty))?;
+                    let mapped = apply(engine, args[0].clone(), v, Some(&func_ty), Some(&ok_ty))?;
                     let _ = result_value(&mapped)?;
                     Ok(mapped)
                 }
@@ -3221,7 +3267,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), list_b.clone()), Type::fun(list_a.clone(), list_b)),
+            Type::fun(
+                Type::fun(a.clone(), list_b.clone()),
+                Type::fun(list_a.clone(), list_b),
+            ),
         );
         engine.inject_native_scheme_typed("and_then", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("and_then", call_type, 2)?;
@@ -3230,8 +3279,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = list_elem_type(&list_ty, "and_then")?;
             let mut out = Vec::new();
             for value in list_to_vec(&args[1], "and_then")? {
-                let mapped =
-                    apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 let mut inner = list_to_vec(&mapped, "and_then")?;
                 out.append(&mut inner);
             }
@@ -3249,7 +3303,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), array_b.clone()), Type::fun(array_a.clone(), array_b)),
+            Type::fun(
+                Type::fun(a.clone(), array_b.clone()),
+                Type::fun(array_a.clone(), array_b),
+            ),
         );
         engine.inject_native_scheme_typed("and_then", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("and_then", call_type, 2)?;
@@ -3258,8 +3315,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let elem_ty = array_elem_type(&array_ty, "and_then")?;
             let mut out = Vec::new();
             for value in expect_array(&args[1], "and_then")? {
-                let mapped =
-                    apply(engine, args[0].clone(), value, Some(&func_ty), Some(&elem_ty))?;
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    value,
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
                 let mut inner = expect_array(&mapped, "and_then")?;
                 out.append(&mut inner);
             }
@@ -3277,7 +3339,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), opt_b.clone()), Type::fun(opt_a.clone(), opt_b)),
+            Type::fun(
+                Type::fun(a.clone(), opt_b.clone()),
+                Type::fun(opt_a.clone(), opt_b),
+            ),
         );
         engine.inject_native_scheme_typed("and_then", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("and_then", call_type, 2)?;
@@ -3303,7 +3368,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv, e_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), result_b.clone()), Type::fun(result_a.clone(), result_b)),
+            Type::fun(
+                Type::fun(a.clone(), result_b.clone()),
+                Type::fun(result_a.clone(), result_b),
+            ),
         );
         engine.inject_native_scheme_typed("and_then", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("and_then", call_type, 2)?;
@@ -3312,8 +3380,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let (ok_ty, _err_ty) = result_types(&result_ty, "and_then")?;
             match result_value(&args[1])? {
                 Ok(v) => {
-                    let mapped =
-                        apply(engine, args[0].clone(), v, Some(&func_ty), Some(&ok_ty))?;
+                    let mapped = apply(engine, args[0].clone(), v, Some(&func_ty), Some(&ok_ty))?;
                     let _ = result_value(&mapped)?;
                     Ok(mapped)
                 }
@@ -3329,7 +3396,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::fun(list_a.clone(), list_a.clone()), Type::fun(list_a.clone(), list_a)),
+            Type::fun(
+                Type::fun(list_a.clone(), list_a.clone()),
+                Type::fun(list_a.clone(), list_a),
+            ),
         );
         engine.inject_native_scheme_typed("or_else", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("or_else", call_type, 2)?;
@@ -3338,7 +3408,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             if !list_to_vec(&args[1], "or_else")?.is_empty() {
                 return Ok(args[1].clone());
             }
-            apply(engine, args[0].clone(), args[1].clone(), Some(&func_ty), Some(&list_ty))
+            apply(
+                engine,
+                args[0].clone(),
+                args[1].clone(),
+                Some(&func_ty),
+                Some(&list_ty),
+            )
         })?;
     }
 
@@ -3349,7 +3425,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::fun(array_a.clone(), array_a.clone()), Type::fun(array_a.clone(), array_a)),
+            Type::fun(
+                Type::fun(array_a.clone(), array_a.clone()),
+                Type::fun(array_a.clone(), array_a),
+            ),
         );
         engine.inject_native_scheme_typed("or_else", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("or_else", call_type, 2)?;
@@ -3358,7 +3437,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             if !expect_array(&args[1], "or_else")?.is_empty() {
                 return Ok(args[1].clone());
             }
-            apply(engine, args[0].clone(), args[1].clone(), Some(&func_ty), Some(&array_ty))
+            apply(
+                engine,
+                args[0].clone(),
+                args[1].clone(),
+                Some(&func_ty),
+                Some(&array_ty),
+            )
         })?;
     }
 
@@ -3369,7 +3454,10 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::fun(opt_a.clone(), opt_a.clone()), Type::fun(opt_a.clone(), opt_a)),
+            Type::fun(
+                Type::fun(opt_a.clone(), opt_a.clone()),
+                Type::fun(opt_a.clone(), opt_a),
+            ),
         );
         engine.inject_native_scheme_typed("or_else", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain("or_else", call_type, 2)?;
@@ -3378,7 +3466,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             if option_value(&args[1])?.is_some() {
                 return Ok(args[1].clone());
             }
-            apply(engine, args[0].clone(), args[1].clone(), Some(&func_ty), Some(&opt_ty))
+            apply(
+                engine,
+                args[0].clone(),
+                args[1].clone(),
+                Some(&func_ty),
+                Some(&opt_ty),
+            )
         })?;
     }
 
@@ -3401,7 +3495,13 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let func_ty = arg_tys[0].clone();
             let result_ty = arg_tys[1].clone();
             if matches!(result_value(&args[1])?, Err(_)) {
-                apply(engine, args[0].clone(), args[1].clone(), Some(&func_ty), Some(&result_ty))
+                apply(
+                    engine,
+                    args[0].clone(),
+                    args[1].clone(),
+                    Some(&func_ty),
+                    Some(&result_ty),
+                )
             } else {
                 Ok(args[1].clone())
             }
@@ -3569,7 +3669,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 Some(v) => {
                     let len_val = len_value_for_type(&elem_ty, 1, "mean")?;
                     let div = resolve_binary_op(engine, "/", &elem_ty)?;
-                    let div_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
+                    let div_ty =
+                        Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
                     let step_ty = Type::fun(elem_ty.clone(), elem_ty.clone());
                     let div_step = apply(engine, div.clone(), v, Some(&div_ty), Some(&elem_ty))?;
                     apply(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty))
@@ -3884,7 +3985,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                             name: sym("unzip"),
                             expected: "tuple2".into(),
                             got: other.type_name().into(),
-                        })
+                        });
                     }
                 }
             }
@@ -3922,7 +4023,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                             name: sym("unzip"),
                             expected: "tuple2".into(),
                             got: other.type_name().into(),
-                        })
+                        });
                     }
                 }
             }
@@ -4080,14 +4181,20 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     let is_some = sym("is_some");
     let is_some_scheme = lookup_scheme(engine, &is_some)?;
-    engine.inject_native_scheme_typed("is_some", is_some_scheme, 1, |_engine, _call_type, args| {
-        Ok(Value::Bool(option_value(&args[0])?.is_some()))
-    })?;
+    engine.inject_native_scheme_typed(
+        "is_some",
+        is_some_scheme,
+        1,
+        |_engine, _call_type, args| Ok(Value::Bool(option_value(&args[0])?.is_some())),
+    )?;
     let is_none = sym("is_none");
     let is_none_scheme = lookup_scheme(engine, &is_none)?;
-    engine.inject_native_scheme_typed("is_none", is_none_scheme, 1, |_engine, _call_type, args| {
-        Ok(Value::Bool(option_value(&args[0])?.is_none()))
-    })?;
+    engine.inject_native_scheme_typed(
+        "is_none",
+        is_none_scheme,
+        1,
+        |_engine, _call_type, args| Ok(Value::Bool(option_value(&args[0])?.is_none())),
+    )?;
 
     let is_ok = sym("is_ok");
     let is_ok_scheme = lookup_scheme(engine, &is_ok)?;
@@ -4096,9 +4203,12 @@ fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError>
     })?;
     let is_err = sym("is_err");
     let is_err_scheme = lookup_scheme(engine, &is_err)?;
-    engine.inject_native_scheme_typed("is_err", is_err_scheme, 1, |_engine, _call_type, args| {
-        Ok(Value::Bool(result_value(&args[0])?.is_err()))
-    })?;
+    engine.inject_native_scheme_typed(
+        "is_err",
+        is_err_scheme,
+        1,
+        |_engine, _call_type, args| Ok(Value::Bool(result_value(&args[0])?.is_err())),
+    )?;
     Ok(())
 }
 
@@ -4165,13 +4275,14 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
             let value = eval_typed_expr(engine, &env, expr)?;
             match value {
                 Value::Adt(_, args) if args.len() == 1 => match &args[0] {
-                    Value::Dict(map) => map
-                        .get(field)
-                        .cloned()
-                        .ok_or_else(|| EngineError::UnknownField {
-                            field: field.clone(),
-                            value: "record".into(),
-                        }),
+                    Value::Dict(map) => {
+                        map.get(field)
+                            .cloned()
+                            .ok_or_else(|| EngineError::UnknownField {
+                                field: field.clone(),
+                                value: "record".into(),
+                            })
+                    }
                     other => Err(EngineError::UnknownField {
                         field: field.clone(),
                         value: other.type_name().into(),

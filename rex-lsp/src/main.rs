@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::collections::{BTreeSet, HashMap};
 
 use rex_ast::expr::{Decl, Expr, Pattern, Program, TypeDecl, TypeExpr};
@@ -82,7 +84,10 @@ impl LanguageServer for RexServer {
         let uri = params.text_document.uri;
         let text = params.text_document.text;
 
-        self.documents.write().await.insert(uri.clone(), text.clone());
+        self.documents
+            .write()
+            .await
+            .insert(uri.clone(), text.clone());
         self.publish_diagnostics(uri, &text).await;
     }
 
@@ -133,10 +138,7 @@ impl LanguageServer for RexServer {
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
-        let uri = params
-            .text_document_position
-            .text_document
-            .uri;
+        let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let text = { self.documents.read().await.get(&uri).cloned() };
 
@@ -325,7 +327,12 @@ fn completion_items(text: &str, position: Position) -> Vec<CompletionItem> {
     if let Ok(tokens) = Token::tokenize(text) {
         let mut parser = Parser::new(tokens);
         if let Ok(program) = parser.parse_program() {
-            return completion_items_from_program(&program, position, field_mode, base_ident.as_deref());
+            return completion_items_from_program(
+                &program,
+                position,
+                field_mode,
+                base_ident.as_deref(),
+            );
         }
     }
 
@@ -339,9 +346,7 @@ fn completion_items_from_program(
     base_ident: Option<&str>,
 ) -> Vec<CompletionItem> {
     if field_mode {
-        if let Some(fields) =
-            field_completion_for_position(program, position, base_ident)
-        {
+        if let Some(fields) = field_completion_for_position(program, position, base_ident) {
             return fields
                 .into_iter()
                 .map(|label| completion_item(label, CompletionItemKind::FIELD))
@@ -538,8 +543,7 @@ fn field_env_at_expr(
             }
             if position_in_span(position, *body.span()) {
                 let mut env_with = env.clone();
-                let fields = binding_fields(ann.as_ref(), def, type_fields)
-                    .unwrap_or_default();
+                let fields = binding_fields(ann.as_ref(), def, type_fields).unwrap_or_default();
                 env_with.insert(var.name.to_string(), fields);
                 if let Some(inner) = field_env_at_expr(body, position, &env_with, type_fields) {
                     return Some(inner);
@@ -574,9 +578,11 @@ fn field_env_at_expr(
                 }
                 if position_in_span(position, *arm.span()) {
                     let mut env_with = env.clone();
-                    env_with.extend(pattern_vars(pattern).into_iter().map(|name| {
-                        (name, BTreeSet::new())
-                    }));
+                    env_with.extend(
+                        pattern_vars(pattern)
+                            .into_iter()
+                            .map(|name| (name, BTreeSet::new())),
+                    );
                     if let Some(inner) = field_env_at_expr(arm, position, &env_with, type_fields) {
                         return Some(inner);
                     }
@@ -680,7 +686,8 @@ fn fields_from_type_expr(
 ) -> Option<BTreeSet<String>> {
     match typ {
         TypeExpr::Record(_, entries) => {
-            let fields: BTreeSet<String> = entries.iter().map(|(name, _)| name.to_string()).collect();
+            let fields: BTreeSet<String> =
+                entries.iter().map(|(name, _)| name.to_string()).collect();
             if fields.is_empty() {
                 None
             } else {
@@ -727,10 +734,8 @@ fn fields_for_expr(
             }
             None
         }
-        Expr::Ann(_, inner, ann) => {
-            fields_from_type_expr(ann, type_fields)
-                .or_else(|| fields_for_expr(inner, env, type_fields))
-        }
+        Expr::Ann(_, inner, ann) => fields_from_type_expr(ann, type_fields)
+            .or_else(|| fields_for_expr(inner, env, type_fields)),
         Expr::Project(_, base, _) => fields_for_expr(base, env, type_fields),
         _ => None,
     }
@@ -840,10 +845,7 @@ fn fallback_field_map(tokens: &Tokens) -> HashMap<String, BTreeSet<String>> {
     map
 }
 
-fn parse_record_fields(
-    tokens: &[Token],
-    start_index: usize,
-) -> Option<(BTreeSet<String>, usize)> {
+fn parse_record_fields(tokens: &[Token], start_index: usize) -> Option<(BTreeSet<String>, usize)> {
     if !matches!(tokens.get(start_index), Some(Token::BraceL(..))) {
         return None;
     }
@@ -958,8 +960,7 @@ fn scope_at_expr(expr: &Expr, position: RexPosition, scope: &Vec<String>) -> Opt
         }
         Expr::Match(_, scrutinee, arms) => {
             if position_in_span(position, *scrutinee.span()) {
-                return scope_at_expr(scrutinee, position, scope)
-                    .or_else(|| Some(scope.clone()));
+                return scope_at_expr(scrutinee, position, scope).or_else(|| Some(scope.clone()));
             }
             for (pattern, arm) in arms {
                 if position_in_span(position, *pattern.span()) {

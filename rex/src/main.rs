@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::env;
 use std::fs;
 
@@ -77,8 +79,7 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     let source = if let Some(code) = code {
         code
     } else if let Some(path) = file {
-        fs::read_to_string(&path)
-            .map_err(|e| format!("failed to read `{path}`: {e}"))?
+        fs::read_to_string(&path).map_err(|e| format!("failed to read `{path}`: {e}"))?
     } else {
         return Err("missing input (file or `-c/--code`)".into());
     };
@@ -96,7 +97,9 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     if emit_type {
         let mut ts = TypeSystem::with_prelude();
         inject_type_decls(&mut ts, &program.decls).map_err(|e| format!("{e}"))?;
-        let (preds, ty) = ts.infer(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
+        let (preds, ty) = ts
+            .infer(program.expr.as_ref())
+            .map_err(|e| format!("{e}"))?;
         if preds.is_empty() {
             println!("{ty}");
         } else {
@@ -116,7 +119,9 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
 
     let mut engine = Engine::with_prelude();
     inject_engine_decls(&mut engine, &program.decls).map_err(|e| format!("{e}"))?;
-    let value = engine.eval(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
+    let value = engine
+        .eval(program.expr.as_ref())
+        .map_err(|e| format!("{e}"))?;
     println!("{value}");
     Ok(())
 }
@@ -146,9 +151,7 @@ fn inject_engine_decls(engine: &mut Engine, decls: &[Decl]) -> Result<(), rex_en
 }
 
 fn print_usage() {
-    eprintln!(
-        "Usage:\n  rex run <file>\n  rex run -c <code>\n\nRun with -h/--help for more."
-    );
+    eprintln!("Usage:\n  rex run <file>\n  rex run -c <code>\n\nRun with -h/--help for more.");
 }
 
 fn print_run_usage() {
