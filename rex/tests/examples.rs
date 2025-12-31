@@ -22,22 +22,15 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     out
 }
 
-fn inject_type_decls_ts(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
+fn inject_decls_ts(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
     for decl in decls {
-        if let Decl::Type(ty) = decl {
-            ts.inject_type_decl(ty)?;
-        }
-    }
-    Ok(())
-}
-
-fn inject_type_decls_engine(
-    engine: &mut Engine,
-    decls: &[Decl],
-) -> Result<(), rex_engine::EngineError> {
-    for decl in decls {
-        if let Decl::Type(ty) = decl {
-            engine.inject_type_decl(ty)?;
+        match decl {
+            Decl::Type(ty) => ts.inject_type_decl(ty)?,
+            Decl::Class(class_decl) => ts.inject_class_decl(class_decl)?,
+            Decl::Instance(inst_decl) => {
+                ts.inject_instance_decl(inst_decl)?;
+            }
+            Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
         }
     }
     Ok(())
@@ -65,18 +58,17 @@ fn assert_example_ok(name: &str) {
             });
 
             let mut ts = TypeSystem::with_prelude();
-            inject_type_decls_ts(&mut ts, &program.decls)
-                .unwrap_or_else(|err| panic!("type decl error in {}: {err}", path.display()));
-            let expr = program.expr_with_fns();
-            ts.infer(expr.as_ref())
+            inject_decls_ts(&mut ts, &program.decls)
+                .unwrap_or_else(|err| panic!("decl error in {}: {err}", path.display()));
+            ts.infer(program.expr.as_ref())
                 .unwrap_or_else(|err| panic!("type error in {}: {err}", path.display()));
 
             let mut engine = Engine::with_prelude();
-            inject_type_decls_engine(&mut engine, &program.decls).unwrap_or_else(|err| {
-                panic!("engine type decl error in {}: {err}", path.display())
+            engine.inject_decls(&program.decls).unwrap_or_else(|err| {
+                panic!("engine decl error in {}: {err}", path.display())
             });
             engine
-                .eval(expr.as_ref())
+                .eval(program.expr.as_ref())
                 .unwrap_or_else(|err| panic!("eval error in {}: {err}", path.display()));
         })
         .unwrap();
@@ -111,4 +103,39 @@ fn example_complex() {
 #[test]
 fn example_type_classes() {
     assert_example_ok("type_classes.rex");
+}
+
+#[test]
+fn example_default() {
+    assert_example_ok("default.rex");
+}
+
+#[test]
+fn example_typeclasses_default_list_option() {
+    assert_example_ok("typeclasses_default_list_option.rex");
+}
+
+#[test]
+fn example_typeclasses_hkt_functor_applicative() {
+    assert_example_ok("typeclasses_hkt_functor_applicative.rex");
+}
+
+#[test]
+fn example_typeclasses_result_functor() {
+    assert_example_ok("typeclasses_result_functor.rex");
+}
+
+#[test]
+fn example_typeclasses_methods_and_globals() {
+    assert_example_ok("typeclasses_methods_and_globals.rex");
+}
+
+#[test]
+fn example_typeclasses_pattern_match_in_method() {
+    assert_example_ok("typeclasses_pattern_match_in_method.rex");
+}
+
+#[test]
+fn example_typeclasses_superclass_usage() {
+    assert_example_ok("typeclasses_superclass_usage.rex");
 }

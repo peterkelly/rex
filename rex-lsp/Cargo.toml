@@ -9,3 +9,4 @@ tower-lsp = { workspace = true }
 rex-lexer = { workspace = true }
 rex-ast = { workspace = true }
 rex-parser = { workspace = true }
+rex-ts = { workspace = true }

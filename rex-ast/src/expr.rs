@@ -327,9 +327,41 @@ pub struct FnDecl {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ClassMethodSig {
+    pub name: Symbol,
+    pub typ: TypeExpr,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ClassDecl {
+    pub span: Span,
+    pub name: Symbol,
+    pub params: Vec<Symbol>,
+    pub supers: Vec<TypeConstraint>,
+    pub methods: Vec<ClassMethodSig>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct InstanceMethodImpl {
+    pub name: Symbol,
+    pub body: Arc<Expr>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct InstanceDecl {
+    pub span: Span,
+    pub class: Symbol,
+    pub head: TypeExpr,
+    pub context: Vec<TypeConstraint>,
+    pub methods: Vec<InstanceMethodImpl>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Decl {
     Type(TypeDecl),
     Fn(FnDecl),
+    Class(ClassDecl),
+    Instance(InstanceDecl),
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]

@@ -49,7 +49,7 @@
     },
     "keywords": {
       "name": "keyword.control.rex",
-      "match": "\\b(as|else|fn|for|if|in|is|let|match|then|type|when|where)\\b"
+      "match": "\\b(as|class|else|fn|for|if|in|instance|is|let|match|then|type|when|where)\\b"
     },
     "constants": {
       "name": "constant.language.rex",

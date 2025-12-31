@@ -13,8 +13,12 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Expr, Pattern, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern};
-use rex_lexer::span::Span;
+use rex_ast::expr::{
+    ClassDecl, ClassMethodSig, Decl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl, Pattern,
+    Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
+};
+use rex_lexer::{Token, span::Span};
+use rex_parser::Parser;
 use rpds::HashTrieMapSync;
 use uuid::Uuid;
 
@@ -463,6 +467,22 @@ pub enum TypeError {
     NoInstance(Symbol, String),
     #[error("unknown type {0}")]
     UnknownTypeName(Symbol),
+    #[error("duplicate value definition `{0}`")]
+    DuplicateValue(Symbol),
+    #[error("class `{class}` must have exactly one type parameter (got {got})")]
+    InvalidClassArity { class: Symbol, got: usize },
+    #[error("duplicate class method `{0}`")]
+    DuplicateClassMethod(Symbol),
+    #[error("unknown method `{method}` in instance of class `{class}`")]
+    UnknownInstanceMethod { class: Symbol, method: Symbol },
+    #[error("missing implementation of `{method}` for instance of class `{class}`")]
+    MissingInstanceMethod { class: Symbol, method: Symbol },
+    #[error("instance method `{method}` requires constraint {class} {typ}, but it is not in the instance context")]
+    MissingInstanceConstraint {
+        method: Symbol,
+        class: Symbol,
+        typ: String,
+    },
     #[error("unbound variable {0}")]
     UnknownVar(Symbol),
     #[error("ambiguous overload for {0}")]
@@ -1090,7 +1110,37 @@ pub struct TypeSystem {
     pub env: TypeEnv,
     pub classes: ClassEnv,
     pub adts: HashMap<Symbol, AdtDecl>,
+    pub class_info: HashMap<Symbol, ClassInfo>,
+    pub class_methods: HashMap<Symbol, ClassMethodInfo>,
     pub supply: TypeVarSupply,
+}
+
+/// Semantic information about a type class declaration, derived from Rex source.
+///
+/// Design notes (WARM):
+/// - We keep this explicit and data-oriented: it makes review easy and keeps costs visible.
+/// - Today Rex classes are unary (one type parameter). That matches the existing `Predicate`
+///   model and avoids adding half-finished multi-parameter machinery.
+#[derive(Clone, Debug)]
+pub struct ClassInfo {
+    pub name: Symbol,
+    pub param: Symbol,
+    pub supers: Vec<Symbol>,
+    pub methods: BTreeMap<Symbol, Scheme>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClassMethodInfo {
+    pub class: Symbol,
+    pub scheme: Scheme,
+}
+
+#[derive(Clone, Debug)]
+pub struct PreparedInstanceDecl {
+    pub span: Span,
+    pub class: Symbol,
+    pub head: Type,
+    pub context: Vec<Predicate>,
 }
 
 impl TypeSystem {
@@ -1099,6 +1149,8 @@ impl TypeSystem {
             env: TypeEnv::new(),
             classes: ClassEnv::new(),
             adts: HashMap::new(),
+            class_info: HashMap::new(),
+            class_methods: HashMap::new(),
             supply: TypeVarSupply::new(),
         }
     }
@@ -1123,6 +1175,277 @@ impl TypeSystem {
 
     pub fn inject_instance(&mut self, class: impl AsRef<str>, inst: Instance) {
         self.classes.add_instance(sym(class.as_ref()), inst);
+    }
+
+    pub fn inject_class_decl(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
+        let span = decl.span;
+        (|| {
+            if decl.params.len() != 1 {
+                return Err(TypeError::InvalidClassArity {
+                    class: decl.name.clone(),
+                    got: decl.params.len(),
+                });
+            }
+            let param = decl.params[0].clone();
+
+            // Register the superclass relationships in the class environment.
+            //
+            // We only accept `<= C param` style superclasses for now. Anything
+            // fancier would require storing type-level relationships in `ClassEnv`,
+            // which Rex does not currently model.
+            let mut supers = Vec::with_capacity(decl.supers.len());
+            for sup in &decl.supers {
+                let mut vars = HashMap::new();
+                let param_tv = self.supply.fresh(Some(param.clone()));
+                vars.insert(param.clone(), param_tv.clone());
+                let sup_ty =
+                    type_from_annotation_expr_vars(&self.adts, &sup.typ, &mut vars, &mut self.supply)?;
+                if sup_ty != Type::var(param_tv) {
+                    return Err(TypeError::UnsupportedExpr(
+                        "superclass constraints must be of the form `<= C a`",
+                    ));
+                }
+                supers.push(sup.class.clone());
+            }
+
+            self.classes.add_class(decl.name.clone(), supers.clone());
+
+            let mut methods = BTreeMap::new();
+            for ClassMethodSig { name, typ } in &decl.methods {
+                if self.env.lookup(name).is_some() || self.class_methods.contains_key(name) {
+                    return Err(TypeError::DuplicateClassMethod(name.clone()));
+                }
+
+                let mut vars: HashMap<Symbol, TypeVar> = HashMap::new();
+                let param_tv = self.supply.fresh(Some(param.clone()));
+                vars.insert(param.clone(), param_tv.clone());
+
+                let ty =
+                    type_from_annotation_expr_vars(&self.adts, typ, &mut vars, &mut self.supply)?;
+
+                let mut scheme_vars: Vec<TypeVar> = vars.values().cloned().collect();
+                scheme_vars.sort_by_key(|tv| tv.id);
+                scheme_vars.dedup_by_key(|tv| tv.id);
+
+                let class_pred = Predicate {
+                    class: decl.name.clone(),
+                    typ: Type::var(param_tv),
+                };
+                let scheme = Scheme::new(scheme_vars, vec![class_pred], ty);
+
+                self.env.extend(name.clone(), scheme.clone());
+                self.class_methods.insert(
+                    name.clone(),
+                    ClassMethodInfo {
+                        class: decl.name.clone(),
+                        scheme: scheme.clone(),
+                    },
+                );
+                methods.insert(name.clone(), scheme);
+            }
+
+            self.class_info.insert(
+                decl.name.clone(),
+                ClassInfo {
+                    name: decl.name.clone(),
+                    param,
+                    supers,
+                    methods,
+                },
+            );
+            Ok(())
+        })()
+        .map_err(|err| with_span(&span, err))
+    }
+
+    pub fn inject_instance_decl(&mut self, decl: &InstanceDecl) -> Result<PreparedInstanceDecl, TypeError> {
+        let span = decl.span;
+        (|| {
+            let class = decl.class.clone();
+            if !self.class_info.contains_key(&class) && !self.classes.classes.contains_key(&class) {
+                return Err(TypeError::UnknownClass(class));
+            }
+
+            let mut vars: HashMap<Symbol, TypeVar> = HashMap::new();
+            let head =
+                type_from_annotation_expr_vars(&self.adts, &decl.head, &mut vars, &mut self.supply)?;
+            let context =
+                predicates_from_constraints(&self.adts, &decl.context, &mut vars, &mut self.supply)?;
+
+            let inst = Instance::new(
+                context.clone(),
+                Predicate {
+                    class: decl.class.clone(),
+                    typ: head.clone(),
+                },
+            );
+
+            // Validate method list against the class declaration if present.
+            if let Some(info) = self.class_info.get(&decl.class) {
+                for method in &decl.methods {
+                    if !info.methods.contains_key(&method.name) {
+                        return Err(TypeError::UnknownInstanceMethod {
+                            class: decl.class.clone(),
+                            method: method.name.clone(),
+                        });
+                    }
+                }
+                for method_name in info.methods.keys() {
+                    if !decl.methods.iter().any(|m| &m.name == method_name) {
+                        return Err(TypeError::MissingInstanceMethod {
+                            class: decl.class.clone(),
+                            method: method_name.clone(),
+                        });
+                    }
+                }
+            }
+
+            self.classes.add_instance(decl.class.clone(), inst);
+            Ok(PreparedInstanceDecl {
+                span,
+                class: decl.class.clone(),
+                head,
+                context,
+            })
+        })()
+        .map_err(|err| with_span(&span, err))
+    }
+
+    pub fn inject_fn_decl(&mut self, decl: &FnDecl) -> Result<(), TypeError> {
+        let span = decl.span;
+        (|| {
+            if self.env.lookup(&decl.name.name).is_some() {
+                return Err(TypeError::DuplicateValue(decl.name.name.clone()));
+            }
+
+            // Lower a `fn` declaration to the same lambda shape used by
+            // `Program::expr_with_fns`, then infer it and generalize into
+            // a top-level scheme.
+            let mut lam_body = decl.body.clone();
+            let mut lam_end = lam_body.span().end;
+            for (idx, (param, ann)) in decl.params.iter().enumerate().rev() {
+                let lam_constraints = if idx == 0 {
+                    decl.constraints.clone()
+                } else {
+                    Vec::new()
+                };
+                let span = Span::from_begin_end(param.span.begin, lam_end);
+                lam_body = Arc::new(Expr::Lam(
+                    span,
+                    Scope::new_sync(),
+                    param.clone(),
+                    Some(ann.clone()),
+                    lam_constraints,
+                    lam_body,
+                ));
+                lam_end = lam_body.span().end;
+            }
+
+            let mut sig = decl.ret.clone();
+            for (_, ann) in decl.params.iter().rev() {
+                let span = Span::from_begin_end(ann.span().begin, sig.span().end);
+                sig = TypeExpr::Fun(span, Box::new(ann.clone()), Box::new(sig));
+            }
+
+            let (typed, preds, inferred) = self.infer_typed(lam_body.as_ref())?;
+
+            let mut ann_vars: HashMap<Symbol, TypeVar> = HashMap::new();
+            let expected = type_from_annotation_expr_vars(
+                &self.adts,
+                &sig,
+                &mut ann_vars,
+                &mut self.supply,
+            )?;
+            let s = unify(&inferred, &expected)?;
+            let preds = preds.apply(&s);
+            let inferred = inferred.apply(&s);
+
+            // The scheme is the generalized inferred type with its required
+            // class predicates. This is the same shape a `let` binding would
+            // produce, but done explicitly so other decls (e.g. instances) can
+            // typecheck against it.
+            let scheme = generalize(&self.env, preds, inferred);
+            self.env.extend(decl.name.name.clone(), scheme);
+
+            // `typed` is intentionally unused here. Typechecking instance
+            // methods only needs the scheme in the environment; evaluation
+            // happens in `rex-engine`.
+            let _ = typed;
+            Ok(())
+        })()
+        .map_err(|err| with_span(&span, err))
+    }
+
+    pub fn instantiate_class_method_for_head(
+        &mut self,
+        class: &Symbol,
+        method: &Symbol,
+        head: &Type,
+    ) -> Result<Type, TypeError> {
+        let info = self
+            .class_info
+            .get(class)
+            .ok_or_else(|| TypeError::UnknownClass(class.clone()))?;
+        let scheme = info
+            .methods
+            .get(method)
+            .ok_or_else(|| TypeError::UnknownInstanceMethod {
+                class: class.clone(),
+                method: method.clone(),
+            })?;
+
+        let (preds, typ) = instantiate(scheme, &mut self.supply);
+        let class_pred = preds
+            .iter()
+            .find(|p| &p.class == class)
+            .ok_or_else(|| TypeError::UnsupportedExpr("class method scheme missing class predicate"))?;
+        let s = unify(&class_pred.typ, head)?;
+        Ok(typ.apply(&s))
+    }
+
+    pub fn typecheck_instance_method(
+        &mut self,
+        prepared: &PreparedInstanceDecl,
+        method: &InstanceMethodImpl,
+    ) -> Result<TypedExpr, TypeError> {
+        let expected = self.instantiate_class_method_for_head(&prepared.class, &method.name, &prepared.head)?;
+        let (typed, preds, actual) = self.infer_typed(method.body.as_ref())?;
+        let s = unify(&actual, &expected)?;
+        let typed = typed.apply(&s);
+        let preds = preds.apply(&s);
+
+        // The only legal “given” constraints inside an instance method are the
+        // instance context (plus superclass closure). We do *not* allow instance
+        // search for non-ground constraints here, because that would be unsound:
+        // a type variable would unify with any concrete instance head.
+        let mut given = prepared.context.clone();
+        let mut i = 0;
+        while i < given.len() {
+            let p = given[i].clone();
+            for sup in self.classes.supers_of(&p.class) {
+                given.push(Predicate::new(sup, p.typ.clone()));
+            }
+            i += 1;
+        }
+
+        for pred in &preds {
+            if pred.typ.ftv().is_empty() {
+                if !entails(&self.classes, &given, pred)? {
+                    return Err(TypeError::NoInstance(
+                        pred.class.clone(),
+                        pred.typ.to_string(),
+                    ));
+                }
+            } else if !given.iter().any(|p| p.class == pred.class && p.typ == pred.typ) {
+                return Err(TypeError::MissingInstanceConstraint {
+                    method: method.name.clone(),
+                    class: pred.class.clone(),
+                    typ: pred.typ.to_string(),
+                });
+            }
+        }
+
+        Ok(typed)
     }
 
     /// Register constructor schemes for an ADT in the type environment.
@@ -2559,6 +2882,32 @@ fn check_match_exhaustive(
     })
 }
 
+fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) {
+    let source = include_str!("prelude_typeclasses.rex");
+    let tokens = Token::tokenize(source).expect("failed to lex Rex prelude type class source");
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap_or_else(|errs| {
+        let mut out = String::from("failed to parse Rex prelude type class source:");
+        for err in errs {
+            out.push_str(&format!("\n  {err}"));
+        }
+        panic!("{out}");
+    });
+
+    for decl in &program.decls {
+        match decl {
+            Decl::Class(class_decl) => ts
+                .inject_class_decl(class_decl)
+                .expect("failed to inject prelude class decl"),
+            Decl::Instance(inst_decl) => {
+                ts.inject_instance_decl(inst_decl)
+                    .expect("failed to inject prelude instance decl");
+            }
+            Decl::Type(..) | Decl::Fn(..) => {}
+        }
+    }
+}
+
 fn build_prelude(ts: &mut TypeSystem) {
     // Primitive type constructors
     let prims = [
@@ -2570,14 +2919,11 @@ fn build_prelude(ts: &mut TypeSystem) {
             .extend(sym(prim), Scheme::new(vec![], vec![], Type::con(prim, 0)));
     }
 
-    // Type constructors for ADTs and host-native arrays
-    let list_con = Type::con("List", 1);
+    // Type constructors for ADTs used in prelude schemes.
     let result_con = Type::con("Result", 2);
     let option_con = Type::con("Option", 1);
-    let array_con = Type::con("Array", 1);
 
     // Register ADT constructors as value-level functions.
-    let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(sym(name)));
     {
         let list_name = sym("List");
         let a_name = sym("a");
@@ -2612,300 +2958,13 @@ fn build_prelude(ts: &mut TypeSystem) {
         ts.inject_adt(&result_adt);
     }
 
-    // Classes
-    ts.inject_class(sym("AdditiveMonoid"), vec![]);
-    ts.inject_class(sym("MultiplicativeMonoid"), vec![]);
-    ts.inject_class(
-        sym("Semiring"),
-        vec![sym("AdditiveMonoid"), sym("MultiplicativeMonoid")],
-    );
-    ts.inject_class(sym("AdditiveGroup"), vec![sym("Semiring")]);
-    ts.inject_class(
-        sym("Ring"),
-        vec![sym("AdditiveGroup"), sym("MultiplicativeMonoid")],
-    );
-    ts.inject_class(sym("Field"), vec![sym("Ring")]);
-    ts.inject_class(sym("Integral"), vec![]);
-    ts.inject_class(sym("Eq"), vec![]);
-    ts.inject_class(sym("Ord"), vec![sym("Eq")]);
-    ts.inject_class(sym("Functor"), vec![]);
-    ts.inject_class(sym("Applicative"), vec![sym("Functor")]);
-    ts.inject_class(sym("Monad"), vec![sym("Applicative")]);
-    ts.inject_class(sym("Foldable"), vec![]);
-    ts.inject_class(sym("Filterable"), vec![sym("Functor")]);
-    ts.inject_class(sym("Sequence"), vec![sym("Functor"), sym("Foldable")]);
-    ts.inject_class(sym("Alternative"), vec![sym("Applicative")]);
-    ts.inject_class(sym("Indexable"), vec![]);
+    inject_prelude_classes_and_instances(ts);
 
-    let numeric = |name: &str| Type::con(name, 0);
-    let list_of = |t: Type| Type::app(list_con.clone(), t);
+    // Helper constructors used to describe prelude schemes below.
+    let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(sym(name)));
     let option_of = |t: Type| Type::app(option_con.clone(), t);
     let result_of = |t: Type, e: Type| Type::app(Type::app(result_con.clone(), e), t);
-    let array_of = |t: Type| Type::app(array_con.clone(), t);
     let indexable_of = |container: Type, elem: Type| Type::tuple(vec![container, elem]);
-
-    let additive_only = ["string"];
-    for name in additive_only {
-        ts.inject_instance(
-            "AdditiveMonoid",
-            Instance::new(vec![], Predicate::new("AdditiveMonoid", numeric(name))),
-        );
-    }
-
-    let semiring_names = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
-    ];
-    for name in semiring_names {
-        let ty = numeric(name);
-        ts.inject_instance(
-            "AdditiveMonoid",
-            Instance::new(vec![], Predicate::new("AdditiveMonoid", ty.clone())),
-        );
-        ts.inject_instance(
-            "MultiplicativeMonoid",
-            Instance::new(vec![], Predicate::new("MultiplicativeMonoid", ty.clone())),
-        );
-        ts.inject_instance(
-            "Semiring",
-            Instance::new(vec![], Predicate::new("Semiring", ty.clone())),
-        );
-    }
-
-    let additive_group = ["i8", "i16", "i32", "i64", "f32", "f64"];
-    for name in additive_group {
-        let ty = numeric(name);
-        ts.inject_instance(
-            "AdditiveGroup",
-            Instance::new(
-                vec![Predicate::new("Semiring", ty.clone())],
-                Predicate::new("AdditiveGroup", ty.clone()),
-            ),
-        );
-        ts.inject_instance(
-            "Ring",
-            Instance::new(
-                vec![Predicate::new("AdditiveGroup", ty.clone())],
-                Predicate::new("Ring", ty.clone()),
-            ),
-        );
-    }
-
-    let fields = ["f32", "f64"];
-    for name in fields {
-        let ty = numeric(name);
-        ts.inject_instance(
-            "Field",
-            Instance::new(
-                vec![Predicate::new("Ring", ty.clone())],
-                Predicate::new("Field", ty.clone()),
-            ),
-        );
-    }
-
-    let integral_types = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"];
-    for name in integral_types {
-        let ty = numeric(name);
-        ts.inject_instance(
-            "Integral",
-            Instance::new(vec![], Predicate::new("Integral", ty)),
-        );
-    }
-
-    let eq_types = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string",
-        "uuid", "datetime",
-    ];
-    for name in eq_types {
-        let ty = numeric(name);
-        ts.inject_instance("Eq", Instance::new(vec![], Predicate::new("Eq", ty)));
-    }
-
-    let ord_types = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
-    ];
-    for name in ord_types {
-        let ty = numeric(name);
-        ts.inject_instance(
-            "Ord",
-            Instance::new(
-                vec![Predicate::new("Eq", ty.clone())],
-                Predicate::new("Ord", ty),
-            ),
-        );
-    }
-
-    // Eq instances for parameterized types
-    {
-        let a_tv = fresh_tv(ts, "a");
-        let a = Type::var(a_tv.clone());
-        ts.inject_instance(
-            "Eq",
-            Instance::new(
-                vec![Predicate::new("Eq", a.clone())],
-                Predicate::new("Eq", list_of(a.clone())),
-            ),
-        );
-        ts.inject_instance(
-            "Eq",
-            Instance::new(
-                vec![Predicate::new("Eq", a.clone())],
-                Predicate::new("Eq", option_of(a.clone())),
-            ),
-        );
-        ts.inject_instance(
-            "Eq",
-            Instance::new(
-                vec![Predicate::new("Eq", a.clone())],
-                Predicate::new("Eq", array_of(a.clone())),
-            ),
-        );
-        let b_tv = fresh_tv(ts, "b");
-        let b = Type::var(b_tv.clone());
-        ts.inject_instance(
-            "Eq",
-            Instance::new(
-                vec![
-                    Predicate::new("Eq", a.clone()),
-                    Predicate::new("Eq", b.clone()),
-                ],
-                Predicate::new("Eq", result_of(a.clone(), b.clone())),
-            ),
-        );
-    }
-
-    // Functor / Applicative / Monad / Foldable / Filterable / Sequence / Alternative instances
-    {
-        let list = list_con.clone();
-        let option = option_con.clone();
-        let array = array_con.clone();
-        let result_e_tv = fresh_tv(ts, "e");
-        let result_e = Type::app(result_con.clone(), Type::var(result_e_tv));
-
-        let functors = [
-            list.clone(),
-            option.clone(),
-            array.clone(),
-            result_e.clone(),
-        ];
-        for f in functors {
-            ts.inject_instance(
-                sym("Functor"),
-                Instance::new(vec![], Predicate::new("Functor", f)),
-            );
-        }
-
-        let applicatives = [
-            list.clone(),
-            option.clone(),
-            array.clone(),
-            result_e.clone(),
-        ];
-        for f in applicatives {
-            ts.inject_instance(
-                "Applicative",
-                Instance::new(
-                    vec![Predicate::new("Functor", f.clone())],
-                    Predicate::new("Applicative", f),
-                ),
-            );
-        }
-
-        let monads = [
-            list.clone(),
-            option.clone(),
-            array.clone(),
-            result_e.clone(),
-        ];
-        for m in monads {
-            ts.inject_instance(
-                "Monad",
-                Instance::new(
-                    vec![Predicate::new("Applicative", m.clone())],
-                    Predicate::new("Monad", m),
-                ),
-            );
-        }
-
-        let foldables = [list.clone(), option.clone(), array.clone()];
-        for f in foldables {
-            ts.inject_instance(
-                sym("Foldable"),
-                Instance::new(vec![], Predicate::new("Foldable", f)),
-            );
-        }
-
-        let filterables = [list.clone(), option.clone(), array.clone()];
-        for f in filterables {
-            ts.inject_instance(
-                "Filterable",
-                Instance::new(
-                    vec![Predicate::new("Functor", f.clone())],
-                    Predicate::new("Filterable", f),
-                ),
-            );
-        }
-
-        let sequences = [list.clone(), array.clone()];
-        for f in sequences {
-            ts.inject_instance(
-                "Sequence",
-                Instance::new(
-                    vec![
-                        Predicate::new("Functor", f.clone()),
-                        Predicate::new("Foldable", f.clone()),
-                    ],
-                    Predicate::new("Sequence", f),
-                ),
-            );
-        }
-
-        let alternatives = [list.clone(), option.clone(), array.clone(), result_e];
-        for f in alternatives {
-            ts.inject_instance(
-                "Alternative",
-                Instance::new(
-                    vec![Predicate::new("Applicative", f.clone())],
-                    Predicate::new("Alternative", f),
-                ),
-            );
-        }
-    }
-
-    // Indexable instances for list, array, and homogeneous tuples (up to 32).
-    {
-        let a_tv = fresh_tv(ts, "a");
-        let a = Type::var(a_tv.clone());
-        ts.inject_instance(
-            "Indexable",
-            Instance::new(
-                vec![],
-                Predicate::new("Indexable", indexable_of(list_of(a.clone()), a.clone())),
-            ),
-        );
-        let a_tv = fresh_tv(ts, "a");
-        let a = Type::var(a_tv.clone());
-        ts.inject_instance(
-            "Indexable",
-            Instance::new(
-                vec![],
-                Predicate::new("Indexable", indexable_of(array_of(a.clone()), a.clone())),
-            ),
-        );
-
-        for size in 2..=32 {
-            let a_tv = fresh_tv(ts, "a");
-            let a = Type::var(a_tv.clone());
-            let elems = vec![a.clone(); size];
-            let tuple_ty = Type::tuple(elems);
-            ts.inject_instance(
-                "Indexable",
-                Instance::new(
-                    vec![],
-                    Predicate::new("Indexable", indexable_of(tuple_ty, a.clone())),
-                ),
-            );
-        }
-    }
 
     // Inject provided function declarations and operator schemes.
     let a_tv = ts.supply.fresh(Some("a".into()));

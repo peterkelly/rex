@@ -96,9 +96,8 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
 
     if emit_type {
         let mut ts = TypeSystem::with_prelude();
-        inject_type_decls(&mut ts, &program.decls).map_err(|e| format!("{e}"))?;
-        let expr = program.expr_with_fns();
-        let (preds, ty) = ts.infer(expr.as_ref()).map_err(|e| format!("{e}"))?;
+        inject_type_env_decls(&mut ts, &program.decls).map_err(|e| format!("{e}"))?;
+        let (preds, ty) = ts.infer(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
         if preds.is_empty() {
             println!("{ty}");
         } else {
@@ -117,9 +116,10 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
     }
 
     let mut engine = Engine::with_prelude();
-    inject_engine_decls(&mut engine, &program.decls).map_err(|e| format!("{e}"))?;
-    let expr = program.expr_with_fns();
-    let value = engine.eval(expr.as_ref()).map_err(|e| format!("{e}"))?;
+    engine
+        .inject_decls(&program.decls)
+        .map_err(|e| format!("{e}"))?;
+    let value = engine.eval(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
     println!("{value}");
     Ok(())
 }
@@ -132,19 +132,15 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     out
 }
 
-fn inject_type_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
+fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
     for decl in decls {
-        if let Decl::Type(ty) = decl {
-            ts.inject_type_decl(ty)?;
-        }
-    }
-    Ok(())
-}
-
-fn inject_engine_decls(engine: &mut Engine, decls: &[Decl]) -> Result<(), rex_engine::EngineError> {
-    for decl in decls {
-        if let Decl::Type(ty) = decl {
-            engine.inject_type_decl(ty)?;
+        match decl {
+            Decl::Type(ty) => ts.inject_type_decl(ty)?,
+            Decl::Class(class_decl) => ts.inject_class_decl(class_decl)?,
+            Decl::Instance(inst_decl) => {
+                ts.inject_instance_decl(inst_decl)?;
+            }
+            Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
         }
     }
     Ok(())

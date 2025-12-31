@@ -33,6 +33,25 @@ map ((*) 2) [1, 2, 3, 4]
   - Collections: tuples `(e1, e2)`, lists `[e1, e2]`, dictionaries `{ key = value }`.
   - Functions and control flow: lambdas `\x y -> body` (also accepts `λ` and `→`), let-in bindings `let x = e1, y = e2 in body`, and conditionals `if cond then a else b`.
 
+## Type Classes
+
+Rex supports Haskell-style type classes with `class` and `instance`. Superclasses and instance contexts use `<=` (read it as “requires”).
+
+```rex
+class Default a where
+    default : a
+
+class Ord a <= Eq a where
+    cmp : a -> a -> i32
+
+instance Default (List a) <= Default a where
+    default = []
+```
+
+Class methods are values: using `default` produces a `Default T` constraint, and evaluation resolves the right instance based on the inferred type `T`.
+
+Prelude type classes and instances live in `rex-ts/src/prelude_typeclasses.rex` and are injected by `TypeSystem::with_prelude()`.
+
 ## Let-in
 
 We can assign variable names to expressions, allowing them to be re-used multiple times. This can help to simplify our Rex code. To create a variable, we need to use a let-in expression.

@@ -7,10 +7,13 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Expr, Pattern, Symbol, TypeDecl, intern};
+use rex_ast::expr::{
+    ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, intern,
+};
 use rex_ts::{
-    AdtDecl, Instance, Predicate, Scheme, Subst, Type, TypeError, TypeKind, TypeSystem,
-    TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails, instantiate, unify,
+    AdtDecl, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type, TypeError, TypeKind,
+    TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails,
+    instantiate, unify,
 };
 use uuid::Uuid;
 
@@ -20,6 +23,14 @@ fn sym(name: &str) -> Symbol {
 
 fn sym_eq(name: &Symbol, expected: &str) -> bool {
     name.as_ref() == expected
+}
+
+fn type_head_is_var(typ: &Type) -> bool {
+    let mut cur = typ;
+    while let TypeKind::App(head, _) = cur.as_ref() {
+        cur = head;
+    }
+    matches!(cur.as_ref(), TypeKind::Var(..))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +65,12 @@ pub enum EngineError {
     AmbiguousImpl { name: Symbol, typ: String },
     #[error("duplicate native implementation for `{name}` with type {typ}")]
     DuplicateImpl { name: Symbol, typ: String },
+    #[error("no type class instance for `{class}` with type {typ}")]
+    MissingTypeclassImpl { class: Symbol, typ: String },
+    #[error("ambiguous type class instance for `{class}` with type {typ}")]
+    AmbiguousTypeclassImpl { class: Symbol, typ: String },
+    #[error("duplicate type class instance for `{class}` with type {typ}")]
+    DuplicateTypeclassImpl { class: Symbol, typ: String },
     #[error("injected `{name}` has incompatible type {typ}")]
     InvalidInjection { name: Symbol, typ: String },
     #[error("unknown type for value in `{0}`")]
@@ -367,6 +384,87 @@ impl NativeRegistry {
 
     fn has_name(&self, name: &Symbol) -> bool {
         self.entries.contains_key(name)
+    }
+}
+
+#[derive(Clone)]
+struct TypeclassInstance {
+    head: Type,
+    def_env: Env,
+    methods: HashMap<Symbol, Arc<TypedExpr>>,
+}
+
+#[derive(Default, Clone)]
+struct TypeclassRegistry {
+    entries: HashMap<Symbol, Vec<TypeclassInstance>>,
+}
+
+impl TypeclassRegistry {
+    fn insert(
+        &mut self,
+        class: Symbol,
+        head: Type,
+        def_env: Env,
+        methods: HashMap<Symbol, Arc<TypedExpr>>,
+    ) -> Result<(), EngineError> {
+        let entry = self.entries.entry(class.clone()).or_default();
+        for existing in entry.iter() {
+            if unify(&existing.head, &head).is_ok() {
+                return Err(EngineError::DuplicateTypeclassImpl {
+                    class,
+                    typ: head.to_string(),
+                });
+            }
+        }
+        entry.push(TypeclassInstance {
+            head,
+            def_env,
+            methods,
+        });
+        Ok(())
+    }
+
+    fn resolve(
+        &self,
+        class: &Symbol,
+        method: &Symbol,
+        param_type: &Type,
+    ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
+        let instances = self
+            .entries
+            .get(class)
+            .ok_or_else(|| EngineError::MissingTypeclassImpl {
+                class: class.clone(),
+                typ: param_type.to_string(),
+            })?;
+
+        let mut matches = Vec::new();
+        for inst in instances {
+            if let Ok(s) = unify(&inst.head, param_type) {
+                matches.push((inst, s));
+            }
+        }
+        match matches.len() {
+            0 => Err(EngineError::MissingTypeclassImpl {
+                class: class.clone(),
+                typ: param_type.to_string(),
+            }),
+            1 => {
+                let (inst, s) = matches.remove(0);
+                let typed =
+                    inst.methods
+                        .get(method)
+                        .ok_or_else(|| EngineError::MissingTypeclassImpl {
+                            class: class.clone(),
+                            typ: param_type.to_string(),
+                        })?;
+                Ok((inst.def_env.clone(), typed.clone(), s))
+            }
+            _ => Err(EngineError::AmbiguousTypeclassImpl {
+                class: class.clone(),
+                typ: param_type.to_string(),
+            }),
+        }
     }
 }
 
@@ -723,6 +821,7 @@ impl FromValue for Value {
 pub struct Engine {
     env: Env,
     natives: NativeRegistry,
+    typeclasses: TypeclassRegistry,
     types: TypeSystem,
 }
 
@@ -731,6 +830,7 @@ impl Engine {
         Self {
             env: Env::new(),
             natives: NativeRegistry::default(),
+            typeclasses: TypeclassRegistry::default(),
             types: TypeSystem::new(),
         }
     }
@@ -739,6 +839,7 @@ impl Engine {
         let mut engine = Engine {
             env: Env::new(),
             natives: NativeRegistry::default(),
+            typeclasses: TypeclassRegistry::default(),
             types: TypeSystem::with_prelude(),
         };
         engine.inject_prelude().expect("prelude injection failed");
@@ -916,6 +1017,59 @@ impl Engine {
         self.inject_adt(adt)
     }
 
+    pub fn inject_class_decl(&mut self, decl: &ClassDecl) -> Result<(), EngineError> {
+        self.types.inject_class_decl(decl).map_err(EngineError::Type)
+    }
+
+    pub fn inject_instance_decl(&mut self, decl: &InstanceDecl) -> Result<(), EngineError> {
+        let prepared = self.types.inject_instance_decl(decl).map_err(EngineError::Type)?;
+        self.register_typeclass_instance(decl, &prepared)
+    }
+
+    pub fn inject_fn_decl(&mut self, decl: &FnDecl) -> Result<(), EngineError> {
+        // First, register the generalized scheme in the type environment so
+        // later declarations (including instance method bodies) can typecheck.
+        self.types.inject_fn_decl(decl).map_err(EngineError::Type)?;
+
+        // Then, evaluate the lowered lambda and stash the runtime value in the
+        // global environment. This makes function values visible to instance
+        // methods without relying on call-site environments.
+        let mut lam_body = decl.body.clone();
+        for (idx, (param, ann)) in decl.params.iter().enumerate().rev() {
+            let lam_constraints = if idx == 0 {
+                decl.constraints.clone()
+            } else {
+                Vec::new()
+            };
+            let span = param.span;
+            lam_body = Arc::new(Expr::Lam(
+                span,
+                Scope::new_sync(),
+                param.clone(),
+                Some(ann.clone()),
+                lam_constraints,
+                lam_body,
+            ));
+        }
+
+        let typed = self.type_check(lam_body.as_ref())?;
+        let value = eval_typed_expr(self, &self.env, &typed)?;
+        self.env = self.env.extend(decl.name.name.clone(), value);
+        Ok(())
+    }
+
+    pub fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+        for decl in decls {
+            match decl {
+                Decl::Type(ty) => self.inject_type_decl(ty)?,
+                Decl::Class(class_decl) => self.inject_class_decl(class_decl)?,
+                Decl::Instance(inst_decl) => self.inject_instance_decl(inst_decl)?,
+                Decl::Fn(fd) => self.inject_fn_decl(fd)?,
+            }
+        }
+        Ok(())
+    }
+
     pub fn inject_class(&mut self, name: &str, supers: Vec<String>) {
         let supers = supers.into_iter().map(|s| sym(&s)).collect();
         self.types.inject_class(name, supers);
@@ -1037,6 +1191,12 @@ impl Engine {
                         return Ok(());
                     }
                     if !engine.natives.has_name(name) {
+                        if engine.env.get(name).is_some() {
+                            return Ok(());
+                        }
+                        if engine.types.class_methods.contains_key(name) {
+                            return Ok(());
+                        }
                         return Err(EngineError::UnknownVar(name.clone()));
                     }
                     if !overloads.is_empty() {
@@ -1121,6 +1281,57 @@ impl Engine {
         }
 
         walk(self, expr, &mut Vec::new())
+    }
+
+    fn register_typeclass_instance(
+        &mut self,
+        decl: &InstanceDecl,
+        prepared: &PreparedInstanceDecl,
+    ) -> Result<(), EngineError> {
+        let mut methods: HashMap<Symbol, Arc<TypedExpr>> = HashMap::new();
+        for method in &decl.methods {
+            let typed = self
+                .types
+                .typecheck_instance_method(prepared, method)
+                .map_err(EngineError::Type)?;
+            self.check_natives(&typed)?;
+            methods.insert(method.name.clone(), Arc::new(typed));
+        }
+
+        self.typeclasses
+            .insert(
+                prepared.class.clone(),
+                prepared.head.clone(),
+                self.env.clone(),
+                methods,
+            )?;
+        Ok(())
+    }
+
+    fn resolve_typeclass_method_impl(
+        &self,
+        name: &Symbol,
+        call_type: &Type,
+    ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
+        let info = self
+            .types
+            .class_methods
+            .get(name)
+            .ok_or_else(|| EngineError::UnknownVar(name.clone()))?;
+
+        let s_method = unify(&info.scheme.typ, call_type).map_err(EngineError::Type)?;
+        let class_pred = info
+            .scheme
+            .preds
+            .iter()
+            .find(|p| p.class == info.class)
+            .ok_or_else(|| EngineError::Type(TypeError::UnsupportedExpr("method scheme missing class predicate")))?;
+        let param_type = class_pred.typ.apply(&s_method);
+        if type_head_is_var(&param_type) {
+            return Err(EngineError::AmbiguousOverload { name: name.clone() });
+        }
+
+        self.typeclasses.resolve(&info.class, name, &param_type)
     }
 
     fn has_impl(&self, name: &str, typ: &Type) -> bool {
@@ -4262,8 +4473,12 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
                     }
                     _ => Ok(value),
                 }
+            } else if engine.types.class_methods.contains_key(name) {
+                let (def_env, typed, s) = engine.resolve_typeclass_method_impl(name, &cur.typ)?;
+                let specialized = typed.as_ref().apply(&s);
+                eval_typed_expr(engine, &def_env, &specialized)
             } else {
-                engine.resolve_native_value(name.as_ref(), &expr.typ)
+                engine.resolve_native_value(name.as_ref(), &cur.typ)
             }
         }
         TypedExprKind::App(f, x) => {

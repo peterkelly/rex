@@ -651,6 +651,7 @@ dependencies = [
  "rex-ast",
  "rex-lexer",
  "rex-parser",
+ "rex-ts",
  "tokio",
  "tower-lsp",
 ]

@@ -8,6 +8,7 @@ use rex_lexer::{
     LexicalError, Token, Tokens,
 };
 use rex_parser::Parser;
+use rex_ts::{TypeError as TsTypeError, TypeSystem};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
@@ -181,15 +182,44 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
-        let (type_defs, ctor_defs) = index_type_and_constructor_spans(&program, &tokens);
+        let index = index_decl_spans(&program, &tokens);
         let pos = lsp_to_rex_position(position);
 
-        let expr = program.expr_with_fns();
+        // Pick the expression tree that actually contains the cursor. Top-level
+        // instance method bodies are not part of `expr_with_fns()`, so we have
+        // to handle them explicitly.
+        let expr_with_fns = program.expr_with_fns();
+        let mut root_expr: &Expr = expr_with_fns.as_ref();
+        for decl in &program.decls {
+            let Decl::Instance(inst) = decl else {
+                continue;
+            };
+            for method in &inst.methods {
+                if position_in_span(pos, *method.body.span()) {
+                    root_expr = method.body.as_ref();
+                    break;
+                }
+            }
+        }
+
         let value_def =
-            definition_span_for_value_ident(&expr, pos, &ident, &mut Vec::new(), &tokens);
+            definition_span_for_value_ident(root_expr, pos, &ident, &mut Vec::new(), &tokens);
+
+        let instance_method_def = index.instance_method_defs.iter().find_map(|(span, methods)| {
+            if position_in_span(pos, *span) {
+                methods.get(&ident).copied()
+            } else {
+                None
+            }
+        });
+
         let target_span = value_def
-            .or_else(|| ctor_defs.get(&ident).copied())
-            .or_else(|| type_defs.get(&ident).copied());
+            .or_else(|| instance_method_def)
+            .or_else(|| index.class_method_defs.get(&ident).copied())
+            .or_else(|| index.fn_defs.get(&ident).copied())
+            .or_else(|| index.ctor_defs.get(&ident).copied())
+            .or_else(|| index.type_defs.get(&ident).copied())
+            .or_else(|| index.class_defs.get(&ident).copied());
 
         let Some(target_span) = target_span else {
             return Ok(None);
@@ -212,14 +242,21 @@ fn diagnostics_from_text(text: &str) -> Vec<Diagnostic> {
 
             if diagnostics.len() < MAX_DIAGNOSTICS {
                 let mut parser = Parser::new(tokens);
-                if let Err(errors) = parser.parse_program() {
-                    for err in errors {
-                        diagnostics.push(diagnostic_for_span(err.span, err.message));
-                        if diagnostics.len() >= MAX_DIAGNOSTICS {
-                            break;
+                match parser.parse_program() {
+                    Err(errors) => {
+                        for err in errors {
+                            diagnostics.push(diagnostic_for_span(err.span, err.message));
+                            if diagnostics.len() >= MAX_DIAGNOSTICS {
+                                break;
+                            }
                         }
                     }
-                }
+                    Ok(program) => {
+                        if diagnostics.len() < MAX_DIAGNOSTICS {
+                            push_type_diagnostics(text, &program, &mut diagnostics);
+                        }
+                    }
+                };
             }
         }
         Err(err) => {
@@ -275,6 +312,75 @@ fn diagnostic_for_span(span: Span, message: impl Into<String>) -> Diagnostic {
         source: Some("rex-lsp".to_string()),
         ..Diagnostic::default()
     }
+}
+
+fn push_type_diagnostics(text: &str, program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+    // Type inference is meaningfully more expensive than lex/parse, and we run
+    // diagnostics on every full-text change. Keep the cost model explicit.
+    const MAX_TYPECHECK_BYTES: usize = 256 * 1024;
+    if text.len() > MAX_TYPECHECK_BYTES {
+        return;
+    }
+
+    let mut ts = TypeSystem::with_prelude();
+    for decl in &program.decls {
+        match decl {
+            Decl::Type(ty) => {
+                if let Err(err) = ts.inject_type_decl(ty) {
+                    push_ts_error(err, diagnostics);
+                    return;
+                }
+            }
+            Decl::Class(class_decl) => {
+                if let Err(err) = ts.inject_class_decl(class_decl) {
+                    push_ts_error(err, diagnostics);
+                    return;
+                }
+            }
+            Decl::Instance(inst_decl) => {
+                let prepared = match ts.inject_instance_decl(inst_decl) {
+                    Ok(prepared) => prepared,
+                    Err(err) => {
+                        push_ts_error(err, diagnostics);
+                        return;
+                    }
+                };
+
+                // Typecheck instance method bodies too, so errors inside the
+                // instance show up as diagnostics.
+                for method in &inst_decl.methods {
+                    if let Err(err) = ts.typecheck_instance_method(&prepared, method) {
+                        push_ts_error(err, diagnostics);
+                        return;
+                    }
+                }
+            }
+            Decl::Fn(fd) => {
+                if let Err(err) = ts.inject_fn_decl(fd) {
+                    push_ts_error(err, diagnostics);
+                    return;
+                }
+            }
+        }
+    }
+
+    if let Err(err) = ts.infer(program.expr.as_ref()) {
+        push_ts_error(err, diagnostics);
+    }
+}
+
+fn push_ts_error(err: TsTypeError, diagnostics: &mut Vec<Diagnostic>) {
+    let (span, message) = match err {
+        TsTypeError::Spanned { span, error } => (span, error.to_string()),
+        other => (Span::default(), other.to_string()),
+    };
+    diagnostics.push(Diagnostic {
+        range: span_to_range(span),
+        severity: Some(DiagnosticSeverity::ERROR),
+        message,
+        source: Some("rex-ts".to_string()),
+        ..Diagnostic::default()
+    });
 }
 
 fn range_contains_position(range: Range, position: Position) -> bool {
@@ -1247,54 +1353,119 @@ fn ident_token_at_position(tokens: &Tokens, position: Position) -> Option<(Strin
     None
 }
 
-fn index_type_and_constructor_spans(
-    program: &Program,
-    tokens: &Tokens,
-) -> (HashMap<String, Span>, HashMap<String, Span>) {
+struct DeclSpanIndex {
+    type_defs: HashMap<String, Span>,
+    ctor_defs: HashMap<String, Span>,
+    class_defs: HashMap<String, Span>,
+    fn_defs: HashMap<String, Span>,
+    class_method_defs: HashMap<String, Span>,
+    instance_method_defs: Vec<(Span, HashMap<String, Span>)>,
+}
+
+fn index_decl_spans(program: &Program, tokens: &Tokens) -> DeclSpanIndex {
     fn span_contains_span(outer: Span, inner: Span) -> bool {
         position_leq(outer.begin, inner.begin) && position_leq(inner.end, outer.end)
     }
 
     let mut type_defs = HashMap::new();
     let mut ctor_defs = HashMap::new();
+    let mut class_defs = HashMap::new();
+    let mut fn_defs = HashMap::new();
+    let mut class_method_defs = HashMap::new();
+    let mut instance_method_defs = Vec::new();
 
     for decl in &program.decls {
-        let Decl::Type(td) = decl else {
-            continue;
-        };
-        let decl_span = td.span;
+        match decl {
+            Decl::Type(td) => {
+                let decl_span = td.span;
+                let mut expect_type_name = false;
+                let mut expect_ctor_name = false;
 
-        let mut expect_type_name = false;
-        let mut expect_ctor_name = false;
+                for token in &tokens.items {
+                    let token_span = *token.span();
+                    if !span_contains_span(decl_span, token_span) {
+                        continue;
+                    }
 
-        for token in &tokens.items {
-            let token_span = *token.span();
-            if !span_contains_span(decl_span, token_span) {
-                continue;
+                    match token {
+                        Token::Type(..) => {
+                            expect_type_name = true;
+                            expect_ctor_name = false;
+                        }
+                        Token::Ident(name, span, ..) if expect_type_name => {
+                            type_defs.insert(name.clone(), *span);
+                            expect_type_name = false;
+                        }
+                        Token::Assign(..) | Token::Pipe(..) => {
+                            expect_ctor_name = true;
+                        }
+                        Token::Ident(name, span, ..) if expect_ctor_name => {
+                            ctor_defs.insert(name.clone(), *span);
+                            expect_ctor_name = false;
+                        }
+                        _ => {}
+                    }
+                }
             }
-
-            match token {
-                Token::Type(..) => {
-                    expect_type_name = true;
-                    expect_ctor_name = false;
+            Decl::Class(cd) => {
+                let decl_span = cd.span;
+                let mut expect_class_name = false;
+                for i in 0..tokens.items.len() {
+                    let token = &tokens.items[i];
+                    let token_span = *token.span();
+                    if !span_contains_span(decl_span, token_span) {
+                        continue;
+                    }
+                    match token {
+                        Token::Class(..) => expect_class_name = true,
+                        Token::Ident(name, span, ..) if expect_class_name => {
+                            class_defs.insert(name.clone(), *span);
+                            expect_class_name = false;
+                        }
+                        Token::Ident(name, span, ..) => {
+                            if let Some(next) = tokens.items.get(i + 1) {
+                                if matches!(next, Token::Colon(..)) {
+                                    class_method_defs.insert(name.clone(), *span);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
                 }
-                Token::Ident(name, span, ..) if expect_type_name => {
-                    type_defs.insert(name.clone(), *span);
-                    expect_type_name = false;
+            }
+            Decl::Instance(id) => {
+                let decl_span = id.span;
+                let mut methods = HashMap::new();
+                for i in 0..tokens.items.len() {
+                    let token = &tokens.items[i];
+                    let token_span = *token.span();
+                    if !span_contains_span(decl_span, token_span) {
+                        continue;
+                    }
+                    if let Token::Ident(name, span, ..) = token {
+                        if let Some(next) = tokens.items.get(i + 1) {
+                            if matches!(next, Token::Assign(..)) {
+                                methods.insert(name.clone(), *span);
+                            }
+                        }
+                    }
                 }
-                Token::Assign(..) | Token::Pipe(..) => {
-                    expect_ctor_name = true;
-                }
-                Token::Ident(name, span, ..) if expect_ctor_name => {
-                    ctor_defs.insert(name.clone(), *span);
-                    expect_ctor_name = false;
-                }
-                _ => {}
+                instance_method_defs.push((decl_span, methods));
+            }
+            Decl::Fn(fd) => {
+                fn_defs.insert(fd.name.name.as_ref().to_string(), fd.name.span);
             }
         }
     }
 
-    (type_defs, ctor_defs)
+    DeclSpanIndex {
+        type_defs,
+        ctor_defs,
+        class_defs,
+        fn_defs,
+        class_method_defs,
+        instance_method_defs,
+    }
 }
 
 fn definition_span_for_value_ident(

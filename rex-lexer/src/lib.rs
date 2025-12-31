@@ -39,11 +39,13 @@ impl Precedence {
 pub enum Token {
     // Reserved keywords
     As(Span),
+    Class(Span),
     Else(Span),
     Fn(Span),
     For(Span),
     If(Span),
     Is(Span),
+    Instance(Span),
     Match(Span),
     Type(Span),
     When(Span),
@@ -143,6 +145,8 @@ impl Token {
                 // Reserved keywords
                 if capture.name("As").is_some() {
                     Token::As(span)
+                } else if capture.name("Class").is_some() {
+                    Token::Class(span)
                 } else if capture.name("Else").is_some() {
                     Token::Else(span)
                 } else if capture.name("Fn").is_some() {
@@ -153,6 +157,8 @@ impl Token {
                     Token::If(span)
                 } else if capture.name("Is").is_some() {
                     Token::Is(span)
+                } else if capture.name("Instance").is_some() {
+                    Token::Instance(span)
                 } else if capture.name("Match").is_some() {
                     Token::Match(span)
                 } else if capture.name("Type").is_some() {
@@ -303,11 +309,13 @@ impl Token {
                 regex::Regex::from_str(concat!(
                     // Reserved keywords (with word boundaries)
                     r"(?P<As>\bas\b)|",
+                    r"(?P<Class>\bclass\b)|",
                     r"(?P<Else>\belse\b)|",
                     r"(?P<Fn>\bfn\b)|",
                     r"(?P<For>\bfor\b)|",
                     r"(?P<If>\bif\b)|",
                     r"(?P<Is>\bis\b)|",
+                    r"(?P<Instance>\binstance\b)|",
                     r"(?P<Match>\bmatch\b)|",
                     r"(?P<Type>\btype\b)|",
                     r"(?P<When>\bwhen\b)|",
@@ -398,11 +406,13 @@ impl Spanned for Token {
         match self {
             // Reserved keywords
             As(span, ..) => span,
+            Class(span, ..) => span,
             Else(span, ..) => span,
             Fn(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
             Is(span, ..) => span,
+            Instance(span, ..) => span,
             Match(span, ..) => span,
             Type(span, ..) => span,
             When(span, ..) => span,
@@ -473,11 +483,13 @@ impl Spanned for Token {
         match self {
             // Reserved keywords
             As(span, ..) => span,
+            Class(span, ..) => span,
             Else(span, ..) => span,
             Fn(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
             Is(span, ..) => span,
+            Instance(span, ..) => span,
             Match(span, ..) => span,
             Type(span, ..) => span,
             When(span, ..) => span,
@@ -550,11 +562,13 @@ impl Display for Token {
         match self {
             // Reserved keywords
             As(..) => write!(f, "as"),
+            Class(..) => write!(f, "class"),
             Else(..) => write!(f, "else"),
             Fn(..) => write!(f, "fn"),
             For(..) => write!(f, "for"),
             If(..) => write!(f, "if"),
             Is(..) => write!(f, "is"),
+            Instance(..) => write!(f, "instance"),
             Match(..) => write!(f, "match"),
             Type(..) => write!(f, "type"),
             When(..) => write!(f, "when"),
