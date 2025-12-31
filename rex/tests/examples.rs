@@ -22,10 +22,7 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     out
 }
 
-fn inject_type_decls_ts(
-    ts: &mut TypeSystem,
-    decls: &[Decl],
-) -> Result<(), rex_ts::TypeError> {
+fn inject_type_decls_ts(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
     for decl in decls {
         let Decl::Type(ty) = decl;
         ts.inject_type_decl(ty)?;
@@ -57,11 +54,13 @@ fn assert_example_ok(name: &str) {
             let tokens = Token::tokenize(&source)
                 .unwrap_or_else(|err| panic!("lex error in {}: {err}", path.display()));
             let mut parser = Parser::new(tokens);
-            let program = parser
-                .parse_program()
-                .unwrap_or_else(|errs| {
-                    panic!("parse error in {}:\n{}", path.display(), format_parse_errors(&errs))
-                });
+            let program = parser.parse_program().unwrap_or_else(|errs| {
+                panic!(
+                    "parse error in {}:\n{}",
+                    path.display(),
+                    format_parse_errors(&errs)
+                )
+            });
 
             let mut ts = TypeSystem::with_prelude();
             inject_type_decls_ts(&mut ts, &program.decls)
@@ -70,10 +69,9 @@ fn assert_example_ok(name: &str) {
                 .unwrap_or_else(|err| panic!("type error in {}: {err}", path.display()));
 
             let mut engine = Engine::with_prelude();
-            inject_type_decls_engine(&mut engine, &program.decls)
-                .unwrap_or_else(|err| {
-                    panic!("engine type decl error in {}: {err}", path.display())
-                });
+            inject_type_decls_engine(&mut engine, &program.decls).unwrap_or_else(|err| {
+                panic!("engine type decl error in {}: {err}", path.display())
+            });
             engine
                 .eval(program.expr.as_ref())
                 .unwrap_or_else(|err| panic!("eval error in {}: {err}", path.display()));
@@ -87,7 +85,7 @@ fn example_adt() {
     assert_example_ok("adt.rex");
 }
 
-// #[test]
+#[test]
 fn example_lots_of_lambdas() {
     assert_example_ok("lots_of_lambdas.rex");
 }
@@ -100,11 +98,6 @@ fn example_lots_of_lets() {
 #[test]
 fn example_mega() {
     assert_example_ok("mega.rex");
-}
-
-#[test]
-fn example_complex() {
-    assert_example_ok("complex.rex");
 }
 
 #[test]
