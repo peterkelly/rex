@@ -648,6 +648,7 @@ dependencies = [
 name = "rex-lsp"
 version = "0.1.0"
 dependencies = [
+ "rex-ast",
  "rex-lexer",
  "rex-parser",
  "tokio",

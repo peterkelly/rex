@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, sync::Arc, vec};
 
 use rex_ast::expr::{
-    intern, Decl, Expr, Pattern, Program, Scope, TypeDecl, TypeExpr, TypeVariant, Var,
+    intern, Decl, Expr, Pattern, Program, Scope, TypeConstraint, TypeDecl, TypeExpr, TypeVariant,
+    Var,
 };
 use rex_lexer::{
     span::{Position, Span, Spanned},
@@ -150,7 +151,6 @@ impl Parser {
             Token::And(..) => Operator::And,
             Token::Concat(..) => Operator::Concat,
             Token::Div(..) => Operator::Div,
-            Token::Dot(..) => Operator::Dot,
             Token::Eq(..) => Operator::Eq,
             Token::Ne(..) => Operator::Ne,
             Token::Ge(..) => Operator::Ge,
@@ -255,7 +255,7 @@ impl Parser {
         }
         loop {
             match self.current_token() {
-                Token::Tilde(..) => {
+                Token::Dot(..) | Token::Colon(..) => {
                     self.next_token();
                 }
                 _ => break,
@@ -270,7 +270,7 @@ impl Parser {
                 token => {
                     return Err(ParserErr::new(
                         *token.span(),
-                        "expected field name after `~`",
+                        "expected field name after `.`",
                     ));
                 }
             };
@@ -351,10 +351,6 @@ impl Parser {
             Token::Div(span, ..) => {
                 self.next_token();
                 Expr::Var(Var::with_span(span, "/"))
-            }
-            Token::Dot(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "."))
             }
             Token::Eq(span, ..) => {
                 self.next_token();
@@ -638,6 +634,12 @@ impl Parser {
             }
         }
 
+        let mut constraints = Vec::new();
+        if matches!(self.current_token(), Token::Where(..)) {
+            self.next_token();
+            constraints = self.parse_type_constraints()?;
+        }
+
         // Parse the arrow.
         let _span_arrow = match self.current_token() {
             Token::ArrowR(span, ..) => {
@@ -656,11 +658,17 @@ impl Parser {
         let mut body = self.parse_expr()?;
         let mut body_span_end = body.span().end;
         while let Some((param_span, param, ann)) = params.pop_back() {
+            let lam_constraints = if params.is_empty() {
+                std::mem::take(&mut constraints)
+            } else {
+                Vec::new()
+            };
             body = Expr::Lam(
                 Span::from_begin_end(param_span.begin, body_span_end),
                 Scope::new_sync(),
                 param,
                 ann,
+                lam_constraints,
                 Arc::new(body),
             );
             body_span_end = body.span().end;
@@ -675,7 +683,15 @@ impl Parser {
         match self.current_token() {
             Token::Ident(name, span, ..) => {
                 self.next_token();
-                Ok((Var::with_span(span, name), None, span))
+                let mut ann = None;
+                let mut param_span = span;
+                if let Token::Colon(..) = self.current_token() {
+                    self.next_token();
+                    let ann_expr = self.parse_type_expr()?;
+                    param_span = Span::from_begin_end(span.begin, ann_expr.span().end);
+                    ann = Some(ann_expr);
+                }
+                Ok((Var::with_span(span, name), ann, param_span))
             }
             Token::ParenL(span_begin, ..) => {
                 self.next_token();
@@ -725,6 +741,37 @@ impl Parser {
                 format!("expected lambda param got {}", token),
             )),
         }
+    }
+
+    fn parse_type_constraints(&mut self) -> Result<Vec<TypeConstraint>, ParserErr> {
+        let mut constraints = Vec::new();
+        loop {
+            let class = match self.current_token() {
+                Token::Ident(name, _span, ..) => {
+                    let name = intern(&name);
+                    self.next_token();
+                    name
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected type class name got {}", token),
+                    ));
+                }
+            };
+
+            let typ = self.parse_type_app()?;
+            constraints.push(TypeConstraint::new(class, typ));
+
+            match self.current_token() {
+                Token::Comma(..) => {
+                    self.next_token();
+                    continue;
+                }
+                _ => break,
+            }
+        }
+        Ok(constraints)
     }
 
     //
@@ -1550,6 +1597,7 @@ mod tests {
             Scope::new_sync(),
             Var::new(param),
             None,
+            Vec::new(),
             body,
         ))
     }
@@ -1752,7 +1800,19 @@ mod tests {
 
     #[test]
     fn test_projection_expr() {
-        let expr = parse("x~field");
+        let expr = parse("x.field");
+        let expected = Arc::new(Expr::Project(
+            Span::default(),
+            v!("x"),
+            intern("field"),
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_projection_expr_colon() {
+        let expr = parse("x:field");
         let expected = Arc::new(Expr::Project(
             Span::default(),
             v!("x"),
@@ -1838,9 +1898,10 @@ mod tests {
 
         let expr = parse("\\ (a : f32) -> a");
         match expr.as_ref() {
-            Expr::Lam(_, _scope, param, Some(TypeExpr::Name(_, name)), body) => {
+            Expr::Lam(_, _scope, param, Some(TypeExpr::Name(_, name)), constraints, body) => {
                 assert_eq!(param.name.as_ref(), "a");
                 assert_eq!(name.as_ref(), "f32");
+                assert!(constraints.is_empty());
                 assert!(matches!(body.as_ref(), Expr::Var(_)));
             }
             other => panic!("expected typed lambda, got {other:?}"),

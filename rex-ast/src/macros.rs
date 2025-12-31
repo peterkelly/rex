@@ -226,6 +226,7 @@ macro_rules! lam {
             $crate::expr::Scope::new_sync(),
             $crate::expr::Var::new(stringify!($x)),
             None,
+            Vec::new(),
             ($e).into(),
         ))
     };
@@ -236,6 +237,7 @@ macro_rules! lam {
             $crate::expr::Scope::new_sync(),
             $crate::expr::Var::new(stringify!($x)),
             None,
+            Vec::new(),
             ($e).into(),
         ))
     };
@@ -247,6 +249,7 @@ macro_rules! lam {
             $crate::expr::Scope::new_sync(),
             $crate::expr::Var::new(stringify!($x)),
             None,
+            Vec::new(),
             ($e).into(),
         ))
     };

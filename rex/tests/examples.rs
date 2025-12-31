@@ -104,3 +104,8 @@ fn example_mega() {
 fn example_complex() {
     assert_example_ok("complex.rex");
 }
+
+#[test]
+fn example_type_classes() {
+    assert_example_ok("type_classes.rex");
+}

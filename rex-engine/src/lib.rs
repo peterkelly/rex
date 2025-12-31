@@ -4393,13 +4393,13 @@ mod tests {
     fn eval_type_annotation_mismatch() {
         let expr = parse("let x: i32 = 3.14 in x");
         let mut engine = engine_with_arith();
-        let err = engine.eval(expr.as_ref()).unwrap_err();
-        match err {
-            EngineError::Type(err) => {
+        match engine.eval(expr.as_ref()) {
+            Err(EngineError::Type(err)) => {
                 let err = strip_span(err);
                 assert!(matches!(err, TypeError::Unification(_, _)));
             }
-            other => panic!("expected type error, got {other:?}"),
+            Err(other) => panic!("expected type error, got {other:?}"),
+            Ok(_) => panic!("expected type error, got Ok"),
         }
     }
 
@@ -4642,7 +4642,7 @@ mod tests {
             let
                 x = MyVariant1 { field1 = 1, field2 = 2.0 }
             in
-                (x~field1, x~field2)
+                (x.field1, x.field2)
             "#,
         );
         let mut engine = Engine::with_prelude();
@@ -4672,7 +4672,7 @@ mod tests {
                 x = MyVariant1 { field1 = 1 }
             in
                 match x
-                    when MyVariant1 { field1 } -> x~field1
+                    when MyVariant1 { field1 } -> x.field1
                     when MyVariant2 _ -> 0
             "#,
         );

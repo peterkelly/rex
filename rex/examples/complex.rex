@@ -1,9 +1,21 @@
 type Box = Box { value: i32 }
 
+type Tree 
+    = Leaf { value: i32 }
+    | Node { left: Tree, right: Tree }
+
 let
+    t = Node { 
+        left = Node { 
+            left = Leaf { value = 1 }, 
+            right = Leaf { value = 2 } 
+        }, 
+        right = Leaf { value = 3 } 
+    },
+    v = match t when Leaf { value } -> value when Node {} -> 0,
     add = λ x y → x + y,
     mk_box = λ x → Box { value = x },
-    unbox = λ b → b~value,
+    unbox = λ b → b.value,
     sum = λ xs →
         match xs
             when [] → 0
@@ -18,7 +30,7 @@ let
     nested = λ flag →
         let
             base = pick flag 1 2,
-            boxed mk_box base,
+            boxed = mk_box base,
             list = [base, base + 1, base + 2],
             dict = ({a = base, b = base + 10}) is Dict i32,
             total = sum list,

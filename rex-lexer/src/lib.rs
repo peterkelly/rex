@@ -42,6 +42,7 @@ pub enum Token {
     Type(Span),
     When(Span),
     Then(Span),
+    Where(Span),
 
     // Operators
     Add(Span),
@@ -83,7 +84,6 @@ pub enum Token {
     Pipe(Span),
     Question(Span),
     SemiColon(Span),
-    Tilde(Span),
     Whitespace(Span),
     WhitespaceNewline(Span),
 
@@ -146,6 +146,8 @@ impl Token {
                     Token::In(span)
                 } else if capture.name("Then").is_some() {
                     Token::Then(span)
+                } else if capture.name("Where").is_some() {
+                    Token::Where(span)
                 }
 
                 // Symbols
@@ -191,8 +193,6 @@ impl Token {
                     Token::Question(span)
                 } else if capture.name("SemiColon").is_some() {
                     Token::SemiColon(span)
-                } else if capture.name("Tilde").is_some() {
-                    Token::Tilde(span)
                 } else if capture.name("Whitespace").is_some() {
                     Token::Whitespace(span)
                 } else if capture.name("WhitespaceNewline").is_some() {
@@ -288,6 +288,7 @@ impl Token {
             r"(?P<Type>\btype\b)|",
             r"(?P<When>\bwhen\b)|",
             r"(?P<Then>\bthen\b)|",
+            r"(?P<Where>\bwhere\b)|",
             // Symbols
             r"(?P<ArrowL><-|←)|",
             r"(?P<ArrowR>->|→)|",
@@ -310,7 +311,6 @@ impl Token {
             r"(?P<ParenR>\))|",
             r"(?P<Question>\?)|",
             r"(?P<SemiColon>;)|",
-            r"(?P<Tilde>~)|",
             r"(?P<Whitespace>( |\t))|",
             r"(?P<WhitespaceNewline>(\n|\r))|",
             // Operators
@@ -355,7 +355,6 @@ impl Token {
             Eq(..) | Ne(..) | Lt(..) | Le(..) | Gt(..) | Ge(..) => Precedence(3),
             Add(..) | Sub(..) | Concat(..) => Precedence(4),
             Mul(..) | Div(..) | Mod(..) => Precedence(5),
-            Dot(..) => Precedence(6),
             Ident(..) => Precedence::highest(),
             _ => Precedence::lowest(),
         }
@@ -381,6 +380,7 @@ impl Spanned for Token {
             Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
+            Where(span, ..) => span,
 
             // Symbols
             ArrowL(span, ..) => span,
@@ -406,7 +406,6 @@ impl Spanned for Token {
             Pipe(span, ..) => span,
             Question(span, ..) => span,
             SemiColon(span, ..) => span,
-            Tilde(span, ..) => span,
             Whitespace(span, ..) => span,
             WhitespaceNewline(span, ..) => span,
 
@@ -455,6 +454,7 @@ impl Spanned for Token {
             Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
+            Where(span, ..) => span,
 
             // Symbols
             ArrowL(span, ..) => span,
@@ -480,7 +480,6 @@ impl Spanned for Token {
             Pipe(span, ..) => span,
             Question(span, ..) => span,
             SemiColon(span, ..) => span,
-            Tilde(span, ..) => span,
             Whitespace(span, ..) => span,
             WhitespaceNewline(span, ..) => span,
 
@@ -531,6 +530,7 @@ impl Display for Token {
             Type(..) => write!(f, "type"),
             When(..) => write!(f, "when"),
             Then(..) => write!(f, "then"),
+            Where(..) => write!(f, "where"),
 
             // Symbols
             ArrowL(..) => write!(f, "<-"),
@@ -556,7 +556,6 @@ impl Display for Token {
             Pipe(..) => write!(f, "|"),
             Question(..) => write!(f, "?"),
             SemiColon(..) => write!(f, ";"),
-            Tilde(..) => write!(f, "~"),
             Whitespace(..) => write!(f, " "),
             WhitespaceNewline(..) => writeln!(f),
 

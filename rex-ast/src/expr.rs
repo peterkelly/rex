@@ -278,6 +278,18 @@ impl Display for TypeExpr {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct TypeConstraint {
+    pub class: Symbol,
+    pub typ: TypeExpr,
+}
+
+impl TypeConstraint {
+    pub fn new(class: Symbol, typ: TypeExpr) -> Self {
+        Self { class, typ }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeVariant {
     pub name: Symbol,
     pub args: Vec<TypeExpr>,
@@ -319,8 +331,8 @@ pub enum Expr {
 
     Var(Var),                                   // x
     App(Span, Arc<Expr>, Arc<Expr>),            // f x
-    Project(Span, Arc<Expr>, Symbol),           // x~field
-    Lam(Span, Scope, Var, Option<TypeExpr>, Arc<Expr>), // λx → e
+    Project(Span, Arc<Expr>, Symbol),           // x.field
+    Lam(Span, Scope, Var, Option<TypeExpr>, Vec<TypeConstraint>, Arc<Expr>), // λx → e
     Let(Span, Var, Option<TypeExpr>, Arc<Expr>, Arc<Expr>), // let x = e1 in e2
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>), // if e1 then e2 else e3
     Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>), // match e1 with patterns
@@ -409,9 +421,14 @@ impl Expr {
             }),
             Expr::App(_, f, x) => Expr::App(span, f.clone(), x.clone()),
             Expr::Project(_, base, field) => Expr::Project(span, base.clone(), field.clone()),
-            Expr::Lam(_, scope, param, ann, body) => {
-                Expr::Lam(span, scope.clone(), param.clone(), ann.clone(), body.clone())
-            }
+            Expr::Lam(_, scope, param, ann, constraints, body) => Expr::Lam(
+                span,
+                scope.clone(),
+                param.clone(),
+                ann.clone(),
+                constraints.clone(),
+                body.clone(),
+            ),
             Expr::Let(_, var, ann, def, body) => {
                 Expr::Let(span, var.clone(), ann.clone(), def.clone(), body.clone())
             }
@@ -464,11 +481,18 @@ impl Expr {
                 Arc::new(base.reset_spans()),
                 field.clone(),
             ),
-            Expr::Lam(_, scope, param, ann, body) => Expr::Lam(
+            Expr::Lam(_, scope, param, ann, constraints, body) => Expr::Lam(
                 Span::default(),
                 scope.clone(),
                 param.reset_spans(),
-                ann.as_ref().map(|t| t.reset_spans()),
+                ann.as_ref().map(TypeExpr::reset_spans),
+                constraints
+                    .iter()
+                    .map(|constraint| TypeConstraint {
+                        class: constraint.class.clone(),
+                        typ: constraint.typ.reset_spans(),
+                    })
+                    .collect(),
                 Arc::new(body.reset_spans()),
             ),
             Expr::Let(_, var, ann, def, body) => Expr::Let(
@@ -562,7 +586,7 @@ impl Display for Expr {
                     }
                 }
             }
-            Self::Lam(_span, _scope, param, ann, body) => {
+            Self::Lam(_span, _scope, param, ann, constraints, body) => {
                 'λ'.fmt(f)?;
                 if let Some(ann) = ann {
                     '('.fmt(f)?;
@@ -572,6 +596,17 @@ impl Display for Expr {
                     ')'.fmt(f)?;
                 } else {
                     param.fmt(f)?;
+                }
+                if !constraints.is_empty() {
+                    " where ".fmt(f)?;
+                    for (i, constraint) in constraints.iter().enumerate() {
+                        constraint.class.fmt(f)?;
+                        ' '.fmt(f)?;
+                        constraint.typ.fmt(f)?;
+                        if i + 1 < constraints.len() {
+                            ", ".fmt(f)?;
+                        }
+                    }
                 }
                 " → ".fmt(f)?;
                 body.fmt(f)
@@ -613,7 +648,7 @@ impl Display for Expr {
             }
             Self::Project(_span, base, field) => {
                 base.fmt(f)?;
-                "~".fmt(f)?;
+                ".".fmt(f)?;
                 field.fmt(f)
             }
             Self::Ann(_span, expr, ann) => {
