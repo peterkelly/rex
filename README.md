@@ -247,7 +247,7 @@ match list
 
 ## Record Field Projection
 
-ADT variants can declare record fields with `{ field: Type }`. When a value is *definitely* that record variant, you can project fields with `x:field`.
+ADT variants can declare record fields with `{ field: Type }`. When a value is *definitely* that record variant, you can project fields with `x~field`.
 
 Single-variant ADT:
 
@@ -269,7 +269,7 @@ let
   x = MyVariant1 { field1 = 1 }
 in
   match x
-    when MyVariant1 { field1 } -> x:field1
+    when MyVariant1 { field1 } -> x~field1
     when MyVariant2 _ -> 0
 ```
 

@@ -37,6 +37,7 @@ pub enum Token {
     Else(Span),
     For(Span),
     If(Span),
+    Is(Span),
     Match(Span),
     Type(Span),
     When(Span),
@@ -82,6 +83,7 @@ pub enum Token {
     Pipe(Span),
     Question(Span),
     SemiColon(Span),
+    Tilde(Span),
     Whitespace(Span),
     WhitespaceNewline(Span),
 
@@ -132,6 +134,8 @@ impl Token {
                     Token::For(span)
                 } else if capture.name("If").is_some() {
                     Token::If(span)
+                } else if capture.name("Is").is_some() {
+                    Token::Is(span)
                 } else if capture.name("Match").is_some() {
                     Token::Match(span)
                 } else if capture.name("Type").is_some() {
@@ -187,6 +191,8 @@ impl Token {
                     Token::Question(span)
                 } else if capture.name("SemiColon").is_some() {
                     Token::SemiColon(span)
+                } else if capture.name("Tilde").is_some() {
+                    Token::Tilde(span)
                 } else if capture.name("Whitespace").is_some() {
                     Token::Whitespace(span)
                 } else if capture.name("WhitespaceNewline").is_some() {
@@ -277,6 +283,7 @@ impl Token {
             r"(?P<Else>\belse\b)|",
             r"(?P<For>\bfor\b)|",
             r"(?P<If>\bif\b)|",
+            r"(?P<Is>\bis\b)|",
             r"(?P<Match>\bmatch\b)|",
             r"(?P<Type>\btype\b)|",
             r"(?P<When>\bwhen\b)|",
@@ -303,6 +310,7 @@ impl Token {
             r"(?P<ParenR>\))|",
             r"(?P<Question>\?)|",
             r"(?P<SemiColon>;)|",
+            r"(?P<Tilde>~)|",
             r"(?P<Whitespace>( |\t))|",
             r"(?P<WhitespaceNewline>(\n|\r))|",
             // Operators
@@ -368,6 +376,7 @@ impl Spanned for Token {
             Else(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Is(span, ..) => span,
             Match(span, ..) => span,
             Type(span, ..) => span,
             When(span, ..) => span,
@@ -397,6 +406,7 @@ impl Spanned for Token {
             Pipe(span, ..) => span,
             Question(span, ..) => span,
             SemiColon(span, ..) => span,
+            Tilde(span, ..) => span,
             Whitespace(span, ..) => span,
             WhitespaceNewline(span, ..) => span,
 
@@ -440,6 +450,7 @@ impl Spanned for Token {
             Else(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Is(span, ..) => span,
             Match(span, ..) => span,
             Type(span, ..) => span,
             When(span, ..) => span,
@@ -469,6 +480,7 @@ impl Spanned for Token {
             Pipe(span, ..) => span,
             Question(span, ..) => span,
             SemiColon(span, ..) => span,
+            Tilde(span, ..) => span,
             Whitespace(span, ..) => span,
             WhitespaceNewline(span, ..) => span,
 
@@ -514,6 +526,7 @@ impl Display for Token {
             Else(..) => write!(f, "else"),
             For(..) => write!(f, "for"),
             If(..) => write!(f, "if"),
+            Is(..) => write!(f, "is"),
             Match(..) => write!(f, "match"),
             Type(..) => write!(f, "type"),
             When(..) => write!(f, "when"),
@@ -543,6 +556,7 @@ impl Display for Token {
             Pipe(..) => write!(f, "|"),
             Question(..) => write!(f, "?"),
             SemiColon(..) => write!(f, ";"),
+            Tilde(..) => write!(f, "~"),
             Whitespace(..) => write!(f, " "),
             WhitespaceNewline(..) => writeln!(f),
 

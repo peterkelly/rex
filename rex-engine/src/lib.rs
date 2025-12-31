@@ -3,28 +3,36 @@ use std::fmt::{self, Display, Formatter};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Expr, Pattern, TypeDecl};
+use rex_ast::expr::{intern, Expr, Pattern, Symbol, TypeDecl};
 use rex_ts::{
     entails, instantiate, compose_subst, AdtDecl, Instance, Predicate, Scheme, Subst, Type,
-    TypeError, TypeSystem, TypeVarSupply, Types, TypedExpr, TypedExprKind, unify,
+    TypeError, TypeKind, TypeSystem, TypeVarSupply, Types, TypedExpr, TypedExprKind, unify,
 };
 use uuid::Uuid;
+
+fn sym(name: &str) -> Symbol {
+    intern(name)
+}
+
+fn sym_eq(name: &Symbol, expected: &str) -> bool {
+    name.as_ref() == expected
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error("unknown variable `{0}`")]
-    UnknownVar(String),
+    UnknownVar(Symbol),
     #[error("value is not callable: {0}")]
     NotCallable(String),
     #[error("native `{name}` expected {expected} args, got {got}")]
     NativeArity {
-        name: String,
+        name: Symbol,
         expected: usize,
         got: usize,
     },
     #[error("native `{name}` expected {expected}, got {got}")]
     NativeType {
-        name: String,
+        name: Symbol,
         expected: String,
         got: String,
     },
@@ -35,25 +43,29 @@ pub enum EngineError {
     #[error("type error: {0}")]
     Type(#[from] TypeError),
     #[error("ambiguous overload for `{name}`")]
-    AmbiguousOverload { name: String },
+    AmbiguousOverload { name: Symbol },
     #[error("no native implementation for `{name}` with type {typ}")]
-    MissingImpl { name: String, typ: String },
+    MissingImpl { name: Symbol, typ: String },
     #[error("ambiguous native implementation for `{name}` with type {typ}")]
-    AmbiguousImpl { name: String, typ: String },
+    AmbiguousImpl { name: Symbol, typ: String },
     #[error("duplicate native implementation for `{name}` with type {typ}")]
-    DuplicateImpl { name: String, typ: String },
+    DuplicateImpl { name: Symbol, typ: String },
     #[error("injected `{name}` has incompatible type {typ}")]
-    InvalidInjection { name: String, typ: String },
+    InvalidInjection { name: Symbol, typ: String },
     #[error("unknown type for value in `{0}`")]
-    UnknownType(String),
+    UnknownType(Symbol),
     #[error("unknown field `{field}` on {value}")]
-    UnknownField { field: String, value: String },
+    UnknownField { field: Symbol, value: String },
     #[error("unsupported expression")]
     UnsupportedExpr,
     #[error("empty sequence")]
     EmptySequence,
     #[error("index {index} out of bounds in `{name}` (len {len})")]
-    IndexOutOfBounds { name: String, index: i32, len: usize },
+    IndexOutOfBounds {
+        name: Symbol,
+        index: i32,
+        len: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -74,11 +86,11 @@ pub enum Value {
     DateTime(DateTime<Utc>),
     Tuple(Vec<Value>),
     Array(Vec<Value>),
-    Dict(BTreeMap<String, Value>),
-    Adt(String, Vec<Value>),
+    Dict(BTreeMap<Symbol, Value>),
+    Adt(Symbol, Vec<Value>),
     Closure {
         env: Env,
-        param: String,
+        param: Symbol,
         param_ty: Type,
         typ: Type,
         body: Arc<TypedExpr>,
@@ -107,7 +119,7 @@ impl Value {
             Value::Tuple(..) => "tuple",
             Value::Array(..) => "array",
             Value::Dict(..) => "dict",
-            Value::Adt(name, ..) if name == "Empty" || name == "Cons" => "list",
+            Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
             Value::Adt(..) => "adt",
             Value::Closure { .. } => "closure",
             Value::Native(..) => "native",
@@ -190,7 +202,7 @@ impl Display for Value {
 
 #[derive(Clone)]
 pub struct NativeFn {
-    name: String,
+    name: Symbol,
     arity: usize,
     typ: Type,
     func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
@@ -200,13 +212,13 @@ pub struct NativeFn {
 
 impl NativeFn {
     fn new(
-        name: impl Into<String>,
+        name: Symbol,
         arity: usize,
         typ: Type,
         func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
     ) -> Self {
         Self {
-            name: name.into(),
+            name,
             arity,
             typ,
             func,
@@ -263,16 +275,16 @@ impl NativeFn {
 
 #[derive(Clone)]
 pub struct OverloadedFn {
-    name: String,
+    name: Symbol,
     typ: Type,
     applied: Vec<Value>,
     applied_types: Vec<Type>,
 }
 
 impl OverloadedFn {
-    fn new(name: impl Into<String>, typ: Type) -> Self {
+    fn new(name: Symbol, typ: Type) -> Self {
         Self {
-            name: name.into(),
+            name,
             typ,
             applied: Vec::new(),
             applied_types: Vec::new(),
@@ -308,14 +320,14 @@ impl OverloadedFn {
         for arg_ty in self.applied_types.iter().rev() {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
-        let imp = engine.resolve_native_impl(&self.name, &full_ty)?;
+        let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
         (imp.func)(engine, &full_ty, &self.applied)
     }
 }
 
 #[derive(Clone)]
 struct NativeImpl {
-    name: String,
+    name: Symbol,
     arity: usize,
     scheme: Scheme,
     func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
@@ -329,11 +341,11 @@ impl NativeImpl {
 
 #[derive(Default, Clone)]
 struct NativeRegistry {
-    entries: HashMap<String, Vec<NativeImpl>>,
+    entries: HashMap<Symbol, Vec<NativeImpl>>,
 }
 
 impl NativeRegistry {
-    fn insert(&mut self, name: String, imp: NativeImpl) -> Result<(), EngineError> {
+    fn insert(&mut self, name: Symbol, imp: NativeImpl) -> Result<(), EngineError> {
         let entry = self.entries.entry(name.clone()).or_default();
         if entry.iter().any(|existing| existing.scheme == imp.scheme) {
             return Err(EngineError::DuplicateImpl {
@@ -345,11 +357,11 @@ impl NativeRegistry {
         Ok(())
     }
 
-    fn get(&self, name: &str) -> Option<&[NativeImpl]> {
+    fn get(&self, name: &Symbol) -> Option<&[NativeImpl]> {
         self.entries.get(name).map(|v| v.as_slice())
     }
 
-    fn has_name(&self, name: &str) -> bool {
+    fn has_name(&self, name: &Symbol) -> bool {
         self.entries.contains_key(name)
     }
 }
@@ -360,7 +372,7 @@ pub struct Env(Arc<EnvFrame>);
 #[derive(Default)]
 struct EnvFrame {
     parent: Option<Env>,
-    bindings: HashMap<String, Value>,
+    bindings: HashMap<Symbol, Value>,
 }
 
 impl Env {
@@ -368,23 +380,23 @@ impl Env {
         Env(Arc::new(EnvFrame::default()))
     }
 
-    pub fn extend(&self, name: impl Into<String>, value: Value) -> Self {
+    pub fn extend(&self, name: Symbol, value: Value) -> Self {
         let mut bindings = HashMap::new();
-        bindings.insert(name.into(), value);
+        bindings.insert(name, value);
         Env(Arc::new(EnvFrame {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
-    pub fn extend_many(&self, bindings: HashMap<String, Value>) -> Self {
+    pub fn extend_many(&self, bindings: HashMap<Symbol, Value>) -> Self {
         Env(Arc::new(EnvFrame {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
-    pub fn get(&self, name: &str) -> Option<Value> {
+    pub fn get(&self, name: &Symbol) -> Option<Value> {
         if let Some(v) = self.0.bindings.get(name) {
             return Some(v.clone());
         }
@@ -607,13 +619,13 @@ impl<T: RexType> RexType for Vec<T> {
 
 impl RexType for () {
     fn rex_type() -> Type {
-        Type::Tuple(vec![])
+        Type::tuple(vec![])
     }
 }
 
 impl<A: RexType, B: RexType> RexType for (A, B) {
     fn rex_type() -> Type {
-        Type::Tuple(vec![A::rex_type(), B::rex_type()])
+        Type::tuple(vec![A::rex_type(), B::rex_type()])
     }
 }
 
@@ -622,7 +634,7 @@ impl FromValue for bool {
         match value {
             Value::Bool(v) => Ok(*v),
             _ => Err(EngineError::NativeType {
-                name: name.to_string(),
+                name: sym(name),
                 expected: "bool".into(),
                 got: value.type_name().into(),
             }),
@@ -637,7 +649,7 @@ macro_rules! impl_from_value_num {
                 match value {
                     Value::$variant(v) => Ok(*v as $t),
                     _ => Err(EngineError::NativeType {
-                        name: name.to_string(),
+                        name: sym(name),
                         expected: $label.into(),
                         got: value.type_name().into(),
                     }),
@@ -663,7 +675,7 @@ impl FromValue for String {
         match value {
             Value::String(v) => Ok(v.clone()),
             _ => Err(EngineError::NativeType {
-                name: name.to_string(),
+                name: sym(name),
                 expected: "string".into(),
                 got: value.type_name().into(),
             }),
@@ -676,7 +688,7 @@ impl FromValue for Uuid {
         match value {
             Value::Uuid(v) => Ok(*v),
             _ => Err(EngineError::NativeType {
-                name: name.to_string(),
+                name: sym(name),
                 expected: "uuid".into(),
                 got: value.type_name().into(),
             }),
@@ -689,7 +701,7 @@ impl FromValue for DateTime<Utc> {
         match value {
             Value::DateTime(v) => Ok(*v),
             _ => Err(EngineError::NativeType {
-                name: name.to_string(),
+                name: sym(name),
                 expected: "datetime".into(),
                 got: value.type_name().into(),
             }),
@@ -801,7 +813,7 @@ impl Engine {
                     got: args.len(),
                 });
             }
-            let a = A::from_value(&args[0], &name_string)?;
+            let a = A::from_value(&args[0], name_string.as_ref())?;
             Ok(f(a).into_value())
         });
         let typ = Type::fun(A::rex_type(), R::rex_type());
@@ -826,8 +838,8 @@ impl Engine {
                     got: args.len(),
                 });
             }
-            let a = A::from_value(&args[0], &name_string)?;
-            let b = B::from_value(&args[1], &name_string)?;
+            let a = A::from_value(&args[0], name_string.as_ref())?;
+            let b = B::from_value(&args[1], name_string.as_ref())?;
             Ok(f(a, b).into_value())
         });
         let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
@@ -885,7 +897,9 @@ impl Engine {
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
-        AdtDecl::new(name, params, &mut self.types.supply)
+        let name_sym = sym(name);
+        let param_syms: Vec<Symbol> = params.iter().map(|p| sym(p)).collect();
+        AdtDecl::new(&name_sym, &param_syms, &mut self.types.supply)
     }
 
     pub fn inject_adt(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
@@ -909,7 +923,8 @@ impl Engine {
     }
 
     pub fn inject_class(&mut self, name: &str, supers: Vec<String>) {
-        self.types.inject_class(name.to_string(), supers);
+        let supers = supers.into_iter().map(|s| sym(&s)).collect();
+        self.types.inject_class(name, supers);
     }
 
     pub fn inject_instance(&mut self, class: &str, inst: Instance) {
@@ -934,7 +949,7 @@ impl Engine {
 
     fn register_native(
         &mut self,
-        name: String,
+        name: Symbol,
         scheme: Scheme,
         arity: usize,
         func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
@@ -957,12 +972,11 @@ impl Engine {
         self.natives.insert(name, imp)
     }
 
-    fn register_type_scheme(&mut self, name: &str, injected: &Scheme) -> Result<(), EngineError> {
+    fn register_type_scheme(&mut self, name: &Symbol, injected: &Scheme) -> Result<(), EngineError> {
         let schemes = self.types.env.lookup(name);
         match schemes {
             None => {
-                self.types
-                    .add_value(name.to_string(), injected.clone());
+                self.types.add_value(name.as_ref(), injected.clone());
                 Ok(())
             }
             Some(schemes) => {
@@ -976,17 +990,14 @@ impl Engine {
                         }
                     }
                     Err(EngineError::InvalidInjection {
-                        name: name.to_string(),
+                        name: name.clone(),
                         typ: injected.typ.to_string(),
                     })
                 } else {
                     if schemes.iter().any(|s| s == injected) {
                         return Ok(());
                     }
-                    self.types.add_overload(
-                        name.to_string(),
-                        injected.clone(),
-                    );
+                    self.types.add_overload(name.as_ref(), injected.clone());
                     Ok(())
                 }
             }
@@ -1020,7 +1031,7 @@ impl Engine {
         fn walk(
             engine: &Engine,
             expr: &TypedExpr,
-            bound: &mut Vec<String>,
+            bound: &mut Vec<Symbol>,
         ) -> Result<(), EngineError> {
             match &expr.kind {
                 TypedExprKind::Var { name, overloads } => {
@@ -1117,17 +1128,19 @@ impl Engine {
     }
 
     fn has_impl(&self, name: &str, typ: &Type) -> bool {
+        let sym_name = sym(name);
         self.natives
-            .get(name)
+            .get(&sym_name)
             .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
             .unwrap_or(false)
     }
 
     fn resolve_native_impl(&self, name: &str, typ: &Type) -> Result<NativeImpl, EngineError> {
+        let sym_name = sym(name);
         let impls = self
             .natives
-            .get(name)
-            .ok_or_else(|| EngineError::UnknownVar(name.to_string()))?;
+            .get(&sym_name)
+            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
         let matches: Vec<NativeImpl> = impls
             .iter()
             .filter(|imp| impl_matches_type(imp, typ))
@@ -1135,22 +1148,23 @@ impl Engine {
             .collect();
         match matches.len() {
             0 => Err(EngineError::MissingImpl {
-                name: name.to_string(),
+                name: sym_name.clone(),
                 typ: typ.to_string(),
             }),
             1 => Ok(matches[0].clone()),
             _ => Err(EngineError::AmbiguousImpl {
-                name: name.to_string(),
+                name: sym_name,
                 typ: typ.to_string(),
             }),
         }
     }
 
     fn resolve_native_value(&self, name: &str, typ: &Type) -> Result<Value, EngineError> {
+        let sym_name = sym(name);
         let impls = self
             .natives
-            .get(name)
-            .ok_or_else(|| EngineError::UnknownVar(name.to_string()))?;
+            .get(&sym_name)
+            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
         let matches: Vec<NativeImpl> = impls
             .iter()
             .filter(|imp| impl_matches_type(imp, typ))
@@ -1158,7 +1172,7 @@ impl Engine {
             .collect();
         match matches.len() {
             0 => Err(EngineError::MissingImpl {
-                name: name.to_string(),
+                name: sym_name.clone(),
                 typ: typ.to_string(),
             }),
             1 => {
@@ -1174,17 +1188,17 @@ impl Engine {
             _ => {
                 if typ.ftv().is_empty() {
                     Err(EngineError::AmbiguousImpl {
-                        name: name.to_string(),
+                        name: sym_name.clone(),
                         typ: typ.to_string(),
                     })
                 } else if is_function_type(typ) {
                     Ok(Value::Overloaded(OverloadedFn::new(
-                        name.to_string(),
+                        sym_name.clone(),
                         typ.clone(),
                     )))
                 } else {
                     Err(EngineError::AmbiguousOverload {
-                        name: name.to_string(),
+                        name: sym_name,
                     })
                 }
             }
@@ -1192,16 +1206,16 @@ impl Engine {
     }
 }
 
-fn normalize_name(name: &str) -> String {
+fn normalize_name(name: &str) -> Symbol {
     if let Some(stripped) = name.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
         let ok = stripped
             .chars()
             .all(|c| !c.is_alphanumeric() && c != '_' && !c.is_whitespace());
         if ok {
-            return stripped.to_string();
+            return sym(stripped);
         }
     }
-    name.to_string()
+    sym(name)
 }
 
 fn default_ambiguous_types(
@@ -1235,8 +1249,8 @@ fn default_ambiguous_types(
                         simple = false;
                         break;
                     }
-                    match &pred.typ {
-                        Type::Var(v) if v.id == tv => relevant.push(pred.clone()),
+                    match pred.typ.as_ref() {
+                        TypeKind::Var(v) if v.id == tv => relevant.push(pred.clone()),
                         _ => {
                             simple = false;
                             break;
@@ -1262,9 +1276,9 @@ fn default_ambiguous_types(
     Ok((typed.apply(&subst), preds))
 }
 
-fn defaultable_class(class: &str) -> bool {
+fn defaultable_class(class: &Symbol) -> bool {
     matches!(
-        class,
+        class.as_ref(),
         "AdditiveMonoid"
             | "MultiplicativeMonoid"
             | "AdditiveGroup"
@@ -1276,7 +1290,7 @@ fn defaultable_class(class: &str) -> bool {
 
 fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
     if expr.typ.ftv().is_empty() {
-        if let Type::Con(tc) = &expr.typ {
+        if let TypeKind::Con(tc) = expr.typ.as_ref() {
             if tc.arity == 0 {
                 push_unique_type(out, expr.typ.clone());
             }
@@ -1382,24 +1396,24 @@ fn scheme_accepts(
 }
 
 fn is_function_type(typ: &Type) -> bool {
-    matches!(typ, Type::Fun(..))
+    matches!(typ.as_ref(), TypeKind::Fun(..))
 }
 
-fn lookup_scheme(engine: &Engine, name: &str) -> Result<Scheme, EngineError> {
+fn lookup_scheme(engine: &Engine, name: &Symbol) -> Result<Scheme, EngineError> {
     let schemes = engine
         .types
         .env
         .lookup(name)
-        .ok_or_else(|| EngineError::UnknownVar(name.to_string()))?;
+        .ok_or_else(|| EngineError::UnknownVar(name.clone()))?;
     if schemes.len() != 1 {
         return Err(EngineError::AmbiguousOverload {
-            name: name.to_string(),
+            name: name.clone(),
         });
     }
     Ok(schemes[0].clone())
 }
 
-fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<String>) {
+fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
     match pat {
         Pattern::Wildcard(..) => {}
         Pattern::Var(var) => out.push(var.name.clone()),
@@ -1426,16 +1440,16 @@ fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<String>) {
 fn type_arity(typ: &Type) -> usize {
     let mut count = 0;
     let mut cur = typ;
-    while let Type::Fun(_, next) = cur {
+    while let TypeKind::Fun(_, next) = cur.as_ref() {
         count += 1;
-        cur = next.as_ref();
+        cur = next;
     }
     count
 }
 
 fn split_fun(typ: &Type) -> Option<(Type, Type)> {
-    match typ {
-        Type::Fun(a, b) => Some((a.as_ref().clone(), b.as_ref().clone())),
+    match typ.as_ref() {
+        TypeKind::Fun(a, b) => Some((a.clone(), b.clone())),
         _ => None,
     }
 }
@@ -1451,14 +1465,14 @@ fn list_to_vec(value: &Value, name: &str) -> Result<Vec<Value>, EngineError> {
     let mut cur = value;
     loop {
         match cur {
-            Value::Adt(tag, args) if tag == "Empty" && args.is_empty() => return Ok(out),
-            Value::Adt(tag, args) if tag == "Cons" && args.len() == 2 => {
+            Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Ok(out),
+            Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0].clone());
                 cur = &args[1];
             }
             _ => {
                 return Err(EngineError::NativeType {
-                    name: name.to_string(),
+                    name: sym(name),
                     expected: "list".into(),
                     got: value.type_name().into(),
                 })
@@ -1472,8 +1486,8 @@ fn list_to_vec_opt(value: &Value) -> Option<Vec<Value>> {
     let mut cur = value;
     loop {
         match cur {
-            Value::Adt(tag, args) if tag == "Empty" && args.is_empty() => return Some(out),
-            Value::Adt(tag, args) if tag == "Cons" && args.len() == 2 => {
+            Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Some(out),
+            Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0].clone());
                 cur = &args[1];
             }
@@ -1483,9 +1497,9 @@ fn list_to_vec_opt(value: &Value) -> Option<Vec<Value>> {
 }
 
 fn list_from_vec(values: Vec<Value>) -> Value {
-    let mut list = Value::Adt("Empty".to_string(), vec![]);
+    let mut list = Value::Adt(sym("Empty"), vec![]);
     for v in values.into_iter().rev() {
-        list = Value::Adt("Cons".to_string(), vec![v, list]);
+        list = Value::Adt(sym("Cons"), vec![v, list]);
     }
     list
 }
@@ -1511,18 +1525,18 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
             for elem in elems {
                 tys.push(value_type(elem)?);
             }
-            Ok(Type::Tuple(tys))
+            Ok(Type::tuple(tys))
         }
         Value::Array(elems) => {
             let first = elems
                 .get(0)
-                .ok_or_else(|| EngineError::UnknownType("array".into()))?;
+                .ok_or_else(|| EngineError::UnknownType(sym("array")))?;
             let elem_ty = value_type(first)?;
             for elem in elems.iter().skip(1) {
                 let ty = value_type(elem)?;
                 if ty != elem_ty {
                     return Err(EngineError::NativeType {
-                        name: "array".into(),
+                        name: sym("array"),
                         expected: elem_ty.to_string(),
                         got: ty.to_string(),
                     });
@@ -1534,13 +1548,13 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
             let first = map
                 .values()
                 .next()
-                .ok_or_else(|| EngineError::UnknownType("dict".into()))?;
+                .ok_or_else(|| EngineError::UnknownType(sym("dict")))?;
             let elem_ty = value_type(first)?;
             for val in map.values().skip(1) {
                 let ty = value_type(val)?;
                 if ty != elem_ty {
                     return Err(EngineError::NativeType {
-                        name: "dict".into(),
+                        name: sym("dict"),
                         expected: elem_ty.to_string(),
                         got: ty.to_string(),
                     });
@@ -1548,27 +1562,27 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
             }
             Ok(Type::app(Type::con("Dict", 1), elem_ty))
         }
-        Value::Adt(tag, args) if tag == "Some" && args.len() == 1 => {
+        Value::Adt(tag, args) if sym_eq(tag, "Some") && args.len() == 1 => {
             let inner = value_type(&args[0])?;
             Ok(Type::app(Type::con("Option", 1), inner))
         }
-        Value::Adt(tag, args) if tag == "None" && args.is_empty() => {
-            Err(EngineError::UnknownType("option".into()))
+        Value::Adt(tag, args) if sym_eq(tag, "None") && args.is_empty() => {
+            Err(EngineError::UnknownType(sym("option")))
         }
-        Value::Adt(tag, args) if (tag == "Ok" || tag == "Err") && args.len() == 1 => {
-            Err(EngineError::UnknownType("result".into()))
+        Value::Adt(tag, args) if (sym_eq(tag, "Ok") || sym_eq(tag, "Err")) && args.len() == 1 => {
+            Err(EngineError::UnknownType(sym("result")))
         }
-        Value::Adt(tag, args) if (tag == "Empty" || tag == "Cons") && args.len() <= 2 => {
+        Value::Adt(tag, args) if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 => {
             let elems = list_to_vec(value, "list")?;
             let first = elems
                 .get(0)
-                .ok_or_else(|| EngineError::UnknownType("list".into()))?;
+                .ok_or_else(|| EngineError::UnknownType(sym("list")))?;
             let elem_ty = value_type(first)?;
             for elem in elems.iter().skip(1) {
                 let ty = value_type(elem)?;
                 if ty != elem_ty {
                     return Err(EngineError::NativeType {
-                        name: "list".into(),
+                        name: sym("list"),
                         expected: elem_ty.to_string(),
                         got: ty.to_string(),
                     });
@@ -1577,9 +1591,9 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
             Ok(Type::app(Type::con("List", 1), elem_ty))
         }
         Value::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
-        Value::Closure { .. } => Err(EngineError::UnknownType("closure".into())),
-        Value::Native(..) => Err(EngineError::UnknownType("native".into())),
-        Value::Overloaded(..) => Err(EngineError::UnknownType("overloaded".into())),
+        Value::Closure { .. } => Err(EngineError::UnknownType(sym("closure"))),
+        Value::Native(..) => Err(EngineError::UnknownType(sym("native"))),
+        Value::Overloaded(..) => Err(EngineError::UnknownType(sym("overloaded"))),
     }
 }
 
@@ -1600,11 +1614,11 @@ fn resolve_binary_op(engine: &Engine, name: &str, elem_ty: &Type) -> Result<Valu
 }
 
 fn len_value_for_type(elem_ty: &Type, len: usize, name: &str) -> Result<Value, EngineError> {
-    match elem_ty {
-        Type::Con(c) if c.name == "f32" => Ok(Value::F32(len as f32)),
-        Type::Con(c) if c.name == "f64" => Ok(Value::F64(len as f64)),
+    match elem_ty.as_ref() {
+        TypeKind::Con(c) if sym_eq(&c.name, "f32") => Ok(Value::F32(len as f32)),
+        TypeKind::Con(c) if sym_eq(&c.name, "f64") => Ok(Value::F64(len as f64)),
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "f32 or f64".into(),
             got: elem_ty.to_string(),
         }),
@@ -1615,7 +1629,7 @@ fn expect_array(value: &Value, name: &str) -> Result<Vec<Value>, EngineError> {
     match value {
         Value::Array(xs) => Ok(xs.clone()),
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "array".into(),
             got: value.type_name().into(),
         }),
@@ -1626,7 +1640,7 @@ fn expect_bool(value: &Value, name: &str) -> Result<bool, EngineError> {
     match value {
         Value::Bool(v) => Ok(*v),
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "bool".into(),
             got: value.type_name().into(),
         }),
@@ -1635,10 +1649,12 @@ fn expect_bool(value: &Value, name: &str) -> Result<bool, EngineError> {
 
 fn option_value(value: &Value) -> Result<Option<Value>, EngineError> {
     match value {
-        Value::Adt(name, args) if name == "Some" && args.len() == 1 => Ok(Some(args[0].clone())),
-        Value::Adt(name, args) if name == "None" && args.is_empty() => Ok(None),
+        Value::Adt(name, args) if sym_eq(name, "Some") && args.len() == 1 => {
+            Ok(Some(args[0].clone()))
+        }
+        Value::Adt(name, args) if sym_eq(name, "None") && args.is_empty() => Ok(None),
         _ => Err(EngineError::NativeType {
-            name: "option".into(),
+            name: sym("option"),
             expected: "Option".into(),
             got: value.type_name().into(),
         }),
@@ -1647,17 +1663,21 @@ fn option_value(value: &Value) -> Result<Option<Value>, EngineError> {
 
 fn option_from_value(value: Option<Value>) -> Value {
     match value {
-        Some(v) => Value::Adt("Some".to_string(), vec![v]),
-        None => Value::Adt("None".to_string(), vec![]),
+        Some(v) => Value::Adt(sym("Some"), vec![v]),
+        None => Value::Adt(sym("None"), vec![]),
     }
 }
 
 fn result_value(value: &Value) -> Result<Result<Value, Value>, EngineError> {
     match value {
-        Value::Adt(name, args) if name == "Ok" && args.len() == 1 => Ok(Ok(args[0].clone())),
-        Value::Adt(name, args) if name == "Err" && args.len() == 1 => Ok(Err(args[0].clone())),
+        Value::Adt(name, args) if sym_eq(name, "Ok") && args.len() == 1 => {
+            Ok(Ok(args[0].clone()))
+        }
+        Value::Adt(name, args) if sym_eq(name, "Err") && args.len() == 1 => {
+            Ok(Err(args[0].clone()))
+        }
         _ => Err(EngineError::NativeType {
-            name: "result".into(),
+            name: sym("result"),
             expected: "Result".into(),
             got: value.type_name().into(),
         }),
@@ -1666,19 +1686,19 @@ fn result_value(value: &Value) -> Result<Result<Value, Value>, EngineError> {
 
 fn result_from_value(value: Result<Value, Value>) -> Value {
     match value {
-        Ok(v) => Value::Adt("Ok".to_string(), vec![v]),
-        Err(v) => Value::Adt("Err".to_string(), vec![v]),
+        Ok(v) => Value::Adt(sym("Ok"), vec![v]),
+        Err(v) => Value::Adt(sym("Err"), vec![v]),
     }
 }
 
 fn binary_arg_types(name: &str, typ: &Type) -> Result<(Type, Type), EngineError> {
     let (lhs, rest) = split_fun(typ).ok_or_else(|| EngineError::NativeType {
-        name: name.to_string(),
+        name: sym(name),
         expected: "binary function".into(),
         got: typ.to_string(),
     })?;
     let (rhs, _res) = split_fun(&rest).ok_or_else(|| EngineError::NativeType {
-        name: name.to_string(),
+        name: sym(name),
         expected: "binary function".into(),
         got: typ.to_string(),
     })?;
@@ -1694,7 +1714,7 @@ fn split_fun_chain(
     let mut cur = typ.clone();
     for _ in 0..count {
         let (arg, rest) = split_fun(&cur).ok_or_else(|| EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: format!("function of arity {}", count),
             got: typ.to_string(),
         })?;
@@ -1721,12 +1741,14 @@ fn result_type(ok: Type, err: Type) -> Type {
 }
 
 fn list_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
-    match typ {
-        Type::App(head, elem) if matches!(head.as_ref(), Type::Con(c) if c.name == "List") => {
-            Ok(elem.as_ref().clone())
+    match typ.as_ref() {
+        TypeKind::App(head, elem)
+            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "List")) =>
+        {
+            Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "List a".into(),
             got: typ.to_string(),
         }),
@@ -1734,12 +1756,14 @@ fn list_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 }
 
 fn array_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
-    match typ {
-        Type::App(head, elem) if matches!(head.as_ref(), Type::Con(c) if c.name == "Array") => {
-            Ok(elem.as_ref().clone())
+    match typ.as_ref() {
+        TypeKind::App(head, elem)
+            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Array")) =>
+        {
+            Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "Array a".into(),
             got: typ.to_string(),
         }),
@@ -1747,12 +1771,14 @@ fn array_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 }
 
 fn option_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
-    match typ {
-        Type::App(head, elem) if matches!(head.as_ref(), Type::Con(c) if c.name == "Option") => {
-            Ok(elem.as_ref().clone())
+    match typ.as_ref() {
+        TypeKind::App(head, elem)
+            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option")) =>
+        {
+            Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "Option a".into(),
             got: typ.to_string(),
         }),
@@ -1760,19 +1786,21 @@ fn option_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 }
 
 fn result_types(typ: &Type, name: &str) -> Result<(Type, Type), EngineError> {
-    match typ {
-        Type::App(head, ok) => match head.as_ref() {
-            Type::App(head, err) if matches!(head.as_ref(), Type::Con(c) if c.name == "Result") => {
-                Ok((ok.as_ref().clone(), err.as_ref().clone()))
+    match typ.as_ref() {
+        TypeKind::App(head, ok) => match head.as_ref() {
+            TypeKind::App(head, err)
+                if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Result")) =>
+            {
+                Ok((ok.clone(), err.clone()))
             }
             _ => Err(EngineError::NativeType {
-                name: name.to_string(),
+                name: sym(name),
                 expected: "Result e a".into(),
                 got: typ.to_string(),
             }),
         },
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "Result e a".into(),
             got: typ.to_string(),
         }),
@@ -1780,13 +1808,13 @@ fn result_types(typ: &Type, name: &str) -> Result<(Type, Type), EngineError> {
 }
 
 fn tuple_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
-    match typ {
-        Type::Tuple(elems) if !elems.is_empty() => {
+    match typ.as_ref() {
+        TypeKind::Tuple(elems) if !elems.is_empty() => {
             let first = elems[0].clone();
             for elem in elems.iter().skip(1) {
                 if *elem != first {
                     return Err(EngineError::NativeType {
-                        name: name.to_string(),
+                        name: sym(name),
                         expected: first.to_string(),
                         got: elem.to_string(),
                     });
@@ -1795,7 +1823,7 @@ fn tuple_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
             Ok(first)
         }
         _ => Err(EngineError::NativeType {
-            name: name.to_string(),
+            name: sym(name),
             expected: "tuple".into(),
             got: typ.to_string(),
         }),
@@ -1804,122 +1832,122 @@ fn tuple_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 
 fn eq_value_by_type(
     engine: &Engine,
-    op_name: &str,
+    op_name: &Symbol,
     typ: &Type,
     lhs: &Value,
     rhs: &Value,
 ) -> Result<bool, EngineError> {
-    match typ {
-        Type::Con(tc) => match tc.name.as_str() {
+    match typ.as_ref() {
+        TypeKind::Con(tc) => match tc.name.as_ref() {
             "bool" => match (lhs, rhs) {
                 (Value::Bool(a), Value::Bool(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "u8" => match (lhs, rhs) {
                 (Value::U8(a), Value::U8(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "u16" => match (lhs, rhs) {
                 (Value::U16(a), Value::U16(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "u32" => match (lhs, rhs) {
                 (Value::U32(a), Value::U32(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "u64" => match (lhs, rhs) {
                 (Value::U64(a), Value::U64(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i8" => match (lhs, rhs) {
                 (Value::I8(a), Value::I8(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i16" => match (lhs, rhs) {
                 (Value::I16(a), Value::I16(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i32" => match (lhs, rhs) {
                 (Value::I32(a), Value::I32(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i64" => match (lhs, rhs) {
                 (Value::I64(a), Value::I64(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "f32" => match (lhs, rhs) {
                 (Value::F32(a), Value::F32(b)) => Ok((*a - *b).abs() < f32::EPSILON),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "f64" => match (lhs, rhs) {
                 (Value::F64(a), Value::F64(b)) => Ok((*a - *b).abs() < f64::EPSILON),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "string" => match (lhs, rhs) {
                 (Value::String(a), Value::String(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "uuid" => match (lhs, rhs) {
                 (Value::Uuid(a), Value::Uuid(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "datetime" => match (lhs, rhs) {
                 (Value::DateTime(a), Value::DateTime(b)) => Ok(a == b),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
@@ -1928,7 +1956,8 @@ fn eq_value_by_type(
                     typ.clone(),
                     Type::fun(typ.clone(), Type::con("bool", 0)),
                 );
-                let func = engine.resolve_native_value("==", &eq_ty)?;
+                let eq_name = sym("==");
+                let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
                 let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
                 let res = apply(
                     engine,
@@ -1940,18 +1969,18 @@ fn eq_value_by_type(
                 match res {
                     Value::Bool(b) => Ok(b),
                     other => Err(EngineError::NativeType {
-                        name: op_name.to_string(),
+                        name: op_name.clone(),
                         expected: "bool".into(),
                         got: other.type_name().into(),
                     }),
                 }
             }
         },
-        Type::App(head, elem) => {
-            if let Type::Con(tc) = head.as_ref() {
-                if tc.name == "List" {
-                    let left = list_to_vec(lhs, op_name)?;
-                    let right = list_to_vec(rhs, op_name)?;
+        TypeKind::App(head, elem) => {
+            if let TypeKind::Con(tc) = head.as_ref() {
+                if sym_eq(&tc.name, "List") {
+                    let left = list_to_vec(lhs, op_name.as_ref())?;
+                    let right = list_to_vec(rhs, op_name.as_ref())?;
                     if left.len() != right.len() {
                         return Ok(false);
                     }
@@ -1962,16 +1991,16 @@ fn eq_value_by_type(
                     }
                     return Ok(true);
                 }
-                if tc.name == "Option" {
+                if sym_eq(&tc.name, "Option") {
                     return match (lhs, rhs) {
                         (Value::Adt(tag_a, _), Value::Adt(tag_b, _)) if tag_a != tag_b => {
                             Ok(false)
                         }
-                        (Value::Adt(tag, _), Value::Adt(_, _)) if tag == "None" => Ok(true),
-                        (Value::Adt(tag, args_a), Value::Adt(_, args_b)) if tag == "Some" => {
+                        (Value::Adt(tag, _), Value::Adt(_, _)) if sym_eq(tag, "None") => Ok(true),
+                        (Value::Adt(tag, args_a), Value::Adt(_, args_b)) if sym_eq(tag, "Some") => {
                             if args_a.len() != 1 || args_b.len() != 1 {
                                 return Err(EngineError::NativeType {
-                                    name: op_name.to_string(),
+                                    name: op_name.clone(),
                                     expected: "Option".into(),
                                     got: lhs.type_name().into(),
                                 });
@@ -1979,13 +2008,13 @@ fn eq_value_by_type(
                             eq_value_by_type(engine, op_name, elem, &args_a[0], &args_b[0])
                         }
                         _ => Err(EngineError::NativeType {
-                            name: op_name.to_string(),
+                            name: op_name.clone(),
                             expected: "Option".into(),
                             got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                         }),
                     };
                 }
-                if tc.name == "Array" {
+                if sym_eq(&tc.name, "Array") {
                     return match (lhs, rhs) {
                         (Value::Array(left), Value::Array(right)) => {
                             if left.len() != right.len() {
@@ -1999,16 +2028,16 @@ fn eq_value_by_type(
                             Ok(true)
                         }
                         _ => Err(EngineError::NativeType {
-                            name: op_name.to_string(),
+                            name: op_name.clone(),
                             expected: "Array".into(),
                             got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                         }),
                     };
                 }
             }
-            if let Type::App(head, err_ty) = head.as_ref() {
-                if let Type::Con(tc) = head.as_ref() {
-                    if tc.name == "Result" {
+            if let TypeKind::App(head, err_ty) = head.as_ref() {
+                if let TypeKind::Con(tc) = head.as_ref() {
+                    if sym_eq(&tc.name, "Result") {
                         return match (lhs, rhs) {
                             (Value::Adt(tag_a, _), Value::Adt(tag_b, _))
                                 if tag_a != tag_b =>
@@ -2016,11 +2045,11 @@ fn eq_value_by_type(
                                 Ok(false)
                             }
                             (Value::Adt(tag, args_a), Value::Adt(_, args_b))
-                                if tag == "Ok" =>
+                                if sym_eq(tag, "Ok") =>
                             {
                                 if args_a.len() != 1 || args_b.len() != 1 {
                                     return Err(EngineError::NativeType {
-                                        name: op_name.to_string(),
+                                        name: op_name.clone(),
                                         expected: "Result".into(),
                                         got: lhs.type_name().into(),
                                     });
@@ -2034,11 +2063,11 @@ fn eq_value_by_type(
                                 )
                             }
                             (Value::Adt(tag, args_a), Value::Adt(_, args_b))
-                                if tag == "Err" =>
+                                if sym_eq(tag, "Err") =>
                             {
                                 if args_a.len() != 1 || args_b.len() != 1 {
                                     return Err(EngineError::NativeType {
-                                        name: op_name.to_string(),
+                                        name: op_name.clone(),
                                         expected: "Result".into(),
                                         got: lhs.type_name().into(),
                                     });
@@ -2052,7 +2081,7 @@ fn eq_value_by_type(
                                 )
                             }
                             _ => Err(EngineError::NativeType {
-                                name: op_name.to_string(),
+                                name: op_name.clone(),
                                 expected: "Result".into(),
                                 got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                             }),
@@ -2064,7 +2093,8 @@ fn eq_value_by_type(
                 typ.clone(),
                 Type::fun(typ.clone(), Type::con("bool", 0)),
             );
-            let func = engine.resolve_native_value("==", &eq_ty)?;
+            let eq_name = sym("==");
+            let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
             let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
             let res = apply(
                 engine,
@@ -2076,7 +2106,7 @@ fn eq_value_by_type(
             match res {
                 Value::Bool(b) => Ok(b),
                 other => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
+                    name: op_name.clone(),
                     expected: "bool".into(),
                     got: other.type_name().into(),
                 }),
@@ -2087,7 +2117,8 @@ fn eq_value_by_type(
                 typ.clone(),
                 Type::fun(typ.clone(), Type::con("bool", 0)),
             );
-            let func = engine.resolve_native_value("==", &eq_ty)?;
+            let eq_name = sym("==");
+            let func = engine.resolve_native_value(eq_name.as_ref(), &eq_ty)?;
             let step = apply(engine, func, lhs.clone(), Some(&eq_ty), Some(typ))?;
             let res = apply(
                 engine,
@@ -2099,7 +2130,7 @@ fn eq_value_by_type(
             match res {
                 Value::Bool(b) => Ok(b),
                 other => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
+                    name: op_name.clone(),
                     expected: "bool".into(),
                     got: other.type_name().into(),
                 }),
@@ -2109,180 +2140,190 @@ fn eq_value_by_type(
 }
 
 fn cmp_value_by_type(
-    op_name: &str,
+    op_name: &Symbol,
     typ: &Type,
     lhs: &Value,
     rhs: &Value,
 ) -> Result<std::cmp::Ordering, EngineError> {
-    match typ {
-        Type::Con(tc) => match tc.name.as_str() {
+    match typ.as_ref() {
+        TypeKind::Con(tc) => match tc.name.as_ref() {
             "u8" => match (lhs, rhs) {
                 (Value::U8(a), Value::U8(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "u16" => match (lhs, rhs) {
                 (Value::U16(a), Value::U16(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "u32" => match (lhs, rhs) {
                 (Value::U32(a), Value::U32(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "u64" => match (lhs, rhs) {
                 (Value::U64(a), Value::U64(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i8" => match (lhs, rhs) {
                 (Value::I8(a), Value::I8(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i16" => match (lhs, rhs) {
                 (Value::I16(a), Value::I16(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i32" => match (lhs, rhs) {
                 (Value::I32(a), Value::I32(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "i64" => match (lhs, rhs) {
                 (Value::I64(a), Value::I64(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "f32" => match (lhs, rhs) {
                 (Value::F32(a), Value::F32(b)) => a.partial_cmp(b).ok_or_else(|| {
                     EngineError::NativeType {
-                        name: op_name.to_string(),
-                        expected: tc.name.clone(),
+                        name: op_name.clone(),
+                        expected: tc.name.to_string(),
                         got: "nan".into(),
                     }
                 }),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "f64" => match (lhs, rhs) {
                 (Value::F64(a), Value::F64(b)) => a.partial_cmp(b).ok_or_else(|| {
                     EngineError::NativeType {
-                        name: op_name.to_string(),
-                        expected: tc.name.clone(),
+                        name: op_name.clone(),
+                        expected: tc.name.to_string(),
                         got: "nan".into(),
                     }
                 }),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             "string" => match (lhs, rhs) {
                 (Value::String(a), Value::String(b)) => Ok(a.cmp(b)),
                 _ => Err(EngineError::NativeType {
-                    name: op_name.to_string(),
-                    expected: tc.name.clone(),
+                    name: op_name.clone(),
+                    expected: tc.name.to_string(),
                     got: format!("{}, {}", lhs.type_name(), rhs.type_name()),
                 }),
             },
             _ => Err(EngineError::NativeType {
-                name: op_name.to_string(),
+                name: op_name.clone(),
                 expected: "orderable".into(),
                 got: typ.to_string(),
             }),
         },
         _ => Err(EngineError::NativeType {
-            name: op_name.to_string(),
+            name: op_name.clone(),
             expected: "orderable".into(),
             got: typ.to_string(),
         }),
     }
 }
 
+fn eq_impl(engine: &Engine, call_type: &Type, args: &[Value]) -> Result<Value, EngineError> {
+    let eq_name = sym("==");
+    let (lhs_ty, rhs_ty) = binary_arg_types("==", call_type)?;
+    let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
+        name: eq_name.clone(),
+        expected: lhs_ty.to_string(),
+        got: rhs_ty.to_string(),
+    })?;
+    let lhs_ty = lhs_ty.apply(&subst);
+    let ok = eq_value_by_type(engine, &eq_name, &lhs_ty, &args[0], &args[1])?;
+    Ok(Value::Bool(ok))
+}
+
+fn ne_impl(engine: &Engine, call_type: &Type, args: &[Value]) -> Result<Value, EngineError> {
+    let ne_name = sym("!=");
+    let (lhs_ty, rhs_ty) = binary_arg_types("!=", call_type)?;
+    let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
+        name: ne_name.clone(),
+        expected: lhs_ty.to_string(),
+        got: rhs_ty.to_string(),
+    })?;
+    let lhs_ty = lhs_ty.apply(&subst);
+    let ok = eq_value_by_type(engine, &ne_name, &lhs_ty, &args[0], &args[1])?;
+    Ok(Value::Bool(!ok))
+}
+
 fn inject_prelude_adts(engine: &mut Engine) -> Result<(), EngineError> {
     let mut list_adt = engine.adt_decl("List", &["a"]);
-    let a = list_adt.param_type("a").ok_or_else(|| EngineError::UnknownType("List".into()))?;
+    let a_name = sym("a");
+    let a = list_adt
+        .param_type(&a_name)
+        .ok_or_else(|| EngineError::UnknownType(sym("List")))?;
     let list_a = list_adt.result_type();
-    list_adt.add_variant("Empty", vec![]);
-    list_adt.add_variant("Cons", vec![a, list_a]);
+    list_adt.add_variant(sym("Empty"), vec![]);
+    list_adt.add_variant(sym("Cons"), vec![a, list_a]);
     engine.inject_adt(list_adt)?;
 
     let mut option_adt = engine.adt_decl("Option", &["t"]);
+    let t_name = sym("t");
     let t = option_adt
-        .param_type("t")
-        .ok_or_else(|| EngineError::UnknownType("Option".into()))?;
-    option_adt.add_variant("Some", vec![t]);
-    option_adt.add_variant("None", vec![]);
+        .param_type(&t_name)
+        .ok_or_else(|| EngineError::UnknownType(sym("Option")))?;
+    option_adt.add_variant(sym("Some"), vec![t]);
+    option_adt.add_variant(sym("None"), vec![]);
     engine.inject_adt(option_adt)?;
 
     let mut result_adt = engine.adt_decl("Result", &["e", "t"]);
+    let e_name = sym("e");
+    let t_name = sym("t");
     let e = result_adt
-        .param_type("e")
-        .ok_or_else(|| EngineError::UnknownType("Result".into()))?;
+        .param_type(&e_name)
+        .ok_or_else(|| EngineError::UnknownType(sym("Result")))?;
     let t = result_adt
-        .param_type("t")
-        .ok_or_else(|| EngineError::UnknownType("Result".into()))?;
-    result_adt.add_variant("Err", vec![e]);
-    result_adt.add_variant("Ok", vec![t]);
+        .param_type(&t_name)
+        .ok_or_else(|| EngineError::UnknownType(sym("Result")))?;
+    result_adt.add_variant(sym("Err"), vec![e]);
+    result_adt.add_variant(sym("Ok"), vec![t]);
     engine.inject_adt(result_adt)?;
     Ok(())
 }
 
 fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
     let bool_ty = Type::con("bool", 0);
-    let eq_impl = |engine: &Engine, call_type: &Type, args: &[Value]| {
-        let (lhs_ty, rhs_ty) = binary_arg_types("==", call_type)?;
-        let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
-            name: "==".into(),
-            expected: lhs_ty.to_string(),
-            got: rhs_ty.to_string(),
-        })?;
-        let lhs_ty = lhs_ty.apply(&subst);
-        let ok = eq_value_by_type(engine, "==", &lhs_ty, &args[0], &args[1])?;
-        Ok(Value::Bool(ok))
-    };
-    let ne_impl = |engine: &Engine, call_type: &Type, args: &[Value]| {
-        let (lhs_ty, rhs_ty) = binary_arg_types("!=", call_type)?;
-        let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
-            name: "!=".into(),
-            expected: lhs_ty.to_string(),
-            got: rhs_ty.to_string(),
-        })?;
-        let lhs_ty = lhs_ty.apply(&subst);
-        let ok = eq_value_by_type(engine, "!=", &lhs_ty, &args[0], &args[1])?;
-        Ok(Value::Bool(!ok))
-    };
 
     let prims = [
         "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
@@ -2305,8 +2346,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
         engine.inject_native_scheme_typed("(!=)", scheme, 2, ne_impl)?;
     }
 
-    let a_tv = engine.types.supply.fresh(Some("a".into()));
-    let a = Type::Var(a_tv.clone());
+    let a_tv = engine.types.supply.fresh(Some(sym("a")));
+    let a = Type::var(a_tv.clone());
     let list_ty = Type::app(Type::con("List", 1), a.clone());
     let list_scheme = Scheme::new(
         vec![a_tv],
@@ -2316,8 +2357,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
     engine.inject_native_scheme_typed("(==)", list_scheme.clone(), 2, eq_impl)?;
     engine.inject_native_scheme_typed("(!=)", list_scheme, 2, ne_impl)?;
 
-    let a_tv = engine.types.supply.fresh(Some("a".into()));
-    let a = Type::Var(a_tv.clone());
+    let a_tv = engine.types.supply.fresh(Some(sym("a")));
+    let a = Type::var(a_tv.clone());
     let option_ty = Type::app(Type::con("Option", 1), a.clone());
     let option_scheme = Scheme::new(
         vec![a_tv],
@@ -2327,8 +2368,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
     engine.inject_native_scheme_typed("(==)", option_scheme.clone(), 2, eq_impl)?;
     engine.inject_native_scheme_typed("(!=)", option_scheme, 2, ne_impl)?;
 
-    let a_tv = engine.types.supply.fresh(Some("a".into()));
-    let a = Type::Var(a_tv.clone());
+    let a_tv = engine.types.supply.fresh(Some(sym("a")));
+    let a = Type::var(a_tv.clone());
     let array_ty = Type::app(Type::con("Array", 1), a.clone());
     let array_scheme = Scheme::new(
         vec![a_tv],
@@ -2338,10 +2379,10 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
     engine.inject_native_scheme_typed("(==)", array_scheme.clone(), 2, eq_impl)?;
     engine.inject_native_scheme_typed("(!=)", array_scheme, 2, ne_impl)?;
 
-    let ok_tv = engine.types.supply.fresh(Some("a".into()));
-    let ok = Type::Var(ok_tv.clone());
-    let err_tv = engine.types.supply.fresh(Some("e".into()));
-    let err = Type::Var(err_tv.clone());
+    let ok_tv = engine.types.supply.fresh(Some(sym("a")));
+    let ok = Type::var(ok_tv.clone());
+    let err_tv = engine.types.supply.fresh(Some(sym("e")));
+    let err = Type::var(err_tv.clone());
     let result_ty = Type::app(Type::app(Type::con("Result", 2), err.clone()), ok.clone());
     let result_scheme = Scheme::new(
         vec![ok_tv, err_tv],
@@ -2361,14 +2402,15 @@ fn inject_order_ops(engine: &mut Engine) -> Result<(), EngineError> {
     let bool_ty = Type::con("bool", 0);
     let make_impl = |op: &'static str, cmp: fn(std::cmp::Ordering) -> bool| {
         move |_engine: &Engine, call_type: &Type, args: &[Value]| {
-            let (lhs_ty, rhs_ty) = binary_arg_types(op, call_type)?;
+            let op_name = sym(op);
+            let (lhs_ty, rhs_ty) = binary_arg_types(op_name.as_ref(), call_type)?;
             let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
-                name: op.to_string(),
+                name: op_name.clone(),
                 expected: lhs_ty.to_string(),
                 got: rhs_ty.to_string(),
             })?;
             let lhs_ty = lhs_ty.apply(&subst);
-            let ord = cmp_value_by_type(op, &lhs_ty, &args[0], &args[1])?;
+            let ord = cmp_value_by_type(&op_name, &lhs_ty, &args[0], &args[1])?;
             Ok(Value::Bool(cmp(ord)))
         }
     };
@@ -2424,8 +2466,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let list_b = list_type(b.clone());
         let scheme = Scheme::new(
@@ -2450,8 +2492,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let array_b = array_type(b.clone());
         let scheme = Scheme::new(
@@ -2476,8 +2518,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let opt_a = option_type(a.clone());
         let opt_b = option_type(b.clone());
         let scheme = Scheme::new(
@@ -2505,9 +2547,9 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
         let e_tv = engine.types.supply.fresh(Some("e".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
-        let e = Type::Var(e_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let e = Type::var(e_tv.clone());
         let result_a = result_type(a.clone(), e.clone());
         let result_b = result_type(b.clone(), e.clone());
         let scheme = Scheme::new(
@@ -2534,8 +2576,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2552,7 +2594,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let list_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "foldl".into(),
+                    name: sym("foldl"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2571,8 +2613,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2589,7 +2631,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let array_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "foldl".into(),
+                    name: sym("foldl"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2608,8 +2650,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2626,7 +2668,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let opt_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "foldl".into(),
+                    name: sym("foldl"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2647,8 +2689,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2665,7 +2707,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let list_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "foldr".into(),
+                    name: sym("foldr"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2685,8 +2727,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2703,7 +2745,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let array_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "foldr".into(),
+                    name: sym("foldr"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2723,8 +2765,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2741,7 +2783,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let opt_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "foldr".into(),
+                    name: sym("foldr"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2762,8 +2804,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2780,7 +2822,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let list_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "fold".into(),
+                    name: sym("fold"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2799,8 +2841,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2817,7 +2859,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let array_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "fold".into(),
+                    name: sym("fold"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2836,8 +2878,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
@@ -2854,7 +2896,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let opt_ty = arg_tys[2].clone();
             if acc_ty != res_ty {
                 return Err(EngineError::NativeType {
-                    name: "fold".into(),
+                    name: sym("fold"),
                     expected: acc_ty.to_string(),
                     got: res_ty.to_string(),
                 });
@@ -2874,7 +2916,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -2905,7 +2947,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -2936,7 +2978,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -2966,8 +3008,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let list_b = list_type(b.clone());
         let scheme = Scheme::new(
@@ -2998,8 +3040,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let array_b = array_type(b.clone());
         let scheme = Scheme::new(
@@ -3030,8 +3072,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let opt_a = option_type(a.clone());
         let opt_b = option_type(b.clone());
         let scheme = Scheme::new(
@@ -3061,8 +3103,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let list_b = list_type(b.clone());
         let scheme = Scheme::new(
@@ -3089,8 +3131,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let array_b = array_type(b.clone());
         let scheme = Scheme::new(
@@ -3117,8 +3159,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let opt_a = option_type(a.clone());
         let opt_b = option_type(b.clone());
         let scheme = Scheme::new(
@@ -3142,9 +3184,9 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
         let e_tv = engine.types.supply.fresh(Some("e".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
-        let e = Type::Var(e_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let e = Type::var(e_tv.clone());
         let result_a = result_type(a.clone(), e.clone());
         let result_b = result_type(b.clone(), e.clone());
         let scheme = Scheme::new(
@@ -3172,8 +3214,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let list_b = list_type(b.clone());
         let scheme = Scheme::new(
@@ -3200,8 +3242,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let array_b = array_type(b.clone());
         let scheme = Scheme::new(
@@ -3228,8 +3270,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let opt_a = option_type(a.clone());
         let opt_b = option_type(b.clone());
         let scheme = Scheme::new(
@@ -3253,9 +3295,9 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
         let e_tv = engine.types.supply.fresh(Some("e".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
-        let e = Type::Var(e_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let e = Type::var(e_tv.clone());
         let result_a = result_type(a.clone(), e.clone());
         let result_b = result_type(b.clone(), e.clone());
         let scheme = Scheme::new(
@@ -3282,7 +3324,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3302,7 +3344,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3322,7 +3364,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3343,8 +3385,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let e_tv = engine.types.supply.fresh(Some("e".into()));
-        let a = Type::Var(a_tv.clone());
-        let e = Type::Var(e_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let e = Type::var(e_tv.clone());
         let result_a = result_type(a.clone(), e.clone());
         let scheme = Scheme::new(
             vec![a_tv, e_tv],
@@ -3368,7 +3410,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3397,7 +3439,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3426,7 +3468,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3446,7 +3488,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3479,7 +3521,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3512,7 +3554,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3539,7 +3581,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3553,7 +3595,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3567,7 +3609,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3581,7 +3623,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3598,7 +3640,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3615,7 +3657,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3632,7 +3674,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3649,7 +3691,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3663,7 +3705,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let idx = i32::from_value(&args[0], "get")?;
             let idx_usize = if idx < 0 {
                 return Err(EngineError::IndexOutOfBounds {
-                    name: "get".into(),
+                    name: sym("get"),
                     index: idx,
                     len: 0,
                 });
@@ -3673,7 +3715,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let xs = list_to_vec(&args[1], "get")?;
             if idx_usize >= xs.len() {
                 return Err(EngineError::IndexOutOfBounds {
-                    name: "get".into(),
+                    name: sym("get"),
                     index: idx,
                     len: xs.len(),
                 });
@@ -3684,7 +3726,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3698,7 +3740,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let idx = i32::from_value(&args[0], "get")?;
             let idx_usize = if idx < 0 {
                 return Err(EngineError::IndexOutOfBounds {
-                    name: "get".into(),
+                    name: sym("get"),
                     index: idx,
                     len: 0,
                 });
@@ -3708,7 +3750,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let xs = expect_array(&args[1], "get")?;
             if idx_usize >= xs.len() {
                 return Err(EngineError::IndexOutOfBounds {
-                    name: "get".into(),
+                    name: sym("get"),
                     index: idx,
                     len: xs.len(),
                 });
@@ -3719,8 +3761,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     for size in 2..=32 {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
-        let tuple = Type::Tuple(vec![a.clone(); size]);
+        let a = Type::var(a_tv.clone());
+        let tuple = Type::tuple(vec![a.clone(); size]);
         let scheme = Scheme::new(
             vec![a_tv],
             vec![],
@@ -3733,7 +3775,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let idx = i32::from_value(&args[0], "get")?;
             let idx_usize = if idx < 0 {
                 return Err(EngineError::IndexOutOfBounds {
-                    name: "get".into(),
+                    name: sym("get"),
                     index: idx,
                     len: 0,
                 });
@@ -3744,14 +3786,14 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 Value::Tuple(xs) => {
                     if xs.len() != size {
                         return Err(EngineError::NativeType {
-                            name: "get".into(),
+                            name: sym("get"),
                             expected: format!("tuple{}", size),
                             got: format!("tuple{}", xs.len()),
                         });
                     }
                     if idx_usize >= xs.len() {
                         return Err(EngineError::IndexOutOfBounds {
-                            name: "get".into(),
+                            name: sym("get"),
                             index: idx,
                             len: xs.len(),
                         });
@@ -3759,7 +3801,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                     Ok(xs[idx_usize].clone())
                 }
                 other => Err(EngineError::NativeType {
-                    name: "get".into(),
+                    name: sym("get"),
                     expected: format!("tuple{}", size),
                     got: other.type_name().into(),
                 }),
@@ -3770,11 +3812,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let list_a = list_type(a.clone());
         let list_b = list_type(b.clone());
-        let list_pair = list_type(Type::Tuple(vec![a.clone(), b.clone()]));
+        let list_pair = list_type(Type::tuple(vec![a.clone(), b.clone()]));
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
@@ -3794,11 +3836,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
         let array_a = array_type(a.clone());
         let array_b = array_type(b.clone());
-        let array_pair = array_type(Type::Tuple(vec![a.clone(), b.clone()]));
+        let array_pair = array_type(Type::tuple(vec![a.clone(), b.clone()]));
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
@@ -3818,15 +3860,15 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
-        let list_pair = list_type(Type::Tuple(vec![a.clone(), b.clone()]));
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let list_pair = list_type(Type::tuple(vec![a.clone(), b.clone()]));
         let list_a = list_type(a.clone());
         let list_b = list_type(b.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(list_pair.clone(), Type::Tuple(vec![list_a, list_b])),
+            Type::fun(list_pair.clone(), Type::tuple(vec![list_a, list_b])),
         );
         engine.inject_native_scheme_typed("unzip", scheme, 1, |_engine, _call_type, args| {
             let mut left = Vec::new();
@@ -3839,7 +3881,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                     }
                     other => {
                         return Err(EngineError::NativeType {
-                            name: "unzip".into(),
+                            name: sym("unzip"),
                             expected: "tuple2".into(),
                             got: other.type_name().into(),
                         })
@@ -3856,15 +3898,15 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
         let b_tv = engine.types.supply.fresh(Some("b".into()));
-        let a = Type::Var(a_tv.clone());
-        let b = Type::Var(b_tv.clone());
-        let array_pair = array_type(Type::Tuple(vec![a.clone(), b.clone()]));
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let array_pair = array_type(Type::tuple(vec![a.clone(), b.clone()]));
         let array_a = array_type(a.clone());
         let array_b = array_type(b.clone());
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(array_pair.clone(), Type::Tuple(vec![array_a, array_b])),
+            Type::fun(array_pair.clone(), Type::tuple(vec![array_a, array_b])),
         );
         engine.inject_native_scheme_typed("unzip", scheme, 1, |_engine, _call_type, args| {
             let mut left = Vec::new();
@@ -3877,7 +3919,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                     }
                     other => {
                         return Err(EngineError::NativeType {
-                            name: "unzip".into(),
+                            name: sym("unzip"),
                             expected: "tuple2".into(),
                             got: other.type_name().into(),
                         })
@@ -3890,7 +3932,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3898,13 +3940,14 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(list_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("min", scheme, 1, |_engine, call_type, args| {
+            let min_name = sym("min");
             let (arg_tys, _res_ty) = split_fun_chain("min", call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty, "min")?;
             let mut values = list_to_vec(&args[0], "min")?.into_iter();
             let mut best = values.next().ok_or(EngineError::EmptySequence)?;
             for value in values {
-                let ord = cmp_value_by_type("min", &elem_ty, &value, &best)?;
+                let ord = cmp_value_by_type(&min_name, &elem_ty, &value, &best)?;
                 if ord == std::cmp::Ordering::Less {
                     best = value;
                 }
@@ -3915,7 +3958,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3923,13 +3966,14 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(array_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("min", scheme, 1, |_engine, call_type, args| {
+            let min_name = sym("min");
             let (arg_tys, _res_ty) = split_fun_chain("min", call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty, "min")?;
             let mut values = expect_array(&args[0], "min")?.into_iter();
             let mut best = values.next().ok_or(EngineError::EmptySequence)?;
             for value in values {
-                let ord = cmp_value_by_type("min", &elem_ty, &value, &best)?;
+                let ord = cmp_value_by_type(&min_name, &elem_ty, &value, &best)?;
                 if ord == std::cmp::Ordering::Less {
                     best = value;
                 }
@@ -3940,7 +3984,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3960,7 +4004,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let list_a = list_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3968,13 +4012,14 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(list_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("max", scheme, 1, |_engine, call_type, args| {
+            let max_name = sym("max");
             let (arg_tys, _res_ty) = split_fun_chain("max", call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty, "max")?;
             let mut values = list_to_vec(&args[0], "max")?.into_iter();
             let mut best = values.next().ok_or(EngineError::EmptySequence)?;
             for value in values {
-                let ord = cmp_value_by_type("max", &elem_ty, &value, &best)?;
+                let ord = cmp_value_by_type(&max_name, &elem_ty, &value, &best)?;
                 if ord == std::cmp::Ordering::Greater {
                     best = value;
                 }
@@ -3985,7 +4030,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let array_a = array_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -3993,13 +4038,14 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(array_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("max", scheme, 1, |_engine, call_type, args| {
+            let max_name = sym("max");
             let (arg_tys, _res_ty) = split_fun_chain("max", call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty, "max")?;
             let mut values = expect_array(&args[0], "max")?.into_iter();
             let mut best = values.next().ok_or(EngineError::EmptySequence)?;
             for value in values {
-                let ord = cmp_value_by_type("max", &elem_ty, &value, &best)?;
+                let ord = cmp_value_by_type(&max_name, &elem_ty, &value, &best)?;
                 if ord == std::cmp::Ordering::Greater {
                     best = value;
                 }
@@ -4010,7 +4056,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 
     {
         let a_tv = engine.types.supply.fresh(Some("a".into()));
-        let a = Type::Var(a_tv.clone());
+        let a = Type::var(a_tv.clone());
         let opt_a = option_type(a.clone());
         let scheme = Scheme::new(
             vec![a_tv.clone()],
@@ -4032,20 +4078,24 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
 }
 
 fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError> {
-    let is_some_scheme = lookup_scheme(engine, "is_some")?;
+    let is_some = sym("is_some");
+    let is_some_scheme = lookup_scheme(engine, &is_some)?;
     engine.inject_native_scheme_typed("is_some", is_some_scheme, 1, |_engine, _call_type, args| {
         Ok(Value::Bool(option_value(&args[0])?.is_some()))
     })?;
-    let is_none_scheme = lookup_scheme(engine, "is_none")?;
+    let is_none = sym("is_none");
+    let is_none_scheme = lookup_scheme(engine, &is_none)?;
     engine.inject_native_scheme_typed("is_none", is_none_scheme, 1, |_engine, _call_type, args| {
         Ok(Value::Bool(option_value(&args[0])?.is_none()))
     })?;
 
-    let is_ok_scheme = lookup_scheme(engine, "is_ok")?;
+    let is_ok = sym("is_ok");
+    let is_ok_scheme = lookup_scheme(engine, &is_ok)?;
     engine.inject_native_scheme_typed("is_ok", is_ok_scheme, 1, |_engine, _call_type, args| {
         Ok(Value::Bool(result_value(&args[0])?.is_ok()))
     })?;
-    let is_err_scheme = lookup_scheme(engine, "is_err")?;
+    let is_err = sym("is_err");
+    let is_err_scheme = lookup_scheme(engine, &is_err)?;
     engine.inject_native_scheme_typed("is_err", is_err_scheme, 1, |_engine, _call_type, args| {
         Ok(Value::Bool(result_value(&args[0])?.is_err()))
     })?;
@@ -4103,7 +4153,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
                     _ => Ok(value),
                 }
             } else {
-                engine.resolve_native_value(name, &expr.typ)
+                engine.resolve_native_value(name.as_ref(), &expr.typ)
             }
         }
         TypedExprKind::App(f, x) => {
@@ -4210,7 +4260,7 @@ fn apply(
     }
 }
 
-fn match_pattern(pat: &Pattern, value: &Value) -> Option<HashMap<String, Value>> {
+fn match_pattern(pat: &Pattern, value: &Value) -> Option<HashMap<Symbol, Value>> {
     match pat {
         Pattern::Wildcard(..) => Some(HashMap::new()),
         Pattern::Var(var) => {
@@ -4233,7 +4283,7 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<HashMap<String, Value>>
             }
         }
         Pattern::Cons(_, head, tail) => match value {
-            Value::Adt(tag, args) if tag == "Cons" && args.len() == 2 => {
+            Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 let mut left = match_pattern(head, &args[0])?;
                 let right = match_pattern(tail, &args[1])?;
                 left.extend(right);
@@ -4255,7 +4305,7 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<HashMap<String, Value>>
     }
 }
 
-fn match_patterns(patterns: &[Pattern], values: &[Value]) -> Option<HashMap<String, Value>> {
+fn match_patterns(patterns: &[Pattern], values: &[Value]) -> Option<HashMap<Symbol, Value>> {
     let mut bindings = HashMap::new();
     for (p, v) in patterns.iter().zip(values.iter()) {
         let sub = match_pattern(p, v)?;
@@ -4312,6 +4362,44 @@ mod tests {
                 assert!(matches!(xs[1], Value::I32(2)));
             }
             _ => panic!("expected tuple"),
+        }
+    }
+
+    #[test]
+    fn eval_type_annotation_let() {
+        let expr = parse("let x: i32 = 42 in x");
+        let mut engine = engine_with_arith();
+        let value = engine.eval(expr.as_ref()).unwrap();
+        assert!(matches!(value, Value::I32(42)));
+    }
+
+    #[test]
+    fn eval_type_annotation_is() {
+        let expr = parse("\"hi\" is str");
+        let mut engine = engine_with_arith();
+        let value = engine.eval(expr.as_ref()).unwrap();
+        assert!(matches!(value, Value::String(ref s) if s == "hi"));
+    }
+
+    #[test]
+    fn eval_type_annotation_lambda_param() {
+        let expr = parse("let f = \\ (a : f32) -> a in f 1.5");
+        let mut engine = engine_with_arith();
+        let value = engine.eval(expr.as_ref()).unwrap();
+        assert!(matches!(value, Value::F32(v) if (v - 1.5).abs() < f32::EPSILON));
+    }
+
+    #[test]
+    fn eval_type_annotation_mismatch() {
+        let expr = parse("let x: i32 = 3.14 in x");
+        let mut engine = engine_with_arith();
+        let err = engine.eval(expr.as_ref()).unwrap_err();
+        match err {
+            EngineError::Type(err) => {
+                let err = strip_span(err);
+                assert!(matches!(err, TypeError::Unification(_, _)));
+            }
+            other => panic!("expected type error, got {other:?}"),
         }
     }
 
@@ -4554,7 +4642,7 @@ mod tests {
             let
                 x = MyVariant1 { field1 = 1, field2 = 2.0 }
             in
-                (x:field1, x:field2)
+                (x~field1, x~field2)
             "#,
         );
         let mut engine = Engine::with_prelude();
@@ -4584,7 +4672,7 @@ mod tests {
                 x = MyVariant1 { field1 = 1 }
             in
                 match x
-                    when MyVariant1 { field1 } -> x:field1
+                    when MyVariant1 { field1 } -> x~field1
                     when MyVariant2 _ -> 0
             "#,
         );
@@ -4714,8 +4802,8 @@ mod tests {
         match value {
             Value::Tuple(xs) => {
                 assert_eq!(xs.len(), 4);
-                assert!(matches!(xs[0], Value::Adt(ref n, _) if n == "Some"));
-                assert!(matches!(xs[1], Value::Adt(ref n, _) if n == "Ok"));
+                assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
+                assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "Ok")));
                 assert!(matches!(xs[2], Value::Bool(true)));
                 assert!(matches!(xs[3], Value::Bool(true)));
             }
@@ -4770,9 +4858,9 @@ mod tests {
         match value {
             Value::Tuple(xs) => {
                 assert_eq!(xs.len(), 3);
-                assert!(matches!(xs[0], Value::Adt(ref n, _) if n == "Some"));
-                assert!(matches!(xs[1], Value::Adt(ref n, _) if n == "None"));
-                assert!(matches!(xs[2], Value::Adt(ref n, _) if n == "Some"));
+                assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
+                assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "None")));
+                assert!(matches!(xs[2], Value::Adt(ref n, _) if sym_eq(n, "Some")));
             }
             _ => panic!("expected tuple result"),
         }

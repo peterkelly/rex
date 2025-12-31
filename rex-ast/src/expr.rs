@@ -1,7 +1,7 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fmt::{self, Display, Formatter},
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use rex_lexer::span::{Position, Span};
@@ -10,27 +10,43 @@ use rpds::HashTrieMapSync;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-pub type Scope = HashTrieMapSync<String, Arc<Expr>>;
+pub type Symbol = Arc<str>;
+pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;
+
+static INTERNER: OnceLock<Mutex<HashMap<String, Symbol>>> = OnceLock::new();
+
+pub fn intern(name: &str) -> Symbol {
+    let mut table = INTERNER
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("symbol interner lock");
+    if let Some(existing) = table.get(name) {
+        return existing.clone();
+    }
+    let sym: Symbol = Arc::from(name);
+    table.insert(name.to_string(), sym.clone());
+    sym
+}
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub struct Var {
     pub span: Span,
-    pub name: String,
+    pub name: Symbol,
 }
 
 impl Var {
     pub fn new(name: impl ToString) -> Self {
         Self {
             span: Span::default(),
-            name: name.to_string(),
+            name: intern(&name.to_string()),
         }
     }
 
     pub fn with_span(span: Span, name: impl ToString) -> Self {
         Self {
             span,
-            name: name.to_string(),
+            name: intern(&name.to_string()),
         }
     }
 
@@ -60,10 +76,10 @@ impl Display for Var {
 pub enum Pattern {
     Wildcard(Span),                             // _
     Var(Var),                                   // x
-    Named(Span, String, Vec<Pattern>),          // Ok x y z
+    Named(Span, Symbol, Vec<Pattern>),          // Ok x y z
     List(Span, Vec<Pattern>),                   // [x, y, z]
     Cons(Span, Box<Pattern>, Box<Pattern>),     // x:xs
-    Dict(Span, Vec<String>),                    // {a, b, c}
+    Dict(Span, Vec<Symbol>),                    // {a, b, c}
 }
 
 impl Pattern {
@@ -81,7 +97,10 @@ impl Pattern {
     pub fn with_span(&self, span: Span) -> Pattern {
         match self {
             Pattern::Wildcard(..) => Pattern::Wildcard(span),
-            Pattern::Var(var) => Pattern::Var(Var::with_span(span, var.name.clone())),
+            Pattern::Var(var) => Pattern::Var(Var {
+                span,
+                name: var.name.clone(),
+            }),
             Pattern::Named(_, name, ps) => Pattern::Named(span, name.clone(), ps.clone()),
             Pattern::List(_, ps) => Pattern::List(span, ps.clone()),
             Pattern::Cons(_, head, tail) => Pattern::Cons(span, head.clone(), tail.clone()),
@@ -149,10 +168,11 @@ impl Display for Pattern {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TypeExpr {
-    Name(Span, String),
+    Name(Span, Symbol),
     App(Span, Box<TypeExpr>, Box<TypeExpr>),
+    Fun(Span, Box<TypeExpr>, Box<TypeExpr>),
     Tuple(Span, Vec<TypeExpr>),
-    Record(Span, Vec<(String, TypeExpr)>),
+    Record(Span, Vec<(Symbol, TypeExpr)>),
 }
 
 impl TypeExpr {
@@ -160,23 +180,114 @@ impl TypeExpr {
         match self {
             TypeExpr::Name(span, ..)
             | TypeExpr::App(span, ..)
+            | TypeExpr::Fun(span, ..)
             | TypeExpr::Tuple(span, ..)
             | TypeExpr::Record(span, ..) => span,
+        }
+    }
+
+    pub fn reset_spans(&self) -> TypeExpr {
+        match self {
+            TypeExpr::Name(_, name) => TypeExpr::Name(Span::default(), name.clone()),
+            TypeExpr::App(_, fun, arg) => TypeExpr::App(
+                Span::default(),
+                Box::new(fun.reset_spans()),
+                Box::new(arg.reset_spans()),
+            ),
+            TypeExpr::Fun(_, arg, ret) => TypeExpr::Fun(
+                Span::default(),
+                Box::new(arg.reset_spans()),
+                Box::new(ret.reset_spans()),
+            ),
+            TypeExpr::Tuple(_, elems) => TypeExpr::Tuple(
+                Span::default(),
+                elems.iter().map(|e| e.reset_spans()).collect(),
+            ),
+            TypeExpr::Record(_, fields) => TypeExpr::Record(
+                Span::default(),
+                fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), ty.reset_spans()))
+                    .collect(),
+            ),
+        }
+    }
+}
+
+impl Display for TypeExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            TypeExpr::Name(_, name) => name.fmt(f),
+            TypeExpr::App(_, fun, arg) => {
+                match fun.as_ref() {
+                    TypeExpr::Name(..) | TypeExpr::App(..) => fun.fmt(f)?,
+                    _ => {
+                        '('.fmt(f)?;
+                        fun.fmt(f)?;
+                        ')'.fmt(f)?;
+                    }
+                }
+                ' '.fmt(f)?;
+                match arg.as_ref() {
+                    TypeExpr::Name(..) | TypeExpr::App(..) | TypeExpr::Tuple(..) | TypeExpr::Record(..) => {
+                        arg.fmt(f)
+                    }
+                    _ => {
+                        '('.fmt(f)?;
+                        arg.fmt(f)?;
+                        ')'.fmt(f)
+                    }
+                }
+            }
+            TypeExpr::Fun(_, arg, ret) => {
+                match arg.as_ref() {
+                    TypeExpr::Fun(..) => {
+                        '('.fmt(f)?;
+                        arg.fmt(f)?;
+                        ')'.fmt(f)?;
+                    }
+                    _ => arg.fmt(f)?,
+                }
+                " -> ".fmt(f)?;
+                ret.fmt(f)
+            }
+            TypeExpr::Tuple(_, elems) => {
+                '('.fmt(f)?;
+                for (i, elem) in elems.iter().enumerate() {
+                    elem.fmt(f)?;
+                    if i + 1 < elems.len() {
+                        ", ".fmt(f)?;
+                    }
+                }
+                ')'.fmt(f)
+            }
+            TypeExpr::Record(_, fields) => {
+                '{'.fmt(f)?;
+                for (i, (name, ty)) in fields.iter().enumerate() {
+                    name.fmt(f)?;
+                    ": ".fmt(f)?;
+                    ty.fmt(f)?;
+                    if i + 1 < fields.len() {
+                        ", ".fmt(f)?;
+                    }
+                }
+                '}'.fmt(f)
+            }
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeVariant {
-    pub name: String,
+    pub name: Symbol,
     pub args: Vec<TypeExpr>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeDecl {
     pub span: Span,
-    pub name: String,
-    pub params: Vec<String>,
+    pub name: Symbol,
+    pub params: Vec<Symbol>,
     pub variants: Vec<TypeVariant>,
 }
 
@@ -204,15 +315,16 @@ pub enum Expr {
 
     Tuple(Span, Vec<Arc<Expr>>),             // (e1, e2, e3)
     List(Span, Vec<Arc<Expr>>),              // [e1, e2, e3]
-    Dict(Span, BTreeMap<String, Arc<Expr>>), // {k1 = v1, k2 = v2}
+    Dict(Span, BTreeMap<Symbol, Arc<Expr>>), // {k1 = v1, k2 = v2}
 
     Var(Var),                                   // x
     App(Span, Arc<Expr>, Arc<Expr>),            // f x
-    Project(Span, Arc<Expr>, String),           // x:field
-    Lam(Span, Scope, Var, Arc<Expr>),           // λx → e
-    Let(Span, Var, Arc<Expr>, Arc<Expr>),       // let x = e1 in e2
+    Project(Span, Arc<Expr>, Symbol),           // x~field
+    Lam(Span, Scope, Var, Option<TypeExpr>, Arc<Expr>), // λx → e
+    Let(Span, Var, Option<TypeExpr>, Arc<Expr>, Arc<Expr>), // let x = e1 in e2
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>), // if e1 then e2 else e3
     Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>), // match e1 with patterns
+    Ann(Span, Arc<Expr>, TypeExpr),             // e is t
 }
 
 impl Expr {
@@ -234,7 +346,8 @@ impl Expr {
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
             | Self::Ite(span, ..)
-            | Self::Match(span, ..) => span,
+            | Self::Match(span, ..)
+            | Self::Ann(span, ..) => span,
         }
     }
 
@@ -256,7 +369,8 @@ impl Expr {
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
             | Self::Ite(span, ..)
-            | Self::Match(span, ..) => span,
+            | Self::Match(span, ..)
+            | Self::Ann(span, ..) => span,
         }
     }
 
@@ -289,13 +403,18 @@ impl Expr {
                 span,
                 BTreeMap::from_iter(kvs.iter().map(|(k, v)| (k.clone(), v.clone()))),
             ),
-            Expr::Var(var) => Expr::Var(Var::with_span(span, &var.name)),
+            Expr::Var(var) => Expr::Var(Var {
+                span,
+                name: var.name.clone(),
+            }),
             Expr::App(_, f, x) => Expr::App(span, f.clone(), x.clone()),
             Expr::Project(_, base, field) => Expr::Project(span, base.clone(), field.clone()),
-            Expr::Lam(_, scope, param, body) => {
-                Expr::Lam(span, scope.clone(), param.clone(), body.clone())
+            Expr::Lam(_, scope, param, ann, body) => {
+                Expr::Lam(span, scope.clone(), param.clone(), ann.clone(), body.clone())
             }
-            Expr::Let(_, var, def, body) => Expr::Let(span, var.clone(), def.clone(), body.clone()),
+            Expr::Let(_, var, ann, def, body) => {
+                Expr::Let(span, var.clone(), ann.clone(), def.clone(), body.clone())
+            }
             Expr::Ite(_, cond, then, r#else) => {
                 Expr::Ite(span, cond.clone(), then.clone(), r#else.clone())
             }
@@ -306,6 +425,7 @@ impl Expr {
                     .map(|(pat, expr)| (pat.clone(), expr.clone()))
                     .collect(),
             ),
+            Expr::Ann(_, expr, ann) => Expr::Ann(span, expr.clone(), ann.clone()),
         }
     }
 
@@ -344,15 +464,17 @@ impl Expr {
                 Arc::new(base.reset_spans()),
                 field.clone(),
             ),
-            Expr::Lam(_, scope, param, body) => Expr::Lam(
+            Expr::Lam(_, scope, param, ann, body) => Expr::Lam(
                 Span::default(),
                 scope.clone(),
                 param.reset_spans(),
+                ann.as_ref().map(|t| t.reset_spans()),
                 Arc::new(body.reset_spans()),
             ),
-            Expr::Let(_, var, def, body) => Expr::Let(
+            Expr::Let(_, var, ann, def, body) => Expr::Let(
                 Span::default(),
                 var.reset_spans(),
+                ann.as_ref().map(|t| t.reset_spans()),
                 Arc::new(def.reset_spans()),
                 Arc::new(body.reset_spans()),
             ),
@@ -369,6 +491,9 @@ impl Expr {
                     .map(|(pat, expr)| (pat.reset_spans(), Arc::new(expr.reset_spans())))
                     .collect(),
             ),
+            Expr::Ann(_, expr, ann) => {
+                Expr::Ann(Span::default(), Arc::new(expr.reset_spans()), ann.reset_spans())
+            }
         }
     }
 }
@@ -437,15 +562,27 @@ impl Display for Expr {
                     }
                 }
             }
-            Self::Lam(_span, _scope, param, body) => {
+            Self::Lam(_span, _scope, param, ann, body) => {
                 'λ'.fmt(f)?;
-                param.fmt(f)?;
+                if let Some(ann) = ann {
+                    '('.fmt(f)?;
+                    param.fmt(f)?;
+                    " : ".fmt(f)?;
+                    ann.fmt(f)?;
+                    ')'.fmt(f)?;
+                } else {
+                    param.fmt(f)?;
+                }
                 " → ".fmt(f)?;
                 body.fmt(f)
             }
-            Self::Let(_span, var, def, body) => {
+            Self::Let(_span, var, ann, def, body) => {
                 "let ".fmt(f)?;
                 var.fmt(f)?;
+                if let Some(ann) = ann {
+                    ": ".fmt(f)?;
+                    ann.fmt(f)?;
+                }
                 " = ".fmt(f)?;
                 def.fmt(f)?;
                 " in ".fmt(f)?;
@@ -476,8 +613,13 @@ impl Display for Expr {
             }
             Self::Project(_span, base, field) => {
                 base.fmt(f)?;
-                ":".fmt(f)?;
+                "~".fmt(f)?;
                 field.fmt(f)
+            }
+            Self::Ann(_span, expr, ann) => {
+                expr.fmt(f)?;
+                " is ".fmt(f)?;
+                ann.fmt(f)
             }
         }
     }

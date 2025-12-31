@@ -1,24 +1,24 @@
 let
-    id = \x -> x,
-    add = \x y -> x + y,
-    sub = \x y -> x - y,
-    mul = \x y -> x * y,
-    inc = \x -> x + 1,
-    dec = \x -> x - 1,
-    square = \x -> x * x,
-    cube = \x -> x * x * x,
-    quad = \x -> x * x * x * x,
-    clamp = \lo hi x -> if x < lo then lo else if x > hi then hi else x,
-    is_even = \x -> x % 2 == 0,
-    is_odd = \x -> x % 2 != 0,
-    choose = \a b c d e f g h i j -> if a + b > c + d then e + f + g + h + i + j else a + b + c + d,
-    mega26 = \a b c d e f g h i j k l m n o p q r s t u v w x y z ->
+    id = λx → x,
+    add = λx y → x + y,
+    sub = λx y → x - y,
+    mul = λx y → x * y,
+    inc = λx → x + 1,
+    dec = λx → x - 1,
+    square = λx → x * x,
+    cube = λx → x * x * x,
+    quad = λx → x * x * x * x,
+    clamp = λlo hi x → if x < lo then lo else if x > hi then hi else x,
+    is_even = λx → x % 2 == 0,
+    is_odd = λx → x % 2 != 0,
+    choose = λa b c d e f g h i j → if a + b > c + d then e + f + g + h + i + j else a + b + c + d,
+    mega26 = λa b c d e f g h i j k l m n o p q r s t u v w x y z →
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
         + s + t + u + v + w + x
         + y + z,
-    mega52 = \a b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ->
+    mega52 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az →
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
@@ -28,7 +28,7 @@ let
         + ak + al + am + an + ao + ap
         + aq + ar + as_ + at + au + av
         + aw + ax + ay + az,
-    mega64 = \a b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ba bb bc bd be bf bg bh bi bj bk bl ->
+    mega64 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ba bb bc bd be bf bg bh bi bj bk bl →
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
@@ -40,7 +40,7 @@ let
         + aw + ax + ay + az + ba + bb
         + bc + bd + be + bf + bg + bh
         + bi + bj + bk + bl,
-    fanout = \a b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ->
+    fanout = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af →
         (a + b + c, d + e + f, g + h + i, j + k + l,
         m + n + o, p + q + r, s + t + u, v + w + x,
         y + z + aa, ab + ac + ad, ae + af),
@@ -48,13 +48,13 @@ let
     nums2 = map inc nums,
     nums3 = map square nums,
     nums4 = map cube nums,
-    nums5 = map (\x -> x * 3 + 1) nums,
-    nums6 = map (\x -> x * x + 2 * x + 1) nums,
-    nums7 = map (\x -> clamp 10 200 x) nums,
-    nums8 = map (\x -> if is_even x then x + 2 else x + 3) nums,
-    nums9 = map (\x -> x * 7 - x % 5) nums,
-    nums10 = map (\x -> (x + 5) * (x - 3)) nums,
-    nums11 = map (\x -> (x * x) % 97) nums,
+    nums5 = map (λx → x * 3 + 1) nums,
+    nums6 = map (λx → x * x + 2 * x + 1) nums,
+    nums7 = map (λx → clamp 10 200 x) nums,
+    nums8 = map (λx → if is_even x then x + 2 else x + 3) nums,
+    nums9 = map (λx → x * 7 - x % 5) nums,
+    nums10 = map (λx → (x + 5) * (x - 3)) nums,
+    nums11 = map (λx → (x * x) % 97) nums,
     front20 = take 20 nums,
     mid20 = take 20 (skip 40 nums),
     slice20 = take 20 (skip 120 nums),
@@ -78,45 +78,45 @@ let
     odds_count = count odds,
     pair_list = zip evens odds,
     pair_count = count pair_list,
-    pair_head = match pair_list when [] -> (0, 0) when p:ps -> p,
+    pair_head = match pair_list when [] → (0, 0) when p:ps → p,
     pair_first = get 0 pair_head,
     pair_second = get 1 pair_head,
     pair_mix = pair_first + pair_second,
     first_three = (get 0 nums, get 1 nums, get 2 nums),
     last_three = (get 237 nums, get 238 nums, get 239 nums),
-    head_num = match nums when [] -> 0 when x:xs -> x,
-    head_opt = match nums when [] -> None when x:xs -> Some x,
-    opt_to_zero = \x -> match x when None -> 0 when Some v -> v,
+    head_num = match nums when [] → 0 when x:xs → x,
+    head_opt = match nums when [] → None when x:xs → Some x,
+    opt_to_zero = λx → match x when None → 0 when Some v → v,
     head_or_zero = opt_to_zero head_opt,
     deep_match =
         match nums
-            when [] -> 0
-            when x:xs ->
+            when [] → 0
+            when x:xs →
                 match xs
-                    when [] -> x
-                    when y:ys ->
+                    when [] → x
+                    when y:ys →
                         match ys
-                            when [] -> x + y
-                            when z:zs ->
+                            when [] → x + y
+                            when z:zs →
                                 match zs
-                                    when [] -> x + y + z
-                                    when w:ws -> x + y + z + w,
+                                    when [] → x + y + z
+                                    when w:ws → x + y + z + w,
     first_five =
         match nums
-            when [a, b, c, d, e] -> a + b + c + d + e
-            when a:rest -> a
-            when _ -> 0,
+            when [a, b, c, d, e] → a + b + c + d + e
+            when a:rest → a
+            when _ → 0,
     list_of_lists = [front20, mid20, slice20, tail20],
     list_summary =
         match list_of_lists
-            when [a, b, c, d] -> sum a + sum b + sum c + sum d
-            when _ -> 0,
-    classify = \n -> if n % 3 == 0 then Ok n else Err n,
+            when [a, b, c, d] → sum a + sum b + sum c + sum d
+            when _ → 0,
+    classify = λn → if n % 3 == 0 then Ok n else Err n,
     classified = map classify nums,
-    only_ok = filter_map (\x -> match x when Ok v -> Some v when Err _ -> None) classified,
+    only_ok = filter_map (λx → match x when Ok v → Some v when Err _ → None) classified,
     ok_count = count only_ok,
     ok_sum = sum only_ok,
-    ok_head = match only_ok when [] -> 0 when x:xs -> x,
+    ok_head = match only_ok when [] → 0 when x:xs → x,
     mega26_result = mega26 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26,
     mega52_result = mega52 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52,
     mega64_result = mega64 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64,

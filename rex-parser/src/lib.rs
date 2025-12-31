@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::Arc, vec};
 
 use rex_ast::expr::{
-    Decl, Expr, Pattern, Program, Scope, TypeDecl, TypeExpr, TypeVariant, Var,
+    intern, Decl, Expr, Pattern, Program, Scope, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_lexer::{
     span::{Position, Span, Spanned},
@@ -255,14 +255,14 @@ impl Parser {
         }
         loop {
             match self.current_token() {
-                Token::Colon(..) => {
+                Token::Tilde(..) => {
                     self.next_token();
                 }
                 _ => break,
             }
             let field = match self.current_token() {
                 Token::Ident(name, span, ..) => {
-                    let name = name.clone();
+                    let name = intern(&name);
                     let end = span.end;
                     self.next_token();
                     (name, end)
@@ -270,12 +270,23 @@ impl Parser {
                 token => {
                     return Err(ParserErr::new(
                         *token.span(),
-                        "expected field name after `:`",
+                        "expected field name after `~`",
                     ));
                 }
             };
             let span = Span::from_begin_end(call_base_expr.span().begin, field.1);
             call_base_expr = Expr::Project(span, Arc::new(call_base_expr), field.0);
+        }
+        loop {
+            match self.current_token() {
+                Token::Is(..) => {
+                    self.next_token();
+                    let ann = self.parse_type_expr()?;
+                    let span = Span::from_begin_end(call_base_expr.span().begin, ann.span().end);
+                    call_base_expr = Expr::Ann(span, Arc::new(call_base_expr), ann);
+                }
+                _ => break,
+            }
         }
         Ok(call_base_expr)
     }
@@ -617,9 +628,14 @@ impl Parser {
 
         // Parse the params.
         let mut params = VecDeque::new();
-        while let Token::Ident(param, span, ..) = self.current_token() {
-            self.next_token();
-            params.push_back((span, param));
+        loop {
+            match self.current_token() {
+                Token::Ident(..) | Token::ParenL(..) => {
+                    let (var, ann, span) = self.parse_lambda_param()?;
+                    params.push_back((span, var, ann));
+                }
+                _ => break,
+            }
         }
 
         // Parse the arrow.
@@ -639,11 +655,12 @@ impl Parser {
         // Parse the body
         let mut body = self.parse_expr()?;
         let mut body_span_end = body.span().end;
-        while let Some((param_span, param)) = params.pop_back() {
+        while let Some((param_span, param, ann)) = params.pop_back() {
             body = Expr::Lam(
                 Span::from_begin_end(param_span.begin, body_span_end),
                 Scope::new_sync(),
-                Var::with_span(param_span, param),
+                param,
+                ann,
                 Arc::new(body),
             );
             body_span_end = body.span().end;
@@ -652,6 +669,62 @@ impl Parser {
         let body = body.with_span_begin(span_begin);
 
         Ok(body)
+    }
+
+    fn parse_lambda_param(&mut self) -> Result<(Var, Option<TypeExpr>, Span), ParserErr> {
+        match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                self.next_token();
+                Ok((Var::with_span(span, name), None, span))
+            }
+            Token::ParenL(span_begin, ..) => {
+                self.next_token();
+                let (name, name_span) = match self.current_token() {
+                    Token::Ident(name, span, ..) => {
+                        let span = span;
+                        self.next_token();
+                        (name, span)
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected parameter name got {}", token),
+                        ));
+                    }
+                };
+                match self.current_token() {
+                    Token::Colon(..) => self.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `:` got {}", token),
+                        ));
+                    }
+                }
+                let ann = self.parse_type_expr()?;
+                let span_end = match self.current_token() {
+                    Token::ParenR(span, ..) => {
+                        self.next_token();
+                        span.end
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `)` got {}", token),
+                        ));
+                    }
+                };
+                Ok((
+                    Var::with_span(name_span, name),
+                    Some(ann),
+                    Span::from_begin_end(span_begin.begin, span_end),
+                ))
+            }
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("expected lambda param got {}", token),
+            )),
+        }
     }
 
     //
@@ -676,6 +749,11 @@ impl Parser {
         while let Token::Ident(val, span, ..) = self.current_token() {
             self.next_token();
             let var = (span, val);
+            let mut ann = None;
+            if let Token::Colon(..) = self.current_token() {
+                self.next_token();
+                ann = Some(self.parse_type_expr()?);
+            }
 
             // =
             match self.current_token() {
@@ -690,7 +768,7 @@ impl Parser {
                 }
             }
             // Parse the variable definition
-            decls.push_back((var, self.parse_expr()?));
+            decls.push_back((var, ann, self.parse_expr()?));
             // Parse `,` or `in`
             match self.current_token() {
                 Token::Comma(_span, ..) => {
@@ -724,10 +802,11 @@ impl Parser {
         // Parse the body
         let mut body = self.parse_expr()?;
         let mut body_span_end = body.span().end;
-        while let Some(((var_span, var), def)) = decls.pop_back() {
+        while let Some(((var_span, var), ann, def)) = decls.pop_back() {
             body = Expr::Let(
                 Span::from_begin_end(var_span.begin, body_span_end),
                 Var::with_span(var_span, var),
+                ann,
                 Arc::new(def),
                 Arc::new(body),
             );
@@ -881,7 +960,7 @@ impl Parser {
 
         let (name, _name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let name = name.clone();
+                let name = intern(&name);
                 let span = span;
                 self.next_token();
                 (name, span)
@@ -897,7 +976,7 @@ impl Parser {
         let mut params = Vec::new();
         while let Token::Ident(_param, ..) = self.current_token() {
             let name = match self.current_token() {
-                Token::Ident(param, ..) => param.clone(),
+                Token::Ident(param, ..) => intern(&param),
                 _ => unreachable!(),
             };
             self.next_token();
@@ -941,7 +1020,7 @@ impl Parser {
     fn parse_type_variant(&mut self) -> Result<(TypeVariant, Span), ParserErr> {
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let name = name.clone();
+                let name = intern(&name);
                 let span = span;
                 self.next_token();
                 (name, span)
@@ -974,6 +1053,23 @@ impl Parser {
     }
 
     fn parse_type_expr(&mut self) -> Result<TypeExpr, ParserErr> {
+        self.parse_type_fun()
+    }
+
+    fn parse_type_fun(&mut self) -> Result<TypeExpr, ParserErr> {
+        let lhs = self.parse_type_app()?;
+        match self.current_token() {
+            Token::ArrowR(..) => {
+                self.next_token();
+                let rhs = self.parse_type_fun()?;
+                let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
+                Ok(TypeExpr::Fun(span, Box::new(lhs), Box::new(rhs)))
+            }
+            _ => Ok(lhs),
+        }
+    }
+
+    fn parse_type_app(&mut self) -> Result<TypeExpr, ParserErr> {
         let mut lhs = self.parse_type_atom()?;
         loop {
             match self.current_token() {
@@ -991,7 +1087,7 @@ impl Parser {
     fn parse_type_atom(&mut self) -> Result<TypeExpr, ParserErr> {
         match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let name = name.clone();
+                let name = intern(&name);
                 let span = span;
                 self.next_token();
                 Ok(TypeExpr::Name(span, name))
@@ -1089,7 +1185,7 @@ impl Parser {
         let span_end = loop {
             let (name, _span) = match self.current_token() {
                 Token::Ident(name, span, ..) => {
-                    let name = name.clone();
+                    let name = intern(&name);
                     let span = span;
                     self.next_token();
                     (name, span)
@@ -1299,7 +1395,7 @@ impl Parser {
         let span_end = loop {
             match self.current_token() {
                 Token::Ident(name, _key_span, ..) => {
-                    keys.push(name);
+                    keys.push(intern(&name));
                     self.next_token();
                     match self.current_token() {
                         Token::Comma(..) => {
@@ -1453,6 +1549,7 @@ mod tests {
             Span::default(),
             Scope::new_sync(),
             Var::new(param),
+            None,
             body,
         ))
     }
@@ -1535,19 +1632,25 @@ mod tests {
         assert_eq!(program.decls.len(), 1);
         match &program.decls[0] {
             Decl::Type(decl) => {
-                assert_eq!(decl.name, "MyADT");
-                assert_eq!(decl.params, vec!["a", "b", "c"]);
+                assert_eq!(decl.name, intern("MyADT"));
+                assert_eq!(
+                    decl.params,
+                    vec![intern("a"), intern("b"), intern("c")]
+                );
                 assert_eq!(decl.variants.len(), 3);
-                assert_eq!(decl.variants[0].name, "MyCtor1");
+                assert_eq!(decl.variants[0].name, intern("MyCtor1"));
                 assert!(decl.variants[0].args.is_empty());
-                assert_eq!(decl.variants[1].name, "MyCtor2");
+                assert_eq!(decl.variants[1].name, intern("MyCtor2"));
                 assert_eq!(decl.variants[1].args.len(), 2);
-                assert_eq!(decl.variants[2].name, "MyCtor3");
+                assert_eq!(decl.variants[2].name, intern("MyCtor3"));
                 match &decl.variants[2].args[0] {
                     TypeExpr::Record(_, fields) => {
                         assert_eq!(fields.len(), 1);
-                        assert_eq!(fields[0].0, "field1");
-                        assert!(matches!(fields[0].1, TypeExpr::Name(_, ref n) if n == "c"));
+                        assert_eq!(fields[0].0, intern("field1"));
+                        assert!(matches!(
+                            fields[0].1,
+                            TypeExpr::Name(_, ref n) if n.as_ref() == "c"
+                        ));
                     }
                     other => panic!("expected record type, got {other:?}"),
                 }
@@ -1649,11 +1752,11 @@ mod tests {
 
     #[test]
     fn test_projection_expr() {
-        let expr = parse("x:field");
+        let expr = parse("x~field");
         let expected = Arc::new(Expr::Project(
             Span::default(),
             v!("x"),
-            "field".to_string(),
+            intern("field"),
         ));
 
         assert_expr_eq!(expr, expected; ignore span);
@@ -1699,16 +1802,85 @@ mod tests {
         let expected = Arc::new(Expr::Let(
             Span::default(),
             Var::new("inc"),
+            None,
             inc,
             Arc::new(Expr::Let(
                 Span::default(),
                 Var::new("dbl"),
+                None,
                 dbl,
                 body,
             )),
         ));
 
         assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_type_annotations() {
+        let expr = parse("let x: u8 = foo in x");
+        match expr.as_ref() {
+            Expr::Let(_, var, Some(TypeExpr::Name(_, name)), _def, _body) => {
+                assert_eq!(var.name.as_ref(), "x");
+                assert_eq!(name.as_ref(), "u8");
+            }
+            other => panic!("expected typed let, got {other:?}"),
+        }
+
+        let expr = parse("foo bar is u8");
+        match expr.as_ref() {
+            Expr::Ann(_, inner, TypeExpr::Name(_, name)) => {
+                assert_eq!(name.as_ref(), "u8");
+                assert!(matches!(inner.as_ref(), Expr::App(..)));
+            }
+            other => panic!("expected type assertion, got {other:?}"),
+        }
+
+        let expr = parse("\\ (a : f32) -> a");
+        match expr.as_ref() {
+            Expr::Lam(_, _scope, param, Some(TypeExpr::Name(_, name)), body) => {
+                assert_eq!(param.name.as_ref(), "a");
+                assert_eq!(name.as_ref(), "f32");
+                assert!(matches!(body.as_ref(), Expr::Var(_)));
+            }
+            other => panic!("expected typed lambda, got {other:?}"),
+        }
+
+        let expr = parse("let t: f32 -> str -> Result bool str = x in t");
+        match expr.as_ref() {
+            Expr::Let(_, _var, Some(ann), _def, _body) => {
+                fn is_name(expr: &TypeExpr, expected: &str) -> bool {
+                    matches!(expr, TypeExpr::Name(_, name) if name.as_ref() == expected)
+                }
+
+                match ann {
+                    TypeExpr::Fun(_, arg, ret) => {
+                        assert!(is_name(arg, "f32"));
+                        match ret.as_ref() {
+                            TypeExpr::Fun(_, arg2, ret2) => {
+                                assert!(is_name(arg2, "str"));
+                                match ret2.as_ref() {
+                                    TypeExpr::App(_, fun, arg3) => {
+                                        match fun.as_ref() {
+                                            TypeExpr::App(_, fun2, arg2) => {
+                                                assert!(is_name(fun2, "Result"));
+                                                assert!(is_name(arg2, "bool"));
+                                            }
+                                            _ => panic!("expected Result bool str"),
+                                        }
+                                        assert!(is_name(arg3, "str"));
+                                    }
+                                    _ => panic!("expected Result bool str"),
+                                }
+                            }
+                            _ => panic!("expected f32 -> str -> Result bool str"),
+                        }
+                    }
+                    _ => panic!("expected function type annotation"),
+                }
+            }
+            other => panic!("expected typed let, got {other:?}"),
+        }
     }
 
     #[test]
