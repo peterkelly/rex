@@ -55,5 +55,6 @@ pub enum EngineError {
         index: i32,
         len: usize,
     },
+    #[error("internal error: {0}")]
+    Internal(String),
 }
-

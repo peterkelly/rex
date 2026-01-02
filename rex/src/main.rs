@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
+use std::io::{self, Read};
 use std::thread;
 
 use clap::{Args, Parser, Subcommand};
@@ -28,7 +29,11 @@ enum Command {
 #[command(arg_required_else_help = true)]
 struct RunArgs {
     /// Path to a `.rex` file to run.
-    #[arg(value_name = "FILE", required_unless_present = "code", conflicts_with = "code")]
+    #[arg(
+        value_name = "FILE",
+        required_unless_present_any = ["code", "stdin"],
+        conflicts_with_all = ["code", "stdin"]
+    )]
     file: Option<String>,
 
     /// Inline Rex source code to run.
@@ -36,10 +41,14 @@ struct RunArgs {
         short = 'c',
         long = "code",
         value_name = "CODE",
-        required_unless_present = "file",
-        conflicts_with = "file"
+        required_unless_present_any = ["file", "stdin"],
+        conflicts_with_all = ["file", "stdin"]
     )]
     code: Option<String>,
+
+    /// Read Rex source code from stdin.
+    #[arg(long = "stdin", required_unless_present_any = ["file", "code"])]
+    stdin: bool,
 
     /// Print the parsed AST and exit.
     #[arg(long = "emit-ast")]
@@ -48,6 +57,10 @@ struct RunArgs {
     /// Print the inferred type and exit.
     #[arg(long = "type")]
     emit_type: bool,
+
+    /// Stack size (in MiB) used for parsing/type inference/evaluation.
+    #[arg(long = "stack-size-mb", default_value_t = 16)]
+    stack_size_mb: usize,
 }
 
 fn main() {
@@ -68,12 +81,20 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
     let RunArgs {
         file,
         code,
+        stdin,
         emit_ast,
         emit_type,
+        stack_size_mb,
     } = args;
 
     let source = if let Some(code) = code {
         code
+    } else if stdin {
+        let mut buf = String::new();
+        io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("failed to read stdin: {e}"))?;
+        buf
     } else if let Some(path) = file {
         fs::read_to_string(&path).map_err(|e| format!("failed to read `{path}`: {e}"))?
     } else {
@@ -82,10 +103,12 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
 
     // Rex programs can be deeply nested (especially after desugaring). Run on a
     // slightly larger stack to reduce overflow risk in parser/type inference/eval.
-    const STACK_SIZE: usize = 16 * 1024 * 1024;
+    let stack_size = stack_size_mb
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| "stack size overflow".to_string())?;
     let handle = thread::Builder::new()
         .name("rex-run".to_string())
-        .stack_size(STACK_SIZE)
+        .stack_size(stack_size)
         .spawn(move || run_source(&source, emit_ast, emit_type))
         .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
 
@@ -156,4 +179,15 @@ fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_shape_is_stable() {
+        Cli::command().debug_assert();
+    }
 }

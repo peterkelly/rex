@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rex_engine::{Engine, FromValue};
+use rex_engine::{Engine, FromValue, RexType};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_proc_macro::Rex;
@@ -15,6 +15,8 @@ fn eval(code: &str) -> Result<rex_engine::Value, String> {
     let mut engine = Engine::with_prelude();
     MyInnerStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
     MyStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
+    Boxed::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
+    Maybe::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
     Shape::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
 
     engine
@@ -39,6 +41,17 @@ struct MyStruct {
     pair: (i32, String, bool),
     #[serde(rename = "renamed")]
     renamed_field: i32,
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct Boxed<T> {
+    value: T,
+}
+
+#[derive(Rex, Debug, PartialEq)]
+enum Maybe<T> {
+    Just(T),
+    Nothing,
 }
 
 #[test]
@@ -73,6 +86,89 @@ fn derive_struct_roundtrip_value() {
     );
 }
 
+#[test]
+fn derive_generic_struct_roundtrip_value() {
+    let v = eval("Boxed { value = 123 }").unwrap();
+    let decoded = Boxed::<i32>::from_value(&v, "boxed").unwrap();
+    assert_eq!(decoded, Boxed { value: 123 });
+}
+
+#[test]
+fn derive_generic_worked_example_polymorphic_adt() {
+    // Worked example: `Maybe<T>` is injected into Rex once, but constructors stay polymorphic.
+    //
+    // The proc-macro generates *both*:
+    // - `RexType` for Rust values (e.g. `Maybe<i32>` -> `Maybe i32`)
+    // - an `AdtDecl` with a type parameter `T` (so `Just` has scheme `a -> Maybe a`)
+    let mut engine = Engine::with_prelude();
+
+    // Build the ADT surface (params + variants) and sanity-check that it really uses a type var.
+    let adt = Maybe::<i32>::rex_adt_decl(&mut engine);
+    assert_eq!(adt.name.as_ref(), "Maybe");
+    assert_eq!(adt.params.len(), 1);
+
+    let t = adt
+        .param_type(&rex_ast::expr::intern("T"))
+        .expect("expected `T` param type");
+
+    let just = adt
+        .variants
+        .iter()
+        .find(|v| v.name.as_ref() == "Just")
+        .expect("expected `Just` variant");
+    assert_eq!(just.args, vec![t.clone()]);
+
+    let nothing = adt
+        .variants
+        .iter()
+        .find(|v| v.name.as_ref() == "Nothing")
+        .expect("expected `Nothing` variant");
+    assert!(nothing.args.is_empty());
+
+    // Inject the ADT once: constructor *schemes* are registered in the type system, and runtime
+    // constructor *functions* are registered in the evaluator.
+    engine.inject_adt(adt).unwrap();
+
+    // On the Rust side, `RexType` is the nominal head applied to the Rust generic arguments.
+    assert_eq!(
+        Maybe::<i32>::rex_type(),
+        rex_ts::Type::app(rex_ts::Type::con("Maybe", 1), <i32 as RexType>::rex_type())
+    );
+    assert_eq!(
+        Maybe::<bool>::rex_type(),
+        rex_ts::Type::app(rex_ts::Type::con("Maybe", 1), <bool as RexType>::rex_type())
+    );
+
+    // On the Rex side, `Just` stays polymorphic because the injected `AdtDecl` used a type var `T`
+    // in the argument type. That lets the same constructor be used at multiple instantiations.
+    let tokens = Token::tokenize(
+        r#"
+        let id = \x -> Just x in
+            (id 1, id true)
+        "#,
+    )
+    .map_err(|e| format!("lex error: {e}"))
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser
+        .parse_program()
+        .map_err(|errs| format!("parse error: {errs:?}"))
+        .unwrap();
+
+    engine.inject_decls(&program.decls).unwrap();
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+
+    let rex_engine::Value::Tuple(items) = v else {
+        panic!("expected tuple, got {v}");
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(Maybe::<i32>::from_value(&items[0], "a").unwrap(), Maybe::Just(1));
+    assert_eq!(
+        Maybe::<bool>::from_value(&items[1], "b").unwrap(),
+        Maybe::Just(true)
+    );
+}
+
 #[derive(Rex, Debug, PartialEq)]
 enum Shape {
     Rectangle(i32, i32),
@@ -98,4 +194,3 @@ fn derive_enum_constructor_currying() {
     assert_eq!(a, Shape::Rectangle(6, 12));
     assert_eq!(b, Shape::Rectangle(6, 8));
 }
-

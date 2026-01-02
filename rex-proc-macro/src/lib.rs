@@ -2,9 +2,10 @@ use proc_macro::TokenStream;
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
+use std::collections::HashMap;
 use syn::{
-    Attribute, Data, DeriveInput, Error, Fields, GenericArgument, Ident, LitStr, PathArguments,
-    Type, spanned::Spanned,
+    Attribute, Data, DeriveInput, Error, Fields, GenericArgument, Generics, Ident, LitStr,
+    PathArguments, Type, parse_quote, spanned::Spanned,
 };
 
 #[proc_macro_derive(Rex, attributes(rex, serde))]
@@ -21,10 +22,10 @@ struct DeriveOptions {
 }
 
 fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
-    if !ast.generics.params.is_empty() {
+    if ast.generics.lifetimes().next().is_some() || ast.generics.const_params().next().is_some() {
         return Err(Error::new(
             ast.generics.span(),
-            "`#[derive(Rex)]` does not currently support generics",
+            "`#[derive(Rex)]` only supports type parameters (no lifetimes or const generics)",
         ));
     }
 
@@ -34,18 +35,30 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
 
     let rust_ident = &ast.ident;
     let type_name = opts.name;
+    let type_param_idents: Vec<Ident> = ast.generics.type_params().map(|p| p.ident.clone()).collect();
+    let type_param_count = type_param_idents.len();
 
+    let mut rex_type_generics = ast.generics.clone();
+    add_bound_to_type_params(&mut rex_type_generics, parse_quote!(::rex_engine::RexType));
+    let (rex_type_impl_generics, rex_type_ty_generics, rex_type_where_clause) =
+        rex_type_generics.split_for_impl();
+    let rex_type_params = type_param_idents.iter().map(|ident| {
+        quote! { <#ident as ::rex_engine::RexType>::rex_type() }
+    });
     let rex_type_impl = quote! {
-        impl ::rex_engine::RexType for #rust_ident {
+        impl #rex_type_impl_generics ::rex_engine::RexType for #rust_ident #rex_type_ty_generics #rex_type_where_clause {
             fn rex_type() -> ::rex_ts::Type {
-                ::rex_ts::Type::con(#type_name, 0)
+                let mut ty = ::rex_ts::Type::con(#type_name, #type_param_count);
+                #( ty = ::rex_ts::Type::app(ty, #rex_type_params); )*
+                ty
             }
         }
     };
 
-    let adt_decl_fn = adt_decl_fn(ast, &type_name)?;
+    let adt_decl_fn = adt_decl_fn(ast, &type_name, &type_param_idents)?;
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
     let inject_fn = quote! {
-        impl #rust_ident {
+        impl #impl_generics #rust_ident #ty_generics #where_clause {
             pub fn rex_adt_decl(engine: &mut ::rex_engine::Engine) -> ::rex_ts::AdtDecl {
                 #adt_decl_fn
             }
@@ -108,7 +121,31 @@ fn serde_rename_from_attrs(attrs: &[Attribute]) -> Result<Option<String>, Error>
     Ok(None)
 }
 
-fn adt_decl_fn(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error> {
+fn adt_decl_fn(ast: &DeriveInput, type_name: &str, type_params: &[Ident]) -> Result<TokenStream2, Error> {
+    let param_names: Vec<LitStr> = type_params
+        .iter()
+        .map(|p| LitStr::new(&p.to_string(), Span::call_site()))
+        .collect();
+    let adt_decl = if param_names.is_empty() {
+        quote!(let mut adt = engine.adt_decl(#type_name, &[]);)
+    } else {
+        quote!(let mut adt = engine.adt_decl(#type_name, &[#(#param_names,)*]);)
+    };
+
+    let mut param_bindings = Vec::new();
+    let mut param_map: HashMap<String, TokenStream2> = HashMap::new();
+    for p in type_params {
+        let p_name = p.to_string();
+        let p_lit = LitStr::new(&p_name, Span::call_site());
+        let p_ident = format_ident!("__rex_param_{p_name}", span = Span::call_site());
+        param_bindings.push(quote! {
+            let #p_ident = adt
+                .param_type(&::rex_ast::expr::intern(#p_lit))
+                .expect("missing ADT parameter type");
+        });
+        param_map.insert(p_name, quote!(#p_ident.clone()));
+    }
+
     match &ast.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => {
@@ -123,13 +160,14 @@ fn adt_decl_fn(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error
                     if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
                         field_name = rename;
                     }
-                    let field_ty = rex_type_expr(&field.ty)?;
+                    let field_ty = rex_type_expr(&field.ty, &param_map)?;
                     field_inits.push(quote! {
                         ( ::rex_ast::expr::intern(#field_name), #field_ty )
                     });
                 }
                 Ok(quote! {{
-                    let mut adt = engine.adt_decl(#type_name, &[]);
+                    #adt_decl
+                    #(#param_bindings)*
                     let record = ::rex_ts::Type::record(::std::vec![#(#field_inits,)*]);
                     adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![record]);
                     adt
@@ -139,17 +177,19 @@ fn adt_decl_fn(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error
                 let ctor = type_name;
                 let mut args = Vec::new();
                 for field in &fields.unnamed {
-                    let ty = rex_type_expr(&field.ty)?;
+                    let ty = rex_type_expr(&field.ty, &param_map)?;
                     args.push(ty);
                 }
                 Ok(quote! {{
-                    let mut adt = engine.adt_decl(#type_name, &[]);
+                    #adt_decl
+                    #(#param_bindings)*
                     adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![#(#args,)*]);
                     adt
                 }})
             }
             Fields::Unit => Ok(quote! {{
-                let mut adt = engine.adt_decl(#type_name, &[]);
+                #adt_decl
+                #(#param_bindings)*
                 adt.add_variant(::rex_ast::expr::intern(#type_name), ::std::vec![]);
                 adt
             }}),
@@ -166,7 +206,7 @@ fn adt_decl_fn(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error
                     Fields::Unnamed(fields) => {
                         let mut out = Vec::new();
                         for field in &fields.unnamed {
-                            out.push(rex_type_expr(&field.ty)?);
+                            out.push(rex_type_expr(&field.ty, &param_map)?);
                         }
                         out
                     }
@@ -181,7 +221,7 @@ fn adt_decl_fn(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error
                             if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
                                 field_name = rename;
                             }
-                            let field_ty = rex_type_expr(&field.ty)?;
+                            let field_ty = rex_type_expr(&field.ty, &param_map)?;
                             field_inits.push(quote! {
                                 ( ::rex_ast::expr::intern(#field_name), #field_ty )
                             });
@@ -197,7 +237,8 @@ fn adt_decl_fn(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error
                 });
             }
             Ok(quote! {{
-                let mut adt = engine.adt_decl(#type_name, &[]);
+                #adt_decl
+                #(#param_bindings)*
                 #(#variants)*
                 adt
             }})
@@ -206,13 +247,29 @@ fn adt_decl_fn(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error
     }
 }
 
-fn rex_type_expr(ty: &Type) -> Result<TokenStream2, Error> {
+fn rex_type_expr(ty: &Type, adt_params: &HashMap<String, TokenStream2>) -> Result<TokenStream2, Error> {
     match ty {
         Type::Tuple(tuple) => {
-            let elems = tuple.elems.iter().map(rex_type_expr).collect::<Result<Vec<_>, _>>()?;
+            let elems = tuple
+                .elems
+                .iter()
+                .map(|t| rex_type_expr(t, adt_params))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok(quote! { ::rex_ts::Type::tuple(::std::vec![#(#elems,)*]) })
         }
         Type::Path(type_path) => {
+            if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+                let seg = type_path
+                    .path
+                    .segments
+                    .last()
+                    .ok_or_else(|| Error::new(type_path.span(), "unsupported type path"))?;
+                let ident = seg.ident.to_string();
+                if let Some(param_ty) = adt_params.get(&ident) {
+                    return Ok(param_ty.clone());
+                }
+            }
+
             let seg = type_path
                 .path
                 .segments
@@ -236,29 +293,35 @@ fn rex_type_expr(ty: &Type) -> Result<TokenStream2, Error> {
                     let [inner] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Vec<T>`"));
                     };
-                    let inner = rex_type_expr(inner)?;
+                    let inner = rex_type_expr(inner, adt_params)?;
                     Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("List", 1), #inner) })
                 }
                 "HashMap" | "BTreeMap" => {
-                    let [_k, v] = args.as_slice() else {
+                    let [k, v] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `HashMap<K, V>`"));
                     };
-                    let v = rex_type_expr(v)?;
+                    if !is_string_type(k) {
+                        return Err(Error::new(
+                            k.span(),
+                            "only `HashMap<String, V>` is supported for Rex dictionaries",
+                        ));
+                    }
+                    let v = rex_type_expr(v, adt_params)?;
                     Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("Dict", 1), #v) })
                 }
                 "Option" => {
                     let [inner] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Option<T>`"));
                     };
-                    let inner = rex_type_expr(inner)?;
+                    let inner = rex_type_expr(inner, adt_params)?;
                     Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("Option", 1), #inner) })
                 }
                 "Result" => {
                     let [ok, err] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Result<T, E>`"));
                     };
-                    let ok = rex_type_expr(ok)?;
-                    let err = rex_type_expr(err)?;
+                    let ok = rex_type_expr(ok, adt_params)?;
+                    let err = rex_type_expr(err, adt_params)?;
                     Ok(quote! {
                         ::rex_ts::Type::app(
                             ::rex_ts::Type::app(::rex_ts::Type::con("Result", 2), #err),
@@ -541,6 +604,12 @@ fn is_string_type(ty: &Type) -> bool {
     }
 }
 
+fn add_bound_to_type_params(generics: &mut Generics, bound: syn::TypeParamBound) {
+    for param in generics.type_params_mut() {
+        param.bounds.push(bound.clone());
+    }
+}
+
 fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error> {
     let rust_ident = &ast.ident;
     let ctor = type_name;
@@ -649,8 +718,12 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
         Data::Union(_) => return Err(Error::new(ast.span(), "`#[derive(Rex)]` only supports structs and enums")),
     };
 
+    let mut generics = ast.generics.clone();
+    add_bound_to_type_params(&mut generics, parse_quote!(::rex_engine::IntoValue));
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     Ok(quote! {
-        impl ::rex_engine::IntoValue for #rust_ident {
+        impl #impl_generics ::rex_engine::IntoValue for #rust_ident #ty_generics #where_clause {
             fn into_value(self) -> ::rex_engine::Value {
                 #body
             }
@@ -831,8 +904,12 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
         )),
     }?;
 
+    let mut generics = ast.generics.clone();
+    add_bound_to_type_params(&mut generics, parse_quote!(::rex_engine::FromValue));
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
     Ok(quote! {
-        impl ::rex_engine::FromValue for #rust_ident {
+        impl #impl_generics ::rex_engine::FromValue for #rust_ident #ty_generics #where_clause {
             fn from_value(value: &::rex_engine::Value, name: &str) -> Result<Self, ::rex_engine::EngineError> {
                 #body
             }

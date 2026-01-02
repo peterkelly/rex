@@ -22,6 +22,118 @@ map (λx → 2 * x) [1, 2, 3, 4]
 map ((*) 2) [1, 2, 3, 4]
 ```
 
+## Crates
+
+This repo is a Cargo workspace. The key crates are:
+
+- `rex-lexer`: tokenization (+ spans)
+- `rex-parser`: parser producing a `Program { decls, expr }`
+- `rex-ts`: Hindley–Milner type inference + type classes + ADTs
+- `rex-engine`: runtime evaluator + native-function injection, backed by `rex-ts`
+- `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
+- `rex`: CLI binary (`cargo run -p rex -- ...`)
+- `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
+
+## Docs
+
+- `docs/ARCHITECTURE.md`: crate pipeline and design notes
+- `docs/EMBEDDING.md`: embedding Rex in Rust (API patterns)
+- `docs/LANGUAGE.md`: language notes and examples
+- `docs/CONTRIBUTING.md`: contributor workflow and repo policies
+
+## CLI
+
+Run a file:
+
+```sh
+cargo run -p rex -- run rex/examples/record_update.rex
+```
+
+Run inline code:
+
+```sh
+cargo run -p rex -- run -c 'map ((*) 2) [1, 2, 3]'
+```
+
+Other useful flags:
+
+- `--emit-ast`: print parsed AST and exit
+- `--type`: print inferred type (and constraints) and exit
+- `--stdin`: read a program from stdin
+- `--stack-size-mb`: control the runner thread stack size
+
+## Embedding (Rust)
+
+### Parse + Eval
+
+```rust
+use rex_engine::Engine;
+use rex_lexer::Token;
+use rex_parser::Parser;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let tokens = Token::tokenize(r#"let x = 1 + 2 in x * 3"#)?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+
+    let mut engine = Engine::with_prelude();
+    engine.inject_decls(&program.decls)?;
+    let value = engine.eval(program.expr.as_ref())?;
+    println!("{value}");
+    Ok(())
+}
+```
+
+For deeply nested programs, prefer the large-stack entrypoints:
+
+- `rex_parser::Parser::parse_program_with_stack_size`
+- `rex_ts::TypeSystem::infer_with_stack_size`
+- `rex_engine::Engine::eval_with_stack_size`
+
+### Type Inference
+
+```rust
+use rex_lexer::Token;
+use rex_parser::Parser;
+use rex_ts::TypeSystem;
+
+let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
+let program = Parser::new(tokens)
+    .parse_program_with_stack_size(rex_parser::DEFAULT_STACK_SIZE_BYTES)
+    .map_err(|errs| format!("{errs:?}"))?;
+
+let mut ts = TypeSystem::with_prelude();
+// If you parsed type/class/instance/function decls, inject them before inference:
+// for decl in &program.decls { ... }
+let (_preds, ty) = ts.infer_with_stack_size(program.expr.as_ref(), rex_ts::DEFAULT_STACK_SIZE_BYTES)?;
+println!("{ty}");
+```
+
+### Rust Types as Rex Types (`#[derive(Rex)]`)
+
+Derive support lives in `rex-proc-macro`. The derive generates:
+
+- an ADT declaration (`T::rex_adt_decl`) + injection helper (`T::inject_rex`)
+- `IntoValue` and `FromValue` to convert between Rust values and `rex_engine::Value`
+
+```rust
+use rex_engine::{Engine, FromValue};
+use rex_proc_macro::Rex;
+
+#[derive(Rex, Debug, PartialEq)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+let mut engine = Engine::with_prelude();
+Point::inject_rex(&mut engine)?;
+
+let value = engine.eval(rex_parser::Parser::new(rex_lexer::Token::tokenize("Point { x = 1, y = 2 }")?).parse_program().unwrap().expr.as_ref())?;
+let point = Point::from_value(&value, "point")?;
+assert_eq!(point, Point { x: 1, y: 2 });
+```
+
 ## Syntax Reference
 
 - Programs are a single expression; whitespace (including newlines) is ignored outside of strings and comments. Block comments use `{- ... -}` and are stripped before parsing.
@@ -147,7 +259,7 @@ will return `["a", "list"]`.
 We create dictionaries using braces:
 
 ```rex
-{ key1: "value1", key2: 420, key3: true }
+{ key1 = "value1", key2 = 420, key3 = true }
 ```
 
 ## Lambda Functions
@@ -282,7 +394,7 @@ type Boxed = Boxed { value: i32 }
 let
   x = Boxed { value = 1 }
 in
-  x:value
+  x.value
 ```
 
 Multi-variant ADT (projection is only valid in a branch that proves the constructor):
@@ -327,4 +439,4 @@ Rex ships with a small prelude of common helpers. The type system constrains the
 
 ## Contribute
 
-Made with ♡ by QDX
+See `docs/ARCHITECTURE.md` for a high-level tour of the crates and the parsing → typing → evaluation pipeline.
