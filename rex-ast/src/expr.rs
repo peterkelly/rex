@@ -429,6 +429,7 @@ pub enum Expr {
     Tuple(Span, Vec<Arc<Expr>>),             // (e1, e2, e3)
     List(Span, Vec<Arc<Expr>>),              // [e1, e2, e3]
     Dict(Span, BTreeMap<Symbol, Arc<Expr>>), // {k1 = v1, k2 = v2}
+    RecordUpdate(Span, Arc<Expr>, BTreeMap<Symbol, Arc<Expr>>), // {base with {k1 = v1, ...}}
 
     Var(Var),                         // x
     App(Span, Arc<Expr>, Arc<Expr>),  // f x
@@ -460,6 +461,7 @@ impl Expr {
             | Self::Tuple(span, ..)
             | Self::List(span, ..)
             | Self::Dict(span, ..)
+            | Self::RecordUpdate(span, ..)
             | Self::Var(Var { span, .. })
             | Self::App(span, ..)
             | Self::Project(span, ..)
@@ -483,6 +485,7 @@ impl Expr {
             | Self::Tuple(span, ..)
             | Self::List(span, ..)
             | Self::Dict(span, ..)
+            | Self::RecordUpdate(span, ..)
             | Self::Var(Var { span, .. })
             | Self::App(span, ..)
             | Self::Project(span, ..)
@@ -522,6 +525,11 @@ impl Expr {
             Expr::Dict(_, kvs) => Expr::Dict(
                 span,
                 BTreeMap::from_iter(kvs.iter().map(|(k, v)| (k.clone(), v.clone()))),
+            ),
+            Expr::RecordUpdate(_, base, updates) => Expr::RecordUpdate(
+                span,
+                base.clone(),
+                BTreeMap::from_iter(updates.iter().map(|(k, v)| (k.clone(), v.clone()))),
             ),
             Expr::Var(var) => Expr::Var(Var {
                 span,
@@ -575,6 +583,15 @@ impl Expr {
                 Span::default(),
                 BTreeMap::from_iter(
                     kvs.iter()
+                        .map(|(k, v)| (k.clone(), Arc::new(v.reset_spans()))),
+                ),
+            ),
+            Expr::RecordUpdate(_, base, updates) => Expr::RecordUpdate(
+                Span::default(),
+                Arc::new(base.reset_spans()),
+                BTreeMap::from_iter(
+                    updates
+                        .iter()
                         .map(|(k, v)| (k.clone(), Arc::new(v.reset_spans()))),
                 ),
             ),
@@ -672,6 +689,22 @@ impl Display for Expr {
                 }
                 '}'.fmt(f)
             }
+            Self::RecordUpdate(_span, base, kvs) => {
+                '{'.fmt(f)?;
+                base.fmt(f)?;
+                " with ".fmt(f)?;
+                '{'.fmt(f)?;
+                for (i, (k, v)) in kvs.iter().enumerate() {
+                    k.fmt(f)?;
+                    " = ".fmt(f)?;
+                    v.fmt(f)?;
+                    if i + 1 < kvs.len() {
+                        ", ".fmt(f)?;
+                    }
+                }
+                '}'.fmt(f)?;
+                '}'.fmt(f)
+            }
             Self::Var(var) => var.fmt(f),
             Self::App(_span, g, x) => {
                 g.fmt(f)?;
@@ -685,6 +718,7 @@ impl Display for Expr {
                     | Self::List(..)
                     | Self::Tuple(..)
                     | Self::Dict(..)
+                    | Self::RecordUpdate(..)
                     | Self::Project(..)
                     | Self::Var(..) => x.fmt(f),
                     _ => {

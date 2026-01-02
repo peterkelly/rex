@@ -1,80 +1,76 @@
 #![forbid(unsafe_code)]
 
-use std::env;
 use std::fs;
+use std::thread;
 
+use clap::{Args, Parser, Subcommand};
 use rex_ast::expr::Decl;
 use rex_engine::Engine;
 use rex_lexer::Token;
-use rex_parser::Parser;
+use rex_parser::Parser as RexParser;
 use rex_ts::TypeSystem;
 
+#[derive(Parser)]
+#[command(name = "rex")]
+#[command(about = "Rex (Rush Expressions) CLI")]
+#[command(arg_required_else_help = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    Run(RunArgs),
+}
+
+#[derive(Args)]
+#[command(arg_required_else_help = true)]
+struct RunArgs {
+    /// Path to a `.rex` file to run.
+    #[arg(value_name = "FILE", required_unless_present = "code", conflicts_with = "code")]
+    file: Option<String>,
+
+    /// Inline Rex source code to run.
+    #[arg(
+        short = 'c',
+        long = "code",
+        value_name = "CODE",
+        required_unless_present = "file",
+        conflicts_with = "file"
+    )]
+    code: Option<String>,
+
+    /// Print the parsed AST and exit.
+    #[arg(long = "emit-ast")]
+    emit_ast: bool,
+
+    /// Print the inferred type and exit.
+    #[arg(long = "type")]
+    emit_type: bool,
+}
+
 fn main() {
-    if let Err(err) = run() {
+    let cli = Cli::parse();
+    if let Err(err) = run(cli) {
         eprintln!("error: {err}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), String> {
-    let mut args = env::args().skip(1);
-    let cmd = match args.next() {
-        Some(cmd) => cmd,
-        None => {
-            print_usage();
-            return Ok(());
-        }
-    };
-
-    match cmd.as_str() {
-        "run" => run_cmd(args),
-        "-h" | "--help" => {
-            print_usage();
-            Ok(())
-        }
-        other => Err(format!("unknown command `{other}`")),
+fn run(cli: Cli) -> Result<(), String> {
+    match cli.command {
+        Command::Run(args) => run_cmd(args),
     }
 }
 
-fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
-    let mut code: Option<String> = None;
-    let mut file: Option<String> = None;
-    let mut emit_ast = false;
-    let mut emit_type = false;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--emit-ast" => {
-                emit_ast = true;
-            }
-            "--type" => {
-                emit_type = true;
-            }
-            "-c" | "--code" => {
-                if code.is_some() {
-                    return Err("`-c/--code` provided more than once".into());
-                }
-                code = Some(
-                    args.next()
-                        .ok_or_else(|| "missing code after `-c/--code`".to_string())?,
-                );
-            }
-            "-h" | "--help" => {
-                print_run_usage();
-                return Ok(());
-            }
-            _ => {
-                if file.is_some() {
-                    return Err(format!("unexpected extra argument `{arg}`"));
-                }
-                file = Some(arg);
-            }
-        }
-    }
-
-    if code.is_some() && file.is_some() {
-        return Err("provide either a file or `-c/--code`, not both".into());
-    }
+fn run_cmd(args: RunArgs) -> Result<(), String> {
+    let RunArgs {
+        file,
+        code,
+        emit_ast,
+        emit_type,
+    } = args;
 
     let source = if let Some(code) = code {
         code
@@ -84,8 +80,24 @@ fn run_cmd(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         return Err("missing input (file or `-c/--code`)".into());
     };
 
-    let tokens = Token::tokenize(&source).map_err(|e| format!("lex error: {e}"))?;
-    let mut parser = Parser::new(tokens);
+    // Rex programs can be deeply nested (especially after desugaring). Run on a
+    // slightly larger stack to reduce overflow risk in parser/type inference/eval.
+    const STACK_SIZE: usize = 16 * 1024 * 1024;
+    let handle = thread::Builder::new()
+        .name("rex-run".to_string())
+        .stack_size(STACK_SIZE)
+        .spawn(move || run_source(&source, emit_ast, emit_type))
+        .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
+
+    match handle.join() {
+        Ok(res) => res,
+        Err(_) => Err("runner thread panicked".into()),
+    }
+}
+
+fn run_source(source: &str, emit_ast: bool, emit_type: bool) -> Result<(), String> {
+    let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
+    let mut parser = RexParser::new(tokens);
     let program = parser
         .parse_program()
         .map_err(|errs| format_parse_errors(&errs))?;
@@ -144,14 +156,4 @@ fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_
         }
     }
     Ok(())
-}
-
-fn print_usage() {
-    eprintln!("Usage:\n  rex run <file>\n  rex run -c <code>\n\nRun with -h/--help for more.");
-}
-
-fn print_run_usage() {
-    eprintln!(
-        "Usage:\n  rex run <file>\n  rex run -c <code>\n\nOptions:\n  --emit-ast   Print the parsed AST and exit\n  --type       Print the inferred type and exit"
-    );
 }

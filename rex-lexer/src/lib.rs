@@ -50,6 +50,7 @@ pub enum Token {
     Type(Span),
     When(Span),
     Then(Span),
+    With(Span),
     Where(Span),
 
     // Operators
@@ -169,6 +170,8 @@ impl Token {
                     Token::In(span)
                 } else if capture.name("Then").is_some() {
                     Token::Then(span)
+                } else if capture.name("With").is_some() {
+                    Token::With(span)
                 } else if capture.name("Where").is_some() {
                     Token::Where(span)
                 }
@@ -320,6 +323,7 @@ impl Token {
                     r"(?P<Type>\btype\b)|",
                     r"(?P<When>\bwhen\b)|",
                     r"(?P<Then>\bthen\b)|",
+                    r"(?P<With>\bwith\b)|",
                     r"(?P<Where>\bwhere\b)|",
                     // Symbols
                     r"(?P<ArrowL><-|←)|",
@@ -417,6 +421,7 @@ impl Spanned for Token {
             Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
+            With(span, ..) => span,
             Where(span, ..) => span,
 
             // Symbols
@@ -494,6 +499,7 @@ impl Spanned for Token {
             Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
+            With(span, ..) => span,
             Where(span, ..) => span,
 
             // Symbols
@@ -573,6 +579,7 @@ impl Display for Token {
             Type(..) => write!(f, "type"),
             When(..) => write!(f, "when"),
             Then(..) => write!(f, "then"),
+            With(..) => write!(f, "with"),
             Where(..) => write!(f, "where"),
 
             // Symbols

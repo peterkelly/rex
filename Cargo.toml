@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rex", "rex-ast", "rex-engine", "rex-lexer", "rex-lsp", "rex-parser", "rex-ts"]
+members = ["rex", "rex-ast", "rex-engine", "rex-lexer", "rex-lsp", "rex-parser", "rex-proc-macro", "rex-ts"]
 
 [workspace.dependencies]
 # External dependencies

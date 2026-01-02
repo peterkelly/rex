@@ -66,7 +66,7 @@ The current inference implementation covers variables, application, lambdas, let
 
 ### Collection Combinators
 
-- `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `flat_map`, `and_then`, `or_else`
+- `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `or_else`
 - `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`
 These are type-class constrained and work for `List`, `Array`, `Option`, and `Result` where applicable.
 

@@ -41,7 +41,7 @@ Operator names can be injected with parentheses (e.g., `"(+)"`); the engine norm
 - **Equality**: `==`, `!=`
 - **Ordering**: `<`, `<=`, `>`, `>=`
 - **Booleans**: `&&`, `||`
-- **Collection combinators** (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `flat_map`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `and_then`, `or_else`
+- **Collection combinators** (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
 - **Option/Result helpers**: `is_some`, `is_none`, `is_ok`, `is_err`
 
 List literals are evaluated to the `Empty`/`Cons` ADT constructors (stored as `Value::Adt`). Arrays are host-native `Value::Array` values injected from Rust (e.g., by passing `Vec<T>` to `inject_value`) and participate in the same collection combinators via type classes.

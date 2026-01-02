@@ -4,8 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+clap = { workspace = true }
 rex-ast = { workspace = true }
 rex-lexer = { workspace = true }
 rex-parser = { workspace = true }
 rex-engine = { workspace = true }
 rex-ts = { workspace = true }
+
+[dev-dependencies]
+rex-proc-macro = { workspace = true }

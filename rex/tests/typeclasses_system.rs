@@ -34,12 +34,12 @@ fn assert_err_contains(code: &str, needle: &str) {
 fn default_record_dispatch() {
     assert_eval(
         r#"
-        class Default a where
+        class Default a
             default : a
 
         type Foo = Foo { x: i32, y: i32 } | Bar { z: f32 }
 
-        instance Default Foo where
+        instance Default Foo
             default = Bar { z = 0.0 }
 
         let x: Foo = default in x
@@ -52,13 +52,13 @@ fn default_record_dispatch() {
 fn default_nested_context_list() {
     assert_eval(
         r#"
-        class Default a where
+        class Default a
             default : a
 
-        instance Default i32 where
+        instance Default i32
             default = 0
 
-        instance Default (List a) <= Default a where
+        instance Default (List a) <= Default a
             default = [default, default]
 
         let xs: List i32 = default in xs
@@ -71,13 +71,13 @@ fn default_nested_context_list() {
 fn default_nested_context_option() {
     assert_eval(
         r#"
-        class Default a where
+        class Default a
             default : a
 
-        instance Default i32 where
+        instance Default i32
             default = 0
 
-        instance Default (Option a) <= Default a where
+        instance Default (Option a) <= Default a
             default = Some default
 
         let x: Option i32 = default in x
@@ -90,14 +90,14 @@ fn default_nested_context_option() {
 fn methods_can_call_other_methods() {
     assert_eval(
         r#"
-        class PairOps p where
+        class PairOps p
             first : p -> i32
             second : p -> i32
             sum_pair : p -> i32
 
         type Pair = Pair { a: i32, b: i32 }
 
-        instance PairOps Pair where
+        instance PairOps Pair
             first = \p -> p.a
             second = \p -> p.b
             sum_pair = \p -> (first p) + (second p)
@@ -112,10 +112,10 @@ fn methods_can_call_other_methods() {
 fn method_can_return_function() {
     assert_eval(
         r#"
-        class Builder a where
+        class Builder a
             make_adder : a -> i32 -> i32
 
-        instance Builder i32 where
+        instance Builder i32
             make_adder = \n x -> x + n
 
         let f = make_adder 5 in f 37
@@ -130,10 +130,10 @@ fn instance_method_can_reference_global_fn() {
         r#"
         fn inc (x: i32) -> i32 = x + 1
 
-        class Bump a where
+        class Bump a
             bump : a -> a
 
-        instance Bump i32 where
+        instance Bump i32
             bump = inc
 
         bump 41
@@ -146,16 +146,16 @@ fn instance_method_can_reference_global_fn() {
 fn hkt_functor_option_and_result() {
     assert_eval(
         r#"
-        class Functor f where
+        class MyFunctor f
             fmap : (a -> b) -> f a -> f b
 
-        instance Functor Option where
+        instance MyFunctor Option
             fmap = \f x ->
                 match x
                     when Some v -> Some (f v)
                     when None -> None
 
-        instance Functor (Result e) where
+        instance MyFunctor (Result e)
             fmap = \f x ->
                 match x
                     when Ok v -> Ok (f v)
@@ -178,10 +178,10 @@ fn hkt_functor_option_and_result() {
 fn pattern_match_inside_method_body() {
     assert_eval(
         r#"
-        class Head a where
+        class Head a
             head_or : a -> List a -> a
 
-        instance Head i32 where
+        instance Head i32
             head_or = \fallback xs ->
                 match xs
                     when [] -> fallback
@@ -197,15 +197,15 @@ fn pattern_match_inside_method_body() {
 fn superclass_and_instance_context() {
     assert_eval(
         r#"
-        class MyEq a where
+        class MyEq a
             eq : a -> a -> bool
 
-        class MyOrd a <= MyEq a where
+        class MyOrd a <= MyEq a
             my_cmp : a -> a -> i32
 
         type Color = Red | Green | Blue
 
-        instance MyEq Color where
+        instance MyEq Color
             eq = \x y ->
                 match x
                     when Red ->
@@ -215,7 +215,7 @@ fn superclass_and_instance_context() {
                     when Blue ->
                         let r = match y when Blue -> true when _ -> false in r
 
-        instance MyOrd Color <= MyEq Color where
+        instance MyOrd Color <= MyEq Color
             my_cmp = \x y ->
                 if eq x y then 0 else
                 match x
@@ -233,10 +233,10 @@ fn superclass_and_instance_context() {
 fn missing_instance_method_is_error() {
     assert_err_contains(
         r#"
-        class Default a where
+        class Default a
             default : a
 
-        instance Default i32 where
+        instance Default i32
         0
         "#,
         "missing implementation of `default`",
@@ -247,10 +247,10 @@ fn missing_instance_method_is_error() {
 fn unknown_instance_method_is_error() {
     assert_err_contains(
         r#"
-        class Default a where
+        class Default a
             default : a
 
-        instance Default i32 where
+        instance Default i32
             not_a_method = 0
         0
         "#,
@@ -262,10 +262,10 @@ fn unknown_instance_method_is_error() {
 fn missing_instance_constraint_is_error() {
     assert_err_contains(
         r#"
-        class Default a where
+        class Default a
             default : a
 
-        instance Default (List a) where
+        instance Default (List a)
             default = [default]
         0
         "#,
@@ -277,13 +277,13 @@ fn missing_instance_constraint_is_error() {
 fn duplicate_instances_are_rejected() {
     assert_err_contains(
         r#"
-        class Default a where
+        class Default a
             default : a
 
-        instance Default i32 where
+        instance Default i32
             default = 0
 
-        instance Default i32 where
+        instance Default i32
             default = 1
 
         0
@@ -296,10 +296,10 @@ fn duplicate_instances_are_rejected() {
 fn ambiguous_class_method_use_is_error() {
     assert_err_contains(
         r#"
-        class Default a where
+        class Default a
             default : a
 
-        instance Default i32 where
+        instance Default i32
             default = 0
 
         default

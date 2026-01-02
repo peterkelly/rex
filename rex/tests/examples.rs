@@ -139,3 +139,8 @@ fn example_typeclasses_pattern_match_in_method() {
 fn example_typeclasses_superclass_usage() {
     assert_example_ok("typeclasses_superclass_usage.rex");
 }
+
+#[test]
+fn example_record_update() {
+    assert_example_ok("record_update.rex");
+}

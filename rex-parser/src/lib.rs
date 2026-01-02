@@ -5,7 +5,11 @@
 //! The parser is written to be straightforward to step through in a debugger:
 //! no parser-generator indirection, and (mostly) explicit control flow.
 
-use std::{collections::VecDeque, sync::Arc, vec};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+    vec,
+};
 
 use rex_ast::expr::{
     intern, ClassDecl, ClassMethodSig, Decl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
@@ -620,11 +624,114 @@ impl Parser {
             token => {
                 return Err(ParserErr::new(
                     *token.span(),
-                    format!("expected `[` got {}", token),
+                    format!("expected `{{` got {}", token),
                 ));
             }
         };
 
+        // `{}` is always an empty dict literal.
+        if let Token::BraceR(span, ..) = self.current_token() {
+            self.next_token();
+            return Ok(Expr::Dict(
+                Span::from_begin_end(span_begin, span.end),
+                BTreeMap::new(),
+            ));
+        }
+
+        // Disambiguate:
+        // - `{ x = e }` is a dict literal
+        // - `{ base with { x = e } }` is a record-update expression
+        let looks_like_dict_literal = matches!(self.current_token(), Token::Ident(..))
+            && matches!(self.peek_token(1), Token::Assign(..));
+
+        if looks_like_dict_literal {
+            return self.parse_dict_expr_after_lbrace(span_begin);
+        }
+
+        let base = match self.parse_expr() {
+            Ok(expr) => expr,
+            Err(err) => {
+                self.record_error(err);
+                while !matches!(self.current_token(), Token::BraceR(..) | Token::Eof(..)) {
+                    self.next_token();
+                }
+                if let Token::BraceR(..) = self.current_token() {
+                    self.next_token();
+                }
+                return Ok(Expr::Dict(
+                    Span::from_begin_end(span_begin, Position::new(0, 0)),
+                    BTreeMap::new(),
+                ));
+            }
+        };
+
+        match self.current_token() {
+            Token::With(..) => self.next_token(),
+            token => {
+                self.record_error(ParserErr::new(*token.span(), "expected `with`"));
+                while !matches!(self.current_token(), Token::BraceR(..) | Token::Eof(..)) {
+                    self.next_token();
+                }
+                if let Token::BraceR(..) = self.current_token() {
+                    self.next_token();
+                }
+                return Ok(base);
+            }
+        };
+
+        let updates = match self.parse_dict_expr() {
+            Ok(Expr::Dict(_, kvs)) => kvs,
+            Ok(other) => {
+                self.record_error(ParserErr::new(*other.span(), "expected `{...}`"));
+                BTreeMap::new()
+            }
+            Err(err) => {
+                self.record_error(err);
+                BTreeMap::new()
+            }
+        };
+
+        // Eat the right brace of the update expression.
+        let span_end = match self.current_token() {
+            Token::BraceR(span, ..) => {
+                self.next_token();
+                span.end
+            }
+            token => {
+                self.record_error(ParserErr::new(
+                    *token.span(),
+                    format!("expected `}}` got {}", token),
+                ));
+                Position::new(0, 0)
+            }
+        };
+
+        Ok(Expr::RecordUpdate(
+            Span::from_begin_end(span_begin, span_end),
+            Arc::new(base),
+            updates,
+        ))
+    }
+
+    fn parse_dict_expr(&mut self) -> Result<Expr, ParserErr> {
+        // Eat the left brace.
+        let span_begin = match self.current_token() {
+            Token::BraceL(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `{{` got {}", token),
+                ));
+            }
+        };
+
+        self.parse_dict_expr_after_lbrace(span_begin)
+    }
+
+    fn parse_dict_expr_after_lbrace(&mut self, span_begin: Position) -> Result<Expr, ParserErr> {
         let mut kvs = Vec::new();
         loop {
             if let Token::BraceR(..) = self.current_token() {
@@ -650,7 +757,7 @@ impl Parser {
             match self.current_token() {
                 Token::Comma(..) => self.next_token(),
                 Token::Eof(span) => {
-                    self.record_error(ParserErr::new(span, "expected `,` or `}}`"));
+                    self.record_error(ParserErr::new(span, "expected `,` or `}`"));
                     break;
                 }
                 _ => {
@@ -2787,6 +2894,43 @@ mod tests {
         );
 
         assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_record_update_expr() {
+        let expr = parse("{ foo with { x = 1, y = 2 } }");
+        match expr.as_ref() {
+            Expr::RecordUpdate(_, base, updates) => {
+                assert_expr_eq!(base.clone(), v!("foo"); ignore span);
+                assert_expr_eq!(updates.get(&intern("x")).unwrap().clone(), u!(1); ignore span);
+                assert_expr_eq!(updates.get(&intern("y")).unwrap().clone(), u!(2); ignore span);
+            }
+            other => panic!("expected record update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_brace_expr_prefers_dict_literal() {
+        let expr = parse("{ foo = 1 }");
+        match expr.as_ref() {
+            Expr::Dict(_, kvs) => {
+                assert_eq!(kvs.len(), 1);
+                assert_expr_eq!(kvs.get(&intern("foo")).unwrap().clone(), u!(1); ignore span);
+            }
+            other => panic!("expected dict literal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_record_update_empty_updates() {
+        let expr = parse("{ foo with { } }");
+        match expr.as_ref() {
+            Expr::RecordUpdate(_, base, updates) => {
+                assert_expr_eq!(base.clone(), v!("foo"); ignore span);
+                assert!(updates.is_empty());
+            }
+            other => panic!("expected record update, got {other:?}"),
+        }
     }
 
     #[test]

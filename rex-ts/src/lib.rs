@@ -10,17 +10,20 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{self, Display, Formatter};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rex_ast::expr::{
-    ClassDecl, ClassMethodSig, Decl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl, Pattern,
-    Program, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
+    ClassDecl, ClassMethodSig, Expr, FnDecl, InstanceDecl, InstanceMethodImpl, Pattern, Scope,
+    Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
 };
-use rex_lexer::{Token, span::Span};
-use rex_parser::Parser;
+use rex_lexer::span::Span;
 use rpds::HashTrieMapSync;
 use uuid::Uuid;
+
+mod prelude;
+
+pub use prelude::prelude_typeclasses_program;
 
 pub type TypeVarId = usize;
 
@@ -340,6 +343,16 @@ impl TypedExpr {
                 }
                 TypedExprKind::Dict(out)
             }
+            TypedExprKind::RecordUpdate { base, updates } => {
+                let mut out = BTreeMap::new();
+                for (k, v) in updates {
+                    out.insert(k.clone(), v.apply(s));
+                }
+                TypedExprKind::RecordUpdate {
+                    base: Box::new(base.apply(s)),
+                    updates: out,
+                }
+            }
             TypedExprKind::Var { name, overloads } => TypedExprKind::Var {
                 name: name.clone(),
                 overloads: overloads.iter().map(|t| t.apply(s)).collect(),
@@ -390,6 +403,10 @@ pub enum TypedExprKind {
     Tuple(Vec<TypedExpr>),
     List(Vec<TypedExpr>),
     Dict(BTreeMap<Symbol, TypedExpr>),
+    RecordUpdate {
+        base: Box<TypedExpr>,
+        updates: BTreeMap<Symbol, TypedExpr>,
+    },
     Var {
         name: Symbol,
         overloads: Vec<Type>,
@@ -469,7 +486,9 @@ pub enum TypeError {
     UnknownTypeName(Symbol),
     #[error("duplicate value definition `{0}`")]
     DuplicateValue(Symbol),
-    #[error("class `{class}` must have exactly one type parameter (got {got})")]
+    #[error("duplicate class definition `{0}`")]
+    DuplicateClass(Symbol),
+    #[error("class `{class}` must have at least one type parameter (got {got})")]
     InvalidClassArity { class: Symbol, got: usize },
     #[error("duplicate class method `{0}`")]
     DuplicateClassMethod(Symbol),
@@ -1119,12 +1138,15 @@ pub struct TypeSystem {
 ///
 /// Design notes (WARM):
 /// - We keep this explicit and data-oriented: it makes review easy and keeps costs visible.
-/// - Today Rex classes are unary (one type parameter). That matches the existing `Predicate`
-///   model and avoids adding half-finished multi-parameter machinery.
+/// - Rex represents multi-parameter classes by encoding the parameters as a tuple in the
+///   single `Predicate.typ` slot. For a unary class `C a` the predicate is `C a`. For a
+///   binary class `C t a` the predicate is `C (t, a)`, etc.
+/// - This keeps the runtime/type-inference machinery simple: instance matching is still
+///   “unify the predicate types”, and no separate arity tracking is needed.
 #[derive(Clone, Debug)]
 pub struct ClassInfo {
     pub name: Symbol,
-    pub param: Symbol,
+    pub params: Vec<Symbol>,
     pub supers: Vec<Symbol>,
     pub methods: BTreeMap<Symbol, Scheme>,
 }
@@ -1157,7 +1179,7 @@ impl TypeSystem {
 
     pub fn with_prelude() -> Self {
         let mut ts = TypeSystem::new();
-        build_prelude(&mut ts);
+        prelude::build_prelude(&mut ts);
         ts
     }
 
@@ -1180,13 +1202,19 @@ impl TypeSystem {
     pub fn inject_class_decl(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
         let span = decl.span;
         (|| {
-            if decl.params.len() != 1 {
+            // Classes are global, and Rex does not support reopening/merging them.
+            // Allowing that would be a long-term maintenance hazard: it creates
+            // spooky-action-at-a-distance across modules and makes reviews harder.
+            if self.class_info.contains_key(&decl.name) || self.classes.classes.contains_key(&decl.name) {
+                return Err(TypeError::DuplicateClass(decl.name.clone()));
+            }
+            if decl.params.is_empty() {
                 return Err(TypeError::InvalidClassArity {
                     class: decl.name.clone(),
                     got: decl.params.len(),
                 });
             }
-            let param = decl.params[0].clone();
+            let params = decl.params.clone();
 
             // Register the superclass relationships in the class environment.
             //
@@ -1194,10 +1222,16 @@ impl TypeSystem {
             // fancier would require storing type-level relationships in `ClassEnv`,
             // which Rex does not currently model.
             let mut supers = Vec::with_capacity(decl.supers.len());
+            if !decl.supers.is_empty() && params.len() != 1 {
+                return Err(TypeError::UnsupportedExpr(
+                    "multi-parameter classes cannot declare superclasses yet",
+                ));
+            }
             for sup in &decl.supers {
                 let mut vars = HashMap::new();
+                let param = params[0].clone();
                 let param_tv = self.supply.fresh(Some(param.clone()));
-                vars.insert(param.clone(), param_tv.clone());
+                vars.insert(param, param_tv.clone());
                 let sup_ty =
                     type_from_annotation_expr_vars(&self.adts, &sup.typ, &mut vars, &mut self.supply)?;
                 if sup_ty != Type::var(param_tv) {
@@ -1217,8 +1251,12 @@ impl TypeSystem {
                 }
 
                 let mut vars: HashMap<Symbol, TypeVar> = HashMap::new();
-                let param_tv = self.supply.fresh(Some(param.clone()));
-                vars.insert(param.clone(), param_tv.clone());
+                let mut param_tvs: Vec<TypeVar> = Vec::with_capacity(params.len());
+                for param in &params {
+                    let tv = self.supply.fresh(Some(param.clone()));
+                    vars.insert(param.clone(), tv.clone());
+                    param_tvs.push(tv);
+                }
 
                 let ty =
                     type_from_annotation_expr_vars(&self.adts, typ, &mut vars, &mut self.supply)?;
@@ -1229,7 +1267,11 @@ impl TypeSystem {
 
                 let class_pred = Predicate {
                     class: decl.name.clone(),
-                    typ: Type::var(param_tv),
+                    typ: if param_tvs.len() == 1 {
+                        Type::var(param_tvs[0].clone())
+                    } else {
+                        Type::tuple(param_tvs.into_iter().map(Type::var).collect())
+                    },
                 };
                 let scheme = Scheme::new(scheme_vars, vec![class_pred], ty);
 
@@ -1248,7 +1290,7 @@ impl TypeSystem {
                 decl.name.clone(),
                 ClassInfo {
                     name: decl.name.clone(),
-                    param,
+                    params,
                     supers,
                     methods,
                 },
@@ -1459,10 +1501,15 @@ impl TypeSystem {
         let preds = preds.apply(&s);
 
         // The only legal “given” constraints inside an instance method are the
-        // instance context (plus superclass closure). We do *not* allow instance
+        // instance context (plus superclass closure, plus the instance head
+        // itself). We do *not* allow instance
         // search for non-ground constraints here, because that would be unsound:
         // a type variable would unify with any concrete instance head.
         let mut given = prepared.context.clone();
+
+        // Allow recursive instance methods (e.g. `Eq (List a)` calling `(==)`
+        // on the tail). This is dictionary recursion, not instance search.
+        given.push(Predicate::new(prepared.class.clone(), prepared.head.clone()));
         let mut i = 0;
         while i < given.len() {
             let p = given[i].clone();
@@ -1994,18 +2041,38 @@ fn infer_expr_type(
         Expr::Project(_, base, field) => {
             let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, base)?;
             let base_ty = unifier.apply_type(&t1);
-            let mut known_variant = None;
-            if let Expr::Var(var) = base.as_ref() {
-                if let Some(info) = known.get(&var.name) {
-                    known_variant = Some(info.clone());
-                }
-            }
-            if known_variant.is_none() {
-                known_variant = known_variant_from_expr(base, &base_ty, adts);
-            }
+            let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
             let field_ty =
                 resolve_projection(unifier, supply, adts, &base_ty, known_variant, field)?;
             Ok((p1, field_ty))
+        }
+        Expr::RecordUpdate(_, base, updates) => {
+            let (p_base, t_base) = infer_expr_type(unifier, supply, env, adts, known, base)?;
+            let base_ty = unifier.apply_type(&t_base);
+            let known_variant =
+                known_variant_from_expr_with_known(base, &base_ty, adts, known);
+            let update_fields: Vec<Symbol> = updates.keys().cloned().collect();
+            let (result_ty, fields) = resolve_record_update(
+                unifier,
+                supply,
+                adts,
+                &base_ty,
+                known_variant,
+                &update_fields,
+            )?;
+            let expected: HashMap<_, _> = fields.into_iter().collect();
+
+            let mut preds = p_base;
+            for (k, v) in updates {
+                let expected_ty = expected.get(k).ok_or_else(|| TypeError::UnknownField {
+                    field: k.clone(),
+                    typ: result_ty.to_string(),
+                })?;
+                let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
+                unifier.unify(&t1, expected_ty)?;
+                preds.extend(p1);
+            }
+            Ok((preds, result_ty))
         }
         Expr::Let(..) => {
             let mut bindings = Vec::new();
@@ -2032,7 +2099,9 @@ fn infer_expr_type(
                 let def_ty = unifier.apply_type(&t1);
                 let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
                 env_cur.extend(v.name.clone(), scheme);
-                if let Some(known_variant) = known_variant_from_expr(&d, &def_ty, adts) {
+                if let Some(known_variant) =
+                    known_variant_from_expr_with_known(&d, &def_ty, adts, &known_cur)
+                {
                     known_cur.insert(
                         v.name.clone(),
                         KnownVariant {
@@ -2232,11 +2301,22 @@ fn infer_expr(
             } else {
                 let mut overloads = Vec::new();
                 for scheme in schemes {
-                    if !scheme.vars.is_empty() || !scheme.preds.is_empty() {
+                    // Overloads in Rex are a *type-directed* choice at use sites.
+                    //
+                    // We can represent overload sets whose alternatives differ only
+                    // by type (e.g. `prim_map` for List/Array/Option/Result). But we
+                    // do *not* model “choice between predicate sets”: that would
+                    // require disjunction in the constraint solver.
+                    if !scheme.preds.is_empty() {
                         return Err(TypeError::AmbiguousOverload(var.name.clone()));
                     }
+
                     let scheme = apply_scheme_with_unifier(scheme, unifier);
-                    overloads.push(scheme.typ);
+                    let (preds, typ) = instantiate(&scheme, supply);
+                    if !preds.is_empty() {
+                        return Err(TypeError::AmbiguousOverload(var.name.clone()));
+                    }
+                    overloads.push(typ);
                 }
                 let t = Type::var(supply.fresh(Some(var.name.clone())));
                 let typed = TypedExpr::new(
@@ -2353,15 +2433,7 @@ fn infer_expr(
         Expr::Project(_, base, field) => {
             let (p1, t1, typed_base) = infer_expr(unifier, supply, env, adts, known, base)?;
             let base_ty = unifier.apply_type(&t1);
-            let mut known_variant = None;
-            if let Expr::Var(var) = base.as_ref() {
-                if let Some(info) = known.get(&var.name) {
-                    known_variant = Some(info.clone());
-                }
-            }
-            if known_variant.is_none() {
-                known_variant = known_variant_from_expr(base, &base_ty, adts);
-            }
+            let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
             let field_ty =
                 resolve_projection(unifier, supply, adts, &base_ty, known_variant, field)?;
             let typed = TypedExpr::new(
@@ -2372,6 +2444,43 @@ fn infer_expr(
                 },
             );
             Ok((p1, field_ty, typed))
+        }
+        Expr::RecordUpdate(_, base, updates) => {
+            let (p_base, t_base, typed_base) = infer_expr(unifier, supply, env, adts, known, base)?;
+            let base_ty = unifier.apply_type(&t_base);
+            let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
+            let update_fields: Vec<Symbol> = updates.keys().cloned().collect();
+            let (result_ty, fields) = resolve_record_update(
+                unifier,
+                supply,
+                adts,
+                &base_ty,
+                known_variant,
+                &update_fields,
+            )?;
+            let expected: HashMap<_, _> = fields.into_iter().collect();
+
+            let mut preds = p_base;
+            let mut typed_updates = BTreeMap::new();
+            for (k, v) in updates {
+                let expected_ty = expected.get(k).ok_or_else(|| TypeError::UnknownField {
+                    field: k.clone(),
+                    typ: result_ty.to_string(),
+                })?;
+                let (p1, t1, typed_v) =
+                    infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
+                unifier.unify(&t1, expected_ty)?;
+                preds.extend(p1);
+                typed_updates.insert(k.clone(), typed_v);
+            }
+            let typed = TypedExpr::new(
+                result_ty.clone(),
+                TypedExprKind::RecordUpdate {
+                    base: Box::new(typed_base),
+                    updates: typed_updates,
+                },
+            );
+            Ok((preds, result_ty, typed))
         }
         Expr::Let(..) => {
             let mut bindings = Vec::new();
@@ -2400,7 +2509,9 @@ fn infer_expr(
                 let def_ty = unifier.apply_type(&t1);
                 let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
                 env_cur.extend(v.name.clone(), scheme);
-                if let Some(known_variant) = known_variant_from_expr(&d, &def_ty, adts) {
+                if let Some(known_variant) =
+                    known_variant_from_expr_with_known(&d, &def_ty, adts, &known_cur)
+                {
                     known_cur.insert(
                         v.name.clone(),
                         KnownVariant {
@@ -2632,6 +2743,129 @@ fn known_variant_from_expr(
         adt: adt.name.clone(),
         variant: variant.name.clone(),
     })
+}
+
+fn known_variant_from_expr_with_known(
+    expr: &Expr,
+    expr_ty: &Type,
+    adts: &HashMap<Symbol, AdtDecl>,
+    known: &KnownVariants,
+) -> Option<KnownVariant> {
+    let mut expr = expr;
+    while let Expr::Ann(_, inner, _) = expr {
+        expr = inner.as_ref();
+    }
+    match expr {
+        Expr::Var(var) => known.get(&var.name).cloned(),
+        Expr::RecordUpdate(_, base, _) => {
+            known_variant_from_expr_with_known(base.as_ref(), expr_ty, adts, known)
+        }
+        _ => known_variant_from_expr(expr, expr_ty, adts),
+    }
+}
+
+fn resolve_record_update(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    adts: &HashMap<Symbol, AdtDecl>,
+    base_ty: &Type,
+    known_variant: Option<KnownVariant>,
+    update_fields: &[Symbol],
+) -> Result<(Type, Vec<(Symbol, Type)>), TypeError> {
+    if let TypeKind::Record(fields) = base_ty.as_ref() {
+        return Ok((base_ty.clone(), fields.clone()));
+    }
+
+    let field_for_errors = update_fields
+        .first()
+        .cloned()
+        .unwrap_or_else(|| sym("_"));
+
+    let (adt, variant) = if let Some(info) = known_variant {
+        let adt = adts
+            .get(&info.adt)
+            .ok_or_else(|| TypeError::UnknownTypeName(info.adt.clone()))?;
+        let variant = adt
+            .variants
+            .iter()
+            .find(|v| v.name == info.variant)
+            .ok_or_else(|| TypeError::UnknownField {
+                field: field_for_errors.clone(),
+                typ: base_ty.to_string(),
+            })?;
+        (adt, variant)
+    } else if let Some(adt_name) = type_head_name(base_ty) {
+        let adt = adts.get(adt_name).ok_or_else(|| TypeError::UnknownField {
+            field: field_for_errors.clone(),
+            typ: base_ty.to_string(),
+        })?;
+        if adt.variants.len() == 1 {
+            (adt, &adt.variants[0])
+        } else {
+            return Err(TypeError::FieldNotKnown {
+                field: field_for_errors.clone(),
+                typ: base_ty.to_string(),
+            });
+        }
+    } else if matches!(base_ty.as_ref(), TypeKind::Var(_)) {
+        let mut candidates = Vec::new();
+        for adt in adts.values() {
+            if adt.variants.len() != 1 {
+                continue;
+            }
+            let variant = &adt.variants[0];
+            let Some(fields) = record_fields(variant) else {
+                continue;
+            };
+            if update_fields
+                .iter()
+                .all(|field| fields.iter().any(|(name, _)| name == field))
+            {
+                candidates.push((adt, variant));
+            }
+        }
+        if candidates.len() == 1 {
+            candidates.remove(0)
+        } else if candidates.is_empty() {
+            return Err(TypeError::UnknownField {
+                field: field_for_errors.clone(),
+                typ: base_ty.to_string(),
+            });
+        } else {
+            return Err(TypeError::FieldNotKnown {
+                field: field_for_errors.clone(),
+                typ: base_ty.to_string(),
+            });
+        }
+    } else {
+        return Err(TypeError::UnknownField {
+            field: field_for_errors.clone(),
+            typ: base_ty.to_string(),
+        });
+    };
+
+    let (result_ty, fields) =
+        instantiate_variant_fields(adt, variant, supply).ok_or_else(|| TypeError::UnknownField {
+            field: field_for_errors.clone(),
+            typ: base_ty.to_string(),
+        })?;
+
+    for field in update_fields {
+        if fields.iter().all(|(name, _)| name != field) {
+            return Err(TypeError::UnknownField {
+                field: field.clone(),
+                typ: base_ty.to_string(),
+            });
+        }
+    }
+
+    unifier.unify(base_ty, &result_ty)?;
+    let result_ty = unifier.apply_type(&result_ty);
+    let fields = fields
+        .into_iter()
+        .map(|(name, ty)| (name, unifier.apply_type(&ty)))
+        .collect();
+    Ok((result_ty, fields))
 }
 
 fn resolve_projection(
@@ -2926,492 +3160,6 @@ fn check_match_exhaustive(
     })
 }
 
-fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) {
-    for decl in &prelude_typeclasses_program().decls {
-        match decl {
-            Decl::Class(class_decl) => ts
-                .inject_class_decl(class_decl)
-                .expect("failed to inject prelude class decl"),
-            Decl::Instance(inst_decl) => {
-                ts.inject_instance_decl(inst_decl)
-                    .expect("failed to inject prelude instance decl");
-            }
-            Decl::Type(..) | Decl::Fn(..) => {}
-        }
-    }
-}
-
-pub fn prelude_typeclasses_program() -> &'static Program {
-    static PROGRAM: OnceLock<Program> = OnceLock::new();
-    PROGRAM.get_or_init(|| {
-        let source = include_str!("prelude_typeclasses.rex");
-        let tokens = Token::tokenize(source).expect("failed to lex Rex prelude type class source");
-        let mut parser = Parser::new(tokens);
-        parser.parse_program().unwrap_or_else(|errs| {
-            let mut out = String::from("failed to parse Rex prelude type class source:");
-            for err in errs {
-                out.push_str(&format!("\n  {err}"));
-            }
-            panic!("{out}");
-        })
-    })
-}
-
-fn inject_prelude_primops(ts: &mut TypeSystem) {
-    // Rust-backed intrinsics used by `rex-ts/src/prelude_typeclasses.rex`.
-    //
-    // These intentionally carry no typeclass predicates. An instance method
-    // body should not need to assume the class it is defining.
-    let bool_ty = Type::con("bool", 0);
-    let i32_ty = Type::con("i32", 0);
-
-    // Polymorphic equality intrinsics.
-    {
-        let a_tv = ts.supply.fresh(Some(sym("a")));
-        let a = Type::var(a_tv.clone());
-        ts.add_value(
-            "prim_eq",
-            Scheme::new(
-                vec![a_tv.clone()],
-                vec![],
-                Type::fun(a.clone(), Type::fun(a.clone(), bool_ty.clone())),
-            ),
-        );
-        ts.add_value(
-            "prim_ne",
-            Scheme::new(
-                vec![a_tv],
-                vec![],
-                Type::fun(a.clone(), Type::fun(a, bool_ty.clone())),
-            ),
-        );
-    }
-
-    // Numeric intrinsics (monomorphic overloads).
-    {
-        let additive = [
-            "string", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
-        ];
-        for prim in additive {
-            let t = Type::con(prim, 0);
-            ts.add_value("prim_zero", Scheme::new(vec![], vec![], t.clone()));
-            ts.add_value(
-                "prim_add",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
-            );
-        }
-
-        let multiplicative = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64"];
-        for prim in multiplicative {
-            let t = Type::con(prim, 0);
-            ts.add_value("prim_one", Scheme::new(vec![], vec![], t.clone()));
-            ts.add_value(
-                "prim_mul",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
-            );
-        }
-
-        let signed = ["i8", "i16", "i32", "i64", "f32", "f64"];
-        for prim in signed {
-            let t = Type::con(prim, 0);
-            ts.add_value(
-                "prim_sub",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
-            );
-            ts.add_value(
-                "prim_negate",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), t.clone())),
-            );
-        }
-
-        for prim in ["f32", "f64"] {
-            let t = Type::con(prim, 0);
-            ts.add_value(
-                "prim_div",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
-            );
-        }
-
-        let integral = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"];
-        for prim in integral {
-            let t = Type::con(prim, 0);
-            ts.add_value(
-                "prim_mod",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
-            );
-        }
-    }
-
-    // Ordering intrinsics (monomorphic overloads).
-    {
-        let ord = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string"];
-        for prim in ord {
-            let t = Type::con(prim, 0);
-            ts.add_value(
-                "prim_cmp",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), i32_ty.clone()))),
-            );
-            for name in ["prim_lt", "prim_le", "prim_gt", "prim_ge"] {
-                ts.add_value(
-                    name,
-                    Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), bool_ty.clone()))),
-                );
-            }
-        }
-    }
-}
-
-fn build_prelude(ts: &mut TypeSystem) {
-    // Primitive type constructors
-    let prims = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string",
-        "uuid", "datetime",
-    ];
-    for prim in prims {
-        ts.env
-            .extend(sym(prim), Scheme::new(vec![], vec![], Type::con(prim, 0)));
-    }
-
-    // Type constructors for ADTs used in prelude schemes.
-    let result_con = Type::con("Result", 2);
-    let option_con = Type::con("Option", 1);
-
-    // Register ADT constructors as value-level functions.
-    {
-        let list_name = sym("List");
-        let a_name = sym("a");
-        let list_params = vec![a_name.clone()];
-        let mut list_adt = AdtDecl::new(&list_name, &list_params, &mut ts.supply);
-        let a = list_adt.param_type(&a_name).unwrap();
-        let list_a = list_adt.result_type();
-        list_adt.add_variant(sym("Empty"), vec![]);
-        list_adt.add_variant(sym("Cons"), vec![a.clone(), list_a.clone()]);
-        ts.inject_adt(&list_adt);
-    }
-    {
-        let option_name = sym("Option");
-        let t_name = sym("t");
-        let option_params = vec![t_name.clone()];
-        let mut option_adt = AdtDecl::new(&option_name, &option_params, &mut ts.supply);
-        let t = option_adt.param_type(&t_name).unwrap();
-        option_adt.add_variant(sym("Some"), vec![t]);
-        option_adt.add_variant(sym("None"), vec![]);
-        ts.inject_adt(&option_adt);
-    }
-    {
-        let result_name = sym("Result");
-        let e_name = sym("e");
-        let t_name = sym("t");
-        let result_params = vec![e_name.clone(), t_name.clone()];
-        let mut result_adt = AdtDecl::new(&result_name, &result_params, &mut ts.supply);
-        let e = result_adt.param_type(&e_name).unwrap();
-        let t = result_adt.param_type(&t_name).unwrap();
-        result_adt.add_variant(sym("Err"), vec![e]);
-        result_adt.add_variant(sym("Ok"), vec![t]);
-        ts.inject_adt(&result_adt);
-    }
-
-    inject_prelude_primops(ts);
-    inject_prelude_classes_and_instances(ts);
-
-    // Helper constructors used to describe prelude schemes below.
-    let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(sym(name)));
-    let option_of = |t: Type| Type::app(option_con.clone(), t);
-    let result_of = |t: Type, e: Type| Type::app(Type::app(result_con.clone(), e), t);
-    let indexable_of = |container: Type, elem: Type| Type::tuple(vec![container, elem]);
-
-    // Inject provided function declarations and schemes.
-
-    // Boolean operators
-    let bool_ty = Type::con("bool", 0);
-    ts.add_value(
-        "&&",
-        Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(bool_ty.clone(), Type::fun(bool_ty.clone(), bool_ty.clone())),
-        ),
-    );
-    ts.add_value(
-        "||",
-        Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(bool_ty.clone(), Type::fun(bool_ty.clone(), bool_ty.clone())),
-        ),
-    );
-
-    // Collection combinators (type class based)
-    {
-        let f_tv = fresh_tv(ts, "f");
-        let a_tv = fresh_tv(ts, "a");
-        let b_tv = fresh_tv(ts, "b");
-        let f = Type::var(f_tv.clone());
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let fa = Type::app(f.clone(), a.clone());
-        let fb = Type::app(f.clone(), b.clone());
-
-        ts.add_value(
-            "map",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Functor", f.clone())],
-                Type::fun(
-                    Type::fun(a.clone(), b.clone()),
-                    Type::fun(fa.clone(), fb.clone()),
-                ),
-            ),
-        );
-        ts.add_value(
-            "foldl",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Foldable", f.clone())],
-                Type::fun(
-                    Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                    Type::fun(b.clone(), Type::fun(fa.clone(), b.clone())),
-                ),
-            ),
-        );
-        ts.add_value(
-            "foldr",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Foldable", f.clone())],
-                Type::fun(
-                    Type::fun(a.clone(), Type::fun(b.clone(), b.clone())),
-                    Type::fun(b.clone(), Type::fun(fa.clone(), b.clone())),
-                ),
-            ),
-        );
-        ts.add_value(
-            "fold",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Foldable", f.clone())],
-                Type::fun(
-                    Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                    Type::fun(b.clone(), Type::fun(fa.clone(), b.clone())),
-                ),
-            ),
-        );
-        ts.add_value(
-            "filter",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![Predicate::new("Filterable", f.clone())],
-                Type::fun(
-                    Type::fun(a.clone(), bool_ty.clone()),
-                    Type::fun(fa.clone(), fa.clone()),
-                ),
-            ),
-        );
-        ts.add_value(
-            "filter_map",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Filterable", f.clone())],
-                Type::fun(
-                    Type::fun(a.clone(), option_of(b.clone())),
-                    Type::fun(fa.clone(), fb.clone()),
-                ),
-            ),
-        );
-        ts.add_value(
-            "flat_map",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Monad", f.clone())],
-                Type::fun(
-                    Type::fun(a.clone(), fb.clone()),
-                    Type::fun(fa.clone(), fb.clone()),
-                ),
-            ),
-        );
-        ts.add_value(
-            "and_then",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Monad", f.clone())],
-                Type::fun(
-                    Type::fun(a.clone(), fb.clone()),
-                    Type::fun(fa.clone(), fb.clone()),
-                ),
-            ),
-        );
-        ts.add_value(
-            "or_else",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![Predicate::new("Alternative", f.clone())],
-                Type::fun(
-                    Type::fun(fa.clone(), fa.clone()),
-                    Type::fun(fa.clone(), fa.clone()),
-                ),
-            ),
-        );
-        ts.add_value(
-            "sum",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("AdditiveMonoid", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-        ts.add_value(
-            "mean",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("Field", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-        ts.add_value(
-            "count",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![Predicate::new("Foldable", f.clone())],
-                Type::fun(fa.clone(), Type::con("i32", 0)),
-            ),
-        );
-        ts.add_value(
-            "take",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![Predicate::new("Sequence", f.clone())],
-                Type::fun(Type::con("i32", 0), Type::fun(fa.clone(), fa.clone())),
-            ),
-        );
-        ts.add_value(
-            "skip",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![Predicate::new("Sequence", f.clone())],
-                Type::fun(Type::con("i32", 0), Type::fun(fa.clone(), fa.clone())),
-            ),
-        );
-        ts.add_value(
-            "zip",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Sequence", f.clone())],
-                Type::fun(
-                    fa.clone(),
-                    Type::fun(
-                        fb.clone(),
-                        Type::app(f.clone(), Type::tuple(vec![a.clone(), b.clone()])),
-                    ),
-                ),
-            ),
-        );
-        ts.add_value(
-            "unzip",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone(), b_tv.clone()],
-                vec![Predicate::new("Sequence", f.clone())],
-                Type::fun(
-                    Type::app(f.clone(), Type::tuple(vec![a.clone(), b.clone()])),
-                    Type::tuple(vec![fa.clone(), fb.clone()]),
-                ),
-            ),
-        );
-        ts.add_value(
-            "min",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("Ord", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-        ts.add_value(
-            "max",
-            Scheme::new(
-                vec![f_tv, a_tv],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("Ord", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-    }
-
-    // Indexable access
-    {
-        let t_tv = fresh_tv(ts, "t");
-        let a_tv = fresh_tv(ts, "a");
-        let t = Type::var(t_tv.clone());
-        let a = Type::var(a_tv.clone());
-        let pred = Predicate::new("Indexable", indexable_of(t.clone(), a.clone()));
-        ts.add_value(
-            "get",
-            Scheme::new(
-                vec![t_tv, a_tv],
-                vec![pred],
-                Type::fun(Type::con("i32", 0), Type::fun(t, a)),
-            ),
-        );
-    }
-
-    // Option helpers
-    {
-        let a_tv = fresh_tv(ts, "a");
-        let a = Type::var(a_tv.clone());
-        let opt_a = option_of(a.clone());
-        ts.add_value(
-            "is_some",
-            Scheme::new(
-                vec![a_tv.clone()],
-                vec![],
-                Type::fun(opt_a.clone(), bool_ty.clone()),
-            ),
-        );
-        ts.add_value(
-            "is_none",
-            Scheme::new(
-                vec![a_tv.clone()],
-                vec![],
-                Type::fun(opt_a.clone(), bool_ty.clone()),
-            ),
-        );
-    }
-
-    // Result helpers
-    {
-        let t_tv = fresh_tv(ts, "t");
-        let e_tv = fresh_tv(ts, "e");
-        let t = Type::var(t_tv.clone());
-        let e = Type::var(e_tv.clone());
-        let res_te = result_of(t.clone(), e.clone());
-        ts.add_value(
-            "is_ok",
-            Scheme::new(
-                vec![t_tv.clone(), e_tv.clone()],
-                vec![],
-                Type::fun(res_te.clone(), bool_ty.clone()),
-            ),
-        );
-        ts.add_value(
-            "is_err",
-            Scheme::new(
-                vec![t_tv.clone(), e_tv.clone()],
-                vec![],
-                Type::fun(res_te.clone(), bool_ty.clone()),
-            ),
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3510,6 +3258,20 @@ mod tests {
     fn parse_program(code: &str) -> rex_ast::expr::Program {
         let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
         parser.parse_program().unwrap()
+    }
+
+    fn inject_decls(ts: &mut TypeSystem, decls: &[rex_ast::expr::Decl]) -> Result<(), TypeError> {
+        for decl in decls {
+            match decl {
+                rex_ast::expr::Decl::Type(td) => ts.inject_type_decl(td)?,
+                rex_ast::expr::Decl::Class(cd) => ts.inject_class_decl(cd)?,
+                rex_ast::expr::Decl::Instance(id) => {
+                    let _ = ts.inject_instance_decl(id)?;
+                }
+                rex_ast::expr::Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
+            }
+        }
+        Ok(())
     }
 
     fn strip_span(mut err: TypeError) -> TypeError {
@@ -4299,5 +4061,95 @@ mod tests {
             .find(|p| p.class.as_ref() == "Functor" && p.typ == Type::con("Dict", 1))
             .expect("expected Functor Dict constraint");
         assert!(!entails(&ts.classes, &[], pred).unwrap());
+    }
+
+    #[test]
+    fn record_update_single_variant_adt_infers() {
+        let program = parse_program(
+            r#"
+            type Foo = Bar { x: i32, y: i32 }
+            let
+              foo: Foo = Bar { x = 1, y = 2 },
+              bar = { foo with { x = 3 } }
+            in
+              bar
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        inject_decls(&mut ts, &program.decls).unwrap();
+        let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
+        assert_eq!(typ.to_string(), "Foo");
+    }
+
+    #[test]
+    fn record_update_unknown_field_errors() {
+        let program = parse_program(
+            r#"
+            type Foo = Bar { x: i32 }
+            let
+              foo: Foo = Bar { x = 1 }
+            in
+              { foo with { y = 2 } }
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        inject_decls(&mut ts, &program.decls).unwrap();
+        let err = ts.infer(program.expr.as_ref()).unwrap_err();
+        let err = strip_span(err);
+        assert!(matches!(err, TypeError::UnknownField { .. }));
+    }
+
+    #[test]
+    fn record_update_requires_refined_variant_for_sum_types() {
+        let program = parse_program(
+            r#"
+            type Foo = Bar { x: i32 } | Baz { x: i32 }
+            let
+              f = \ (foo : Foo) -> { foo with { x = 2 } }
+            in
+              f (Bar { x = 1 })
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        inject_decls(&mut ts, &program.decls).unwrap();
+        let err = ts.infer(program.expr.as_ref()).unwrap_err();
+        let err = strip_span(err);
+        assert!(matches!(err, TypeError::FieldNotKnown { .. }));
+    }
+
+    #[test]
+    fn record_update_allowed_after_match_refines_variant() {
+        let program = parse_program(
+            r#"
+            type Foo = Bar { x: i32 } | Baz { x: i32 }
+            let
+              f = \ (foo : Foo) ->
+                match foo
+                  when Bar {x} -> { foo with { x = x + 1 } }
+                  when Baz {x} -> { foo with { x = x + 2 } }
+            in
+              f (Bar { x = 1 })
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        inject_decls(&mut ts, &program.decls).unwrap();
+        let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
+        assert_eq!(typ.to_string(), "Foo");
+    }
+
+    #[test]
+    fn record_update_plain_record_type() {
+        let program = parse_program(
+            r#"
+            let
+              f = \ (r : { x: i32, y: i32 }) -> { r with { y = 9 } }
+            in
+              f { x = 1, y = 2 }
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        inject_decls(&mut ts, &program.decls).unwrap();
+        let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
+        assert_eq!(typ.to_string(), "{x: i32, y: i32}");
     }
 }

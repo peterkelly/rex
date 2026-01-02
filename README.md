@@ -298,6 +298,22 @@ in
     when MyVariant2 _ -> 0
 ```
 
+## Record Update
+
+When a value is *definitely* a record-carrying constructor, you can create a new value by updating fields:
+
+```rex
+type Boxed = Boxed { value: i32 }
+
+let
+  x = Boxed { value = 1 }
+  y = { x with { value = 2 } }
+in
+  y.value
+```
+
+For multi-variant ADTs, record update follows the same “constructor must be known” rule as projection (use `match` to refine the variant first).
+
 ## Standard Library (Prelude)
 
 Rex ships with a small prelude of common helpers. The type system constrains these using type classes where appropriate.
@@ -306,7 +322,7 @@ Rex ships with a small prelude of common helpers. The type system constrains the
 - Equality: `==`, `!=`
 - Ordering: `<`, `<=`, `>`, `>=`
 - Booleans: `&&`, `||`
-- Collections (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `flat_map`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `and_then`, `or_else`
+- Collections (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
 - Option/Result helpers: `is_some`, `is_none`, `is_ok`, `is_err`
 
 ## Contribute
