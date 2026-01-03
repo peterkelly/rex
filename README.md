@@ -39,6 +39,7 @@ This repo is a Cargo workspace. The key crates are:
 - `docs/ARCHITECTURE.md`: crate pipeline and design notes
 - `docs/EMBEDDING.md`: embedding Rex in Rust (API patterns)
 - `docs/LANGUAGE.md`: language notes and examples
+- `docs/SPEC.md`: locked semantics (record update, coherence, defaulting)
 - `docs/CONTRIBUTING.md`: contributor workflow and repo policies
 
 ## CLI
@@ -61,6 +62,8 @@ Other useful flags:
 - `--type`: print inferred type (and constraints) and exit
 - `--stdin`: read a program from stdin
 - `--stack-size-mb`: control the runner thread stack size
+- `--gas`: total gas budget for parse/type/eval
+- `--no-gas`: disable gas metering
 
 ## Embedding (Rust)
 

@@ -4,7 +4,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Display, Formatter};
 use std::sync::{Arc, Mutex};
 
+use async_recursion::async_recursion;
 use chrono::{DateTime, Utc};
+use futures::{FutureExt, future::BoxFuture};
+use rex_gas::GasMeter;
 use rex_ast::expr::{
     ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, intern,
 };
@@ -31,6 +34,41 @@ fn type_head_is_var(typ: &Type) -> bool {
         cur = head;
     }
     matches!(cur.as_ref(), TypeKind::Var(..))
+}
+
+type NativeFuture = BoxFuture<'static, Result<Value, EngineError>>;
+type SyncNativeCallable =
+    Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>;
+type AsyncNativeCallable =
+    Arc<dyn Fn(Engine, Type, Vec<Value>) -> NativeFuture + Send + Sync>;
+
+#[derive(Clone)]
+enum NativeCallable {
+    Sync(SyncNativeCallable),
+    Async(AsyncNativeCallable),
+}
+
+impl NativeCallable {
+    fn call_sync(&self, engine: &Engine, typ: &Type, args: &[Value]) -> Result<Value, EngineError> {
+        match self {
+            NativeCallable::Sync(f) => (f)(engine, typ, args),
+            NativeCallable::Async(f) => {
+                futures::executor::block_on((f)(engine.clone(), typ.clone(), args.to_vec()))
+            }
+        }
+    }
+
+    async fn call_async(
+        &self,
+        engine: Engine,
+        typ: Type,
+        args: Vec<Value>,
+    ) -> Result<Value, EngineError> {
+        match self {
+            NativeCallable::Sync(f) => (f)(&engine, &typ, &args),
+            NativeCallable::Async(f) => (f)(engine, typ, args).await,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -170,7 +208,8 @@ pub struct NativeFn {
     name: Symbol,
     arity: usize,
     typ: Type,
-    func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
+    func: NativeCallable,
+    gas_cost: u64,
     applied: Vec<Value>,
     applied_types: Vec<Type>,
 }
@@ -180,13 +219,15 @@ impl NativeFn {
         name: Symbol,
         arity: usize,
         typ: Type,
-        func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
+        func: NativeCallable,
+        gas_cost: u64,
     ) -> Self {
         Self {
             name,
             arity,
             typ,
             func,
+            gas_cost,
             applied: Vec::new(),
             applied_types: Vec::new(),
         }
@@ -223,7 +264,7 @@ impl NativeFn {
         for arg_ty in self.applied_types.iter().rev() {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
-        (self.func)(engine, &full_ty, &self.applied)
+        self.func.call_sync(engine, &full_ty, &self.applied)
     }
 
     fn call_zero(&self, engine: &Engine) -> Result<Value, EngineError> {
@@ -234,7 +275,56 @@ impl NativeFn {
                 got: 0,
             });
         }
-        (self.func)(engine, &self.typ, &[])
+        self.func.call_sync(engine, &self.typ, &[])
+    }
+
+    async fn apply_async(
+        mut self,
+        engine: &Engine,
+        arg: Value,
+        arg_type: Option<&Type>,
+    ) -> Result<Value, EngineError> {
+        if self.arity == 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name,
+                expected: 0,
+                got: 1,
+            });
+        }
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
+        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+            name: self.name.clone(),
+            expected: arg_ty.to_string(),
+            got: actual_ty.to_string(),
+        })?;
+        self.typ = rest_ty.apply(&subst);
+        self.applied.push(arg);
+        self.applied_types.push(actual_ty);
+        if is_function_type(&self.typ) {
+            return Ok(Value::Native(self));
+        }
+        let mut full_ty = self.typ.clone();
+        for arg_ty in self.applied_types.iter().rev() {
+            full_ty = Type::fun(arg_ty.clone(), full_ty);
+        }
+        self.func
+            .call_async(engine.clone(), full_ty, self.applied)
+            .await
+    }
+
+    async fn call_zero_async(&self, engine: &Engine) -> Result<Value, EngineError> {
+        if self.arity != 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name.clone(),
+                expected: self.arity,
+                got: 0,
+            });
+        }
+        self.func
+            .call_async(engine.clone(), self.typ.clone(), Vec::new())
+            .await
     }
 }
 
@@ -307,7 +397,180 @@ impl OverloadedFn {
         }
 
         let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
-        (imp.func)(engine, &full_ty, &self.applied)
+        imp.func.call_sync(engine, &full_ty, &self.applied)
+    }
+
+    fn apply_with_gas(
+        mut self,
+        engine: &Engine,
+        arg: Value,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
+        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+            name: self.name.clone(),
+            expected: arg_ty.to_string(),
+            got: actual_ty.to_string(),
+        })?;
+        let rest_ty = rest_ty.apply(&subst);
+        self.applied.push(arg);
+        self.applied_types.push(actual_ty);
+        if is_function_type(&rest_ty) {
+            return Ok(Value::Overloaded(OverloadedFn {
+                name: self.name,
+                typ: rest_ty,
+                applied: self.applied,
+                applied_types: self.applied_types,
+            }));
+        }
+        let mut full_ty = rest_ty;
+        for arg_ty in self.applied_types.iter().rev() {
+            full_ty = Type::fun(arg_ty.clone(), full_ty);
+        }
+        if engine.types.class_methods.contains_key(&self.name) {
+            let mut func = engine.resolve_class_method_value_with_gas(&self.name, &full_ty, gas)?;
+            let mut cur_ty = full_ty;
+            for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
+                let (arg_ty, rest_ty) = split_fun(&cur_ty)
+                    .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
+                let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
+                    name: self.name.clone(),
+                    expected: arg_ty.to_string(),
+                    got: applied_ty.to_string(),
+                })?;
+                let rest_ty = rest_ty.apply(&subst);
+                func = apply_with_gas(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas)?;
+                cur_ty = rest_ty;
+            }
+            return Ok(func);
+        }
+
+        let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(imp.gas_cost)
+            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(self.applied.len() as u64));
+        gas.charge(amount)?;
+        imp.func.call_sync(engine, &full_ty, &self.applied)
+    }
+
+    async fn apply_async(
+        mut self,
+        engine: &Engine,
+        arg: Value,
+        arg_type: Option<&Type>,
+    ) -> Result<Value, EngineError> {
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
+        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+            name: self.name.clone(),
+            expected: arg_ty.to_string(),
+            got: actual_ty.to_string(),
+        })?;
+        let rest_ty = rest_ty.apply(&subst);
+        self.applied.push(arg);
+        self.applied_types.push(actual_ty);
+        if is_function_type(&rest_ty) {
+            return Ok(Value::Overloaded(OverloadedFn {
+                name: self.name,
+                typ: rest_ty,
+                applied: self.applied,
+                applied_types: self.applied_types,
+            }));
+        }
+        let mut full_ty = rest_ty;
+        for arg_ty in self.applied_types.iter().rev() {
+            full_ty = Type::fun(arg_ty.clone(), full_ty);
+        }
+        if engine.types.class_methods.contains_key(&self.name) {
+            let mut func = engine.resolve_class_method_value(&self.name, &full_ty)?;
+            let mut cur_ty = full_ty;
+            for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
+                let (arg_ty, rest_ty) = split_fun(&cur_ty)
+                    .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
+                let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
+                    name: self.name.clone(),
+                    expected: arg_ty.to_string(),
+                    got: applied_ty.to_string(),
+                })?;
+                let rest_ty = rest_ty.apply(&subst);
+                func = apply_async(engine, func, applied, Some(&cur_ty), Some(applied_ty)).await?;
+                cur_ty = rest_ty;
+            }
+            return Ok(func);
+        }
+
+        let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
+        imp.func
+            .call_async(engine.clone(), full_ty, self.applied)
+            .await
+    }
+
+    async fn apply_async_with_gas(
+        mut self,
+        engine: &Engine,
+        arg: Value,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
+        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+            name: self.name.clone(),
+            expected: arg_ty.to_string(),
+            got: actual_ty.to_string(),
+        })?;
+        let rest_ty = rest_ty.apply(&subst);
+        self.applied.push(arg);
+        self.applied_types.push(actual_ty);
+        if is_function_type(&rest_ty) {
+            return Ok(Value::Overloaded(OverloadedFn {
+                name: self.name,
+                typ: rest_ty,
+                applied: self.applied,
+                applied_types: self.applied_types,
+            }));
+        }
+        let mut full_ty = rest_ty;
+        for arg_ty in self.applied_types.iter().rev() {
+            full_ty = Type::fun(arg_ty.clone(), full_ty);
+        }
+        if engine.types.class_methods.contains_key(&self.name) {
+            let mut func = engine.resolve_class_method_value_with_gas(&self.name, &full_ty, gas)?;
+            let mut cur_ty = full_ty;
+            for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
+                let (arg_ty, rest_ty) = split_fun(&cur_ty)
+                    .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
+                let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
+                    name: self.name.clone(),
+                    expected: arg_ty.to_string(),
+                    got: applied_ty.to_string(),
+                })?;
+                let rest_ty = rest_ty.apply(&subst);
+                func =
+                    apply_async_with_gas(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas)
+                        .await?;
+                cur_ty = rest_ty;
+            }
+            return Ok(func);
+        }
+
+        let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(imp.gas_cost)
+            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(self.applied.len() as u64));
+        gas.charge(amount)?;
+        imp.func
+            .call_async(engine.clone(), full_ty, self.applied)
+            .await
     }
 }
 
@@ -316,12 +579,19 @@ struct NativeImpl {
     name: Symbol,
     arity: usize,
     scheme: Scheme,
-    func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
+    func: NativeCallable,
+    gas_cost: u64,
 }
 
 impl NativeImpl {
     fn to_native_fn(&self, typ: Type) -> NativeFn {
-        NativeFn::new(self.name.clone(), self.arity, typ, self.func.clone())
+        NativeFn::new(
+            self.name.clone(),
+            self.arity,
+            typ,
+            self.func.clone(),
+            self.gas_cost,
+        )
     }
 }
 
@@ -784,7 +1054,7 @@ impl Engine {
         let func =
             Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Value]| Ok(value.clone()));
         let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 0, func)
+        self.register_native(name, scheme, 0, NativeCallable::Sync(func), 0)
     }
 
     pub fn inject_value_typed(
@@ -797,7 +1067,7 @@ impl Engine {
         let func =
             Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Value]| Ok(value.clone()));
         let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 0, func)
+        self.register_native(name, scheme, 0, NativeCallable::Sync(func), 0)
     }
 
     pub fn inject_fn0<F, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
@@ -820,7 +1090,7 @@ impl Engine {
         });
         let typ = R::rex_type();
         let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name_string, scheme, 0, func)
+        self.register_native(name_string, scheme, 0, NativeCallable::Sync(func), 0)
     }
 
     pub fn inject_fn1<F, A, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
@@ -844,7 +1114,7 @@ impl Engine {
         });
         let typ = Type::fun(A::rex_type(), R::rex_type());
         let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 1, func)
+        self.register_native(name, scheme, 1, NativeCallable::Sync(func), 0)
     }
 
     pub fn inject_fn2<F, A, B, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
@@ -870,7 +1140,100 @@ impl Engine {
         });
         let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
         let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 2, func)
+        self.register_native(name, scheme, 2, NativeCallable::Sync(func), 0)
+    }
+
+    pub fn inject_async_fn0<F, Fut, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        R: IntoValue + RexType,
+    {
+        let name = normalize_name(name);
+        let name_sym = name.clone();
+        let f = Arc::new(f);
+        let func = Arc::new(move |_engine: Engine, _typ: Type, args: Vec<Value>| {
+            let f = f.clone();
+            let name_sym = name_sym.clone();
+            async move {
+                if !args.is_empty() {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 0,
+                        got: args.len(),
+                    });
+                }
+                Ok(f().await.into_value())
+            }
+            .boxed()
+        });
+        let typ = R::rex_type();
+        let scheme = Scheme::new(vec![], vec![], typ);
+        self.register_native(name, scheme, 0, NativeCallable::Async(func), 0)
+    }
+
+    pub fn inject_async_fn1<F, Fut, A, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
+    where
+        F: Fn(A) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        A: FromValue + RexType,
+        R: IntoValue + RexType,
+    {
+        let name = normalize_name(name);
+        let name_sym = name.clone();
+        let f = Arc::new(f);
+        let func = Arc::new(move |_engine: Engine, _typ: Type, args: Vec<Value>| {
+            let f = f.clone();
+            let name_sym = name_sym.clone();
+            async move {
+                if args.len() != 1 {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 1,
+                        got: args.len(),
+                    });
+                }
+                let a = A::from_value(&args[0], name_sym.as_ref())?;
+                Ok(f(a).await.into_value())
+            }
+            .boxed()
+        });
+        let typ = Type::fun(A::rex_type(), R::rex_type());
+        let scheme = Scheme::new(vec![], vec![], typ);
+        self.register_native(name, scheme, 1, NativeCallable::Async(func), 0)
+    }
+
+    pub fn inject_async_fn2<F, Fut, A, B, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
+    where
+        F: Fn(A, B) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        A: FromValue + RexType,
+        B: FromValue + RexType,
+        R: IntoValue + RexType,
+    {
+        let name = normalize_name(name);
+        let name_sym = name.clone();
+        let f = Arc::new(f);
+        let func = Arc::new(move |_engine: Engine, _typ: Type, args: Vec<Value>| {
+            let f = f.clone();
+            let name_sym = name_sym.clone();
+            async move {
+                if args.len() != 2 {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 2,
+                        got: args.len(),
+                    });
+                }
+                let a = A::from_value(&args[0], name_sym.as_ref())?;
+                let b = B::from_value(&args[1], name_sym.as_ref())?;
+                Ok(f(a, b).await.into_value())
+            }
+            .boxed()
+        });
+        let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
+        let scheme = Scheme::new(vec![], vec![], typ);
+        self.register_native(name, scheme, 2, NativeCallable::Async(func), 0)
     }
 
     pub fn inject_native<F>(
@@ -886,7 +1249,7 @@ impl Engine {
         let name = normalize_name(name);
         let scheme = Scheme::new(vec![], vec![], typ);
         let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Value]| func(engine, args));
-        self.register_native(name, scheme, arity, func)
+        self.register_native(name, scheme, arity, NativeCallable::Sync(func), 0)
     }
 
     pub fn inject_native_scheme<F>(
@@ -901,7 +1264,7 @@ impl Engine {
     {
         let name = normalize_name(name);
         let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Value]| func(engine, args));
-        self.register_native(name, scheme, arity, func)
+        self.register_native(name, scheme, arity, NativeCallable::Sync(func), 0)
     }
 
     pub fn inject_native_scheme_typed<F>(
@@ -915,7 +1278,62 @@ impl Engine {
         F: Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync + 'static,
     {
         let name = normalize_name(name);
-        self.register_native(name, scheme, arity, Arc::new(func))
+        self.register_native(name, scheme, arity, NativeCallable::Sync(Arc::new(func)), 0)
+    }
+
+    pub fn inject_native_scheme_typed_with_gas_cost<F>(
+        &mut self,
+        name: &str,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        func: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync + 'static,
+    {
+        let name = normalize_name(name);
+        self.register_native(
+            name,
+            scheme,
+            arity,
+            NativeCallable::Sync(Arc::new(func)),
+            gas_cost,
+        )
+    }
+
+    pub fn inject_native_scheme_typed_async<F, Fut>(
+        &mut self,
+        name: &str,
+        scheme: Scheme,
+        arity: usize,
+        func: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(Engine, Type, Vec<Value>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Value, EngineError>> + Send + 'static,
+    {
+        let name = normalize_name(name);
+        let func = Arc::new(move |engine: Engine, typ: Type, args: Vec<Value>| func(engine, typ, args).boxed());
+        self.register_native(name, scheme, arity, NativeCallable::Async(func), 0)
+    }
+
+    pub fn inject_native_scheme_typed_async_with_gas_cost<F, Fut>(
+        &mut self,
+        name: &str,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        func: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(Engine, Type, Vec<Value>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Value, EngineError>> + Send + 'static,
+    {
+        let name = normalize_name(name);
+        let func =
+            Arc::new(move |engine: Engine, typ: Type, args: Vec<Value>| func(engine, typ, args).boxed());
+        self.register_native(name, scheme, arity, NativeCallable::Async(func), gas_cost)
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
@@ -934,7 +1352,7 @@ impl Engine {
                 Ok(Value::Adt(ctor_name.clone(), args.to_vec()))
             });
             let arity = type_arity(&scheme.typ);
-            self.register_native(ctor, scheme, arity, func)?;
+            self.register_native(ctor, scheme, arity, NativeCallable::Sync(func), 0)?;
         }
         Ok(())
     }
@@ -1010,6 +1428,25 @@ impl Engine {
         self.eval_inner(expr)
     }
 
+    pub async fn eval_async(&mut self, expr: &Expr) -> Result<Value, EngineError> {
+        let typed = self.type_check(expr)?;
+        eval_typed_expr_async(self, &self.env, &typed).await
+    }
+
+    pub fn eval_with_gas(&mut self, expr: &Expr, gas: &mut GasMeter) -> Result<Value, EngineError> {
+        let typed = self.type_check(expr)?;
+        eval_typed_expr_with_gas(self, &self.env, &typed, gas)
+    }
+
+    pub async fn eval_async_with_gas(
+        &mut self,
+        expr: &Expr,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        let typed = self.type_check(expr)?;
+        eval_typed_expr_async_with_gas(self, &self.env, &typed, gas).await
+    }
+
     pub fn eval_with_stack_size(
         &mut self,
         expr: &Expr,
@@ -1059,7 +1496,8 @@ impl Engine {
         name: Symbol,
         scheme: Scheme,
         arity: usize,
-        func: Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>,
+        func: NativeCallable,
+        gas_cost: u64,
     ) -> Result<(), EngineError> {
         let expected = type_arity(&scheme.typ);
         if expected != arity {
@@ -1075,6 +1513,7 @@ impl Engine {
             arity,
             scheme,
             func,
+            gas_cost,
         };
         self.natives.insert(name, imp)
     }
@@ -1336,6 +1775,23 @@ impl Engine {
         Ok(value)
     }
 
+    fn resolve_class_method_value_with_gas(
+        &self,
+        name: &Symbol,
+        typ: &Type,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
+            Ok(res) => res,
+            Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
+                return Ok(Value::Overloaded(OverloadedFn::new(name.clone(), typ.clone())));
+            }
+            Err(err) => return Err(err),
+        };
+        let specialized = typed.as_ref().apply(&s);
+        eval_typed_expr_with_gas(self, &def_env, &specialized, gas)
+    }
+
     fn resolve_global_value(&self, name: &Symbol, typ: &Type) -> Result<Value, EngineError> {
         if let Some(value) = self.env.get(name) {
             match value {
@@ -1420,6 +1876,52 @@ impl Engine {
                         sym_name.clone(),
                         typ.clone(),
                     )))
+                } else {
+                    Err(EngineError::AmbiguousOverload { name: sym_name })
+                }
+            }
+        }
+    }
+
+    fn resolve_native_value_with_gas(
+        &self,
+        name: &str,
+        typ: &Type,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        let sym_name = sym(name);
+        let impls = self
+            .natives
+            .get(&sym_name)
+            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
+        let matches: Vec<NativeImpl> = impls
+            .iter()
+            .filter(|imp| impl_matches_type(imp, typ))
+            .cloned()
+            .collect();
+        match matches.len() {
+            0 => Err(EngineError::MissingImpl {
+                name: sym_name.clone(),
+                typ: typ.to_string(),
+            }),
+            1 => {
+                let imp = matches[0].clone();
+                let value = Value::Native(imp.to_native_fn(typ.clone()));
+                if imp.arity == 0 {
+                    if let Value::Native(native) = &value {
+                        return native.call_zero_with_gas(self, gas);
+                    }
+                }
+                Ok(value)
+            }
+            _ => {
+                if typ.ftv().is_empty() {
+                    Err(EngineError::AmbiguousImpl {
+                        name: sym_name.clone(),
+                        typ: typ.to_string(),
+                    })
+                } else if is_function_type(typ) {
+                    Ok(Value::Overloaded(OverloadedFn::new(sym_name.clone(), typ.clone())))
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }
@@ -2579,10 +3081,8 @@ fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(array_a.clone(), Type::fun(array_a, bool_ty.clone())),
         );
         engine.inject_native_scheme_typed("prim_array_ne", scheme, 2, |engine, call_type, args| {
-            let eq = engine
-                .resolve_native_impl("prim_array_eq", call_type)?
-                .func
-                .as_ref()(engine, call_type, args)?;
+            let imp = engine.resolve_native_impl("prim_array_eq", call_type)?;
+            let eq = imp.func.call_sync(engine, call_type, args)?;
             Ok(Value::Bool(!expect_bool(&eq, "prim_array_ne")?))
         })?;
     }
@@ -4721,6 +5221,742 @@ fn apply(
     }
 }
 
+impl NativeFn {
+    fn call_zero_with_gas(&self, engine: &Engine, gas: &mut GasMeter) -> Result<Value, EngineError> {
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(self.gas_cost)
+            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
+        gas.charge(amount)?;
+        self.call_zero(engine)
+    }
+
+    fn apply_with_gas(
+        mut self,
+        engine: &Engine,
+        arg: Value,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        if self.arity == 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name,
+                expected: 0,
+                got: 1,
+            });
+        }
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
+        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+            name: self.name.clone(),
+            expected: arg_ty.to_string(),
+            got: actual_ty.to_string(),
+        })?;
+        self.typ = rest_ty.apply(&subst);
+        self.applied.push(arg);
+        self.applied_types.push(actual_ty);
+        if is_function_type(&self.typ) {
+            return Ok(Value::Native(self));
+        }
+
+        let mut full_ty = self.typ.clone();
+        for arg_ty in self.applied_types.iter().rev() {
+            full_ty = Type::fun(arg_ty.clone(), full_ty);
+        }
+
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(self.gas_cost)
+            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(self.applied.len() as u64));
+        gas.charge(amount)?;
+        self.func.call_sync(engine, &full_ty, &self.applied)
+    }
+
+    async fn call_zero_async_with_gas(
+        &self,
+        engine: &Engine,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(self.gas_cost)
+            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
+        gas.charge(amount)?;
+        self.call_zero_async(engine).await
+    }
+
+    async fn apply_async_with_gas(
+        mut self,
+        engine: &Engine,
+        arg: Value,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+    ) -> Result<Value, EngineError> {
+        if self.arity == 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name,
+                expected: 0,
+                got: 1,
+            });
+        }
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let actual_ty = resolve_arg_type(arg_type, &arg)?;
+        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+            name: self.name.clone(),
+            expected: arg_ty.to_string(),
+            got: actual_ty.to_string(),
+        })?;
+        self.typ = rest_ty.apply(&subst);
+        self.applied.push(arg);
+        self.applied_types.push(actual_ty);
+        if is_function_type(&self.typ) {
+            return Ok(Value::Native(self));
+        }
+
+        let mut full_ty = self.typ.clone();
+        for arg_ty in self.applied_types.iter().rev() {
+            full_ty = Type::fun(arg_ty.clone(), full_ty);
+        }
+
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(self.gas_cost)
+            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(self.applied.len() as u64));
+        gas.charge(amount)?;
+        self.func
+            .call_async(engine.clone(), full_ty, self.applied)
+            .await
+    }
+}
+
+fn eval_typed_expr_with_gas(
+    engine: &Engine,
+    env: &Env,
+    expr: &TypedExpr,
+    gas: &mut GasMeter,
+) -> Result<Value, EngineError> {
+    let mut env = env.clone();
+    let mut cur = expr;
+    loop {
+        match &cur.kind {
+            TypedExprKind::Let { name, def, body } => {
+                gas.charge(gas.costs.eval_node)?;
+                let value = eval_typed_expr_with_gas(engine, &env, def, gas)?;
+                env = env.extend(name.clone(), value);
+                cur = body;
+            }
+            _ => break,
+        }
+    }
+
+    gas.charge(gas.costs.eval_node)?;
+    match &cur.kind {
+        TypedExprKind::Bool(v) => Ok(Value::Bool(*v)),
+        TypedExprKind::Uint(v) => Ok(Value::I32(*v as i32)),
+        TypedExprKind::Int(v) => Ok(Value::I32(*v as i32)),
+        TypedExprKind::Float(v) => Ok(Value::F32(*v as f32)),
+        TypedExprKind::String(v) => Ok(Value::String(v.clone())),
+        TypedExprKind::Uuid(v) => Ok(Value::Uuid(*v)),
+        TypedExprKind::DateTime(v) => Ok(Value::DateTime(*v)),
+        TypedExprKind::Tuple(elems) => {
+            let mut values = Vec::with_capacity(elems.len());
+            for elem in elems {
+                values.push(eval_typed_expr_with_gas(engine, &env, elem, gas)?);
+            }
+            Ok(Value::Tuple(values))
+        }
+        TypedExprKind::List(elems) => {
+            let mut values = Vec::with_capacity(elems.len());
+            for elem in elems {
+                values.push(eval_typed_expr_with_gas(engine, &env, elem, gas)?);
+            }
+            Ok(list_from_vec(values))
+        }
+        TypedExprKind::Dict(kvs) => {
+            let mut out = BTreeMap::new();
+            for (k, v) in kvs {
+                out.insert(k.clone(), eval_typed_expr_with_gas(engine, &env, v, gas)?);
+            }
+            Ok(Value::Dict(out))
+        }
+        TypedExprKind::RecordUpdate { base, updates } => {
+            let base_val = eval_typed_expr_with_gas(engine, &env, base, gas)?;
+            let mut update_vals = BTreeMap::new();
+            for (k, v) in updates {
+                update_vals.insert(k.clone(), eval_typed_expr_with_gas(engine, &env, v, gas)?);
+            }
+
+            match base_val {
+                Value::Dict(mut map) => {
+                    for (k, v) in update_vals {
+                        gas.charge(gas.costs.eval_record_update_field)?;
+                        map.insert(k, v);
+                    }
+                    Ok(Value::Dict(map))
+                }
+                Value::Adt(tag, args) if args.len() == 1 => match &args[0] {
+                    Value::Dict(map) => {
+                        let mut out = map.clone();
+                        for (k, v) in update_vals {
+                            gas.charge(gas.costs.eval_record_update_field)?;
+                            out.insert(k, v);
+                        }
+                        Ok(Value::Adt(tag, vec![Value::Dict(out)]))
+                    }
+                    _ => Err(EngineError::UnsupportedExpr),
+                },
+                _ => Err(EngineError::UnsupportedExpr),
+            }
+        }
+        TypedExprKind::Var { name, .. } => {
+            if let Some(value) = env.get(name) {
+                match value {
+                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        native.call_zero_with_gas(engine, gas)
+                    }
+                    _ => Ok(value),
+                }
+            } else if engine.types.class_methods.contains_key(name) {
+                engine.resolve_class_method_value_with_gas(name, &cur.typ, gas)
+            } else {
+                engine.resolve_native_value_with_gas(name.as_ref(), &cur.typ, gas)
+            }
+        }
+        TypedExprKind::App(..) => {
+            let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
+            let mut head = cur;
+            while let TypedExprKind::App(f, x) = &head.kind {
+                spine.push((f.typ.clone(), x.as_ref()));
+                head = f.as_ref();
+            }
+            spine.reverse();
+
+            let mut func = eval_typed_expr_with_gas(engine, &env, head, gas)?;
+            for (func_type, arg_expr) in spine {
+                gas.charge(gas.costs.eval_app_step)?;
+                let arg = eval_typed_expr_with_gas(engine, &env, arg_expr, gas)?;
+                func = apply_with_gas(engine, func, arg, Some(&func_type), Some(&arg_expr.typ), gas)?;
+            }
+            Ok(func)
+        }
+        TypedExprKind::Project { expr, field } => {
+            let value = eval_typed_expr_with_gas(engine, &env, expr, gas)?;
+            match value {
+                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
+                    Value::Dict(map) => map.get(field).cloned().ok_or_else(|| EngineError::UnknownField {
+                        field: field.clone(),
+                        value: "record".into(),
+                    }),
+                    other => Err(EngineError::UnknownField {
+                        field: field.clone(),
+                        value: other.type_name().into(),
+                    }),
+                },
+                other => Err(EngineError::UnknownField {
+                    field: field.clone(),
+                    value: other.type_name().into(),
+                }),
+            }
+        }
+        TypedExprKind::Lam { param, body } => Ok(Value::Closure {
+            env: env.clone(),
+            param: param.clone(),
+            param_ty: split_fun(&expr.typ)
+                .map(|(arg, _)| arg)
+                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?,
+            typ: expr.typ.clone(),
+            body: Arc::new(body.as_ref().clone()),
+        }),
+        TypedExprKind::Ite {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            let value = eval_typed_expr_with_gas(engine, &env, cond, gas)?;
+            match value {
+                Value::Bool(true) => eval_typed_expr_with_gas(engine, &env, then_expr, gas),
+                Value::Bool(false) => eval_typed_expr_with_gas(engine, &env, else_expr, gas),
+                other => Err(EngineError::ExpectedBool(other.type_name().into())),
+            }
+        }
+        TypedExprKind::Match { scrutinee, arms } => {
+            let value = eval_typed_expr_with_gas(engine, &env, scrutinee, gas)?;
+            for (pat, expr) in arms {
+                gas.charge(gas.costs.eval_match_arm)?;
+                if let Some(bindings) = match_pattern(pat, &value) {
+                    let env = env.extend_many(bindings);
+                    return eval_typed_expr_with_gas(engine, &env, expr, gas);
+                }
+            }
+            Err(EngineError::MatchFailure)
+        }
+        TypedExprKind::Let { .. } => unreachable!("let chain handled in eval_typed_expr_with_gas loop"),
+    }
+}
+
+fn apply_with_gas(
+    engine: &Engine,
+    func: Value,
+    arg: Value,
+    func_type: Option<&Type>,
+    arg_type: Option<&Type>,
+    gas: &mut GasMeter,
+) -> Result<Value, EngineError> {
+    match func {
+        Value::Closure {
+            env,
+            param,
+            param_ty,
+            typ,
+            body,
+        } => {
+            let mut subst = Subst::new_sync();
+            if let Some(expected) = func_type {
+                let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
+                    name: param.clone(),
+                    expected: typ.to_string(),
+                    got: expected.to_string(),
+                })?;
+                subst = compose_subst(s_fun, subst);
+            }
+            let actual_ty = resolve_arg_type(arg_type, &arg)?;
+            let param_ty = param_ty.apply(&subst);
+            let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+                name: param.clone(),
+                expected: param_ty.to_string(),
+                got: actual_ty.to_string(),
+            })?;
+            subst = compose_subst(s_arg, subst);
+            let env = env.extend(param, arg);
+            let body = body.apply(&subst);
+            eval_typed_expr_with_gas(engine, &env, &body, gas)
+        }
+        Value::Native(native) => native.apply_with_gas(engine, arg, arg_type, gas),
+        Value::Overloaded(over) => over.apply_with_gas(engine, arg, arg_type, gas),
+        other => Err(EngineError::NotCallable(other.type_name().into())),
+    }
+}
+
+#[async_recursion]
+async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value, EngineError> {
+    let mut env = env.clone();
+    let mut cur = expr;
+    loop {
+        match &cur.kind {
+            TypedExprKind::Let { name, def, body } => {
+                let value = eval_typed_expr_async(engine, &env, def).await?;
+                env = env.extend(name.clone(), value);
+                cur = body;
+            }
+            _ => break,
+        }
+    }
+
+    match &cur.kind {
+        TypedExprKind::Bool(v) => Ok(Value::Bool(*v)),
+        TypedExprKind::Uint(v) => Ok(Value::I32(*v as i32)),
+        TypedExprKind::Int(v) => Ok(Value::I32(*v as i32)),
+        TypedExprKind::Float(v) => Ok(Value::F32(*v as f32)),
+        TypedExprKind::String(v) => Ok(Value::String(v.clone())),
+        TypedExprKind::Uuid(v) => Ok(Value::Uuid(*v)),
+        TypedExprKind::DateTime(v) => Ok(Value::DateTime(*v)),
+        TypedExprKind::Tuple(elems) => {
+            let mut values = Vec::with_capacity(elems.len());
+            for elem in elems {
+                values.push(eval_typed_expr_async(engine, &env, elem).await?);
+            }
+            Ok(Value::Tuple(values))
+        }
+        TypedExprKind::List(elems) => {
+            let mut values = Vec::with_capacity(elems.len());
+            for elem in elems {
+                values.push(eval_typed_expr_async(engine, &env, elem).await?);
+            }
+            Ok(list_from_vec(values))
+        }
+        TypedExprKind::Dict(kvs) => {
+            let mut out = BTreeMap::new();
+            for (k, v) in kvs {
+                out.insert(k.clone(), eval_typed_expr_async(engine, &env, v).await?);
+            }
+            Ok(Value::Dict(out))
+        }
+        TypedExprKind::RecordUpdate { base, updates } => {
+            let base_val = eval_typed_expr_async(engine, &env, base).await?;
+            let mut update_vals = BTreeMap::new();
+            for (k, v) in updates {
+                update_vals.insert(k.clone(), eval_typed_expr_async(engine, &env, v).await?);
+            }
+
+            match base_val {
+                Value::Dict(mut map) => {
+                    for (k, v) in update_vals {
+                        map.insert(k, v);
+                    }
+                    Ok(Value::Dict(map))
+                }
+                Value::Adt(tag, args) if args.len() == 1 => match &args[0] {
+                    Value::Dict(map) => {
+                        let mut out = map.clone();
+                        for (k, v) in update_vals {
+                            out.insert(k, v);
+                        }
+                        Ok(Value::Adt(tag, vec![Value::Dict(out)]))
+                    }
+                    _ => Err(EngineError::UnsupportedExpr),
+                },
+                _ => Err(EngineError::UnsupportedExpr),
+            }
+        }
+        TypedExprKind::Var { name, .. } => {
+            if let Some(value) = env.get(name) {
+                match value {
+                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        native.call_zero_async(engine).await
+                    }
+                    _ => Ok(value),
+                }
+            } else if engine.types.class_methods.contains_key(name) {
+                engine.resolve_class_method_value(name, &cur.typ)
+            } else {
+                engine.resolve_native_value(name.as_ref(), &cur.typ)
+            }
+        }
+        TypedExprKind::App(..) => {
+            let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
+            let mut head = cur;
+            while let TypedExprKind::App(f, x) = &head.kind {
+                spine.push((f.typ.clone(), x.as_ref()));
+                head = f.as_ref();
+            }
+            spine.reverse();
+
+            let mut func = eval_typed_expr_async(engine, &env, head).await?;
+            for (func_type, arg_expr) in spine {
+                let arg = eval_typed_expr_async(engine, &env, arg_expr).await?;
+                func = apply_async(engine, func, arg, Some(&func_type), Some(&arg_expr.typ)).await?;
+            }
+            Ok(func)
+        }
+        TypedExprKind::Project { expr, field } => {
+            let value = eval_typed_expr_async(engine, &env, expr).await?;
+            match value {
+                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
+                    Value::Dict(map) => map.get(field).cloned().ok_or_else(|| EngineError::UnknownField {
+                        field: field.clone(),
+                        value: "record".into(),
+                    }),
+                    other => Err(EngineError::UnknownField {
+                        field: field.clone(),
+                        value: other.type_name().into(),
+                    }),
+                },
+                other => Err(EngineError::UnknownField {
+                    field: field.clone(),
+                    value: other.type_name().into(),
+                }),
+            }
+        }
+        TypedExprKind::Lam { param, body } => Ok(Value::Closure {
+            env: env.clone(),
+            param: param.clone(),
+            param_ty: split_fun(&expr.typ)
+                .map(|(arg, _)| arg)
+                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?,
+            typ: expr.typ.clone(),
+            body: Arc::new(body.as_ref().clone()),
+        }),
+        TypedExprKind::Ite {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            let value = eval_typed_expr_async(engine, &env, cond).await?;
+            match value {
+                Value::Bool(true) => eval_typed_expr_async(engine, &env, then_expr).await,
+                Value::Bool(false) => eval_typed_expr_async(engine, &env, else_expr).await,
+                other => Err(EngineError::ExpectedBool(other.type_name().into())),
+            }
+        }
+        TypedExprKind::Match { scrutinee, arms } => {
+            let value = eval_typed_expr_async(engine, &env, scrutinee).await?;
+            for (pat, expr) in arms {
+                if let Some(bindings) = match_pattern(pat, &value) {
+                    let env = env.extend_many(bindings);
+                    return eval_typed_expr_async(engine, &env, expr).await;
+                }
+            }
+            Err(EngineError::MatchFailure)
+        }
+        TypedExprKind::Let { .. } => unreachable!("let chain handled in eval_typed_expr_async loop"),
+    }
+}
+
+#[async_recursion]
+async fn eval_typed_expr_async_with_gas(
+    engine: &Engine,
+    env: &Env,
+    expr: &TypedExpr,
+    gas: &mut GasMeter,
+) -> Result<Value, EngineError> {
+    let mut env = env.clone();
+    let mut cur = expr;
+    loop {
+        match &cur.kind {
+            TypedExprKind::Let { name, def, body } => {
+                gas.charge(gas.costs.eval_node)?;
+                let value = eval_typed_expr_async_with_gas(engine, &env, def, gas).await?;
+                env = env.extend(name.clone(), value);
+                cur = body;
+            }
+            _ => break,
+        }
+    }
+
+    gas.charge(gas.costs.eval_node)?;
+    match &cur.kind {
+        TypedExprKind::Bool(v) => Ok(Value::Bool(*v)),
+        TypedExprKind::Uint(v) => Ok(Value::I32(*v as i32)),
+        TypedExprKind::Int(v) => Ok(Value::I32(*v as i32)),
+        TypedExprKind::Float(v) => Ok(Value::F32(*v as f32)),
+        TypedExprKind::String(v) => Ok(Value::String(v.clone())),
+        TypedExprKind::Uuid(v) => Ok(Value::Uuid(*v)),
+        TypedExprKind::DateTime(v) => Ok(Value::DateTime(*v)),
+        TypedExprKind::Tuple(elems) => {
+            let mut values = Vec::with_capacity(elems.len());
+            for elem in elems {
+                values.push(eval_typed_expr_async_with_gas(engine, &env, elem, gas).await?);
+            }
+            Ok(Value::Tuple(values))
+        }
+        TypedExprKind::List(elems) => {
+            let mut values = Vec::with_capacity(elems.len());
+            for elem in elems {
+                values.push(eval_typed_expr_async_with_gas(engine, &env, elem, gas).await?);
+            }
+            Ok(list_from_vec(values))
+        }
+        TypedExprKind::Dict(kvs) => {
+            let mut out = BTreeMap::new();
+            for (k, v) in kvs {
+                out.insert(
+                    k.clone(),
+                    eval_typed_expr_async_with_gas(engine, &env, v, gas).await?,
+                );
+            }
+            Ok(Value::Dict(out))
+        }
+        TypedExprKind::RecordUpdate { base, updates } => {
+            let base_val = eval_typed_expr_async_with_gas(engine, &env, base, gas).await?;
+            let mut update_vals = BTreeMap::new();
+            for (k, v) in updates {
+                update_vals.insert(
+                    k.clone(),
+                    eval_typed_expr_async_with_gas(engine, &env, v, gas).await?,
+                );
+            }
+
+            match base_val {
+                Value::Dict(mut map) => {
+                    for (k, v) in update_vals {
+                        gas.charge(gas.costs.eval_record_update_field)?;
+                        map.insert(k, v);
+                    }
+                    Ok(Value::Dict(map))
+                }
+                Value::Adt(tag, args) if args.len() == 1 => match &args[0] {
+                    Value::Dict(map) => {
+                        let mut out = map.clone();
+                        for (k, v) in update_vals {
+                            gas.charge(gas.costs.eval_record_update_field)?;
+                            out.insert(k, v);
+                        }
+                        Ok(Value::Adt(tag, vec![Value::Dict(out)]))
+                    }
+                    _ => Err(EngineError::UnsupportedExpr),
+                },
+                _ => Err(EngineError::UnsupportedExpr),
+            }
+        }
+        TypedExprKind::Var { name, .. } => {
+            if let Some(value) = env.get(name) {
+                match value {
+                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        native.call_zero_async_with_gas(engine, gas).await
+                    }
+                    _ => Ok(value),
+                }
+            } else if engine.types.class_methods.contains_key(name) {
+                engine.resolve_class_method_value_with_gas(name, &cur.typ, gas)
+            } else {
+                engine.resolve_native_value_with_gas(name.as_ref(), &cur.typ, gas)
+            }
+        }
+        TypedExprKind::App(..) => {
+            let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
+            let mut head = cur;
+            while let TypedExprKind::App(f, x) = &head.kind {
+                spine.push((f.typ.clone(), x.as_ref()));
+                head = f.as_ref();
+            }
+            spine.reverse();
+
+            let mut func = eval_typed_expr_async_with_gas(engine, &env, head, gas).await?;
+            for (func_type, arg_expr) in spine {
+                gas.charge(gas.costs.eval_app_step)?;
+                let arg = eval_typed_expr_async_with_gas(engine, &env, arg_expr, gas).await?;
+                func = apply_async_with_gas(engine, func, arg, Some(&func_type), Some(&arg_expr.typ), gas).await?;
+            }
+            Ok(func)
+        }
+        TypedExprKind::Project { expr, field } => {
+            let value = eval_typed_expr_async_with_gas(engine, &env, expr, gas).await?;
+            match value {
+                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
+                    Value::Dict(map) => map.get(field).cloned().ok_or_else(|| EngineError::UnknownField {
+                        field: field.clone(),
+                        value: "record".into(),
+                    }),
+                    other => Err(EngineError::UnknownField {
+                        field: field.clone(),
+                        value: other.type_name().into(),
+                    }),
+                },
+                other => Err(EngineError::UnknownField {
+                    field: field.clone(),
+                    value: other.type_name().into(),
+                }),
+            }
+        }
+        TypedExprKind::Lam { param, body } => Ok(Value::Closure {
+            env: env.clone(),
+            param: param.clone(),
+            param_ty: split_fun(&expr.typ)
+                .map(|(arg, _)| arg)
+                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?,
+            typ: expr.typ.clone(),
+            body: Arc::new(body.as_ref().clone()),
+        }),
+        TypedExprKind::Ite {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            let value = eval_typed_expr_async_with_gas(engine, &env, cond, gas).await?;
+            match value {
+                Value::Bool(true) => eval_typed_expr_async_with_gas(engine, &env, then_expr, gas).await,
+                Value::Bool(false) => eval_typed_expr_async_with_gas(engine, &env, else_expr, gas).await,
+                other => Err(EngineError::ExpectedBool(other.type_name().into())),
+            }
+        }
+        TypedExprKind::Match { scrutinee, arms } => {
+            let value = eval_typed_expr_async_with_gas(engine, &env, scrutinee, gas).await?;
+            for (pat, expr) in arms {
+                gas.charge(gas.costs.eval_match_arm)?;
+                if let Some(bindings) = match_pattern(pat, &value) {
+                    let env = env.extend_many(bindings);
+                    return eval_typed_expr_async_with_gas(engine, &env, expr, gas).await;
+                }
+            }
+            Err(EngineError::MatchFailure)
+        }
+        TypedExprKind::Let { .. } => unreachable!("let chain handled in eval_typed_expr_async_with_gas loop"),
+    }
+}
+
+#[async_recursion]
+async fn apply_async(
+    engine: &Engine,
+    func: Value,
+    arg: Value,
+    func_type: Option<&Type>,
+    arg_type: Option<&Type>,
+) -> Result<Value, EngineError> {
+    match func {
+        Value::Closure {
+            env,
+            param,
+            param_ty,
+            typ,
+            body,
+        } => {
+            let mut subst = Subst::new_sync();
+            if let Some(expected) = func_type {
+                let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
+                    name: param.clone(),
+                    expected: typ.to_string(),
+                    got: expected.to_string(),
+                })?;
+                subst = compose_subst(s_fun, subst);
+            }
+            let actual_ty = resolve_arg_type(arg_type, &arg)?;
+            let param_ty = param_ty.apply(&subst);
+            let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+                name: param.clone(),
+                expected: param_ty.to_string(),
+                got: actual_ty.to_string(),
+            })?;
+            subst = compose_subst(s_arg, subst);
+            let env = env.extend(param, arg);
+            let body = body.apply(&subst);
+            eval_typed_expr_async(engine, &env, &body).await
+        }
+        Value::Native(native) => native.apply_async(engine, arg, arg_type).await,
+        Value::Overloaded(over) => over.apply_async(engine, arg, arg_type).await,
+        other => Err(EngineError::NotCallable(other.type_name().into())),
+    }
+}
+
+#[async_recursion]
+async fn apply_async_with_gas(
+    engine: &Engine,
+    func: Value,
+    arg: Value,
+    func_type: Option<&Type>,
+    arg_type: Option<&Type>,
+    gas: &mut GasMeter,
+) -> Result<Value, EngineError> {
+    match func {
+        Value::Closure {
+            env,
+            param,
+            param_ty,
+            typ,
+            body,
+        } => {
+            let mut subst = Subst::new_sync();
+            if let Some(expected) = func_type {
+                let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
+                    name: param.clone(),
+                    expected: typ.to_string(),
+                    got: expected.to_string(),
+                })?;
+                subst = compose_subst(s_fun, subst);
+            }
+            let actual_ty = resolve_arg_type(arg_type, &arg)?;
+            let param_ty = param_ty.apply(&subst);
+            let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+                name: param.clone(),
+                expected: param_ty.to_string(),
+                got: actual_ty.to_string(),
+            })?;
+            subst = compose_subst(s_arg, subst);
+            let env = env.extend(param, arg);
+            let body = body.apply(&subst);
+            eval_typed_expr_async_with_gas(engine, &env, &body, gas).await
+        }
+        Value::Native(native) => native.apply_async_with_gas(engine, arg, arg_type, gas).await,
+        Value::Overloaded(over) => over.apply_async_with_gas(engine, arg, arg_type, gas).await,
+        other => Err(EngineError::NotCallable(other.type_name().into())),
+    }
+}
+
 fn match_pattern(pat: &Pattern, value: &Value) -> Option<HashMap<Symbol, Value>> {
     match pat {
         Pattern::Wildcard(..) => Some(HashMap::new()),
@@ -4778,6 +6014,8 @@ fn match_patterns(patterns: &[Pattern], values: &[Value]) -> Option<HashMap<Symb
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::executor::block_on;
+    use rex_gas::{GasCosts, GasMeter};
 
     fn parse(code: &str) -> Arc<Expr> {
         let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
@@ -4824,6 +6062,60 @@ mod tests {
             }
             _ => panic!("expected tuple"),
         }
+    }
+
+    #[test]
+    fn eval_async_native_injection() {
+        let expr = parse("inc 1");
+        let mut engine = Engine::with_prelude();
+        engine
+            .inject_async_fn1("inc", |x: i32| async move { x + 1 })
+            .unwrap();
+
+        let v_async = block_on(engine.eval_async(expr.as_ref())).unwrap();
+        assert!(matches!(v_async, Value::I32(2)));
+
+        let v_sync = engine.eval(expr.as_ref()).unwrap();
+        assert!(matches!(v_sync, Value::I32(2)));
+    }
+
+    #[test]
+    fn eval_with_gas_rejects_out_of_budget() {
+        let expr = parse("1");
+        let mut engine = Engine::with_prelude();
+        let mut gas = GasMeter::new(Some(0), GasCosts { eval_node: 1, ..GasCosts::sensible_defaults() });
+        let err = match engine.eval_with_gas(expr.as_ref(), &mut gas) {
+            Ok(_) => panic!("expected out of gas"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, EngineError::OutOfGas(..)));
+    }
+
+    #[test]
+    fn native_per_impl_gas_cost_is_charged() {
+        let expr = parse("foo");
+        let mut engine = Engine::with_prelude();
+        let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
+        engine
+            .inject_native_scheme_typed_with_gas_cost("foo", scheme, 0, 50, |_e, _t, _args| {
+                Ok(Value::I32(1))
+            })
+            .unwrap();
+
+        let mut gas = GasMeter::new(
+            Some(10),
+            GasCosts {
+                eval_node: 1,
+                native_call_base: 1,
+                native_call_per_arg: 0,
+                ..GasCosts::sensible_defaults()
+            },
+        );
+        let err = match engine.eval_with_gas(expr.as_ref(), &mut gas) {
+            Ok(_) => panic!("expected out of gas"),
+            Err(e) => e,
+        };
+        assert!(matches!(err, EngineError::OutOfGas(..)));
     }
 
     #[test]

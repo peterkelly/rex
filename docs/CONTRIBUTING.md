@@ -21,6 +21,13 @@ Run the full test suite:
 cargo test
 ```
 
+There is also a lightweight “fuzz smoke” test that runs a deterministic lex→parse→infer→eval loop.
+You can scale iterations with `REX_FUZZ_ITERS`:
+
+```sh
+REX_FUZZ_ITERS=2000 cargo test -p rex --test fuzz_smoke
+```
+
 If you edit Rust code, also run:
 
 ```sh
@@ -37,4 +44,3 @@ This repo commits:
 
 Other lock-like files (for example under `target/` or `node_modules/`) are build artifacts and
 should not be committed.
-

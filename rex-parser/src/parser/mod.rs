@@ -16,6 +16,7 @@ use rex_lexer::{
 };
 
 use crate::{error::ParserErr, op::Operator};
+use rex_gas::GasMeter;
 
 pub struct Parser {
     token_cursor: usize,
@@ -224,6 +225,28 @@ impl Parser {
                 expr: Arc::new(expr),
             })
         }
+    }
+
+    pub fn parse_program_with_gas(&mut self, gas: &mut GasMeter) -> Result<Program, Vec<ParserErr>> {
+        let token_cost = gas
+            .costs
+            .parse_token
+            .saturating_mul(self.tokens.len() as u64);
+        if let Err(e) = gas.charge(token_cost) {
+            return Err(vec![ParserErr::new(Span::default(), e.to_string())]);
+        }
+
+        let program = self.parse_program()?;
+        let expr_nodes = count_expr_nodes(program.expr.as_ref());
+        let decl_nodes = program.decls.len() as u64;
+        let node_cost = gas
+            .costs
+            .parse_node
+            .saturating_mul(expr_nodes.saturating_add(decl_nodes));
+        if let Err(e) = gas.charge(node_cost) {
+            return Err(vec![ParserErr::new(Span::default(), e.to_string())]);
+        }
+        Ok(program)
     }
 
     pub fn parse_program_with_stack_size(
@@ -2544,6 +2567,65 @@ fn find_layout_header_clause_end(
         idx += 1;
     }
     tokens.len()
+}
+
+fn count_expr_nodes(expr: &Expr) -> u64 {
+    match expr {
+        Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..)
+        | Expr::Var(..) => 1,
+        Expr::Tuple(_, xs) | Expr::List(_, xs) => 1 + xs.iter().map(|e| count_expr_nodes(e)).sum::<u64>(),
+        Expr::Dict(_, kvs) => 1 + kvs.values().map(|e| count_expr_nodes(e)).sum::<u64>(),
+        Expr::RecordUpdate(_, base, updates) => {
+            1 + count_expr_nodes(base) + updates.values().map(|e| count_expr_nodes(e)).sum::<u64>()
+        }
+        Expr::App(_, f, x) => 1 + count_expr_nodes(f) + count_expr_nodes(x),
+        Expr::Project(_, e, _) => 1 + count_expr_nodes(e),
+        Expr::Lam(_, _, _, ann, constraints, body) => {
+            let ann_nodes = ann.as_ref().map(count_type_expr_nodes).unwrap_or(0);
+            let constraint_nodes = constraints.iter().map(count_type_constraint_nodes).sum::<u64>();
+            1 + ann_nodes + constraint_nodes + count_expr_nodes(body)
+        }
+        Expr::Let(_, _, ann, def, body) => {
+            let ann_nodes = ann.as_ref().map(count_type_expr_nodes).unwrap_or(0);
+            1 + ann_nodes + count_expr_nodes(def) + count_expr_nodes(body)
+        }
+        Expr::Ite(_, a, b, c) => 1 + count_expr_nodes(a) + count_expr_nodes(b) + count_expr_nodes(c),
+        Expr::Match(_, scrutinee, arms) => {
+            1 + count_expr_nodes(scrutinee)
+                + arms
+                    .iter()
+                    .map(|(pat, e)| count_pattern_nodes(pat) + count_expr_nodes(e))
+                    .sum::<u64>()
+        }
+        Expr::Ann(_, e, ty) => 1 + count_expr_nodes(e) + count_type_expr_nodes(ty),
+    }
+}
+
+fn count_pattern_nodes(pat: &Pattern) -> u64 {
+    match pat {
+        Pattern::Wildcard(..) | Pattern::Var(..) | Pattern::Dict(..) => 1,
+        Pattern::Named(_, _, ps) | Pattern::List(_, ps) => 1 + ps.iter().map(count_pattern_nodes).sum::<u64>(),
+        Pattern::Cons(_, a, b) => 1 + count_pattern_nodes(a) + count_pattern_nodes(b),
+    }
+}
+
+fn count_type_constraint_nodes(c: &TypeConstraint) -> u64 {
+    1 + count_type_expr_nodes(&c.typ)
+}
+
+fn count_type_expr_nodes(ty: &TypeExpr) -> u64 {
+    match ty {
+        TypeExpr::Name(..) => 1,
+        TypeExpr::App(_, a, b) | TypeExpr::Fun(_, a, b) => 1 + count_type_expr_nodes(a) + count_type_expr_nodes(b),
+        TypeExpr::Tuple(_, elems) => 1 + elems.iter().map(count_type_expr_nodes).sum::<u64>(),
+        TypeExpr::Record(_, fields) => 1 + fields.iter().map(|(_, t)| count_type_expr_nodes(t)).sum::<u64>(),
+    }
 }
 
 #[cfg(test)]

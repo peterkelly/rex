@@ -11,6 +11,7 @@ rex-parser = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 rpds = { workspace = true }
+rex-gas = { workspace = true }
 
 [lints]
 workspace = true

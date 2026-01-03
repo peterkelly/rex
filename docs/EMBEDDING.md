@@ -68,6 +68,28 @@ engine.inject_value("answer", 42i32)?;
 engine.inject_fn1("inc", |x: i32| x + 1)?;
 ```
 
+### Async Natives
+
+If your host functions are async, inject them with `inject_async_fn*` and evaluate with
+`Engine::eval_async` (or call `Engine::eval` to block on async natives).
+
+```rust
+use rex_engine::Engine;
+
+let mut engine = Engine::with_prelude();
+engine.inject_async_fn1("inc", |x: i32| async move { x + 1 })?;
+let v = engine.eval_async(rex_parser::Parser::new(rex_lexer::Token::tokenize("inc 1")?).parse_program().unwrap().expr.as_ref()).await?;
+println!("{v}");
+```
+
+### Gas Metering
+
+To defend against untrusted/large programs, you can run the pipeline with a gas budget:
+
+- `Parser::parse_program_with_gas`
+- `TypeSystem::infer_with_gas` / `infer_typed_with_gas`
+- `Engine::eval_with_gas` / `eval_async_with_gas`
+
 ## Bridge Rust Types with `#[derive(Rex)]`
 
 The derive:
@@ -106,4 +128,3 @@ Some workloads (very deep nesting) can overflow the default thread stack. The pr
 - `rex_parser::Parser::parse_program_with_stack_size`
 - `rex_ts::TypeSystem::infer_with_stack_size`
 - `rex_engine::Engine::eval_with_stack_size`
-

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rex", "rex-ast", "rex-engine", "rex-lexer", "rex-lsp", "rex-parser", "rex-proc-macro", "rex-ts"]
+members = ["rex", "rex-ast", "rex-engine", "rex-gas", "rex-lexer", "rex-lsp", "rex-parser", "rex-proc-macro", "rex-ts"]
 
 [workspace.dependencies]
 # External dependencies
@@ -28,6 +28,7 @@ uuid = { version = "1", features = ["v4"] }
 # Internal dependencies
 rex-ast = { path = "rex-ast" }
 rex-engine = { path = "rex-engine" }
+rex-gas = { path = "rex-gas" }
 rex-lexer = { path = "rex-lexer" }
 rex-parser = { path = "rex-parser" }
 rex-proc-macro = { path = "rex-proc-macro" }

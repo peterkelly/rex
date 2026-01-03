@@ -1,4 +1,5 @@
 use rex_ast::expr::Symbol;
+use rex_gas::OutOfGas;
 use rex_ts::TypeError;
 
 #[derive(Debug, thiserror::Error)]
@@ -57,4 +58,6 @@ pub enum EngineError {
     },
     #[error("internal error: {0}")]
     Internal(String),
+    #[error("{0}")]
+    OutOfGas(#[from] OutOfGas),
 }

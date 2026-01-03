@@ -7,6 +7,7 @@ use std::thread;
 use clap::{Args, Parser, Subcommand};
 use rex_ast::expr::Decl;
 use rex_engine::Engine;
+use rex_gas::{GasCosts, GasMeter};
 use rex_lexer::Token;
 use rex_parser::Parser as RexParser;
 use rex_ts::TypeSystem;
@@ -61,6 +62,14 @@ struct RunArgs {
     /// Stack size (in MiB) used for parsing/type inference/evaluation.
     #[arg(long = "stack-size-mb", default_value_t = 16)]
     stack_size_mb: usize,
+
+    /// Gas budget (in abstract units) for parsing + type inference + evaluation.
+    #[arg(long = "gas", default_value_t = 10_000_000)]
+    gas: u64,
+
+    /// Disable gas metering.
+    #[arg(long = "no-gas")]
+    no_gas: bool,
 }
 
 fn main() {
@@ -85,6 +94,8 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         emit_ast,
         emit_type,
         stack_size_mb,
+        gas,
+        no_gas,
     } = args;
 
     let source = if let Some(code) = code {
@@ -109,7 +120,7 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
     let handle = thread::Builder::new()
         .name("rex-run".to_string())
         .stack_size(stack_size)
-        .spawn(move || run_source(&source, emit_ast, emit_type))
+        .spawn(move || run_source(&source, emit_ast, emit_type, gas, no_gas))
         .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
 
     match handle.join() {
@@ -118,11 +129,18 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
     }
 }
 
-fn run_source(source: &str, emit_ast: bool, emit_type: bool) -> Result<(), String> {
+fn run_source(source: &str, emit_ast: bool, emit_type: bool, gas: u64, no_gas: bool) -> Result<(), String> {
+    let costs = GasCosts::sensible_defaults();
+    let mut gas = if no_gas {
+        GasMeter::unlimited(costs)
+    } else {
+        GasMeter::new(Some(gas), costs)
+    };
+
     let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = RexParser::new(tokens);
     let program = parser
-        .parse_program()
+        .parse_program_with_gas(&mut gas)
         .map_err(|errs| format_parse_errors(&errs))?;
 
     if emit_ast {
@@ -132,7 +150,9 @@ fn run_source(source: &str, emit_ast: bool, emit_type: bool) -> Result<(), Strin
     if emit_type {
         let mut ts = TypeSystem::with_prelude();
         inject_type_env_decls(&mut ts, &program.decls).map_err(|e| format!("{e}"))?;
-        let (preds, ty) = ts.infer(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
+        let (preds, ty) = ts
+            .infer_with_gas(program.expr.as_ref(), &mut gas)
+            .map_err(|e| format!("{e}"))?;
         if preds.is_empty() {
             println!("{ty}");
         } else {
@@ -154,7 +174,9 @@ fn run_source(source: &str, emit_ast: bool, emit_type: bool) -> Result<(), Strin
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
-    let value = engine.eval(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
+    let value = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .map_err(|e| format!("{e}"))?;
     println!("{value}");
     Ok(())
 }

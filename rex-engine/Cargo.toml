@@ -9,6 +9,9 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 rex-ts = { workspace = true }
+async-recursion = { workspace = true }
+futures = { workspace = true }
+rex-gas = { workspace = true }
 
 [lints]
 workspace = true

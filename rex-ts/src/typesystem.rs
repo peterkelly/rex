@@ -10,6 +10,7 @@ use rex_ast::expr::{
     Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
 };
 use rex_lexer::span::Span;
+use rex_gas::{GasMeter, OutOfGas};
 use rpds::HashTrieMapSync;
 use uuid::Uuid;
 
@@ -582,6 +583,8 @@ pub enum TypeError {
     Spanned { span: Span, error: Box<TypeError> },
     #[error("internal error: {0}")]
     Internal(String),
+    #[error("{0}")]
+    OutOfGas(#[from] OutOfGas),
 }
 
 fn with_span(span: &Span, err: TypeError) -> TypeError {
@@ -594,8 +597,8 @@ fn with_span(span: &Span, err: TypeError) -> TypeError {
     }
 }
 
-#[derive(Default, Debug)]
-struct Unifier {
+#[derive(Debug)]
+struct Unifier<'g> {
     // `subs[id] = Some(t)` means type variable `id` has been bound to `t`.
     //
     // This is intentionally a dense `Vec` rather than a `HashMap`: inference
@@ -603,11 +606,40 @@ struct Unifier {
     // “small id space, lots of lookups”. This makes the cost model obvious:
     // you pay O(max_id) space, and you get O(1) binds/queries.
     subs: Vec<Option<Type>>,
+    gas: Option<&'g mut GasMeter>,
 }
 
-impl Unifier {
+impl<'g> Unifier<'g> {
     fn new() -> Self {
-        Self { subs: Vec::new() }
+        Self {
+            subs: Vec::new(),
+            gas: None,
+        }
+    }
+
+    fn with_gas(gas: &'g mut GasMeter) -> Self {
+        Self {
+            subs: Vec::new(),
+            gas: Some(gas),
+        }
+    }
+
+    fn charge_infer_node(&mut self) -> Result<(), TypeError> {
+        let Some(gas) = self.gas.as_mut() else {
+            return Ok(());
+        };
+        let cost = (**gas).costs.infer_node;
+        (**gas).charge(cost)?;
+        Ok(())
+    }
+
+    fn charge_unify_step(&mut self) -> Result<(), TypeError> {
+        let Some(gas) = self.gas.as_mut() else {
+            return Ok(());
+        };
+        let cost = (**gas).costs.unify_step;
+        (**gas).charge(cost)?;
+        Ok(())
     }
 
     fn bind_var(&mut self, id: TypeVarId, ty: Type) {
@@ -669,6 +701,7 @@ impl Unifier {
     }
 
     fn unify(&mut self, t1: &Type, t2: &Type) -> Result<(), TypeError> {
+        self.charge_unify_step()?;
         let t1 = self.prune(t1);
         let t2 = self.prune(t2);
         match (t1.as_ref(), t2.as_ref()) {
@@ -745,7 +778,7 @@ impl Unifier {
 
 fn record_elem_type_unifier(
     fields: &[(Symbol, Type)],
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
 ) -> Result<Type, TypeError> {
     let mut iter = fields.iter();
     let first = match iter.next() {
@@ -933,7 +966,7 @@ impl TypeVarSupply {
     }
 }
 
-fn apply_scheme_with_unifier(scheme: &Scheme, unifier: &mut Unifier) -> Scheme {
+fn apply_scheme_with_unifier(scheme: &Scheme, unifier: &mut Unifier<'_>) -> Scheme {
     let preds = scheme
         .preds
         .iter()
@@ -943,7 +976,7 @@ fn apply_scheme_with_unifier(scheme: &Scheme, unifier: &mut Unifier) -> Scheme {
     Scheme::new(scheme.vars.clone(), preds, typ)
 }
 
-fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier) -> HashSet<TypeVarId> {
+fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier<'_>) -> HashSet<TypeVarId> {
     let mut ftv = unifier.apply_type(&scheme.typ).ftv();
     for pred in &scheme.preds {
         ftv.extend(unifier.apply_type(&pred.typ).ftv());
@@ -954,7 +987,7 @@ fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier) -> HashSet<Ty
     ftv
 }
 
-fn env_ftv_with_unifier(env: &TypeEnv, unifier: &mut Unifier) -> HashSet<TypeVarId> {
+fn env_ftv_with_unifier(env: &TypeEnv, unifier: &mut Unifier<'_>) -> HashSet<TypeVarId> {
     let mut out = HashSet::new();
     for (_name, schemes) in env.values.iter() {
         for scheme in schemes {
@@ -968,7 +1001,7 @@ fn generalize_with_unifier(
     env: &TypeEnv,
     preds: Vec<Predicate>,
     typ: Type,
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
 ) -> Scheme {
     // This is `generalize`, but operating in the “imperative unifier world”.
     // It avoids constructing intermediate `Subst` maps while inference is
@@ -1721,6 +1754,35 @@ impl TypeSystem {
         self.infer_typed_inner(expr)
     }
 
+    pub fn infer_typed_with_gas(
+        &mut self,
+        expr: &Expr,
+        gas: &mut GasMeter,
+    ) -> Result<(TypedExpr, Vec<Predicate>, Type), TypeError> {
+        let known = KnownVariants::new();
+        let mut unifier = Unifier::with_gas(gas);
+        let (preds, t, typed) = infer_expr(
+            &mut unifier,
+            &mut self.supply,
+            &self.env,
+            &self.adts,
+            &known,
+            expr,
+        )
+        .map_err(|err| with_span(expr.span(), err))?;
+        let subst = unifier.into_subst();
+        let mut typed = typed.apply(&subst);
+        let mut preds = dedup_preds(preds.apply(&subst));
+        let mut t = t.apply(&subst);
+        let improve = improve_indexable(&preds)?;
+        if !subst_is_empty(&improve) {
+            typed = typed.apply(&improve);
+            preds = dedup_preds(preds.apply(&improve));
+            t = t.apply(&improve);
+        }
+        Ok((typed, preds, t))
+    }
+
     pub fn infer_typed_with_stack_size(
         &mut self,
         expr: &Expr,
@@ -1759,6 +1821,21 @@ impl TypeSystem {
 
     pub fn infer(&mut self, expr: &Expr) -> Result<(Vec<Predicate>, Type), TypeError> {
         self.infer_inner(expr)
+    }
+
+    pub fn infer_with_gas(
+        &mut self,
+        expr: &Expr,
+        gas: &mut GasMeter,
+    ) -> Result<(Vec<Predicate>, Type), TypeError> {
+        let known = KnownVariants::new();
+        let mut unifier = Unifier::with_gas(gas);
+        let (preds, t) = infer_expr_type(&mut unifier, &mut self.supply, &self.env, &self.adts, &known, expr)
+            .map_err(|err| with_span(expr.span(), err))?;
+        let subst = unifier.into_subst();
+        let preds = dedup_preds(preds.apply(&subst));
+        let t = t.apply(&subst);
+        Ok((preds, t))
     }
 
     pub fn infer_with_stack_size(
@@ -2022,7 +2099,7 @@ fn collect_app_chain<'a>(expr: &'a Expr) -> (&'a Expr, Vec<&'a Expr>) {
 }
 
 fn infer_app_arg_type(
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &HashMap<Symbol, AdtDecl>,
@@ -2072,7 +2149,7 @@ fn infer_app_arg_type(
 }
 
 fn infer_app_arg_typed(
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &HashMap<Symbol, AdtDecl>,
@@ -2123,7 +2200,7 @@ fn infer_app_arg_typed(
 }
 
 fn infer_expr_type(
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &HashMap<Symbol, AdtDecl>,
@@ -2131,7 +2208,9 @@ fn infer_expr_type(
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
     let span = *expr.span();
-    let res = (|| match expr {
+    let res = (|| {
+        unifier.charge_infer_node()?;
+        match expr {
         Expr::Bool(_, _) => Ok((vec![], Type::con("bool", 0))),
         Expr::Uint(_, _) => Ok((vec![], Type::con("i32", 0))),
         Expr::Int(_, _) => Ok((vec![], Type::con("i32", 0))),
@@ -2384,12 +2463,13 @@ fn infer_expr_type(
             let out_ty = unifier.apply_type(&ann_ty);
             Ok((preds, out_ty))
         }
+        }
     })();
     res.map_err(|err| with_span(&span, err))
 }
 
 fn infer_expr(
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     adts: &HashMap<Symbol, AdtDecl>,
@@ -2397,7 +2477,9 @@ fn infer_expr(
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
     let span = *expr.span();
-    let res = (|| match expr {
+    let res = (|| {
+        unifier.charge_infer_node()?;
+        match expr {
         Expr::Bool(_, v) => {
             let t = Type::con("bool", 0);
             Ok((
@@ -2795,6 +2877,7 @@ fn infer_expr(
             let out_ty = unifier.apply_type(&ann_ty);
             Ok((preds, out_ty, typed_expr))
         }
+        }
     })();
     res.map_err(|err| with_span(&span, err))
 }
@@ -2893,7 +2976,7 @@ fn known_variant_from_expr_with_known(
 }
 
 fn resolve_record_update(
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     adts: &HashMap<Symbol, AdtDecl>,
     base_ty: &Type,
@@ -2997,7 +3080,7 @@ fn resolve_record_update(
 }
 
 fn resolve_projection(
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     adts: &HashMap<Symbol, AdtDecl>,
     base_ty: &Type,
@@ -3098,14 +3181,16 @@ fn decompose_fun(typ: &Type, arity: usize) -> Option<(Vec<Type>, Type)> {
 }
 
 fn infer_pattern(
-    unifier: &mut Unifier,
+    unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     pat: &Pattern,
     scrutinee_ty: &Type,
 ) -> Result<(Vec<Predicate>, Vec<(Symbol, Type)>), TypeError> {
     let span = *pat.span();
-    let res = (|| match pat {
+    let res = (|| {
+        unifier.charge_infer_node()?;
+        match pat {
         Pattern::Wildcard(..) => Ok((vec![], vec![])),
         Pattern::Var(var) => Ok((
             vec![],
@@ -3202,6 +3287,7 @@ fn infer_pattern(
                 Ok((vec![], bindings))
             }
         }
+        }
     })();
     res.map_err(|err| with_span(&span, err))
 }
@@ -3291,6 +3377,7 @@ fn check_match_exhaustive(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rex_gas::{GasCosts, GasMeter};
 
     fn tvar(id: TypeVarId, name: &str) -> Type {
         Type::var(TypeVar::new(id, Some(sym(name))))
@@ -3455,6 +3542,22 @@ mod tests {
             }
             other => panic!("expected spanned error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn infer_with_gas_rejects_out_of_budget() {
+        let expr = parse_expr("1");
+        let mut ts = TypeSystem::with_prelude();
+        let mut gas = GasMeter::new(
+            Some(0),
+            GasCosts {
+                infer_node: 1,
+                unify_step: 0,
+                ..GasCosts::sensible_defaults()
+            },
+        );
+        let err = ts.infer_with_gas(expr.as_ref(), &mut gas).unwrap_err();
+        assert!(matches!(strip_span(err), TypeError::OutOfGas(..)));
     }
 
     #[test]

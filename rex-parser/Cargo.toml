@@ -11,3 +11,4 @@ regex = { workspace = true }
 rex-ast = { workspace = true }
 rex-lexer = { workspace = true }
 thiserror = { workspace = true }
+rex-gas = { workspace = true }
