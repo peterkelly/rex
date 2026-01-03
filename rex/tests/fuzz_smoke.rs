@@ -4,7 +4,7 @@ use rex_ast::expr::Decl;
 use rex_engine::Engine;
 use rex_gas::{GasCosts, GasMeter};
 use rex_lexer::Token;
-use rex_parser::Parser;
+use rex_parser::{Parser, ParserLimits};
 use rex_ts::TypeSystem;
 
 fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
@@ -77,6 +77,7 @@ fn fuzz_smoke_pipeline_does_not_panic() {
             let mut gas = GasMeter::new(Some(200_000), GasCosts::sensible_defaults());
 
             let mut parser = Parser::new(tokens);
+            parser.set_limits(ParserLimits::safe_defaults());
             let program = match parser.parse_program_with_gas(&mut gas) {
                 Ok(p) => p,
                 Err(_) => return,
@@ -96,4 +97,3 @@ fn fuzz_smoke_pipeline_does_not_panic() {
         }
     }
 }
-

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use async_recursion::async_recursion;
 use chrono::{DateTime, Utc};
-use futures::{FutureExt, future::BoxFuture};
+use futures::{FutureExt, future::BoxFuture, pin_mut};
 use rex_gas::GasMeter;
 use rex_ast::expr::{
     ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, intern,
@@ -18,7 +18,7 @@ use rex_ts::{
 };
 use uuid::Uuid;
 
-use crate::{Env, EngineError};
+use crate::{CancellationToken, Env, EngineError};
 
 fn sym(name: &str) -> Symbol {
     intern(name)
@@ -26,6 +26,14 @@ fn sym(name: &str) -> Symbol {
 
 fn sym_eq(name: &Symbol, expected: &str) -> bool {
     name.as_ref() == expected
+}
+
+fn check_cancelled(engine: &Engine) -> Result<(), EngineError> {
+    if engine.cancel.is_cancelled() {
+        Err(EngineError::Cancelled)
+    } else {
+        Ok(())
+    }
 }
 
 fn type_head_is_var(typ: &Type) -> bool {
@@ -41,19 +49,26 @@ type SyncNativeCallable =
     Arc<dyn Fn(&Engine, &Type, &[Value]) -> Result<Value, EngineError> + Send + Sync>;
 type AsyncNativeCallable =
     Arc<dyn Fn(Engine, Type, Vec<Value>) -> NativeFuture + Send + Sync>;
+type AsyncNativeCallableCancellable =
+    Arc<dyn Fn(Engine, CancellationToken, Type, Vec<Value>) -> NativeFuture + Send + Sync>;
 
 #[derive(Clone)]
 enum NativeCallable {
     Sync(SyncNativeCallable),
     Async(AsyncNativeCallable),
+    AsyncCancellable(AsyncNativeCallableCancellable),
 }
 
 impl NativeCallable {
     fn call_sync(&self, engine: &Engine, typ: &Type, args: &[Value]) -> Result<Value, EngineError> {
         match self {
             NativeCallable::Sync(f) => (f)(engine, typ, args),
-            NativeCallable::Async(f) => {
-                futures::executor::block_on((f)(engine.clone(), typ.clone(), args.to_vec()))
+            NativeCallable::Async(..) | NativeCallable::AsyncCancellable(..) => {
+                futures::executor::block_on(self.call_async(
+                    engine.clone(),
+                    typ.clone(),
+                    args.to_vec(),
+                ))
             }
         }
     }
@@ -64,9 +79,31 @@ impl NativeCallable {
         typ: Type,
         args: Vec<Value>,
     ) -> Result<Value, EngineError> {
+        let token = engine.cancellation_token();
+        if token.is_cancelled() {
+            return Err(EngineError::Cancelled);
+        }
+
         match self {
             NativeCallable::Sync(f) => (f)(&engine, &typ, &args),
-            NativeCallable::Async(f) => (f)(engine, typ, args).await,
+            NativeCallable::Async(f) => {
+                let call_fut = (f)(engine, typ, args).fuse();
+                let cancel_fut = token.cancelled().fuse();
+                pin_mut!(call_fut, cancel_fut);
+                futures::select! {
+                    _ = cancel_fut => Err(EngineError::Cancelled),
+                    res = call_fut => res,
+                }
+            }
+            NativeCallable::AsyncCancellable(f) => {
+                let call_fut = (f)(engine, token.clone(), typ, args).fuse();
+                let cancel_fut = token.cancelled().fuse();
+                pin_mut!(call_fut, cancel_fut);
+                futures::select! {
+                    _ = cancel_fut => Err(EngineError::Cancelled),
+                    res = call_fut => res,
+                }
+            }
         }
     }
 }
@@ -1018,6 +1055,7 @@ pub struct Engine {
     typeclasses: TypeclassRegistry,
     types: TypeSystem,
     typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Value>>>,
+    cancel: CancellationToken,
 }
 
 impl Engine {
@@ -1028,6 +1066,7 @@ impl Engine {
             typeclasses: TypeclassRegistry::default(),
             types: TypeSystem::new(),
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
+            cancel: CancellationToken::new(),
         }
     }
 
@@ -1038,9 +1077,18 @@ impl Engine {
             typeclasses: TypeclassRegistry::default(),
             types: TypeSystem::with_prelude(),
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
+            cancel: CancellationToken::new(),
         };
         engine.inject_prelude().expect("prelude injection failed");
         engine
+    }
+
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.cancel();
     }
 
     pub fn inject_value<V: IntoValue + RexType>(
@@ -1236,6 +1284,111 @@ impl Engine {
         self.register_native(name, scheme, 2, NativeCallable::Async(func), 0)
     }
 
+    pub fn inject_async_fn0_cancellable<F, Fut, R>(
+        &mut self,
+        name: &str,
+        f: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(CancellationToken) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        R: IntoValue + RexType,
+    {
+        let name = normalize_name(name);
+        let name_sym = name.clone();
+        let f = Arc::new(f);
+        let func = Arc::new(move |_engine: Engine, token: CancellationToken, _typ: Type, args: Vec<Value>| {
+            let f = f.clone();
+            let name_sym = name_sym.clone();
+            async move {
+                if !args.is_empty() {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 0,
+                        got: args.len(),
+                    });
+                }
+                Ok(f(token).await.into_value())
+            }
+            .boxed()
+        });
+        let typ = R::rex_type();
+        let scheme = Scheme::new(vec![], vec![], typ);
+        self.register_native(name, scheme, 0, NativeCallable::AsyncCancellable(func), 0)
+    }
+
+    pub fn inject_async_fn1_cancellable<F, Fut, A, R>(
+        &mut self,
+        name: &str,
+        f: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(CancellationToken, A) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        A: FromValue + RexType,
+        R: IntoValue + RexType,
+    {
+        let name = normalize_name(name);
+        let name_sym = name.clone();
+        let f = Arc::new(f);
+        let func = Arc::new(move |_engine: Engine, token: CancellationToken, _typ: Type, args: Vec<Value>| {
+            let f = f.clone();
+            let name_sym = name_sym.clone();
+            async move {
+                if args.len() != 1 {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 1,
+                        got: args.len(),
+                    });
+                }
+                let a = A::from_value(&args[0], name_sym.as_ref())?;
+                Ok(f(token, a).await.into_value())
+            }
+            .boxed()
+        });
+        let typ = Type::fun(A::rex_type(), R::rex_type());
+        let scheme = Scheme::new(vec![], vec![], typ);
+        self.register_native(name, scheme, 1, NativeCallable::AsyncCancellable(func), 0)
+    }
+
+    pub fn inject_async_fn2_cancellable<F, Fut, A, B, R>(
+        &mut self,
+        name: &str,
+        f: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(CancellationToken, A, B) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = R> + Send + 'static,
+        A: FromValue + RexType,
+        B: FromValue + RexType,
+        R: IntoValue + RexType,
+    {
+        let name = normalize_name(name);
+        let name_sym = name.clone();
+        let f = Arc::new(f);
+        let func = Arc::new(move |_engine: Engine, token: CancellationToken, _typ: Type, args: Vec<Value>| {
+            let f = f.clone();
+            let name_sym = name_sym.clone();
+            async move {
+                if args.len() != 2 {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 2,
+                        got: args.len(),
+                    });
+                }
+                let a = A::from_value(&args[0], name_sym.as_ref())?;
+                let b = B::from_value(&args[1], name_sym.as_ref())?;
+                Ok(f(token, a, b).await.into_value())
+            }
+            .boxed()
+        });
+        let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
+        let scheme = Scheme::new(vec![], vec![], typ);
+        self.register_native(name, scheme, 2, NativeCallable::AsyncCancellable(func), 0)
+    }
+
     pub fn inject_native<F>(
         &mut self,
         name: &str,
@@ -1336,6 +1489,49 @@ impl Engine {
         self.register_native(name, scheme, arity, NativeCallable::Async(func), gas_cost)
     }
 
+    pub fn inject_native_scheme_typed_async_cancellable<F, Fut>(
+        &mut self,
+        name: &str,
+        scheme: Scheme,
+        arity: usize,
+        func: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(Engine, CancellationToken, Type, Vec<Value>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Value, EngineError>> + Send + 'static,
+    {
+        let name = normalize_name(name);
+        let func = Arc::new(move |engine: Engine, token: CancellationToken, typ: Type, args: Vec<Value>| {
+            func(engine, token, typ, args).boxed()
+        });
+        self.register_native(name, scheme, arity, NativeCallable::AsyncCancellable(func), 0)
+    }
+
+    pub fn inject_native_scheme_typed_async_cancellable_with_gas_cost<F, Fut>(
+        &mut self,
+        name: &str,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        func: F,
+    ) -> Result<(), EngineError>
+    where
+        F: Fn(Engine, CancellationToken, Type, Vec<Value>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<Value, EngineError>> + Send + 'static,
+    {
+        let name = normalize_name(name);
+        let func = Arc::new(move |engine: Engine, token: CancellationToken, typ: Type, args: Vec<Value>| {
+            func(engine, token, typ, args).boxed()
+        });
+        self.register_native(
+            name,
+            scheme,
+            arity,
+            NativeCallable::AsyncCancellable(func),
+            gas_cost,
+        )
+    }
+
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
         let name_sym = sym(name);
         let param_syms: Vec<Symbol> = params.iter().map(|p| sym(p)).collect();
@@ -1429,11 +1625,13 @@ impl Engine {
     }
 
     pub async fn eval_async(&mut self, expr: &Expr) -> Result<Value, EngineError> {
+        check_cancelled(self)?;
         let typed = self.type_check(expr)?;
         eval_typed_expr_async(self, &self.env, &typed).await
     }
 
     pub fn eval_with_gas(&mut self, expr: &Expr, gas: &mut GasMeter) -> Result<Value, EngineError> {
+        check_cancelled(self)?;
         let typed = self.type_check(expr)?;
         eval_typed_expr_with_gas(self, &self.env, &typed, gas)
     }
@@ -1443,6 +1641,7 @@ impl Engine {
         expr: &Expr,
         gas: &mut GasMeter,
     ) -> Result<Value, EngineError> {
+        check_cancelled(self)?;
         let typed = self.type_check(expr)?;
         eval_typed_expr_async_with_gas(self, &self.env, &typed, gas).await
     }
@@ -1456,6 +1655,7 @@ impl Engine {
     }
 
     fn eval_inner(&mut self, expr: &Expr) -> Result<Value, EngineError> {
+        check_cancelled(self)?;
         let typed = self.type_check(expr)?;
         eval_typed_expr(self, &self.env, &typed)
     }
@@ -1803,7 +2003,13 @@ impl Engine {
         } else if self.types.class_methods.contains_key(name) {
             self.resolve_class_method_value(name, typ)
         } else {
-            self.resolve_native_value(name.as_ref(), typ)
+            let value = self.resolve_native_value(name.as_ref(), typ)?;
+            match &value {
+                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                    native.call_zero(self)
+                }
+                _ => Ok(value),
+            }
         }
     }
 
@@ -1857,13 +2063,7 @@ impl Engine {
             }),
             1 => {
                 let imp = matches[0].clone();
-                let value = Value::Native(imp.to_native_fn(typ.clone()));
-                if imp.arity == 0 {
-                    if let Value::Native(native) = &value {
-                        return native.call_zero(self);
-                    }
-                }
-                Ok(value)
+                Ok(Value::Native(imp.to_native_fn(typ.clone())))
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -1887,7 +2087,7 @@ impl Engine {
         &self,
         name: &str,
         typ: &Type,
-        gas: &mut GasMeter,
+        _gas: &mut GasMeter,
     ) -> Result<Value, EngineError> {
         let sym_name = sym(name);
         let impls = self
@@ -1906,13 +2106,7 @@ impl Engine {
             }),
             1 => {
                 let imp = matches[0].clone();
-                let value = Value::Native(imp.to_native_fn(typ.clone()));
-                if imp.arity == 0 {
-                    if let Value::Native(native) = &value {
-                        return native.call_zero_with_gas(self, gas);
-                    }
-                }
-                Ok(value)
+                Ok(Value::Native(imp.to_native_fn(typ.clone())))
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -5023,9 +5217,11 @@ fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError>
 }
 
 fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value, EngineError> {
+    check_cancelled(engine)?;
     let mut env = env.clone();
     let mut cur = expr;
     loop {
+        check_cancelled(engine)?;
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 let value = eval_typed_expr(engine, &env, def)?;
@@ -5046,6 +5242,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr(engine, &env, elem)?);
             }
             Ok(Value::Tuple(values))
@@ -5053,6 +5250,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr(engine, &env, elem)?);
             }
             Ok(list_from_vec(values))
@@ -5060,6 +5258,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
         TypedExprKind::Dict(kvs) => {
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
+                check_cancelled(engine)?;
                 out.insert(k.clone(), eval_typed_expr(engine, &env, v)?);
             }
             Ok(Value::Dict(out))
@@ -5068,6 +5267,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
             let base_val = eval_typed_expr(engine, &env, base)?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
+                check_cancelled(engine)?;
                 update_vals.insert(k.clone(), eval_typed_expr(engine, &env, v)?);
             }
 
@@ -5102,13 +5302,20 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
             } else if engine.types.class_methods.contains_key(name) {
                 engine.resolve_class_method_value(name, &cur.typ)
             } else {
-                engine.resolve_native_value(name.as_ref(), &cur.typ)
+                let value = engine.resolve_native_value(name.as_ref(), &cur.typ)?;
+                match &value {
+                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        native.call_zero(engine)
+                    }
+                    _ => Ok(value),
+                }
             }
         }
         TypedExprKind::App(..) => {
             let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
             let mut head = cur;
             while let TypedExprKind::App(f, x) = &head.kind {
+                check_cancelled(engine)?;
                 spine.push((f.typ.clone(), x.as_ref()));
                 head = f.as_ref();
             }
@@ -5116,6 +5323,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
 
             let mut func = eval_typed_expr(engine, &env, head)?;
             for (func_type, arg_expr) in spine {
+                check_cancelled(engine)?;
                 let arg = eval_typed_expr(engine, &env, arg_expr)?;
                 func = apply(engine, func, arg, Some(&func_type), Some(&arg_expr.typ))?;
             }
@@ -5168,6 +5376,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
         TypedExprKind::Match { scrutinee, arms } => {
             let value = eval_typed_expr(engine, &env, scrutinee)?;
             for (pat, expr) in arms {
+                check_cancelled(engine)?;
                 if let Some(bindings) = match_pattern(pat, &value) {
                     let env = env.extend_many(bindings);
                     return eval_typed_expr(engine, &env, expr);
@@ -5341,9 +5550,11 @@ fn eval_typed_expr_with_gas(
     expr: &TypedExpr,
     gas: &mut GasMeter,
 ) -> Result<Value, EngineError> {
+    check_cancelled(engine)?;
     let mut env = env.clone();
     let mut cur = expr;
     loop {
+        check_cancelled(engine)?;
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 gas.charge(gas.costs.eval_node)?;
@@ -5367,6 +5578,7 @@ fn eval_typed_expr_with_gas(
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr_with_gas(engine, &env, elem, gas)?);
             }
             Ok(Value::Tuple(values))
@@ -5374,6 +5586,7 @@ fn eval_typed_expr_with_gas(
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr_with_gas(engine, &env, elem, gas)?);
             }
             Ok(list_from_vec(values))
@@ -5381,6 +5594,7 @@ fn eval_typed_expr_with_gas(
         TypedExprKind::Dict(kvs) => {
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
+                check_cancelled(engine)?;
                 out.insert(k.clone(), eval_typed_expr_with_gas(engine, &env, v, gas)?);
             }
             Ok(Value::Dict(out))
@@ -5389,6 +5603,7 @@ fn eval_typed_expr_with_gas(
             let base_val = eval_typed_expr_with_gas(engine, &env, base, gas)?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
+                check_cancelled(engine)?;
                 update_vals.insert(k.clone(), eval_typed_expr_with_gas(engine, &env, v, gas)?);
             }
 
@@ -5425,13 +5640,20 @@ fn eval_typed_expr_with_gas(
             } else if engine.types.class_methods.contains_key(name) {
                 engine.resolve_class_method_value_with_gas(name, &cur.typ, gas)
             } else {
-                engine.resolve_native_value_with_gas(name.as_ref(), &cur.typ, gas)
+                let value = engine.resolve_native_value_with_gas(name.as_ref(), &cur.typ, gas)?;
+                match &value {
+                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        native.call_zero_with_gas(engine, gas)
+                    }
+                    _ => Ok(value),
+                }
             }
         }
         TypedExprKind::App(..) => {
             let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
             let mut head = cur;
             while let TypedExprKind::App(f, x) = &head.kind {
+                check_cancelled(engine)?;
                 spine.push((f.typ.clone(), x.as_ref()));
                 head = f.as_ref();
             }
@@ -5439,6 +5661,7 @@ fn eval_typed_expr_with_gas(
 
             let mut func = eval_typed_expr_with_gas(engine, &env, head, gas)?;
             for (func_type, arg_expr) in spine {
+                check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_app_step)?;
                 let arg = eval_typed_expr_with_gas(engine, &env, arg_expr, gas)?;
                 func = apply_with_gas(engine, func, arg, Some(&func_type), Some(&arg_expr.typ), gas)?;
@@ -5488,6 +5711,7 @@ fn eval_typed_expr_with_gas(
         TypedExprKind::Match { scrutinee, arms } => {
             let value = eval_typed_expr_with_gas(engine, &env, scrutinee, gas)?;
             for (pat, expr) in arms {
+                check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_match_arm)?;
                 if let Some(bindings) = match_pattern(pat, &value) {
                     let env = env.extend_many(bindings);
@@ -5545,9 +5769,11 @@ fn apply_with_gas(
 
 #[async_recursion]
 async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value, EngineError> {
+    check_cancelled(engine)?;
     let mut env = env.clone();
     let mut cur = expr;
     loop {
+        check_cancelled(engine)?;
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 let value = eval_typed_expr_async(engine, &env, def).await?;
@@ -5569,6 +5795,7 @@ async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> 
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr_async(engine, &env, elem).await?);
             }
             Ok(Value::Tuple(values))
@@ -5576,6 +5803,7 @@ async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> 
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr_async(engine, &env, elem).await?);
             }
             Ok(list_from_vec(values))
@@ -5583,6 +5811,7 @@ async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> 
         TypedExprKind::Dict(kvs) => {
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
+                check_cancelled(engine)?;
                 out.insert(k.clone(), eval_typed_expr_async(engine, &env, v).await?);
             }
             Ok(Value::Dict(out))
@@ -5591,6 +5820,7 @@ async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> 
             let base_val = eval_typed_expr_async(engine, &env, base).await?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
+                check_cancelled(engine)?;
                 update_vals.insert(k.clone(), eval_typed_expr_async(engine, &env, v).await?);
             }
 
@@ -5625,13 +5855,20 @@ async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> 
             } else if engine.types.class_methods.contains_key(name) {
                 engine.resolve_class_method_value(name, &cur.typ)
             } else {
-                engine.resolve_native_value(name.as_ref(), &cur.typ)
+                let value = engine.resolve_native_value(name.as_ref(), &cur.typ)?;
+                match &value {
+                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        native.call_zero_async(engine).await
+                    }
+                    _ => Ok(value),
+                }
             }
         }
         TypedExprKind::App(..) => {
             let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
             let mut head = cur;
             while let TypedExprKind::App(f, x) = &head.kind {
+                check_cancelled(engine)?;
                 spine.push((f.typ.clone(), x.as_ref()));
                 head = f.as_ref();
             }
@@ -5639,6 +5876,7 @@ async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> 
 
             let mut func = eval_typed_expr_async(engine, &env, head).await?;
             for (func_type, arg_expr) in spine {
+                check_cancelled(engine)?;
                 let arg = eval_typed_expr_async(engine, &env, arg_expr).await?;
                 func = apply_async(engine, func, arg, Some(&func_type), Some(&arg_expr.typ)).await?;
             }
@@ -5687,6 +5925,7 @@ async fn eval_typed_expr_async(engine: &Engine, env: &Env, expr: &TypedExpr) -> 
         TypedExprKind::Match { scrutinee, arms } => {
             let value = eval_typed_expr_async(engine, &env, scrutinee).await?;
             for (pat, expr) in arms {
+                check_cancelled(engine)?;
                 if let Some(bindings) = match_pattern(pat, &value) {
                     let env = env.extend_many(bindings);
                     return eval_typed_expr_async(engine, &env, expr).await;
@@ -5705,9 +5944,11 @@ async fn eval_typed_expr_async_with_gas(
     expr: &TypedExpr,
     gas: &mut GasMeter,
 ) -> Result<Value, EngineError> {
+    check_cancelled(engine)?;
     let mut env = env.clone();
     let mut cur = expr;
     loop {
+        check_cancelled(engine)?;
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 gas.charge(gas.costs.eval_node)?;
@@ -5731,6 +5972,7 @@ async fn eval_typed_expr_async_with_gas(
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr_async_with_gas(engine, &env, elem, gas).await?);
             }
             Ok(Value::Tuple(values))
@@ -5738,6 +5980,7 @@ async fn eval_typed_expr_async_with_gas(
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
+                check_cancelled(engine)?;
                 values.push(eval_typed_expr_async_with_gas(engine, &env, elem, gas).await?);
             }
             Ok(list_from_vec(values))
@@ -5745,6 +5988,7 @@ async fn eval_typed_expr_async_with_gas(
         TypedExprKind::Dict(kvs) => {
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
+                check_cancelled(engine)?;
                 out.insert(
                     k.clone(),
                     eval_typed_expr_async_with_gas(engine, &env, v, gas).await?,
@@ -5756,6 +6000,7 @@ async fn eval_typed_expr_async_with_gas(
             let base_val = eval_typed_expr_async_with_gas(engine, &env, base, gas).await?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
+                check_cancelled(engine)?;
                 update_vals.insert(
                     k.clone(),
                     eval_typed_expr_async_with_gas(engine, &env, v, gas).await?,
@@ -5795,13 +6040,20 @@ async fn eval_typed_expr_async_with_gas(
             } else if engine.types.class_methods.contains_key(name) {
                 engine.resolve_class_method_value_with_gas(name, &cur.typ, gas)
             } else {
-                engine.resolve_native_value_with_gas(name.as_ref(), &cur.typ, gas)
+                let value = engine.resolve_native_value_with_gas(name.as_ref(), &cur.typ, gas)?;
+                match &value {
+                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                        native.call_zero_async_with_gas(engine, gas).await
+                    }
+                    _ => Ok(value),
+                }
             }
         }
         TypedExprKind::App(..) => {
             let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
             let mut head = cur;
             while let TypedExprKind::App(f, x) = &head.kind {
+                check_cancelled(engine)?;
                 spine.push((f.typ.clone(), x.as_ref()));
                 head = f.as_ref();
             }
@@ -5809,6 +6061,7 @@ async fn eval_typed_expr_async_with_gas(
 
             let mut func = eval_typed_expr_async_with_gas(engine, &env, head, gas).await?;
             for (func_type, arg_expr) in spine {
+                check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_app_step)?;
                 let arg = eval_typed_expr_async_with_gas(engine, &env, arg_expr, gas).await?;
                 func = apply_async_with_gas(engine, func, arg, Some(&func_type), Some(&arg_expr.typ), gas).await?;
@@ -5858,6 +6111,7 @@ async fn eval_typed_expr_async_with_gas(
         TypedExprKind::Match { scrutinee, arms } => {
             let value = eval_typed_expr_async_with_gas(engine, &env, scrutinee, gas).await?;
             for (pat, expr) in arms {
+                check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_match_arm)?;
                 if let Some(bindings) = match_pattern(pat, &value) {
                     let env = env.extend_many(bindings);
@@ -6015,6 +6269,7 @@ fn match_patterns(patterns: &[Pattern], values: &[Value]) -> Option<HashMap<Symb
 mod tests {
     use super::*;
     use futures::executor::block_on;
+    use futures::future;
     use rex_gas::{GasCosts, GasMeter};
 
     fn parse(code: &str) -> Arc<Expr> {
@@ -6077,6 +6332,65 @@ mod tests {
 
         let v_sync = engine.eval(expr.as_ref()).unwrap();
         assert!(matches!(v_sync, Value::I32(2)));
+    }
+
+    #[test]
+    fn eval_async_can_be_cancelled() {
+        let expr = parse("stall");
+        let mut engine = Engine::with_prelude();
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        engine
+            .inject_async_fn0_cancellable("stall", move |token: crate::CancellationToken| {
+                let started_tx = started_tx.clone();
+                async move {
+                    let _ = started_tx.send(());
+                    future::pending::<()>().await;
+                    let _ = token;
+                    0i32
+                }
+            })
+            .unwrap();
+
+        let token = engine.cancellation_token();
+        let handle = std::thread::spawn(move || block_on(engine.eval_async(expr.as_ref())));
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("stall native never started");
+        token.cancel();
+
+        let res = handle.join().unwrap();
+        assert!(matches!(res, Err(EngineError::Cancelled)));
+    }
+
+    #[test]
+    fn sync_eval_can_be_cancelled_while_blocking_on_async_native() {
+        let expr = parse("stall");
+        let mut engine = Engine::with_prelude();
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        engine
+            .inject_async_fn0_cancellable("stall", move |token: crate::CancellationToken| {
+                let started_tx = started_tx.clone();
+                async move {
+                    let _ = started_tx.send(());
+                    token.cancelled().await;
+                    0i32
+                }
+            })
+            .unwrap();
+
+        let token = engine.cancellation_token();
+        let handle = std::thread::spawn(move || engine.eval(expr.as_ref()));
+
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("stall native never started");
+        token.cancel();
+
+        let res = handle.join().unwrap();
+        assert!(matches!(res, Err(EngineError::Cancelled)));
     }
 
     #[test]

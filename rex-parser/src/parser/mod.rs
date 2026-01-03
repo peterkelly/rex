@@ -23,6 +23,31 @@ pub struct Parser {
     tokens: Vec<Token>,
     eof: Span,
     errors: Vec<ParserErr>,
+    limits: ParserLimits,
+    nesting_depth: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ParserLimits {
+    pub max_nesting: Option<usize>,
+}
+
+impl ParserLimits {
+    pub fn unlimited() -> Self {
+        Self { max_nesting: None }
+    }
+
+    pub fn safe_defaults() -> Self {
+        Self {
+            max_nesting: Some(512),
+        }
+    }
+}
+
+impl Default for ParserLimits {
+    fn default() -> Self {
+        Self::unlimited()
+    }
 }
 
 impl Parser {
@@ -79,10 +104,35 @@ impl Parser {
                 .collect(),
             eof: tokens.eof,
             errors: Vec::new(),
+            limits: ParserLimits::default(),
+            nesting_depth: 0,
         };
         // println!("tokens = {:#?}", parser.tokens);
         parser.strip_comments();
         parser
+    }
+
+    pub fn set_limits(&mut self, limits: ParserLimits) {
+        self.limits = limits;
+    }
+
+    fn with_nesting<T>(
+        &mut self,
+        span: Span,
+        f: impl FnOnce(&mut Self) -> Result<T, ParserErr>,
+    ) -> Result<T, ParserErr> {
+        if let Some(max) = self.limits.max_nesting {
+            if self.nesting_depth >= max {
+                return Err(ParserErr::new(
+                    span,
+                    format!("maximum nesting depth exceeded (max {max})"),
+                ));
+            }
+        }
+        self.nesting_depth += 1;
+        let res = f(self);
+        self.nesting_depth = self.nesting_depth.saturating_sub(1);
+        res
     }
 
     fn skip_newlines(&mut self) {
@@ -457,104 +507,105 @@ impl Parser {
             }
         };
 
-        // Parse the inner expression.
-        let expr = match self.current_token() {
-            Token::ParenR(span, ..) => {
-                self.next_token();
-                // Empty tuple
-                return Ok(Expr::Tuple(
-                    Span::from_begin_end(span_begin.begin, span.end),
-                    vec![],
-                ));
-            }
-            Token::Add(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "+"))
-            }
-            Token::And(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "&&"))
-            }
-            Token::Concat(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "++"))
-            }
-            Token::Div(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "/"))
-            }
-            Token::Eq(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "=="))
-            }
-            Token::Ge(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, ">="))
-            }
-            Token::Gt(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, ">"))
-            }
-            Token::Le(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "<="))
-            }
-            Token::Lt(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "<"))
-            }
-            Token::Mod(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "%"))
-            }
-            Token::Mul(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "*"))
-            }
-            Token::Or(span, ..) => {
-                self.next_token();
-                Expr::Var(Var::with_span(span, "||"))
-            }
-            Token::Sub(span, ..) => {
-                if let Token::ParenR(..) = self.peek_token(1) {
-                    // In the case of the `-` operator we need to explicitly
-                    // check for the closing right parenthesis, because it is
-                    // valid to have an expressions like `(- 69)`. This is
-                    // different from other operators, because it is not valid
-                    // to have an expression like `(+ 69)`` or `(>= 3)``.
-                    //
-                    // It would not be a crazy idea to explicitly check for the
-                    // closing right parenthesis in other operators. Although we
-                    // do not want to allow expressions like `(+ 420)` the
-                    // explicit check will allow for better error messages.
-                    self.next_token();
-                    Expr::Var(Var::with_span(span, "-"))
-                } else {
-                    self.parse_expr()?
+        self.with_nesting(span_begin, |this| {
+            // Parse the inner expression.
+            let expr = match this.current_token() {
+                Token::ParenR(span, ..) => {
+                    this.next_token();
+                    // Empty tuple
+                    return Ok(Expr::Tuple(
+                        Span::from_begin_end(span_begin.begin, span.end),
+                        vec![],
+                    ));
                 }
-            }
-            _ => self.parse_expr()?,
-        };
+                Token::Add(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "+"))
+                }
+                Token::And(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "&&"))
+                }
+                Token::Concat(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "++"))
+                }
+                Token::Div(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "/"))
+                }
+                Token::Eq(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "=="))
+                }
+                Token::Ge(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, ">="))
+                }
+                Token::Gt(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, ">"))
+                }
+                Token::Le(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "<="))
+                }
+                Token::Lt(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "<"))
+                }
+                Token::Mod(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "%"))
+                }
+                Token::Mul(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "*"))
+                }
+                Token::Or(span, ..) => {
+                    this.next_token();
+                    Expr::Var(Var::with_span(span, "||"))
+                }
+                Token::Sub(span, ..) => {
+                    if let Token::ParenR(..) = this.peek_token(1) {
+                        // In the case of the `-` operator we need to explicitly
+                        // check for the closing right parenthesis, because it is
+                        // valid to have an expressions like `(- 69)`. This is
+                        // different from other operators, because it is not valid
+                        // to have an expression like `(+ 69)`` or `(>= 3)``.
+                        //
+                        // It would not be a crazy idea to explicitly check for the
+                        // closing right parenthesis in other operators. Although we
+                        // do not want to allow expressions like `(+ 420)` the
+                        // explicit check will allow for better error messages.
+                        this.next_token();
+                        Expr::Var(Var::with_span(span, "-"))
+                    } else {
+                        this.parse_expr()?
+                    }
+                }
+                _ => this.parse_expr()?,
+            };
 
-        // Eat the right parenthesis.
-        let span_end = match self.current_token() {
-            Token::ParenR(span, ..) => {
-                self.next_token();
-                span
-            }
-            Token::Comma(..) => {
-                // parse inner expressions
-                return self.parse_tuple(span_begin, expr);
-            }
-            token => {
-                self.record_error(ParserErr::new(*token.span(), "expected `)`"));
-                return Ok(expr);
-            }
-        };
+            // Eat the right parenthesis.
+            let span_end = match this.current_token() {
+                Token::ParenR(span, ..) => {
+                    this.next_token();
+                    span
+                }
+                Token::Comma(..) => {
+                    // parse inner expressions
+                    return this.parse_tuple(span_begin, expr);
+                }
+                token => {
+                    this.record_error(ParserErr::new(*token.span(), "expected `)`"));
+                    return Ok(expr);
+                }
+            };
 
-        let expr = expr.with_span_begin_end(span_begin.begin, span_end.end);
-
-        Ok(expr)
+            let expr = expr.with_span_begin_end(span_begin.begin, span_end.end);
+            Ok(expr)
+        })
     }
 
     fn parse_tuple(&mut self, span_begin: Span, first_item: Expr) -> Result<Expr, ParserErr> {
@@ -580,7 +631,7 @@ impl Parser {
         let span_begin = match self.current_token() {
             Token::BracketL(span, ..) => {
                 self.next_token();
-                span.begin
+                span
             }
             token => {
                 return Err(ParserErr::new(
@@ -590,50 +641,52 @@ impl Parser {
             }
         };
 
-        let mut exprs = Vec::new();
-        loop {
-            if let Token::BracketR(..) = self.current_token() {
-                break;
-            }
-
-            // Parse the next expression.
-            exprs.push(Arc::new(self.parse_expr()?));
-            // Eat the comma.
-            match self.current_token() {
-                Token::Comma(..) => self.next_token(),
-                Token::Eof(span) => {
-                    self.record_error(ParserErr::new(span, "expected `,` or `]`"));
+        self.with_nesting(span_begin, |this| {
+            let mut exprs = Vec::new();
+            loop {
+                if let Token::BracketR(..) = this.current_token() {
                     break;
                 }
-                _ => {
-                    break;
+
+                // Parse the next expression.
+                exprs.push(Arc::new(this.parse_expr()?));
+                // Eat the comma.
+                match this.current_token() {
+                    Token::Comma(..) => this.next_token(),
+                    Token::Eof(span) => {
+                        this.record_error(ParserErr::new(span, "expected `,` or `]`"));
+                        break;
+                    }
+                    _ => {
+                        break;
+                    }
+                };
+            }
+
+            // Eat the right bracket.
+            let span_end = match this.current_token() {
+                Token::BracketR(span, ..) => {
+                    this.next_token();
+                    span.end
+                }
+                token => {
+                    this.record_error(ParserErr::new(
+                        *token.span(),
+                        format!("expected `]` got {}", token),
+                    ));
+
+                    return Ok(Expr::List(
+                        Span::from_begin_end(span_begin.begin, token.span().end),
+                        exprs,
+                    ));
                 }
             };
-        }
 
-        // Eat the right bracket.
-        let span_end = match self.current_token() {
-            Token::BracketR(span, ..) => {
-                self.next_token();
-                span.end
-            }
-            token => {
-                self.record_error(ParserErr::new(
-                    *token.span(),
-                    format!("expected `]` got {}", token),
-                ));
-
-                return Ok(Expr::List(
-                    Span::from_begin_end(span_begin, token.span().end),
-                    exprs,
-                ));
-            }
-        };
-
-        Ok(Expr::List(
-            Span::from_begin_end(span_begin, span_end),
-            exprs,
-        ))
+            Ok(Expr::List(
+                Span::from_begin_end(span_begin.begin, span_end),
+                exprs,
+            ))
+        })
     }
 
     fn parse_brace_expr(&mut self) -> Result<Expr, ParserErr> {
@@ -641,7 +694,7 @@ impl Parser {
         let span_begin = match self.current_token() {
             Token::BraceL(span, ..) => {
                 self.next_token();
-                span.begin
+                span
             }
             token => {
                 return Err(ParserErr::new(
@@ -651,88 +704,92 @@ impl Parser {
             }
         };
 
-        // `{}` is always an empty dict literal.
-        if let Token::BraceR(span, ..) = self.current_token() {
-            self.next_token();
-            return Ok(Expr::Dict(
-                Span::from_begin_end(span_begin, span.end),
-                BTreeMap::new(),
-            ));
-        }
+        self.with_nesting(span_begin, |this| {
+            let span_begin_pos = span_begin.begin;
 
-        // Disambiguate:
-        // - `{ x = e }` is a dict literal
-        // - `{ base with { x = e } }` is a record-update expression
-        let looks_like_dict_literal = matches!(self.current_token(), Token::Ident(..))
-            && matches!(self.peek_token(1), Token::Assign(..));
-
-        if looks_like_dict_literal {
-            return self.parse_dict_expr_after_lbrace(span_begin);
-        }
-
-        let base = match self.parse_expr() {
-            Ok(expr) => expr,
-            Err(err) => {
-                self.record_error(err);
-                while !matches!(self.current_token(), Token::BraceR(..) | Token::Eof(..)) {
-                    self.next_token();
-                }
-                if let Token::BraceR(..) = self.current_token() {
-                    self.next_token();
-                }
+            // `{}` is always an empty dict literal.
+            if let Token::BraceR(span, ..) = this.current_token() {
+                this.next_token();
                 return Ok(Expr::Dict(
-                    Span::from_begin_end(span_begin, Position::new(0, 0)),
+                    Span::from_begin_end(span_begin_pos, span.end),
                     BTreeMap::new(),
                 ));
             }
-        };
 
-        match self.current_token() {
-            Token::With(..) => self.next_token(),
-            token => {
-                self.record_error(ParserErr::new(*token.span(), "expected `with`"));
-                while !matches!(self.current_token(), Token::BraceR(..) | Token::Eof(..)) {
-                    self.next_token();
+            // Disambiguate:
+            // - `{ x = e }` is a dict literal
+            // - `{ base with { x = e } }` is a record-update expression
+            let looks_like_dict_literal = matches!(this.current_token(), Token::Ident(..))
+                && matches!(this.peek_token(1), Token::Assign(..));
+
+            if looks_like_dict_literal {
+                return this.parse_dict_expr_after_lbrace(span_begin_pos);
+            }
+
+            let base = match this.parse_expr() {
+                Ok(expr) => expr,
+                Err(err) => {
+                    this.record_error(err);
+                    while !matches!(this.current_token(), Token::BraceR(..) | Token::Eof(..)) {
+                        this.next_token();
+                    }
+                    if let Token::BraceR(..) = this.current_token() {
+                        this.next_token();
+                    }
+                    return Ok(Expr::Dict(
+                        Span::from_begin_end(span_begin_pos, Position::new(0, 0)),
+                        BTreeMap::new(),
+                    ));
                 }
-                if let Token::BraceR(..) = self.current_token() {
-                    self.next_token();
+            };
+
+            match this.current_token() {
+                Token::With(..) => this.next_token(),
+                token => {
+                    this.record_error(ParserErr::new(*token.span(), "expected `with`"));
+                    while !matches!(this.current_token(), Token::BraceR(..) | Token::Eof(..)) {
+                        this.next_token();
+                    }
+                    if let Token::BraceR(..) = this.current_token() {
+                        this.next_token();
+                    }
+                    return Ok(base);
                 }
-                return Ok(base);
-            }
-        };
+            };
 
-        let updates = match self.parse_dict_expr() {
-            Ok(Expr::Dict(_, kvs)) => kvs,
-            Ok(other) => {
-                self.record_error(ParserErr::new(*other.span(), "expected `{...}`"));
-                BTreeMap::new()
-            }
-            Err(err) => {
-                self.record_error(err);
-                BTreeMap::new()
-            }
-        };
+            let updates = match this.parse_dict_expr() {
+                Ok(Expr::Dict(_, kvs)) => kvs,
+                Ok(other) => {
+                    this.record_error(ParserErr::new(*other.span(), "expected `{...}`"));
+                    BTreeMap::new()
+                }
+                Err(err) => {
+                    this.record_error(err);
+                    BTreeMap::new()
+                }
+            };
 
-        // Eat the right brace of the update expression.
-        let span_end = match self.current_token() {
-            Token::BraceR(span, ..) => {
-                self.next_token();
-                span.end
-            }
-            token => {
-                self.record_error(ParserErr::new(
-                    *token.span(),
-                    format!("expected `}}` got {}", token),
-                ));
-                Position::new(0, 0)
-            }
-        };
+            // Eat the right brace of the update expression.
+            let span_end = match this.current_token() {
+                Token::BraceR(span, ..) => {
+                    this.next_token();
+                    span.end
+                }
+                token => {
+                    this.record_error(ParserErr::new(
+                        *token.span(),
+                        format!("expected `}}` got {}", token),
+                    ));
+                    Position::new(0, 0)
+                }
+            };
 
-        Ok(Expr::RecordUpdate(
-            Span::from_begin_end(span_begin, span_end),
-            Arc::new(base),
-            updates,
-        ))
+            Ok(Expr::RecordUpdate(
+                Span::from_begin_end(span_begin_pos, span_end),
+                Arc::new(base),
+                updates,
+            ))
+        })
     }
 
     fn parse_dict_expr(&mut self) -> Result<Expr, ParserErr> {
@@ -750,7 +807,9 @@ impl Parser {
             }
         };
 
-        self.parse_dict_expr_after_lbrace(span_begin)
+        self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
+            this.parse_dict_expr_after_lbrace(span_begin)
+        })
     }
 
     fn parse_dict_expr_after_lbrace(&mut self, span_begin: Position) -> Result<Expr, ParserErr> {
@@ -2076,48 +2135,50 @@ impl Parser {
             }
         };
 
-        let first = self.parse_type_expr()?;
-        let mut elems = Vec::new();
-        let span_end = match self.current_token() {
-            Token::Comma(..) => {
-                self.next_token();
-                elems.push(first);
-                loop {
-                    elems.push(self.parse_type_expr()?);
-                    match self.current_token() {
-                        Token::Comma(..) => {
-                            self.next_token();
-                            continue;
-                        }
-                        Token::ParenR(span, ..) => {
-                            self.next_token();
-                            break span.end;
-                        }
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `)` got {}", token),
-                            ));
+        self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
+            let first = this.parse_type_expr()?;
+            let mut elems = Vec::new();
+            let span_end = match this.current_token() {
+                Token::Comma(..) => {
+                    this.next_token();
+                    elems.push(first);
+                    loop {
+                        elems.push(this.parse_type_expr()?);
+                        match this.current_token() {
+                            Token::Comma(..) => {
+                                this.next_token();
+                                continue;
+                            }
+                            Token::ParenR(span, ..) => {
+                                this.next_token();
+                                break span.end;
+                            }
+                            token => {
+                                return Err(ParserErr::new(
+                                    *token.span(),
+                                    format!("expected `)` got {}", token),
+                                ));
+                            }
                         }
                     }
                 }
-            }
-            Token::ParenR(_span, ..) => {
-                self.next_token();
-                return Ok(first);
-            }
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected `)` or `,` got {}", token),
-                ));
-            }
-        };
+                Token::ParenR(_span, ..) => {
+                    this.next_token();
+                    return Ok(first);
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `)` or `,` got {}", token),
+                    ));
+                }
+            };
 
-        Ok(TypeExpr::Tuple(
-            Span::from_begin_end(span_begin, span_end),
-            elems,
-        ))
+            Ok(TypeExpr::Tuple(
+                Span::from_begin_end(span_begin, span_end),
+                elems,
+            ))
+        })
     }
 
     fn parse_type_record(&mut self) -> Result<TypeExpr, ParserErr> {
@@ -2134,65 +2195,67 @@ impl Parser {
             }
         };
 
-        let mut fields = Vec::new();
-        if let Token::BraceR(span, ..) = self.current_token() {
-            self.next_token();
-            return Ok(TypeExpr::Record(
-                Span::from_begin_end(span_begin, span.end),
-                fields,
-            ));
-        }
+        self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
+            let mut fields = Vec::new();
+            if let Token::BraceR(span, ..) = this.current_token() {
+                this.next_token();
+                return Ok(TypeExpr::Record(
+                    Span::from_begin_end(span_begin, span.end),
+                    fields,
+                ));
+            }
 
-        let span_end = loop {
-            let (name, _span) = match self.current_token() {
-                Token::Ident(name, span, ..) => {
-                    let name = intern(&name);
-                    let span = span;
-                    self.next_token();
-                    (name, span)
+            let span_end = loop {
+                let (name, _span) = match this.current_token() {
+                    Token::Ident(name, span, ..) => {
+                        let name = intern(&name);
+                        let span = span;
+                        this.next_token();
+                        (name, span)
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected field name got {}", token),
+                        ));
+                    }
+                };
+
+                match this.current_token() {
+                    Token::Colon(..) => this.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `:` got {}", token),
+                        ));
+                    }
                 }
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected field name got {}", token),
-                    ));
+
+                let ty = this.parse_type_expr()?;
+                fields.push((name, ty));
+
+                match this.current_token() {
+                    Token::Comma(..) => {
+                        this.next_token();
+                    }
+                    Token::BraceR(span, ..) => {
+                        this.next_token();
+                        break span.end;
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `}}` got {}", token),
+                        ));
+                    }
                 }
             };
 
-            match self.current_token() {
-                Token::Colon(..) => self.next_token(),
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected `:` got {}", token),
-                    ));
-                }
-            }
-
-            let ty = self.parse_type_expr()?;
-            fields.push((name, ty));
-
-            match self.current_token() {
-                Token::Comma(..) => {
-                    self.next_token();
-                }
-                Token::BraceR(span, ..) => {
-                    self.next_token();
-                    break span.end;
-                }
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected `}}` got {}", token),
-                    ));
-                }
-            }
-        };
-
-        Ok(TypeExpr::Record(
-            Span::from_begin_end(span_begin, span_end),
-            fields,
-        ))
+            Ok(TypeExpr::Record(
+                Span::from_begin_end(span_begin, span_end),
+                fields,
+            ))
+        })
     }
 
     fn parse_pattern(&mut self) -> Result<Pattern, ParserErr> {
@@ -2295,39 +2358,41 @@ impl Parser {
             }
         };
 
-        if let Token::BracketR(span, ..) = self.current_token() {
-            self.next_token();
-            return Ok(Pattern::List(
-                Span::from_begin_end(span_begin, span.end),
-                Vec::new(),
-            ));
-        }
-
-        let mut patterns = Vec::new();
-        let span_end = loop {
-            patterns.push(self.parse_pattern()?);
-
-            match self.current_token() {
-                Token::Comma(..) => {
-                    self.next_token();
-                }
-                Token::BracketR(span, ..) => {
-                    self.next_token();
-                    break span.end;
-                }
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected `,` or `]` got {}", token),
-                    ));
-                }
+        self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
+            if let Token::BracketR(span, ..) = this.current_token() {
+                this.next_token();
+                return Ok(Pattern::List(
+                    Span::from_begin_end(span_begin, span.end),
+                    Vec::new(),
+                ));
             }
-        };
 
-        Ok(Pattern::List(
-            Span::from_begin_end(span_begin, span_end),
-            patterns,
-        ))
+            let mut patterns = Vec::new();
+            let span_end = loop {
+                patterns.push(this.parse_pattern()?);
+
+                match this.current_token() {
+                    Token::Comma(..) => {
+                        this.next_token();
+                    }
+                    Token::BracketR(span, ..) => {
+                        this.next_token();
+                        break span.end;
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `,` or `]` got {}", token),
+                        ));
+                    }
+                }
+            };
+
+            Ok(Pattern::List(
+                Span::from_begin_end(span_begin, span_end),
+                patterns,
+            ))
+        })
     }
 
     fn parse_dict_pattern(&mut self) -> Result<Pattern, ParserErr> {
@@ -2344,49 +2409,51 @@ impl Parser {
             }
         };
 
-        if let Token::BraceR(span, ..) = self.current_token() {
-            self.next_token();
-            return Ok(Pattern::Dict(
-                Span::from_begin_end(span_begin, span.end),
-                Vec::new(),
-            ));
-        }
+        self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
+            if let Token::BraceR(span, ..) = this.current_token() {
+                this.next_token();
+                return Ok(Pattern::Dict(
+                    Span::from_begin_end(span_begin, span.end),
+                    Vec::new(),
+                ));
+            }
 
-        let mut keys = Vec::new();
-        let span_end = loop {
-            match self.current_token() {
-                Token::Ident(name, _key_span, ..) => {
-                    keys.push(intern(&name));
-                    self.next_token();
-                    match self.current_token() {
-                        Token::Comma(..) => {
-                            self.next_token();
-                        }
-                        Token::BraceR(span, ..) => {
-                            self.next_token();
-                            break span.end;
-                        }
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `,` or `}}` got {}", token),
-                            ));
+            let mut keys = Vec::new();
+            let span_end = loop {
+                match this.current_token() {
+                    Token::Ident(name, _key_span, ..) => {
+                        keys.push(intern(&name));
+                        this.next_token();
+                        match this.current_token() {
+                            Token::Comma(..) => {
+                                this.next_token();
+                            }
+                            Token::BraceR(span, ..) => {
+                                this.next_token();
+                                break span.end;
+                            }
+                            token => {
+                                return Err(ParserErr::new(
+                                    *token.span(),
+                                    format!("expected `,` or `}}` got {}", token),
+                                ));
+                            }
                         }
                     }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected identifier in dict pattern got {}", token),
+                        ));
+                    }
                 }
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected identifier in dict pattern got {}", token),
-                    ));
-                }
-            }
-        };
+            };
 
-        Ok(Pattern::Dict(
-            Span::from_begin_end(span_begin, span_end),
-            keys,
-        ))
+            Ok(Pattern::Dict(
+                Span::from_begin_end(span_begin, span_end),
+                keys,
+            ))
+        })
     }
 
     fn parse_paren_pattern(&mut self) -> Result<Pattern, ParserErr> {
@@ -2403,22 +2470,24 @@ impl Parser {
             }
         };
 
-        let pat = self.parse_pattern()?;
+        self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
+            let pat = this.parse_pattern()?;
 
-        let span_end = match self.current_token() {
-            Token::ParenR(span, ..) => {
-                self.next_token();
-                span.end
-            }
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected `)` got {}", token),
-                ));
-            }
-        };
+            let span_end = match this.current_token() {
+                Token::ParenR(span, ..) => {
+                    this.next_token();
+                    span.end
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `)` got {}", token),
+                    ));
+                }
+            };
 
-        Ok(pat.with_span(Span::from_begin_end(span_begin, span_end)))
+            Ok(pat.with_span(Span::from_begin_end(span_begin, span_end)))
+        })
     }
 
     //
@@ -2678,6 +2747,20 @@ mod tests {
                 u!(span!(1:51 - 1:53); 42),
                 b!(span!(1:55 - 1:60); false),
             )
+        );
+    }
+
+    #[test]
+    fn test_max_nesting_depth_is_enforced_during_parse() {
+        let code = format!("{}0{}", "(".repeat(6), ")".repeat(6));
+        let mut parser = Parser::new(Token::tokenize(&code).unwrap());
+        parser.set_limits(ParserLimits { max_nesting: Some(5) });
+
+        let errs = parser.parse_program().unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
+            "expected a max-nesting parse error, got: {errs:?}"
         );
     }
 

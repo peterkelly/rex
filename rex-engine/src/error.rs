@@ -58,6 +58,8 @@ pub enum EngineError {
     },
     #[error("internal error: {0}")]
     Internal(String),
+    #[error("cancelled")]
+    Cancelled,
     #[error("{0}")]
     OutOfGas(#[from] OutOfGas),
 }

@@ -32,6 +32,7 @@ This repo is a Cargo workspace. The key crates are:
 - `rex-engine`: runtime evaluator + native-function injection, backed by `rex-ts`
 - `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
 - `rex`: CLI binary (`cargo run -p rex -- ...`)
+- `rex-fuzz`: stdin-driven fuzz harness binaries
 - `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
 
 ## Docs
@@ -62,6 +63,8 @@ Other useful flags:
 - `--type`: print inferred type (and constraints) and exit
 - `--stdin`: read a program from stdin
 - `--stack-size-mb`: control the runner thread stack size
+- `--max-nesting`: cap syntactic nesting depth during parsing
+- `--no-max-nesting`: disable the parsing nesting cap
 - `--gas`: total gas budget for parse/type/eval
 - `--no-gas`: disable gas metering
 

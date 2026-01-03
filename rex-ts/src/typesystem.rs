@@ -1204,19 +1204,20 @@ pub fn entails(
         return Ok(true);
     }
 
-    let instances = class_env
-        .instances
-        .get(&pred.class)
-        .ok_or_else(|| TypeError::UnknownClass(pred.class.clone()))?;
+    if !class_env.classes.contains_key(&pred.class) {
+        return Err(TypeError::UnknownClass(pred.class.clone()));
+    }
 
-    for inst in instances {
-        if let Ok(s) = unify(&inst.head.typ, &pred.typ) {
-            let ctx = inst.context.apply(&s);
-            if ctx
-                .iter()
-                .all(|c| entails(class_env, &closure, c).unwrap_or(false))
-            {
-                return Ok(true);
+    if let Some(instances) = class_env.instances.get(&pred.class) {
+        for inst in instances {
+            if let Ok(s) = unify(&inst.head.typ, &pred.typ) {
+                let ctx = inst.context.apply(&s);
+                if ctx
+                    .iter()
+                    .all(|c| entails(class_env, &closure, c).unwrap_or(false))
+                {
+                    return Ok(true);
+                }
             }
         }
     }

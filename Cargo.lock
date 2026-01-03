@@ -767,6 +767,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rex-fuzz"
+version = "0.1.0"
+dependencies = [
+ "rex-ast",
+ "rex-engine",
+ "rex-gas",
+ "rex-lexer",
+ "rex-parser",
+ "rex-ts",
+]
+
+[[package]]
 name = "rex-gas"
 version = "0.1.0"
 dependencies = [

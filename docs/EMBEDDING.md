@@ -82,6 +82,32 @@ let v = engine.eval_async(rex_parser::Parser::new(rex_lexer::Token::tokenize("in
 println!("{v}");
 ```
 
+### Cancellation
+
+Async natives can be cancelled. Cancellation is cooperative: you get a `CancellationToken` and
+trigger it from another thread/task, and the engine will stop evaluation with `EngineError::Cancelled`.
+
+```rust
+use rex_engine::{CancellationToken, Engine, EngineError};
+use futures::executor::block_on;
+
+let tokens = rex_lexer::Token::tokenize("stall")?;
+let mut parser = rex_parser::Parser::new(tokens);
+let expr = parser.parse_program().unwrap().expr;
+
+let mut engine = Engine::with_prelude();
+engine.inject_async_fn0_cancellable("stall", |token: CancellationToken| async move {
+    token.cancelled().await;
+    0i32
+})?;
+
+let token = engine.cancellation_token();
+let handle = std::thread::spawn(move || block_on(engine.eval_async(expr.as_ref())));
+token.cancel();
+let res = handle.join().unwrap();
+assert!(matches!(res, Err(EngineError::Cancelled)));
+```
+
 ### Gas Metering
 
 To defend against untrusted/large programs, you can run the pipeline with a gas budget:
@@ -89,6 +115,18 @@ To defend against untrusted/large programs, you can run the pipeline with a gas 
 - `Parser::parse_program_with_gas`
 - `TypeSystem::infer_with_gas` / `infer_typed_with_gas`
 - `Engine::eval_with_gas` / `eval_async_with_gas`
+
+### Parsing Limits
+
+For untrusted input, you can cap syntactic nesting depth during parsing:
+
+```rust
+use rex_parser::{Parser, ParserLimits};
+
+let mut parser = Parser::new(rex_lexer::Token::tokenize("(((1)))")?);
+parser.set_limits(ParserLimits::safe_defaults());
+let program = parser.parse_program()?;
+```
 
 ## Bridge Rust Types with `#[derive(Rex)]`
 

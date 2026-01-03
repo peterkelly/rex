@@ -9,7 +9,7 @@ use rex_ast::expr::Decl;
 use rex_engine::Engine;
 use rex_gas::{GasCosts, GasMeter};
 use rex_lexer::Token;
-use rex_parser::Parser as RexParser;
+use rex_parser::{Parser as RexParser, ParserLimits};
 use rex_ts::TypeSystem;
 
 #[derive(Parser)]
@@ -63,6 +63,14 @@ struct RunArgs {
     #[arg(long = "stack-size-mb", default_value_t = 16)]
     stack_size_mb: usize,
 
+    /// Maximum nesting depth allowed during parsing (defaults to a safe limit).
+    #[arg(long = "max-nesting", value_name = "N", conflicts_with = "no_max_nesting")]
+    max_nesting: Option<usize>,
+
+    /// Disable the parsing nesting-depth limit.
+    #[arg(long = "no-max-nesting")]
+    no_max_nesting: bool,
+
     /// Gas budget (in abstract units) for parsing + type inference + evaluation.
     #[arg(long = "gas", default_value_t = 10_000_000)]
     gas: u64,
@@ -94,6 +102,8 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         emit_ast,
         emit_type,
         stack_size_mb,
+        max_nesting,
+        no_max_nesting,
         gas,
         no_gas,
     } = args;
@@ -117,10 +127,21 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
     let stack_size = stack_size_mb
         .checked_mul(1024 * 1024)
         .ok_or_else(|| "stack size overflow".to_string())?;
+
+    let parser_limits = if no_max_nesting {
+        ParserLimits::unlimited()
+    } else if let Some(max_nesting) = max_nesting {
+        ParserLimits {
+            max_nesting: Some(max_nesting),
+        }
+    } else {
+        ParserLimits::safe_defaults()
+    };
+
     let handle = thread::Builder::new()
         .name("rex-run".to_string())
         .stack_size(stack_size)
-        .spawn(move || run_source(&source, emit_ast, emit_type, gas, no_gas))
+        .spawn(move || run_source(&source, emit_ast, emit_type, gas, no_gas, parser_limits))
         .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
 
     match handle.join() {
@@ -129,7 +150,14 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
     }
 }
 
-fn run_source(source: &str, emit_ast: bool, emit_type: bool, gas: u64, no_gas: bool) -> Result<(), String> {
+fn run_source(
+    source: &str,
+    emit_ast: bool,
+    emit_type: bool,
+    gas: u64,
+    no_gas: bool,
+    parser_limits: ParserLimits,
+) -> Result<(), String> {
     let costs = GasCosts::sensible_defaults();
     let mut gas = if no_gas {
         GasMeter::unlimited(costs)
@@ -139,6 +167,7 @@ fn run_source(source: &str, emit_ast: bool, emit_type: bool, gas: u64, no_gas: b
 
     let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = RexParser::new(tokens);
+    parser.set_limits(parser_limits);
     let program = parser
         .parse_program_with_gas(&mut gas)
         .map_err(|errs| format_parse_errors(&errs))?;

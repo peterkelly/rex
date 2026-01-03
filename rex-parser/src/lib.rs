@@ -12,5 +12,5 @@ mod parser;
 mod stack;
 
 pub use parser::Parser;
+pub use parser::ParserLimits;
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
-
