@@ -9,6 +9,25 @@ Rex is designed as a small pipeline you can embed at whatever stage you need:
 
 This document focuses on common embedding patterns.
 
+## Running Untrusted Rex Code (Production Checklist)
+
+This repo provides the *mechanisms* to safely run user-submitted Rex (gas metering, parsing limits,
+cancellation). Your production server is responsible for enforcing hard resource limits (process
+isolation, wall-clock timeouts, memory limits).
+
+Recommended defaults for untrusted input:
+
+- Always cap parsing nesting depth with `ParserLimits::safe_defaults()` (or stricter).
+- Always run with a bounded `GasMeter` for **parse + infer + eval** (and calibrate budgets with real workloads).
+- Treat `EngineError::OutOfGas` and `EngineError::Cancelled` as normal user-visible outcomes.
+- Run evaluation in an isolation boundary you can hard-kill (separate process/container), with CPU/RSS/time limits.
+
+Async integration footgun:
+
+- `Engine::eval()` will block on async natives internally. If your server is async, prefer
+  `Engine::eval_async*` end-to-end, or run `Engine::eval()` on a dedicated blocking thread. Do not
+  call `Engine::eval()` from inside another executor context that cannot be nested.
+
 ## Evaluate Rex Code
 
 ```rust

@@ -42,6 +42,7 @@ This repo is a Cargo workspace. The key crates are:
 - `docs/LANGUAGE.md`: language notes and examples
 - `docs/SPEC.md`: locked semantics (record update, coherence, defaulting)
 - `docs/CONTRIBUTING.md`: contributor workflow and repo policies
+- Production note (untrusted code): `docs/EMBEDDING.md` (“Running Untrusted Rex Code”)
 
 ## CLI
 
