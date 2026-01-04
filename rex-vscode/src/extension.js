@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const cp = require('child_process');
 const vscode = require('vscode');
 const languageClient = require('vscode-languageclient/node');
 const { LanguageClient } = languageClient;
@@ -12,12 +13,22 @@ function activate(context) {
   const outputChannel = vscode.window.createOutputChannel('Rex Language Server');
   const traceChannel = vscode.window.createOutputChannel('Rex Language Server Trace');
 
-  const serverPath = resolveServerPath(context);
-  outputChannel.appendLine(`[rex] serverPath = ${serverPath}`);
+  const resolved = resolveServerCommand(context);
+  if (!resolved) {
+    outputChannel.appendLine('[rex] rex-lsp not found; syntax highlighting enabled, LSP disabled');
+    vscode.window.showWarningMessage(
+      'Rex: language server (rex-lsp) not found. Syntax highlighting works, but LSP features are disabled. ' +
+        'Install rex-lsp (e.g. `cargo install --path rex-lsp`) or set `rex.serverPath`.'
+    );
+    return;
+  }
+
+  const { command, args } = resolved;
+  outputChannel.appendLine(`[rex] server command = ${command} ${args.join(' ')}`);
 
   const serverOptions = {
-    command: serverPath,
-    args: []
+    command,
+    args
   };
 
   const clientOptions = {
@@ -57,7 +68,22 @@ function activate(context) {
   }
 }
 
-function resolveServerPath(context) {
+function canExecute(commandPath) {
+  try {
+    const res = cp.spawnSync(commandPath, ['--version'], {
+      encoding: 'utf8',
+      stdio: 'ignore'
+    });
+    if (res.error) {
+      return false;
+    }
+    return res.status === 0 || res.status === null;
+  } catch (_) {
+    return false;
+  }
+}
+
+function resolveServerCommand(context) {
   const config = vscode.workspace.getConfiguration('rex');
   const configured = config.get('serverPath');
   if (configured && configured.trim()) {
@@ -65,17 +91,33 @@ function resolveServerPath(context) {
       vscode.window.showErrorMessage(
         `rex.serverPath does not exist: ${configured}`
       );
+      return null;
     }
-    return configured;
+    return { command: configured, args: [] };
   }
 
   const binName = process.platform === 'win32' ? 'rex-lsp.exe' : 'rex-lsp';
-  const localPath = path.join(context.extensionPath, '..', 'target', 'debug', binName);
-  if (fs.existsSync(localPath)) {
-    return localPath;
+
+  // If you choose to ship a prebuilt server binary with the extension, put it here.
+  const bundled = path.join(context.extensionPath, 'server', binName);
+  if (fs.existsSync(bundled)) {
+    return { command: bundled, args: [] };
   }
 
-  return binName;
+  // Development convenience: when running from the repo, prefer the workspace build output.
+  if (context.extensionMode === vscode.ExtensionMode.Development) {
+    const devPath = path.join(context.extensionPath, '..', 'target', 'debug', binName);
+    if (fs.existsSync(devPath)) {
+      return { command: devPath, args: [] };
+    }
+  }
+
+  // Fall back to PATH lookup.
+  if (canExecute(binName)) {
+    return { command: binName, args: [] };
+  }
+
+  return null;
 }
 
 function deactivate() {

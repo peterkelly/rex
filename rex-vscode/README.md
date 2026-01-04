@@ -40,3 +40,48 @@ If the server binary is not in `../target/debug/`, set `rex.serverPath` to the f
 ```bash
 cargo install --path rex-lsp
 ```
+
+## Packaging and Installing (VSIX)
+
+The extension is installable as a `.vsix` file.
+
+From `rex-vscode/`:
+
+```bash
+# Make sure dependencies are present
+npm ci
+
+# Build a VSIX (requires vsce; use global install or npx)
+npx @vscode/vsce package
+```
+
+Then install the generated `.vsix`:
+
+```bash
+code --install-extension rex-lang-0.0.1.vsix
+```
+
+Important:
+
+- The VSIX does **not** automatically include `rex-lsp` unless you ship a prebuilt binary inside
+  `rex-vscode/server/`. In the default setup, users must either:
+  - install `rex-lsp` into their PATH (e.g. `cargo install --path rex-lsp`), or
+  - set `rex.serverPath` to point at the `rex-lsp` executable.
+
+## Publishing
+
+VS Code Marketplace:
+
+1. Create a publisher matching `package.json`’s `"publisher"`.
+2. Create a Personal Access Token (PAT) for publishing.
+3. Publish:
+
+```bash
+npx @vscode/vsce publish -p "$VSCE_PAT"
+```
+
+Open VSX (optional, e.g. for VSCodium):
+
+```bash
+npx ovsx publish -p "$OVSX_TOKEN"
+```

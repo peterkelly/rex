@@ -15,8 +15,10 @@ instance Default (List a) <= Default a where
 instance Default (Option a) <= Default a where
     default = Some default
 
+fn new_point x: i32 -> Point = Point { x = x, y = default }
+
 let
-    p: Point = default,
+    p: Point = new_point 5,
     xs: List i32 = default,
     o: Option Point = default
 in
