@@ -75,6 +75,84 @@ if !preds.is_empty() {
 }
 ```
 
+## Type Classes and Instances
+
+Users can declare new type classes and instances directly in Rex source. As the host, you:
+
+1. Parse Rex source into `Program { decls, expr }`.
+2. Inject `Decl::Class` / `Decl::Instance` into the type system (if you’re typechecking without running).
+3. Inject all decls into the engine (if you’re running), so instance method bodies are available at runtime.
+
+### Typecheck: Inject Class/Instance Decls into `TypeSystem`
+
+```rust
+use rex_lexer::Token;
+use rex_parser::Parser;
+use rex_ts::TypeSystem;
+
+let code = r#"
+class Size a
+    size : a -> i32
+
+instance Size (List t)
+    size = \xs ->
+        match xs
+            when Empty -> 0
+            when Cons _ rest -> 1 + size rest
+
+size [1, 2, 3]
+"#;
+
+let tokens = Token::tokenize(code)?;
+let mut parser = Parser::new(tokens);
+let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+
+let mut ts = TypeSystem::with_prelude();
+for decl in &program.decls {
+    match decl {
+        rex_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
+        rex_ast::expr::Decl::Class(d) => ts.inject_class_decl(d)?,
+        rex_ast::expr::Decl::Instance(d) => {
+            ts.inject_instance_decl(d)?;
+        }
+        rex_ast::expr::Decl::Fn(d) => ts.inject_fn_decl(d)?,
+    }
+}
+
+let (_preds, ty) = ts.infer(program.expr.as_ref())?;
+assert_eq!(ty.to_string(), "i32");
+```
+
+### Evaluate: Inject Decls into `Engine`
+
+```rust
+use rex_engine::Engine;
+use rex_lexer::Token;
+use rex_parser::Parser;
+
+let code = r#"
+class Size a
+    size : a -> i32
+
+instance Size (List t)
+    size = \xs ->
+        match xs
+            when Empty -> 0
+            when Cons _ rest -> 1 + size rest
+
+(size [1, 2, 3], size [])
+"#;
+
+let tokens = Token::tokenize(code)?;
+let mut parser = Parser::new(tokens);
+let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+
+let mut engine = Engine::with_prelude();
+engine.inject_decls(&program.decls)?;
+let value = engine.eval(program.expr.as_ref())?;
+println!("{value}");
+```
+
 ## Inject Native Values and Functions
 
 `rex-engine` is the boundary where Rust provides implementations for Rex values.

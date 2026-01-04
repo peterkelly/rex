@@ -64,12 +64,14 @@ fn assert_example_ok(name: &str) {
                 .unwrap_or_else(|err| panic!("type error in {}: {err}", path.display()));
 
             let mut engine = Engine::with_prelude();
-            engine.inject_decls(&program.decls).unwrap_or_else(|err| {
-                panic!("engine decl error in {}: {err}", path.display())
-            });
             engine
+                .inject_decls(&program.decls)
+                .unwrap_or_else(|err| panic!("engine decl error in {}: {err}", path.display()));
+            let val = engine
                 .eval(program.expr.as_ref())
                 .unwrap_or_else(|err| panic!("eval error in {}: {err}", path.display()));
+
+            println!("example {} evaluated to: {}", name, val);
         })
         .unwrap();
     handle.join().expect("example thread panicked");
@@ -143,4 +145,14 @@ fn example_typeclasses_superclass_usage() {
 #[test]
 fn example_record_update() {
     assert_example_ok("record_update.rex");
+}
+
+#[test]
+fn example_typeclasses_custom_size() {
+    assert_example_ok("typeclasses_custom_size.rex");
+}
+
+#[test]
+fn example_typeclasses_custom_pretty() {
+    assert_example_ok("typeclasses_custom_pretty.rex");
 }
