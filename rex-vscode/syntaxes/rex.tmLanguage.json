@@ -14,11 +14,19 @@
   ],
   "repository": {
     "comments": {
-      "name": "comment.block.rex",
-      "begin": "\\{-",
-      "end": "-\\}",
       "patterns": [
-        {"include": "#comments"}
+        {
+          "name": "comment.line.double-dash.rex",
+          "match": "--.*$"
+        },
+        {
+          "name": "comment.block.rex",
+          "begin": "\\{-",
+          "end": "-\\}",
+          "patterns": [
+            {"include": "#comments"}
+          ]
+        }
       ]
     },
     "strings": {
@@ -49,7 +57,7 @@
     },
     "keywords": {
       "name": "keyword.control.rex",
-      "match": "\\b(as|class|else|fn|for|if|in|instance|is|let|match|then|type|when|where)\\b"
+      "match": "\\b(as|class|else|fn|for|if|in|instance|is|let|match|then|type|when|where|with)\\b"
     },
     "constants": {
       "name": "constant.language.rex",

@@ -1,0 +1,54 @@
+# Applicatives
+
+An `Applicative` is a `Functor` that can inject values and apply wrapped functions:
+
+```rex
+class Applicative f <= Functor f
+  pure : a -> f a
+  ap : f (a -> b) -> f a -> f b
+```
+
+Applicatives are great when you want to combine independent computations that live “in a
+container”.
+
+## `pure`
+
+```rex
+pure 1
+```
+
+The type depends on context. For example, this forces `Option`:
+
+```rex
+let x: Option i32 = pure 1 in x
+```
+
+### A common pattern: building up computations
+
+Because functions are curried, you can apply step-by-step. For `Option`:
+
+```rex
+ap (ap (pure (\x y -> x + y)) (Some 1)) (Some 2)
+```
+
+## `ap` with `Option`
+
+```rex
+ap (Some ((+) 1)) (Some 41)
+```
+
+If either side is “missing”, the result is missing:
+
+```rex
+( ap None (Some 1)
+, ap (Some ((+) 1)) None
+)
+```
+
+## Applicative style
+
+You can build up multi-argument computations by applying step-by-step:
+
+```rex
+ap (ap (pure (\x y -> x + y)) (Some 1)) (Some 2)
+```

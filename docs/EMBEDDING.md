@@ -71,7 +71,13 @@ for decl in &program.decls {
 let (preds, ty) = ts.infer(program.expr.as_ref())?;
 println!("type: {ty}");
 if !preds.is_empty() {
-    println!("constraints: {}", preds.iter().map(|p| format!(\"{} {}\", p.class, p.typ)).collect::<Vec<_>>().join(\", \"));
+    println!(
+        "constraints: {}",
+        preds.iter()
+            .map(|p| format!("{} {}", p.class, p.typ))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 }
 ```
 

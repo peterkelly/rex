@@ -44,6 +44,16 @@ This repo is a Cargo workspace. The key crates are:
 - `docs/CONTRIBUTING.md`: contributor workflow and repo policies
 - Production note (untrusted code): `docs/EMBEDDING.md` (“Running Untrusted Rex Code”)
 
+Build the HTML docs (Sphinx + Shibuya):
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r docs/requirements.txt
+make -C docs html
+open docs/_build/html/index.html
+```
+
 ## CLI
 
 Run a file:

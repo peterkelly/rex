@@ -8,7 +8,11 @@ use rex_lexer::{
     LexicalError, Token, Tokens,
 };
 use rex_parser::Parser;
-use rex_ts::{TypeError as TsTypeError, TypeSystem};
+use rex_ts::{
+    instantiate, unify, Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr,
+    TypedExprKind,
+};
+use rex_ts::Types;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
@@ -125,18 +129,15 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
-        let Some(word) = word_at_position(&text, position) else {
-            return Ok(None);
-        };
+        let contents = hover_type_contents(&text, position).or_else(|| {
+            let word = word_at_position(&text, position)?;
+            hover_contents(&word)
+        });
 
-        if let Some(contents) = hover_contents(&word) {
-            return Ok(Some(Hover {
-                contents,
-                range: None,
-            }));
-        }
-
-        Ok(None)
+        Ok(contents.map(|contents| Hover {
+            contents,
+            range: None,
+        }))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -266,6 +267,436 @@ fn diagnostics_from_text(text: &str) -> Vec<Diagnostic> {
     }
 
     diagnostics
+}
+
+struct HoverType {
+    span: Span,
+    label: String,
+    typ: String,
+    overloads: Vec<String>,
+}
+
+fn hover_type_contents(text: &str, position: Position) -> Option<HoverContents> {
+    let tokens = Token::tokenize(text).ok()?;
+    let (name, name_span, name_is_ident) = name_token_at_position(&tokens, position)?;
+
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().ok()?;
+
+    let pos = lsp_to_rex_position(position);
+
+    // If the cursor is inside an instance method body, typecheck that method
+    // body using the instance context rules (so hover works inside methods).
+    let mut target_instance: Option<(usize, usize)> = None;
+    for (decl_idx, decl) in program.decls.iter().enumerate() {
+        let Decl::Instance(inst) = decl else {
+            continue;
+        };
+        for (method_idx, method) in inst.methods.iter().enumerate() {
+            if position_in_span(pos, *method.body.span()) {
+                target_instance = Some((decl_idx, method_idx));
+                break;
+            }
+        }
+        if target_instance.is_some() {
+            break;
+        }
+    }
+
+    let mut ts = TypeSystem::with_prelude();
+    let mut prepared_target_instance = None;
+
+    for (decl_idx, decl) in program.decls.iter().enumerate() {
+        match decl {
+            Decl::Type(ty) => ts.inject_type_decl(ty).ok()?,
+            Decl::Class(class_decl) => ts.inject_class_decl(class_decl).ok()?,
+            Decl::Instance(inst_decl) => {
+                let prepared = ts.inject_instance_decl(inst_decl).ok()?;
+                if target_instance.is_some_and(|(i, _)| i == decl_idx) {
+                    prepared_target_instance = Some(prepared);
+                }
+            }
+            Decl::Fn(_) => {
+                // `fn` bodies are represented in `program.expr_with_fns()`.
+            }
+        }
+    }
+
+    let expr_with_fns = program.expr_with_fns();
+
+    let root_expr: &Expr;
+    let typed_root: TypedExpr;
+
+    if let Some((decl_idx, method_idx)) = target_instance {
+        let Decl::Instance(inst) = &program.decls[decl_idx] else {
+            return None;
+        };
+        let prepared = prepared_target_instance?;
+        let method = inst.methods.get(method_idx)?;
+        typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
+        root_expr = method.body.as_ref();
+    } else {
+        let (typed, _preds, _typ) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
+        typed_root = typed;
+        root_expr = expr_with_fns.as_ref();
+    }
+
+    let hover = hover_type_in_expr(
+        &mut ts,
+        root_expr,
+        &typed_root,
+        pos,
+        &name,
+        name_span,
+        name_is_ident,
+    )?;
+
+    let mut md = String::new();
+    md.push_str("```rex\n");
+    md.push_str(&hover.label);
+    md.push_str(" : ");
+    md.push_str(&hover.typ);
+    md.push_str("\n```");
+
+    if !hover.overloads.is_empty() {
+        md.push_str("\n\nOverloads:\n");
+        for ov in &hover.overloads {
+            md.push_str("- `");
+            md.push_str(ov);
+            md.push_str("`\n");
+        }
+    }
+
+    Some(HoverContents::Markup(MarkupContent {
+        kind: MarkupKind::Markdown,
+        value: md,
+    }))
+}
+
+fn hover_type_in_expr(
+    ts: &mut TypeSystem,
+    expr: &Expr,
+    typed: &TypedExpr,
+    pos: RexPosition,
+    name: &str,
+    name_span: Span,
+    name_is_ident: bool,
+) -> Option<HoverType> {
+    fn span_contains_pos(span: Span, pos: RexPosition) -> bool {
+        position_in_span(pos, span)
+    }
+
+    fn span_contains_span(outer: Span, inner: Span) -> bool {
+        position_leq(outer.begin, inner.begin) && position_leq(inner.end, outer.end)
+    }
+
+    fn span_size(span: Span) -> (usize, usize) {
+        (
+            span.end.line.saturating_sub(span.begin.line),
+            span.end.column.saturating_sub(span.begin.column),
+        )
+    }
+
+    fn peel_fun(ty: &Type) -> (Vec<Type>, Type) {
+        let mut args = Vec::new();
+        let mut cur = ty.clone();
+        while let TypeKind::Fun(a, b) = cur.as_ref() {
+            args.push(a.clone());
+            cur = b.clone();
+        }
+        (args, cur)
+    }
+
+    fn add_bindings_from_pattern(
+        ts: &mut TypeSystem,
+        scrutinee_ty: &Type,
+        pat: &Pattern,
+        out: &mut HashMap<String, Type>,
+    ) {
+        match pat {
+            Pattern::Wildcard(..) => {}
+            Pattern::Var(v) => {
+                out.insert(v.name.as_ref().to_string(), scrutinee_ty.clone());
+            }
+            Pattern::Named(_span, ctor, args) => {
+                let Some(schemes) = ts.env.lookup(ctor) else {
+                    return;
+                };
+                let Some(scheme) = schemes.first() else {
+                    return;
+                };
+
+                let (_preds, ctor_ty) = instantiate(scheme, &mut ts.supply);
+                let (arg_tys, result_ty) = peel_fun(&ctor_ty);
+                let Ok(s) = unify(&result_ty, scrutinee_ty) else {
+                    return;
+                };
+
+                for (subpat, arg_ty) in args.iter().zip(arg_tys.iter()) {
+                    add_bindings_from_pattern(ts, &arg_ty.apply(&s), subpat, out);
+                }
+            }
+            Pattern::List(_span, elems) => {
+                let tv = ts.supply.fresh(None);
+                let elem = Type::var(tv.clone());
+                let list_ty = Type::app(Type::con("List", 1), elem.clone());
+                let Ok(s) = unify(scrutinee_ty, &list_ty) else {
+                    return;
+                };
+                let elem_ty = elem.apply(&s);
+                for p in elems {
+                    add_bindings_from_pattern(ts, &elem_ty, p, out);
+                }
+            }
+            Pattern::Cons(_span, head, tail) => {
+                let tv = ts.supply.fresh(None);
+                let elem = Type::var(tv.clone());
+                let list_ty = Type::app(Type::con("List", 1), elem.clone());
+                let Ok(s) = unify(scrutinee_ty, &list_ty) else {
+                    return;
+                };
+                let elem_ty = elem.apply(&s);
+                let list_ty = list_ty.apply(&s);
+                add_bindings_from_pattern(ts, &elem_ty, head.as_ref(), out);
+                add_bindings_from_pattern(ts, &list_ty, tail.as_ref(), out);
+            }
+            Pattern::Dict(_span, keys) => match scrutinee_ty.as_ref() {
+                TypeKind::Record(fields) => {
+                    for key in keys {
+                        if let Some((_, ty)) = fields.iter().find(|(n, _)| n == key) {
+                            out.insert(key.as_ref().to_string(), ty.clone());
+                        }
+                    }
+                }
+                _ => {
+                    let tv = ts.supply.fresh(None);
+                    let elem = Type::var(tv.clone());
+                    let dict_ty = Type::app(Type::con("Dict", 1), elem.clone());
+                    let Ok(s) = unify(scrutinee_ty, &dict_ty) else {
+                        return;
+                    };
+                    let elem_ty = elem.apply(&s);
+                    for key in keys {
+                        out.insert(key.as_ref().to_string(), elem_ty.clone());
+                    }
+                }
+            },
+        }
+    }
+
+    fn visit(
+        ts: &mut TypeSystem,
+        expr: &Expr,
+        typed: &TypedExpr,
+        pos: RexPosition,
+        name: &str,
+        name_span: Span,
+        name_is_ident: bool,
+        best: &mut Option<HoverType>,
+    ) {
+        if !span_contains_pos(*expr.span(), pos) {
+            return;
+        }
+
+        let consider = |best: &mut Option<HoverType>, candidate: HoverType| {
+            let take = best
+                .as_ref()
+                .is_none_or(|b| span_size(candidate.span) < span_size(b.span));
+            if take {
+                *best = Some(candidate);
+            }
+        };
+
+        // 1) Pattern-bound variables (match arms).
+        if name_is_ident {
+            if let (
+                Expr::Match(_span, _scrutinee, arms),
+                TypedExprKind::Match {
+                    scrutinee,
+                    arms: typed_arms,
+                },
+            ) = (&expr, &typed.kind)
+            {
+                if span_contains_span(*expr.span(), name_span) {
+                for ((_pat, _arm_body), (typed_pat, _typed_arm_body)) in
+                    arms.iter().zip(typed_arms.iter())
+                {
+                    // The `Pattern` is cloned into the typed tree; use either.
+                    let pat_span = *typed_pat.span();
+                    if span_contains_span(pat_span, name_span) {
+                        let mut bindings: HashMap<String, Type> = HashMap::new();
+                        add_bindings_from_pattern(ts, &scrutinee.typ, typed_pat, &mut bindings);
+                        if let Some(ty) = bindings.get(name) {
+                            consider(
+                                best,
+                                HoverType {
+                                    span: name_span,
+                                    label: name.to_string(),
+                                    typ: ty.to_string(),
+                                    overloads: Vec::new(),
+                                },
+                            );
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        }
+
+        // 2) Binding sites: `let x = ...` and lambda params.
+        match (expr, &typed.kind) {
+            (
+                Expr::Let(_span, binding, _ann, def, body),
+                TypedExprKind::Let {
+                    def: tdef,
+                    body: tbody,
+                    ..
+                },
+            ) => {
+                if span_contains_pos(binding.span, pos) {
+                    consider(
+                        best,
+                        HoverType {
+                            span: binding.span,
+                            label: binding.name.as_ref().to_string(),
+                            typ: tdef.typ.to_string(),
+                            overloads: Vec::new(),
+                        },
+                    );
+                }
+                visit(
+                    ts,
+                    def.as_ref(),
+                    tdef.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
+                visit(
+                    ts,
+                    body.as_ref(),
+                    tbody.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
+            }
+            (Expr::Lam(_span, _scope, param, _ann, _constraints, body), TypedExprKind::Lam { body: tbody, .. }) => {
+                if span_contains_pos(param.span, pos) {
+                    let param_ty = match typed.typ.as_ref() {
+                        TypeKind::Fun(a, _b) => a.to_string(),
+                        _ => "<unknown>".to_string(),
+                    };
+                    consider(
+                        best,
+                        HoverType {
+                            span: param.span,
+                            label: param.name.as_ref().to_string(),
+                            typ: param_ty,
+                            overloads: Vec::new(),
+                        },
+                    );
+                }
+                visit(ts, body.as_ref(), tbody.as_ref(), pos, name, name_span, name_is_ident, best);
+            }
+            (Expr::Var(v), TypedExprKind::Var { overloads, .. }) => {
+                if span_contains_pos(v.span, pos) {
+                    consider(
+                        best,
+                        HoverType {
+                            span: v.span,
+                            label: v.name.as_ref().to_string(),
+                            typ: typed.typ.to_string(),
+                            overloads: overloads.iter().map(|t| t.to_string()).collect(),
+                        },
+                    );
+                }
+            }
+            (Expr::Ann(_span, inner, _ann), _) => {
+                visit(ts, inner.as_ref(), typed, pos, name, name_span, name_is_ident, best);
+            }
+            (Expr::Tuple(_span, elems), TypedExprKind::Tuple(telems)) => {
+                for (e, t) in elems.iter().zip(telems.iter()) {
+                    visit(ts, e.as_ref(), t, pos, name, name_span, name_is_ident, best);
+                }
+            }
+            (Expr::List(_span, elems), TypedExprKind::List(telems)) => {
+                for (e, t) in elems.iter().zip(telems.iter()) {
+                    visit(ts, e.as_ref(), t, pos, name, name_span, name_is_ident, best);
+                }
+            }
+            (Expr::Dict(_span, kvs), TypedExprKind::Dict(tkvs)) => {
+                for (k, v) in kvs {
+                    if let Some(tv) = tkvs.get(k) {
+                        visit(ts, v.as_ref(), tv, pos, name, name_span, name_is_ident, best);
+                    }
+                }
+            }
+            (Expr::RecordUpdate(_span, base, updates), TypedExprKind::RecordUpdate { base: tbase, updates: tupdates }) => {
+                visit(ts, base.as_ref(), tbase.as_ref(), pos, name, name_span, name_is_ident, best);
+                for (k, v) in updates {
+                    if let Some(tv) = tupdates.get(k) {
+                        visit(ts, v.as_ref(), tv, pos, name, name_span, name_is_ident, best);
+                    }
+                }
+            }
+            (Expr::App(_span, f, x), TypedExprKind::App(tf, tx)) => {
+                visit(ts, f.as_ref(), tf.as_ref(), pos, name, name_span, name_is_ident, best);
+                visit(ts, x.as_ref(), tx.as_ref(), pos, name, name_span, name_is_ident, best);
+            }
+            (Expr::Project(_span, e, _field), TypedExprKind::Project { expr: te, .. }) => {
+                visit(ts, e.as_ref(), te.as_ref(), pos, name, name_span, name_is_ident, best);
+            }
+            (Expr::Ite(_span, c, t, e), TypedExprKind::Ite { cond, then_expr, else_expr }) => {
+                visit(ts, c.as_ref(), cond.as_ref(), pos, name, name_span, name_is_ident, best);
+                visit(ts, t.as_ref(), then_expr.as_ref(), pos, name, name_span, name_is_ident, best);
+                visit(ts, e.as_ref(), else_expr.as_ref(), pos, name, name_span, name_is_ident, best);
+            }
+            (Expr::Match(_span, scrutinee, arms), TypedExprKind::Match { scrutinee: tscrut, arms: tarms }) => {
+                visit(ts, scrutinee.as_ref(), tscrut.as_ref(), pos, name, name_span, name_is_ident, best);
+                for ((_pat, arm_body), (_tpat, tarm_body)) in arms.iter().zip(tarms.iter()) {
+                    visit(ts, arm_body.as_ref(), tarm_body, pos, name, name_span, name_is_ident, best);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut best = None;
+    visit(ts, expr, typed, pos, name, name_span, name_is_ident, &mut best);
+    best
+}
+
+fn name_token_at_position(tokens: &Tokens, position: Position) -> Option<(String, Span, bool)> {
+    for token in &tokens.items {
+        let (name, span, is_ident) = match token {
+            Token::Ident(name, span, ..) => (name.clone(), *span, true),
+            Token::Add(span) => ("+".to_string(), *span, false),
+            Token::Sub(span) => ("-".to_string(), *span, false),
+            Token::Mul(span) => ("*".to_string(), *span, false),
+            Token::Div(span) => ("/".to_string(), *span, false),
+            Token::Mod(span) => ("%".to_string(), *span, false),
+            Token::Concat(span) => ("++".to_string(), *span, false),
+            Token::Eq(span) => ("==".to_string(), *span, false),
+            Token::Ne(span) => ("!=".to_string(), *span, false),
+            Token::Lt(span) => ("<".to_string(), *span, false),
+            Token::Le(span) => ("<=".to_string(), *span, false),
+            Token::Gt(span) => (">".to_string(), *span, false),
+            Token::Ge(span) => (">=".to_string(), *span, false),
+            Token::And(span) => ("&&".to_string(), *span, false),
+            Token::Or(span) => ("||".to_string(), *span, false),
+            _ => continue,
+        };
+        if range_touches_position(span_to_range(span), position) {
+            return Some((name, span, is_ident));
+        }
+    }
+    None
 }
 
 fn push_comment_diagnostics(tokens: &Tokens, diagnostics: &mut Vec<Diagnostic>) {

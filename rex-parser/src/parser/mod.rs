@@ -1709,14 +1709,44 @@ impl Parser {
         let is_named_param_head = |token: &Token, next: &Token| {
             matches!(token, Token::Ident(..)) && matches!(next, Token::Colon(..))
         };
+        let is_paren_param_head = |token: &Token, next: &Token, next2: &Token| {
+            matches!(token, Token::ParenL(..))
+                && matches!(next, Token::Ident(..))
+                && matches!(next2, Token::Colon(..))
+        };
 
         // Params (new syntax):
         //   fn foo x: a -> y: b -> i32 = ...
+        //   fn foo (x: a) -> (y: b) -> i32 = ...
+        //   fn foo (x: a) (y: b) -> i32 = ...
         //
         // Params (legacy syntax, still accepted):
         //   fn foo (x: a, y: b) -> i32 = ...
-        match (self.current_token(), self.peek_token(1)) {
-            (Token::ParenL(..), _) => {
+        // First, handle the legacy multi-parameter paren list `(x: a, y: b) -> ...`.
+        if matches!(self.current_token(), Token::ParenL(..)) {
+            // Detect a top-level comma within the first `(...)` group.
+            let paren_start = self.token_cursor;
+            let mut depth = 0usize;
+            let mut has_comma = false;
+            for i in (paren_start + 1)..self.tokens.len() {
+                match self.tokens[i] {
+                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth = depth.saturating_sub(1)
+                    }
+                    Token::Comma(..) if depth == 0 => {
+                        has_comma = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // `()` is also treated as the legacy group syntax (nullary functions).
+            if has_comma || matches!(self.peek_token(1), Token::ParenR(..)) {
                 // (x: a, y: b)
                 self.next_token();
                 if !matches!(self.current_token(), Token::ParenR(..)) {
@@ -1743,8 +1773,40 @@ impl Parser {
                                 ));
                             }
                         }
-                        let ann = self.parse_type_expr()?;
+
+                        // Parse the parameter type, stopping at `,` or `)` at depth 0.
+                        let ty_start = self.token_cursor;
+                        let mut depth = 0usize;
+                        let mut ty_end = None;
+                        for i in ty_start..self.tokens.len() {
+                            match self.tokens[i] {
+                                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
+                                    depth += 1
+                                }
+                                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                                    if depth == 0 {
+                                        ty_end = Some(i);
+                                        break;
+                                    }
+                                    depth = depth.saturating_sub(1)
+                                }
+                                Token::Comma(..) if depth == 0 => {
+                                    ty_end = Some(i);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        let Some(ty_end) = ty_end else {
+                            return Err(ParserErr::new(
+                                self.eof,
+                                "expected `,` or `)` after parameter type".to_string(),
+                            ));
+                        };
+                        let ann = self.parse_type_expr_slice(&self.tokens[ty_start..ty_end])?;
+                        self.token_cursor = ty_end;
                         params.push((Var::with_span(param_span, param_name), ann));
+
                         match self.current_token() {
                             Token::Comma(..) => {
                                 self.next_token();
@@ -1782,9 +1844,79 @@ impl Parser {
                     }
                 }
             }
-            (tok, next) if is_named_param_head(&tok, &next) => {
-                // x: a -> y: b -> i32
-                loop {
+        }
+
+        // New syntax: a chain of named params (`x: a -> ...`) and/or parenthesized params (`(x: a) -> ...`).
+        // Parameters are always delimited by `->`. Adjacency is not accepted.
+        if params.is_empty() {
+            loop {
+                let tok = self.current_token();
+                let next = self.peek_token(1);
+                let next2 = self.peek_token(2);
+                if is_paren_param_head(&tok, &next, &next2) {
+                    // (x: a)
+                    self.next_token(); // `(`
+                    let (param_name, param_span) = match self.current_token() {
+                        Token::Ident(name, span, ..) => {
+                            let span = span;
+                            self.next_token();
+                            (name, span)
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected parameter name got {}", token),
+                            ));
+                        }
+                    };
+                    match self.current_token() {
+                        Token::Colon(..) => self.next_token(),
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `:` got {}", token),
+                            ));
+                        }
+                    }
+
+                    // Parse the parameter type, stopping at the closing `)` at depth 0.
+                    let ty_start = self.token_cursor;
+                    let mut depth = 0usize;
+                    let mut rparen_idx = None;
+                    for i in ty_start..self.tokens.len() {
+                        match self.tokens[i] {
+                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
+                                depth += 1
+                            }
+                            Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                                if depth == 0 {
+                                    rparen_idx = Some(i);
+                                    break;
+                                }
+                                depth = depth.saturating_sub(1)
+                            }
+                            _ => {}
+                        }
+                    }
+                    let Some(rparen_idx) = rparen_idx else {
+                        return Err(ParserErr::new(self.eof, "expected `)`".to_string()));
+                    };
+                    let ann = self.parse_type_expr_slice(&self.tokens[ty_start..rparen_idx])?;
+                    self.token_cursor = rparen_idx;
+
+                    match self.current_token() {
+                        Token::ParenR(..) => self.next_token(),
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `)` got {}", token),
+                            ));
+                        }
+                    }
+
+                    params.push((Var::with_span(param_span, param_name), ann));
+                } else if is_named_param_head(&tok, &next) {
+                    // x: a -> y: b -> i32
                     let (param_name, param_span) = match self.current_token() {
                         Token::Ident(name, span, ..) => {
                             let span = span;
@@ -1843,30 +1975,32 @@ impl Parser {
                     let ann = self.parse_type_expr_slice(&self.tokens[ty_start..arrow_idx])?;
                     self.token_cursor = arrow_idx;
                     params.push((Var::with_span(param_span, param_name), ann));
-
-                    match self.current_token() {
-                        Token::ArrowR(..) => self.next_token(),
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `->` got {}", token),
-                            ));
-                        }
-                    }
-
-                    let tok = self.current_token();
-                    let next = self.peek_token(1);
-                    if is_named_param_head(&tok, &next) {
-                        continue;
-                    }
-                    break;
+                } else {
+                    return Err(ParserErr::new(
+                        *tok.span(),
+                        format!("expected `(` or parameter name got {}", tok),
+                    ));
                 }
-            }
-            (token, _) => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected `(` or parameter name got {}", token),
-                ));
+
+                // Separator: always `->` after a parameter.
+                match self.current_token() {
+                    Token::ArrowR(..) => self.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `->` got {}", token),
+                        ));
+                    }
+                }
+
+                // If another param head follows, keep parsing params; otherwise we are at the return type.
+                let tok = self.current_token();
+                let next = self.peek_token(1);
+                let next2 = self.peek_token(2);
+                if is_paren_param_head(&tok, &next, &next2) || is_named_param_head(&tok, &next) {
+                    continue;
+                }
+                break;
             }
         }
 
@@ -2931,6 +3065,39 @@ mod tests {
             }
             other => panic!("expected fn decl, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_parse_fn_decl_parenthesized_params_allow_fun_types() {
+        let code = r#"
+        fn reduce (f: a -> a -> a) -> (x: t a) -> a = x
+        reduce
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("reduce"));
+                assert_eq!(fd.params.len(), 2);
+                assert_eq!(fd.params[0].0.name, intern("f"));
+                assert!(matches!(fd.params[0].1, TypeExpr::Fun(..)));
+                assert_eq!(fd.params[1].0.name, intern("x"));
+                assert!(matches!(fd.params[1].1, TypeExpr::App(..)));
+                assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "a"));
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fn_decl_parenthesized_params_require_arrow_delimiter() {
+        let code = r#"
+        fn reduce (f: a -> a -> a) (x: t a) -> a = x
+        reduce
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        assert!(parser.parse_program().is_err());
     }
 
     #[test]

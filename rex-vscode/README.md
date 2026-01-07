@@ -48,8 +48,8 @@ The extension is installable as a `.vsix` file.
 From `rex-vscode/`:
 
 ```bash
-# Make sure dependencies are present
-npm ci
+# Make sure runtime dependencies are present (needed at VS Code runtime)
+npm ci --omit=dev
 
 # Build a VSIX (requires vsce; use global install or npx)
 npx @vscode/vsce package
@@ -67,6 +67,9 @@ Important:
   `rex-vscode/server/`. In the default setup, users must either:
   - install `rex-lsp` into their PATH (e.g. `cargo install --path rex-lsp`), or
   - set `rex.serverPath` to point at the `rex-lsp` executable.
+
+If `vsce` warns about a missing `repository` field, it’s safe to ignore or you can pass
+`--allow-missing-repository`.
 
 ## Publishing
 

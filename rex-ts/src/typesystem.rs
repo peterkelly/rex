@@ -571,6 +571,17 @@ pub enum TypeError {
     UnknownVar(Symbol),
     #[error("ambiguous overload for {0}")]
     AmbiguousOverload(Symbol),
+    #[error("ambiguous type variable(s) {vars:?} in constraints: {constraints}")]
+    AmbiguousTypeVars { vars: Vec<TypeVarId>, constraints: String },
+    #[error("kind mismatch for class `{class}`: expected {expected} type argument(s) remaining, got {got} for {typ}")]
+    KindMismatch {
+        class: Symbol,
+        expected: usize,
+        got: usize,
+        typ: String,
+    },
+    #[error("missing type class constraint(s): {constraints}")]
+    MissingConstraints { constraints: String },
     #[error("unsupported expression {0}")]
     UnsupportedExpr(&'static str),
     #[error("unknown field `{field}` on {typ}")]
@@ -597,6 +608,56 @@ fn with_span(span: &Span, err: TypeError) -> TypeError {
     }
 }
 
+fn format_constraints_referencing_vars(preds: &[Predicate], vars: &[TypeVarId]) -> String {
+    if vars.is_empty() {
+        return String::new();
+    }
+    let var_set: HashSet<TypeVarId> = vars.iter().copied().collect();
+    let mut parts = Vec::new();
+    for pred in preds {
+        let ftv = pred.ftv();
+        if ftv.iter().any(|v| var_set.contains(v)) {
+            parts.push(format!("{} {}", pred.class, pred.typ));
+        }
+    }
+    if parts.is_empty() {
+        // Fallback: show all constraints if the filtering logic misses something.
+        for pred in preds {
+            parts.push(format!("{} {}", pred.class, pred.typ));
+        }
+    }
+    parts.join(", ")
+}
+
+fn reject_ambiguous_scheme(scheme: &Scheme) -> Result<(), TypeError> {
+    // Only reject *quantified* ambiguous variables. Variables free in the
+    // environment are allowed to appear only in predicates, since they can be
+    // determined by outer context.
+    let quantified: HashSet<TypeVarId> = scheme.vars.iter().map(|v| v.id).collect();
+    if quantified.is_empty() {
+        return Ok(());
+    }
+
+    let typ_ftv = scheme.typ.ftv();
+    let mut vars = HashSet::new();
+    for pred in &scheme.preds {
+        let TypeKind::Var(tv) = pred.typ.as_ref() else {
+            continue;
+        };
+        if quantified.contains(&tv.id) && !typ_ftv.contains(&tv.id) {
+            vars.insert(tv.id);
+        }
+    }
+
+    if vars.is_empty() {
+        return Ok(());
+    }
+    let mut vars: Vec<TypeVarId> = vars.into_iter().collect();
+    vars.sort_unstable();
+    let constraints = format_constraints_referencing_vars(&scheme.preds, &vars);
+    Err(TypeError::AmbiguousTypeVars { vars, constraints })
+}
+
 #[derive(Debug)]
 struct Unifier<'g> {
     // `subs[id] = Some(t)` means type variable `id` has been bound to `t`.
@@ -607,6 +668,103 @@ struct Unifier<'g> {
     // you pay O(max_id) space, and you get O(1) binds/queries.
     subs: Vec<Option<Type>>,
     gas: Option<&'g mut GasMeter>,
+}
+
+fn superclass_closure(class_env: &ClassEnv, given: &[Predicate]) -> Vec<Predicate> {
+    let mut closure: Vec<Predicate> = given.to_vec();
+    let mut i = 0;
+    while i < closure.len() {
+        let p = closure[i].clone();
+        for sup in class_env.supers_of(&p.class) {
+            closure.push(Predicate::new(sup, p.typ.clone()));
+        }
+        i += 1;
+    }
+    closure
+}
+
+fn check_non_ground_predicates_declared(
+    class_env: &ClassEnv,
+    declared: &[Predicate],
+    inferred: &[Predicate],
+) -> Result<(), TypeError> {
+    // Compare by a stable, user-facing rendering (`Default a`, `Foldable t`, ...),
+    // rather than `TypeVarId`, so signature variables that only appear in
+    // predicates (and thus aren't related by unification) still match up.
+    let closure = superclass_closure(class_env, declared);
+    let closure_keys: HashSet<String> = closure.iter().map(|p| format!("{} {}", p.class, p.typ)).collect();
+    let mut missing = Vec::new();
+    for pred in inferred {
+        if pred.typ.ftv().is_empty() {
+            continue;
+        }
+        let key = format!("{} {}", pred.class, pred.typ);
+        if !closure_keys.contains(&key) {
+            missing.push(key);
+        }
+    }
+
+    missing.sort();
+    missing.dedup();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(TypeError::MissingConstraints {
+        constraints: missing.join(", "),
+    })
+}
+
+fn type_term_remaining_arity(ty: &Type) -> Option<usize> {
+    match ty.as_ref() {
+        TypeKind::Var(_) => None,
+        TypeKind::Con(tc) => Some(tc.arity),
+        TypeKind::App(l, _) => {
+            let a = type_term_remaining_arity(l)?;
+            Some(a.saturating_sub(1))
+        }
+        TypeKind::Fun(..) | TypeKind::Tuple(..) | TypeKind::Record(..) => Some(0),
+    }
+}
+
+fn max_head_app_arity_for_var(ty: &Type, var_id: TypeVarId) -> usize {
+    let mut max_arity = 0usize;
+    let mut stack: Vec<&Type> = vec![ty];
+    while let Some(t) = stack.pop() {
+        match t.as_ref() {
+            TypeKind::Var(_) | TypeKind::Con(_) => {}
+            TypeKind::App(l, r) => {
+                // Record the full application depth at this node.
+                let mut head = t;
+                let mut args = 0usize;
+                while let TypeKind::App(left, _) = head.as_ref() {
+                    args += 1;
+                    head = left;
+                }
+                if let TypeKind::Var(tv) = head.as_ref() {
+                    if tv.id == var_id {
+                        max_arity = max_arity.max(args);
+                    }
+                }
+                stack.push(l);
+                stack.push(r);
+            }
+            TypeKind::Fun(a, b) => {
+                stack.push(a);
+                stack.push(b);
+            }
+            TypeKind::Tuple(ts) => {
+                for t in ts {
+                    stack.push(t);
+                }
+            }
+            TypeKind::Record(fields) => {
+                for (_, t) in fields {
+                    stack.push(t);
+                }
+            }
+        }
+    }
+    max_arity
 }
 
 impl<'g> Unifier<'g> {
@@ -1542,15 +1700,27 @@ impl TypeSystem {
                 &mut ann_vars,
                 &mut self.supply,
             )?;
+            let declared_preds =
+                predicates_from_constraints(&self.adts, &decl.constraints, &mut ann_vars, &mut self.supply)?;
             let s = unify(&inferred, &expected)?;
             let preds = preds.apply(&s);
             let inferred = inferred.apply(&s);
+            let declared_preds = declared_preds.apply(&s);
+
+            // Rex `fn` declarations carry an explicit signature. Extra *non-ground*
+            // constraints inferred from the body must be listed in the signature's
+            // `where` clause (or be implied by superclasses).
+            //
+            // Ground constraints (e.g. `AdditiveMonoid i32`) can be discharged by
+            // instance search at use sites and don't need to be spelled out.
+            check_non_ground_predicates_declared(&self.classes, &declared_preds, &preds)?;
 
             // The scheme is the generalized inferred type with its required
             // class predicates. This is the same shape a `let` binding would
             // produce, but done explicitly so other decls (e.g. instances) can
             // typecheck against it.
             let scheme = generalize(&self.env, preds, inferred);
+            reject_ambiguous_scheme(&scheme)?;
             self.env.extend(decl.name.name.clone(), scheme);
 
             // `typed` is intentionally unused here. Typechecking instance
@@ -1781,6 +1951,7 @@ impl TypeSystem {
             preds = dedup_preds(preds.apply(&improve));
             t = t.apply(&improve);
         }
+        self.check_predicate_kinds(&preds)?;
         Ok((typed, preds, t))
     }
 
@@ -1817,6 +1988,7 @@ impl TypeSystem {
             preds = dedup_preds(preds.apply(&improve));
             t = t.apply(&improve);
         }
+        self.check_predicate_kinds(&preds)?;
         Ok((typed, preds, t))
     }
 
@@ -1836,6 +2008,7 @@ impl TypeSystem {
         let subst = unifier.into_subst();
         let preds = dedup_preds(preds.apply(&subst));
         let t = t.apply(&subst);
+        self.check_predicate_kinds(&preds)?;
         Ok((preds, t))
     }
 
@@ -1867,7 +2040,65 @@ impl TypeSystem {
             preds = dedup_preds(preds.apply(&improve));
             t = t.apply(&improve);
         }
+        self.check_predicate_kinds(&preds)?;
         Ok((preds, t))
+    }
+
+    fn expected_class_param_arities(&self, class: &Symbol) -> Option<Vec<usize>> {
+        let info = self.class_info.get(class)?;
+        let mut out = vec![0usize; info.params.len()];
+        for scheme in info.methods.values() {
+            for (idx, param) in info.params.iter().enumerate() {
+                let Some(tv) = scheme.vars.iter().find(|v| v.name.as_ref() == Some(param)) else {
+                    continue;
+                };
+                out[idx] = out[idx].max(max_head_app_arity_for_var(&scheme.typ, tv.id));
+            }
+        }
+        Some(out)
+    }
+
+    fn check_predicate_kind(&self, pred: &Predicate) -> Result<(), TypeError> {
+        let Some(expected) = self.expected_class_param_arities(&pred.class) else {
+            // Host-injected classes (via Rust API) won't have `class_info`.
+            return Ok(());
+        };
+
+        let args: Vec<Type> = if expected.len() == 1 {
+            vec![pred.typ.clone()]
+        } else if let TypeKind::Tuple(parts) = pred.typ.as_ref() {
+            if parts.len() != expected.len() {
+                return Ok(());
+            }
+            parts.clone()
+        } else {
+            return Ok(());
+        };
+
+        for (arg, expected_arity) in args.iter().zip(expected.iter().copied()) {
+            let Some(got) = type_term_remaining_arity(arg) else {
+                // If we can't determine the arity (e.g. a bare type var), skip:
+                // call sites may fix it up, and Rex does not currently do full
+                // kind inference.
+                continue;
+            };
+            if got != expected_arity {
+                return Err(TypeError::KindMismatch {
+                    class: pred.class.clone(),
+                    expected: expected_arity,
+                    got,
+                    typ: arg.to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn check_predicate_kinds(&self, preds: &[Predicate]) -> Result<(), TypeError> {
+        for pred in preds {
+            self.check_predicate_kind(pred)?;
+        }
+        Ok(())
     }
 }
 
@@ -2054,19 +2285,19 @@ fn collect_lambda_chain(
     let mut params = Vec::new();
     let mut constraints = Vec::new();
     let mut cur = expr;
-    let mut first = true;
+    let mut seen_constraints = false;
     loop {
         match cur {
             Expr::Lam(_, _scope, param, ann, lam_constraints, body) => {
-                if !first && !lam_constraints.is_empty() {
-                    break;
-                }
-                if first {
+                if !lam_constraints.is_empty() {
+                    if seen_constraints {
+                        break;
+                    }
                     constraints = lam_constraints.clone();
+                    seen_constraints = true;
                 }
                 params.push((param.name.clone(), ann.clone()));
                 cur = body.as_ref();
-                first = false;
             }
             _ => break,
         }
@@ -2345,6 +2576,7 @@ fn infer_expr_type(
                 }
                 let def_ty = unifier.apply_type(&t1);
                 let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
+                reject_ambiguous_scheme(&scheme)?;
                 env_cur.extend(v.name.clone(), scheme);
                 if let Some(known_variant) =
                     known_variant_from_expr_with_known(&d, &def_ty, adts, &known_cur)
@@ -2719,6 +2951,7 @@ fn infer_expr(
                 }
                 let def_ty = unifier.apply_type(&t1);
                 let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
+                reject_ambiguous_scheme(&scheme)?;
                 env_cur.extend(v.name.clone(), scheme);
                 if let Some(known_variant) =
                     known_variant_from_expr_with_known(&d, &def_ty, adts, &known_cur)

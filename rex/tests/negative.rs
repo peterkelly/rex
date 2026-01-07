@@ -314,6 +314,47 @@ fn compile_rejects_invalid_programs() {
             "#,
             |e| matches!(e, TypeError::UnknownField { .. } | TypeError::FieldNotKnown { .. } | TypeError::Unification(..)),
         ),
+        (
+            "ambiguous_type_variable_only_in_constraints",
+            r#"
+            class Default a where
+                default : a
+
+            fn my_fn (x: t a) -> a where Foldable t, Default a, Default b =
+                foldl (\_ acc -> acc) (default) x
+
+            my_fn [[1, 2], [3]]
+            "#,
+            |e| {
+                matches!(e, TypeError::AmbiguousTypeVars { constraints, .. } if constraints.contains("Default"))
+            },
+        ),
+        (
+            "constraint_kind_mismatch_rejected",
+            r#"
+            class Default a where
+                default : a
+
+            fn my_fn (x: t i32) -> i32 where Foldable t, Default t =
+                0
+
+            my_fn [1, 2, 3]
+            "#,
+            |e| matches!(e, TypeError::KindMismatch { class, .. } if class.as_ref() == "Default"),
+        ),
+        (
+            "fn_decl_missing_required_constraint_is_error",
+            r#"
+            class Default a where
+                default : a
+
+            fn my_fn (x: t a) -> a where Foldable t =
+                foldl (\_ acc -> acc) (default) x
+
+            my_fn [[1, 2], [3]]
+            "#,
+            |e| matches!(e, TypeError::MissingConstraints { constraints } if constraints.contains("Default")),
+        ),
     ];
 
     for (name, code, pred) in cases {
