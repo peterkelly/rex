@@ -11,6 +11,7 @@ rex-parser = { workspace = true }
 rex-engine = { workspace = true }
 rex-ts = { workspace = true }
 rex-gas = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 rex-proc-macro = { workspace = true }

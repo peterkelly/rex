@@ -400,7 +400,7 @@ impl Parser {
 
     fn parse_unary_expr(&mut self) -> Result<Expr, ParserErr> {
         // println!("parse_unary_expr: self.current_token() = {:#?}", self.current_token());
-        let mut call_base_expr = self.parse_atom_expr()?;
+        let mut call_base_expr = self.parse_postfix_expr()?;
         let call_base_expr_span = *call_base_expr.span();
 
         let mut call_arg_exprs = VecDeque::new();
@@ -417,7 +417,7 @@ impl Parser {
                 | Token::BackSlash(..)
                 | Token::Let(..)
                 | Token::If(..)
-                | Token::Match(..) => self.parse_atom_expr(),
+                | Token::Match(..) => self.parse_postfix_expr(),
                 _ => break,
             }?;
             call_arg_exprs.push_back(call_arg_expr);
@@ -433,12 +433,29 @@ impl Parser {
         }
         loop {
             match self.current_token() {
+                Token::Is(..) => {
+                    self.next_token();
+                    let ann = self.parse_type_expr()?;
+                    let span = Span::from_begin_end(call_base_expr.span().begin, ann.span().end);
+                    call_base_expr = Expr::Ann(span, Arc::new(call_base_expr), ann);
+                }
+                _ => break,
+            }
+        }
+        Ok(call_base_expr)
+    }
+
+    fn parse_postfix_expr(&mut self) -> Result<Expr, ParserErr> {
+        let mut base = self.parse_atom_expr()?;
+        loop {
+            match self.current_token() {
                 Token::Dot(..) | Token::Colon(..) => {
                     self.next_token();
                 }
                 _ => break,
             }
-            let field = match self.current_token() {
+
+            let (field, end) = match self.current_token() {
                 Token::Ident(name, span, ..) => {
                     let name = intern(&name);
                     let end = span.end;
@@ -452,21 +469,11 @@ impl Parser {
                     ));
                 }
             };
-            let span = Span::from_begin_end(call_base_expr.span().begin, field.1);
-            call_base_expr = Expr::Project(span, Arc::new(call_base_expr), field.0);
+
+            let span = Span::from_begin_end(base.span().begin, end);
+            base = Expr::Project(span, Arc::new(base), field);
         }
-        loop {
-            match self.current_token() {
-                Token::Is(..) => {
-                    self.next_token();
-                    let ann = self.parse_type_expr()?;
-                    let span = Span::from_begin_end(call_base_expr.span().begin, ann.span().end);
-                    call_base_expr = Expr::Ann(span, Arc::new(call_base_expr), ann);
-                }
-                _ => break,
-            }
-        }
-        Ok(call_base_expr)
+        Ok(base)
     }
 
     fn parse_atom_expr(&mut self) -> Result<Expr, ParserErr> {
@@ -3201,6 +3208,26 @@ mod tests {
         let expr = parse("x:field");
         let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("field")));
 
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_projection_binds_tighter_than_application() {
+        let expr = parse("pretty p.x");
+        let expected = app!(
+            v!("pretty"),
+            Arc::new(Expr::Project(Span::default(), v!("p"), intern("x")))
+        );
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_projection_can_be_applied_without_parens() {
+        let expr = parse("x.field y");
+        let expected = app!(
+            Arc::new(Expr::Project(Span::default(), v!("x"), intern("field"))),
+            v!("y")
+        );
         assert_expr_eq!(expr, expected; ignore span);
     }
 

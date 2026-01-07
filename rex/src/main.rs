@@ -12,6 +12,8 @@ use rex_lexer::Token;
 use rex_parser::{Parser as RexParser, ParserLimits};
 use rex_ts::TypeSystem;
 
+mod cli_prelude;
+
 #[derive(Parser)]
 #[command(name = "rex")]
 #[command(about = "Rex (Rush Expressions) CLI")]
@@ -178,6 +180,7 @@ fn run_source(
 
     if emit_type {
         let mut ts = TypeSystem::with_prelude();
+        cli_prelude::inject_cli_prelude_schemes(&mut ts);
         inject_type_env_decls(&mut ts, &program.decls).map_err(|e| format!("{e}"))?;
         let (preds, ty) = ts
             .infer_with_gas(program.expr.as_ref(), &mut gas)
@@ -200,6 +203,7 @@ fn run_source(
     }
 
     let mut engine = Engine::with_prelude();
+    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;

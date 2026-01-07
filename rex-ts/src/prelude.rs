@@ -44,6 +44,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // body should not need to assume the class it is defining.
     let bool_ty = Type::con("bool", 0);
     let i32_ty = Type::con("i32", 0);
+    let string_ty = Type::con("string", 0);
 
     // Equality intrinsics.
     //
@@ -180,6 +181,21 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                     ),
                 );
             }
+        }
+    }
+
+    // Pretty-printing intrinsics (monomorphic overloads).
+    {
+        let pretty_types = [
+            "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
+            "uuid", "datetime",
+        ];
+        for prim in pretty_types {
+            let t = Type::con(prim, 0);
+            ts.add_overload(
+                "prim_pretty",
+                Scheme::new(vec![], vec![], Type::fun(t, string_ty.clone())),
+            );
         }
     }
 

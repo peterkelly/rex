@@ -1,18 +1,10 @@
-class Pretty a
-    pretty : a -> string
+type Point = Point { x: i32, y: i32 }
 
-instance Pretty i32
-    pretty = \_ -> "<i32>"
+instance Pretty Point
+    pretty = \p -> "Point(" + pretty p.x + ", " + pretty p.y + ")"
 
-instance Pretty (List a) <= Pretty a
-    pretty = \xs ->
-        let
-            step = \out x ->
-                if out == "["
-                    then out + pretty x
-                    else out + ", " + pretty x,
-            out = foldl step "[" xs
-        in
-            out + "]"
-
-(pretty [1, 2, 3], pretty [])
+(
+    pretty [Point { x = 1, y = 2 }, Point { x = 3, y = 4 }],
+    pretty [1, 2, 3],
+    pretty []
+)

@@ -1,0 +1,1 @@
+error "hello, world!"

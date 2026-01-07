@@ -731,6 +731,7 @@ dependencies = [
  "rex-parser",
  "rex-proc-macro",
  "rex-ts",
+ "uuid",
 ]
 
 [[package]]
@@ -763,6 +764,7 @@ dependencies = [
  "rex-parser",
  "rex-ts",
  "thiserror",
+ "tracing",
  "uuid",
 ]
 

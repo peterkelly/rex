@@ -1083,6 +1083,70 @@ impl Engine {
         engine
     }
 
+    /// Inject `debug`/`info`/`warn`/`error` logging functions backed by `tracing`.
+    ///
+    /// Each function has the Rex type `a -> str where Pretty a` and logs
+    /// `pretty x` at the corresponding level, returning the rendered string.
+    pub fn inject_tracing_log_functions(&mut self) -> Result<(), EngineError> {
+        let string = Type::con("string", 0);
+
+        let make_scheme = |engine: &mut Engine| {
+            let a_tv = engine.types.supply.fresh(Some("a".into()));
+            let a = Type::var(a_tv.clone());
+            Scheme::new(
+                vec![a_tv],
+                vec![Predicate::new("Pretty", a.clone())],
+                Type::fun(a, string.clone()),
+            )
+        };
+
+        let inject = |engine: &mut Engine,
+                      name: &'static str,
+                      log: fn(&str)|
+         -> Result<(), EngineError> {
+            let name_sym = sym(name);
+            let scheme = make_scheme(engine);
+            engine.inject_native_scheme_typed(name, scheme, 1, move |engine, call_type, args| {
+                if args.len() != 1 {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 1,
+                        got: args.len(),
+                    });
+                }
+
+                let (arg_ty, _ret_ty) = split_fun(call_type)
+                    .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
+                let pretty_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
+                let pretty = engine.resolve_class_method_value(&sym("pretty"), &pretty_ty)?;
+                let rendered = apply(
+                    engine,
+                    pretty,
+                    args[0].clone(),
+                    Some(&pretty_ty),
+                    Some(&arg_ty),
+                )?;
+
+                let Value::String(message) = rendered else {
+                    return Err(EngineError::NativeType {
+                        name: name_sym.clone(),
+                        expected: "string".to_string(),
+                        got: rendered.type_name().to_string(),
+                    });
+                };
+
+                log(&message);
+                Ok(Value::String(message))
+            })
+        };
+
+        inject(self, "debug", |s| tracing::debug!("{s}"))?;
+        inject(self, "info", |s| tracing::info!("{s}"))?;
+        inject(self, "warn", |s| tracing::warn!("{s}"))?;
+        inject(self, "error", |s| tracing::error!("{s}"))?;
+        Ok(())
+    }
+
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancel.clone()
     }
@@ -1664,6 +1728,7 @@ impl Engine {
         inject_prelude_adts(self)?;
         inject_equality_ops(self)?;
         inject_order_ops(self)?;
+        inject_pretty_ops(self)?;
         inject_boolean_ops(self)?;
         inject_numeric_ops(self)?;
         inject_list_builtins(self)?;
@@ -3465,6 +3530,24 @@ fn inject_order_ops(engine: &mut Engine) -> Result<(), EngineError> {
         Ok(Value::I32(cmp_to_i32(ord)))
     })?;
 
+    Ok(())
+}
+
+fn inject_pretty_ops(engine: &mut Engine) -> Result<(), EngineError> {
+    engine.inject_fn1("prim_pretty", |x: bool| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: u8| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: u16| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: u32| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: u64| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: i8| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: i16| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: i32| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: i64| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: f32| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: f64| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: String| -> String { x })?;
+    engine.inject_fn1("prim_pretty", |x: Uuid| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |x: DateTime<Utc>| -> String { x.to_string() })?;
     Ok(())
 }
 
