@@ -12,7 +12,7 @@ instance Default (List a) where
 instance Default i32 where
     default = 0
 
-fn reduce (f: a -> a -> a) -> (xs: t a) -> a where Foldable t =
+fn reduce (f: a -> a -> a) -> (xs: t a) -> a where Foldable t, Default a =
     foldl f default xs
 
 let 
