@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::io::{self, Read};
+use std::io::IsTerminal;
 use std::thread;
 
 use clap::{Args, Parser, Subcommand};
@@ -83,11 +84,31 @@ struct RunArgs {
 }
 
 fn main() {
+    init_tracing();
     let cli = Cli::parse();
     if let Err(err) = run(cli) {
         eprintln!("error: {err}");
         std::process::exit(1);
     }
+}
+
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_env("REX_LOG")
+        .or_else(|_| EnvFilter::try_from_default_env())
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let ansi = std::io::stderr().is_terminal();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(ansi)
+        .with_target(true)
+        .with_level(true)
+        .with_thread_names(true)
+        .with_thread_ids(true)
+        .compact()
+        .try_init();
 }
 
 fn run(cli: Cli) -> Result<(), String> {
@@ -231,6 +252,7 @@ fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_
                 ts.inject_instance_decl(inst_decl)?;
             }
             Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
+            Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
         }
     }
     Ok(())

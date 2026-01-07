@@ -40,6 +40,7 @@ pub enum Token {
     // Reserved keywords
     As(Span),
     Class(Span),
+    Declare(Span),
     Else(Span),
     Fn(Span),
     For(Span),
@@ -148,6 +149,8 @@ impl Token {
                     Token::As(span)
                 } else if capture.name("Class").is_some() {
                     Token::Class(span)
+                } else if capture.name("Declare").is_some() {
+                    Token::Declare(span)
                 } else if capture.name("Else").is_some() {
                     Token::Else(span)
                 } else if capture.name("Fn").is_some() {
@@ -313,6 +316,7 @@ impl Token {
                     // Reserved keywords (with word boundaries)
                     r"(?P<As>\bas\b)|",
                     r"(?P<Class>\bclass\b)|",
+                    r"(?P<Declare>\bdeclare\b)|",
                     r"(?P<Else>\belse\b)|",
                     r"(?P<Fn>\bfn\b)|",
                     r"(?P<For>\bfor\b)|",
@@ -411,6 +415,7 @@ impl Spanned for Token {
             // Reserved keywords
             As(span, ..) => span,
             Class(span, ..) => span,
+            Declare(span, ..) => span,
             Else(span, ..) => span,
             Fn(span, ..) => span,
             For(span, ..) => span,
@@ -489,6 +494,7 @@ impl Spanned for Token {
             // Reserved keywords
             As(span, ..) => span,
             Class(span, ..) => span,
+            Declare(span, ..) => span,
             Else(span, ..) => span,
             Fn(span, ..) => span,
             For(span, ..) => span,
@@ -569,6 +575,7 @@ impl Display for Token {
             // Reserved keywords
             As(..) => write!(f, "as"),
             Class(..) => write!(f, "class"),
+            Declare(..) => write!(f, "declare"),
             Else(..) => write!(f, "else"),
             Fn(..) => write!(f, "fn"),
             For(..) => write!(f, "for"),

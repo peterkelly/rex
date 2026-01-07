@@ -14,6 +14,7 @@ const documents = new TextDocuments(TextDocument);
 const maxDiagnostics = 50;
 
 const keywordDocs = new Map([
+  ['declare', 'Declares a forward signature for an externally-provided function.'],
   ['let', 'Introduces local bindings.'],
   ['in', 'Begins the expression body for a let binding.'],
   ['type', 'Declares a type or ADT.'],

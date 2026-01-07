@@ -68,6 +68,24 @@ fn default_nested_context_list() {
 }
 
 #[test]
+fn pattern_field_renaming() {
+    assert_eval(
+        r#"
+        type Point = Point { x: f32, y: f32 }
+
+        instance AdditiveMonoid Point
+            zero = Point { x = 0.0, y = 0.0 }
+            + = \p q -> match (p, q)
+                when (Point { x: x1, y: y1 }, Point { x: x2, y: y2 }) ->
+                    Point { x = x1 + x2, y = y1 + y2 }
+
+        (Point { x = 1.0, y = 2.0 }) + (Point { x = 3.0, y = 4.0 })
+        "#,
+        "Point {x = 4f32, y = 6f32}",
+    );
+}
+
+#[test]
 fn default_nested_context_option() {
     assert_eval(
         r#"

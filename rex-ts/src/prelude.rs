@@ -16,7 +16,7 @@ fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) {
                 ts.inject_instance_decl(inst_decl)
                     .expect("failed to inject prelude instance decl");
             }
-            Decl::Type(..) | Decl::Fn(..) => {}
+            Decl::Type(..) | Decl::Fn(..) | Decl::DeclareFn(..) => {}
         }
     }
 }

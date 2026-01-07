@@ -7,8 +7,9 @@ use std::{
 };
 
 use rex_ast::expr::{
-    intern, ClassDecl, ClassMethodSig, Decl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
-    Pattern, Program, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
+    intern, ClassDecl, ClassMethodSig, DeclareFnDecl, Decl, Expr, FnDecl, InstanceDecl,
+    InstanceMethodImpl, Pattern, Program, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr,
+    TypeVariant, Var,
 };
 use rex_lexer::{
     span::{Position, Span, Spanned},
@@ -226,6 +227,13 @@ impl Parser {
                 },
                 Token::Fn(..) => match self.parse_fn_decl() {
                     Ok(decl) => decls.push(Decl::Fn(decl)),
+                    Err(e) => {
+                        self.record_error(e);
+                        break;
+                    }
+                },
+                Token::Declare(..) => match self.parse_declare_fn_decl_toplevel() {
+                    Ok(decl) => decls.push(Decl::DeclareFn(decl)),
                     Err(e) => {
                         self.record_error(e);
                         break;
@@ -2105,6 +2113,551 @@ impl Parser {
         })
     }
 
+    fn parse_declare_fn_decl_toplevel(&mut self) -> Result<DeclareFnDecl, ParserErr> {
+        let start_idx = self.token_cursor;
+        let start_line = self
+            .tokens
+            .get(start_idx)
+            .ok_or_else(|| ParserErr::new(self.eof, "unexpected EOF".to_string()))?
+            .span()
+            .begin
+            .line;
+
+        // `declare fn` has no body, so we parse only the declaration line.
+        let mut depth = 0usize;
+        let mut end_idx = start_idx;
+        for i in start_idx..self.tokens.len() {
+            let tok = &self.tokens[i];
+            if depth == 0 && tok.span().begin.line > start_line {
+                break;
+            }
+            match tok {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                _ => {}
+            }
+            end_idx = i + 1;
+        }
+
+        let eof = self
+            .tokens
+            .get(end_idx.saturating_sub(1))
+            .map(|t| *t.span())
+            .unwrap_or(self.eof);
+        let tokens = Tokens {
+            items: self.tokens[start_idx..end_idx].to_vec(),
+            eof,
+        };
+        let mut parser = Parser::new(tokens);
+        let decl = parser.parse_declare_fn_decl()?;
+        match parser.current_token() {
+            Token::Eof(..) => {}
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("unexpected {} in declaration", token),
+                ));
+            }
+        }
+
+        self.token_cursor = end_idx;
+        self.skip_newlines();
+        Ok(decl)
+    }
+
+    fn parse_declare_fn_decl(&mut self) -> Result<DeclareFnDecl, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::Declare(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `declare` got {}", token),
+                ));
+            }
+        };
+
+        match self.current_token() {
+            Token::Fn(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `fn` got {}", token),
+                ));
+            }
+        }
+
+        let (name, name_span) = match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                let span = span;
+                self.next_token();
+                (name, span)
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected function name got {}", token),
+                ));
+            }
+        };
+
+        let name_var = Var::with_span(name_span, name);
+        let mut params: Vec<(Var, TypeExpr)> = Vec::new();
+
+        let is_named_param_head = |token: &Token, next: &Token| {
+            matches!(token, Token::Ident(..)) && matches!(next, Token::Colon(..))
+        };
+        let is_paren_param_head = |token: &Token, next: &Token, next2: &Token| {
+            matches!(token, Token::ParenL(..))
+                && matches!(next, Token::Ident(..))
+                && matches!(next2, Token::Colon(..))
+        };
+
+        // `declare fn` supports two surface syntaxes:
+        //  1) A full `fn`-style header with named parameters.
+        //  2) A bare type signature (like class methods): `declare fn id a -> a`.
+        let tok = self.current_token();
+        let next = self.peek_token(1);
+        let next2 = self.peek_token(2);
+        let mut use_named_params =
+            is_named_param_head(&tok, &next) || is_paren_param_head(&tok, &next, &next2);
+
+        if !use_named_params && matches!(tok, Token::ParenL(..)) {
+            // `()` means nullary params in the legacy `fn` syntax, so treat it as named-params mode.
+            if matches!(next, Token::ParenR(..)) {
+                use_named_params = true;
+            } else {
+                // Disambiguate legacy `(x: a, y: b)` params from grouped type expressions like `(a, b) -> c`.
+                let paren_start = self.token_cursor;
+                let mut depth = 0usize;
+                let mut saw_colon = false;
+                for i in (paren_start + 1)..self.tokens.len() {
+                    match self.tokens[i] {
+                        Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                        Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                            if depth == 0 {
+                                break;
+                            }
+                            depth = depth.saturating_sub(1)
+                        }
+                        Token::Colon(..) if depth == 0 => {
+                            saw_colon = true;
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if saw_colon {
+                    use_named_params = true;
+                }
+            }
+        }
+
+        if !use_named_params {
+            // Parse a bare type signature.
+            let sig_start = self.token_cursor;
+            let mut depth = 0usize;
+            let mut where_idx = None;
+            for i in sig_start..self.tokens.len() {
+                match self.tokens[i] {
+                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                        depth = depth.saturating_sub(1)
+                    }
+                    Token::Where(..) if depth == 0 => {
+                        where_idx = Some(i);
+                        break;
+                    }
+                    Token::Assign(span, ..) if depth == 0 => {
+                        return Err(ParserErr::new(
+                            span,
+                            "declare fn cannot have a body; use `fn`".to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+
+            let sig_end = where_idx.unwrap_or(self.tokens.len());
+            let sig = self.parse_type_expr_slice(&self.tokens[sig_start..sig_end])?;
+            self.token_cursor = sig_end;
+
+            let mut constraints = Vec::new();
+            if matches!(self.current_token(), Token::Where(..)) {
+                self.next_token();
+                constraints = self.parse_type_constraints()?;
+            }
+
+            // Flatten `a -> b -> c` into params=[a,b], ret=c so downstream code can
+            // reconstruct the same function type.
+            let mut param_tys = Vec::new();
+            let mut cur = sig;
+            let ret = loop {
+                match cur {
+                    TypeExpr::Fun(_, arg, next_ret) => {
+                        param_tys.push(*arg);
+                        cur = *next_ret;
+                    }
+                    other => break other,
+                }
+            };
+            params = param_tys
+                .into_iter()
+                .enumerate()
+                .map(|(i, ann)| (Var::with_span(*ann.span(), format!("_arg{i}")), ann))
+                .collect();
+
+            let span_end = constraints
+                .last()
+                .map(|c| c.typ.span().end)
+                .unwrap_or(ret.span().end);
+            return Ok(DeclareFnDecl {
+                span: Span::from_begin_end(span_begin, span_end),
+                name: name_var,
+                params,
+                ret,
+                constraints,
+            });
+        }
+
+        // Params (new syntax):
+        //   declare fn foo x: a -> y: b -> i32 where ...
+        //   declare fn foo (x: a) -> (y: b) -> i32
+        //
+        // Params (legacy syntax, still accepted):
+        //   declare fn foo (x: a, y: b) -> i32
+        if matches!(self.current_token(), Token::ParenL(..)) {
+            // Detect a top-level comma within the first `(...)` group.
+            let paren_start = self.token_cursor;
+            let mut depth = 0usize;
+            let mut has_comma = false;
+            for i in (paren_start + 1)..self.tokens.len() {
+                match self.tokens[i] {
+                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth = depth.saturating_sub(1)
+                    }
+                    Token::Comma(..) if depth == 0 => {
+                        has_comma = true;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            // `()` is also treated as the legacy group syntax (nullary functions).
+            if has_comma || matches!(self.peek_token(1), Token::ParenR(..)) {
+                // (x: a, y: b)
+                self.next_token();
+                if !matches!(self.current_token(), Token::ParenR(..)) {
+                    loop {
+                        let (param_name, param_span) = match self.current_token() {
+                            Token::Ident(name, span, ..) => {
+                                let span = span;
+                                self.next_token();
+                                (name, span)
+                            }
+                            token => {
+                                return Err(ParserErr::new(
+                                    *token.span(),
+                                    format!("expected parameter name got {}", token),
+                                ));
+                            }
+                        };
+                        match self.current_token() {
+                            Token::Colon(..) => self.next_token(),
+                            token => {
+                                return Err(ParserErr::new(
+                                    *token.span(),
+                                    format!("expected `:` got {}", token),
+                                ));
+                            }
+                        }
+
+                        // Parse the parameter type, stopping at `,` or `)` at depth 0.
+                        let ty_start = self.token_cursor;
+                        let mut depth = 0usize;
+                        let mut ty_end = None;
+                        for i in ty_start..self.tokens.len() {
+                            match self.tokens[i] {
+                                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
+                                    depth += 1
+                                }
+                                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                                    if depth == 0 {
+                                        ty_end = Some(i);
+                                        break;
+                                    }
+                                    depth = depth.saturating_sub(1)
+                                }
+                                Token::Comma(..) if depth == 0 => {
+                                    ty_end = Some(i);
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                        let Some(ty_end) = ty_end else {
+                            return Err(ParserErr::new(
+                                self.eof,
+                                "expected `,` or `)` after parameter type".to_string(),
+                            ));
+                        };
+                        let ann = self.parse_type_expr_slice(&self.tokens[ty_start..ty_end])?;
+                        self.token_cursor = ty_end;
+                        params.push((Var::with_span(param_span, param_name), ann));
+
+                        match self.current_token() {
+                            Token::Comma(..) => {
+                                self.next_token();
+                                continue;
+                            }
+                            Token::ParenR(..) => break,
+                            token => {
+                                return Err(ParserErr::new(
+                                    *token.span(),
+                                    format!("expected `,` or `)` got {}", token),
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                match self.current_token() {
+                    Token::ParenR(..) => self.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `)` got {}", token),
+                        ));
+                    }
+                }
+
+                // `->`
+                match self.current_token() {
+                    Token::ArrowR(..) => self.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `->` got {}", token),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // New syntax: a chain of named params (`x: a -> ...`) and/or parenthesized params (`(x: a) -> ...`).
+        // Parameters are always delimited by `->`. Adjacency is not accepted.
+        if params.is_empty() {
+            loop {
+                let tok = self.current_token();
+                let next = self.peek_token(1);
+                let next2 = self.peek_token(2);
+                if is_paren_param_head(&tok, &next, &next2) {
+                    // (x: a)
+                    self.next_token(); // `(`
+                    let (param_name, param_span) = match self.current_token() {
+                        Token::Ident(name, span, ..) => {
+                            let span = span;
+                            self.next_token();
+                            (name, span)
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected parameter name got {}", token),
+                            ));
+                        }
+                    };
+                    match self.current_token() {
+                        Token::Colon(..) => self.next_token(),
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `:` got {}", token),
+                            ));
+                        }
+                    }
+
+                    // Parse the parameter type, stopping at the closing `)` at depth 0.
+                    let ty_start = self.token_cursor;
+                    let mut depth = 0usize;
+                    let mut rparen_idx = None;
+                    for i in ty_start..self.tokens.len() {
+                        match self.tokens[i] {
+                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
+                                depth += 1
+                            }
+                            Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                                if depth == 0 {
+                                    rparen_idx = Some(i);
+                                    break;
+                                }
+                                depth = depth.saturating_sub(1)
+                            }
+                            _ => {}
+                        }
+                    }
+                    let Some(rparen_idx) = rparen_idx else {
+                        return Err(ParserErr::new(self.eof, "expected `)`".to_string()));
+                    };
+                    let ann = self.parse_type_expr_slice(&self.tokens[ty_start..rparen_idx])?;
+                    self.token_cursor = rparen_idx;
+
+                    match self.current_token() {
+                        Token::ParenR(..) => self.next_token(),
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `)` got {}", token),
+                            ));
+                        }
+                    }
+
+                    params.push((Var::with_span(param_span, param_name), ann));
+                } else if is_named_param_head(&tok, &next) {
+                    // x: a -> y: b -> i32
+                    let (param_name, param_span) = match self.current_token() {
+                        Token::Ident(name, span, ..) => {
+                            let span = span;
+                            self.next_token();
+                            (name, span)
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected parameter name got {}", token),
+                            ));
+                        }
+                    };
+
+                    match self.current_token() {
+                        Token::Colon(..) => self.next_token(),
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `:` got {}", token),
+                            ));
+                        }
+                    }
+
+                    // Parse the parameter type, stopping at the `->` separator at depth 0.
+                    // To use a function type as a parameter type, parentheses are required:
+                    //   x: (a -> c) -> ...
+                    let ty_start = self.token_cursor;
+                    let mut depth = 0usize;
+                    let mut arrow_idx = None;
+                    let mut stop_span = None;
+                    for i in ty_start..self.tokens.len() {
+                        match self.tokens[i] {
+                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                            Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                                depth = depth.saturating_sub(1)
+                            }
+                            Token::ArrowR(..) if depth == 0 => {
+                                arrow_idx = Some(i);
+                                break;
+                            }
+                            Token::Where(span, ..) if depth == 0 => {
+                                stop_span = Some(span);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    let Some(arrow_idx) = arrow_idx else {
+                        let span = stop_span.unwrap_or(self.eof);
+                        return Err(ParserErr::new(
+                            span,
+                            "expected `->` after parameter type".to_string(),
+                        ));
+                    };
+                    let ann = self.parse_type_expr_slice(&self.tokens[ty_start..arrow_idx])?;
+                    self.token_cursor = arrow_idx;
+                    params.push((Var::with_span(param_span, param_name), ann));
+                } else {
+                    return Err(ParserErr::new(
+                        *tok.span(),
+                        format!("expected `(` or parameter name got {}", tok),
+                    ));
+                }
+
+                // Separator: always `->` after a parameter.
+                match self.current_token() {
+                    Token::ArrowR(..) => self.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `->` got {}", token),
+                        ));
+                    }
+                }
+
+                // If another param head follows, keep parsing params; otherwise we are at the return type.
+                let tok = self.current_token();
+                let next = self.peek_token(1);
+                let next2 = self.peek_token(2);
+                if is_paren_param_head(&tok, &next, &next2) || is_named_param_head(&tok, &next) {
+                    continue;
+                }
+                break;
+            }
+        }
+
+        // Find an (optional) `where` in the remaining tokens. `declare fn` must not have `=`.
+        let ret_start = self.token_cursor;
+        let mut depth = 0usize;
+        let mut where_idx = None;
+        for i in ret_start..self.tokens.len() {
+            match self.tokens[i] {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                Token::Where(..) if depth == 0 => {
+                    where_idx = Some(i);
+                    break;
+                }
+                Token::Assign(span, ..) if depth == 0 => {
+                    return Err(ParserErr::new(
+                        span,
+                        "declare fn cannot have a body; use `fn`".to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        let ret_end = where_idx.unwrap_or(self.tokens.len());
+        let ret = self.parse_type_expr_slice(&self.tokens[ret_start..ret_end])?;
+        self.token_cursor = ret_end;
+
+        let mut constraints = Vec::new();
+        if matches!(self.current_token(), Token::Where(..)) {
+            self.next_token();
+            constraints = self.parse_type_constraints()?;
+        }
+
+        let span_end = constraints
+            .last()
+            .map(|c| c.typ.span().end)
+            .unwrap_or(ret.span().end);
+        Ok(DeclareFnDecl {
+            span: Span::from_begin_end(span_begin, span_end),
+            name: name_var,
+            params,
+            ret,
+            constraints,
+        })
+    }
+
     fn parse_type_decl(&mut self) -> Result<TypeDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Type(span, ..) => {
@@ -2277,6 +2830,15 @@ impl Parser {
         };
 
         self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
+            // Unit type: `()`
+            if let Token::ParenR(span, ..) = this.current_token() {
+                this.next_token();
+                return Ok(TypeExpr::Tuple(
+                    Span::from_begin_end(span_begin, span.end),
+                    Vec::new(),
+                ));
+            }
+
             let first = this.parse_type_expr()?;
             let mut elems = Vec::new();
             let span_end = match this.current_token() {
@@ -2559,12 +3121,23 @@ impl Parser {
                 ));
             }
 
-            let mut keys = Vec::new();
+            let mut fields = Vec::new();
             let span_end = loop {
                 match this.current_token() {
-                    Token::Ident(name, _key_span, ..) => {
-                        keys.push(intern(&name));
+                    Token::Ident(name, key_span, ..) => {
+                        let key_name = name;
+                        let key_span = key_span;
+                        let key = intern(&key_name);
                         this.next_token();
+
+                        let pat = if matches!(this.current_token(), Token::Colon(..)) {
+                            this.next_token();
+                            this.parse_pattern()?
+                        } else {
+                            Pattern::Var(Var::with_span(key_span, key_name))
+                        };
+                        fields.push((key, pat));
+
                         match this.current_token() {
                             Token::Comma(..) => {
                                 this.next_token();
@@ -2592,7 +3165,7 @@ impl Parser {
 
             Ok(Pattern::Dict(
                 Span::from_begin_end(span_begin, span_end),
-                keys,
+                fields,
             ))
         })
     }
@@ -2612,22 +3185,56 @@ impl Parser {
         };
 
         self.with_nesting(Span::from_begin_end(span_begin, span_begin), |this| {
-            let pat = this.parse_pattern()?;
+            // Unit tuple pattern: `()`
+            if let Token::ParenR(span, ..) = this.current_token() {
+                this.next_token();
+                return Ok(Pattern::Tuple(
+                    Span::from_begin_end(span_begin, span.end),
+                    Vec::new(),
+                ));
+            }
 
+            let first = this.parse_pattern()?;
+            let mut elems = Vec::new();
             let span_end = match this.current_token() {
+                Token::Comma(..) => {
+                    this.next_token();
+                    elems.push(first);
+                    loop {
+                        elems.push(this.parse_pattern()?);
+                        match this.current_token() {
+                            Token::Comma(..) => {
+                                this.next_token();
+                            }
+                            Token::ParenR(span, ..) => {
+                                this.next_token();
+                                break span.end;
+                            }
+                            token => {
+                                return Err(ParserErr::new(
+                                    *token.span(),
+                                    format!("expected `)` got {}", token),
+                                ));
+                            }
+                        }
+                    }
+                }
                 Token::ParenR(span, ..) => {
                     this.next_token();
-                    span.end
+                    return Ok(first.with_span(Span::from_begin_end(span_begin, span.end)));
                 }
                 token => {
                     return Err(ParserErr::new(
                         *token.span(),
-                        format!("expected `)` got {}", token),
+                        format!("expected `)` or `,` got {}", token),
                     ));
                 }
             };
 
-            Ok(pat.with_span(Span::from_begin_end(span_begin, span_end)))
+            Ok(Pattern::Tuple(
+                Span::from_begin_end(span_begin, span_end),
+                elems,
+            ))
         })
     }
 
@@ -2819,9 +3426,14 @@ fn count_expr_nodes(expr: &Expr) -> u64 {
 
 fn count_pattern_nodes(pat: &Pattern) -> u64 {
     match pat {
-        Pattern::Wildcard(..) | Pattern::Var(..) | Pattern::Dict(..) => 1,
-        Pattern::Named(_, _, ps) | Pattern::List(_, ps) => 1 + ps.iter().map(count_pattern_nodes).sum::<u64>(),
+        Pattern::Wildcard(..) | Pattern::Var(..) => 1,
+        Pattern::Named(_, _, ps) | Pattern::Tuple(_, ps) | Pattern::List(_, ps) => {
+            1 + ps.iter().map(count_pattern_nodes).sum::<u64>()
+        }
         Pattern::Cons(_, a, b) => 1 + count_pattern_nodes(a) + count_pattern_nodes(b),
+        Pattern::Dict(_, fields) => {
+            1 + fields.iter().map(|(_, p)| count_pattern_nodes(p)).sum::<u64>()
+        }
     }
 }
 
@@ -3046,6 +3658,78 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_declare_fn_decl_where_constraints() {
+        let code = r#"
+        declare fn my_fun x: a -> y: b -> c where Iterable (a, b)
+        42
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::DeclareFn(fd) => {
+                assert_eq!(fd.name.name, intern("my_fun"));
+                assert_eq!(fd.params.len(), 2);
+                assert!(matches!(
+                    fd.constraints[0].class,
+                    ref n if n.as_ref() == "Iterable"
+                ));
+                match &fd.constraints[0].typ {
+                    TypeExpr::Tuple(_, elems) => {
+                        assert_eq!(elems.len(), 2);
+                        assert!(matches!(elems[0], TypeExpr::Name(_, ref n) if n.as_ref() == "a"));
+                        assert!(matches!(elems[1], TypeExpr::Name(_, ref n) if n.as_ref() == "b"));
+                    }
+                    other => panic!("expected tuple constraint type, got {other:?}"),
+                }
+            }
+            other => panic!("expected declare fn decl, got {other:?}"),
+        }
+        assert_expr_eq!(program.expr, u!(span!(3:9 - 3:11); 42));
+    }
+
+    #[test]
+    fn test_parse_declare_fn_decl_bare_signature() {
+        let code = r#"
+        declare fn info a -> string where Pretty a
+        0
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::DeclareFn(fd) => {
+                assert_eq!(fd.name.name, intern("info"));
+                assert_eq!(fd.params.len(), 1);
+                assert!(matches!(
+                    fd.params[0].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "a"
+                ));
+                assert!(matches!(
+                    fd.ret,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "string"
+                ));
+                assert_eq!(fd.constraints.len(), 1);
+                assert!(matches!(
+                    fd.constraints[0].class,
+                    ref n if n.as_ref() == "Pretty"
+                ));
+            }
+            other => panic!("expected declare fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_declare_fn_decl_rejects_body() {
+        let code = r#"
+        declare fn my_fun x: a -> a = x
+        0
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
     fn test_parse_fn_decl_param_fun_type_requires_parens() {
         let code = r#"
         fn apply x: (a -> c) -> y: a -> c = x y
@@ -3105,6 +3789,26 @@ mod tests {
         "#;
         let mut parser = Parser::new(Token::tokenize(code).unwrap());
         assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
+    fn test_parse_unit_type() {
+        let code = r#"
+        fn unit_id x: () -> () = x
+        unit_id ()
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("unit_id"));
+                assert_eq!(fd.params.len(), 1);
+                assert!(matches!(fd.params[0].1, TypeExpr::Tuple(_, ref xs) if xs.is_empty()));
+                assert!(matches!(fd.ret, TypeExpr::Tuple(_, ref xs) if xs.is_empty()));
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3505,7 +4209,13 @@ mod tests {
             Span::default(),
             v!("obj"),
             vec![(
-                Pattern::Dict(Span::default(), vec!["foo".into(), "bar".into()]),
+                Pattern::Dict(
+                    Span::default(),
+                    vec![
+                        ("foo".into(), Pattern::Var(Var::new("foo"))),
+                        ("bar".into(), Pattern::Var(Var::new("bar"))),
+                    ],
+                ),
                 app!(v!("foo"), v!("bar")),
             )],
         ));

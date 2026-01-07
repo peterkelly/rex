@@ -1670,6 +1670,11 @@ impl Engine {
                 Decl::Class(class_decl) => self.inject_class_decl(class_decl)?,
                 Decl::Instance(inst_decl) => self.inject_instance_decl(inst_decl)?,
                 Decl::Fn(fd) => self.inject_fn_decl(fd)?,
+                Decl::DeclareFn(df) => {
+                    self.types
+                        .inject_declare_fn_decl(df)
+                        .map_err(EngineError::Type)?;
+                }
             }
         }
         Ok(())
@@ -2402,6 +2407,11 @@ fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
                 collect_pattern_bindings(p, out);
             }
         }
+        Pattern::Tuple(_, ps) => {
+            for p in ps {
+                collect_pattern_bindings(p, out);
+            }
+        }
         Pattern::List(_, ps) => {
             for p in ps {
                 collect_pattern_bindings(p, out);
@@ -2411,8 +2421,10 @@ fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
             collect_pattern_bindings(head, out);
             collect_pattern_bindings(tail, out);
         }
-        Pattern::Dict(_, keys) => {
-            out.extend(keys.iter().cloned());
+        Pattern::Dict(_, fields) => {
+            for (_key, pat) in fields {
+                collect_pattern_bindings(pat, out);
+            }
         }
     }
 }
@@ -6308,6 +6320,10 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<HashMap<Symbol, Value>>
             }
             _ => None,
         },
+        Pattern::Tuple(_, ps) => match value {
+            Value::Tuple(xs) if xs.len() == ps.len() => match_patterns(ps, xs),
+            _ => None,
+        },
         Pattern::List(_, ps) => {
             let values = list_to_vec(value, "pattern").ok()?;
             if values.len() == ps.len() {
@@ -6325,12 +6341,13 @@ fn match_pattern(pat: &Pattern, value: &Value) -> Option<HashMap<Symbol, Value>>
             }
             _ => None,
         },
-        Pattern::Dict(_, keys) => match value {
+        Pattern::Dict(_, fields) => match value {
             Value::Dict(map) => {
                 let mut bindings = HashMap::new();
-                for key in keys {
+                for (key, pat) in fields {
                     let v = map.get(key)?;
-                    bindings.insert(key.clone(), v.clone());
+                    let sub = match_pattern(pat, v)?;
+                    bindings.extend(sub);
                 }
                 Some(bindings)
             }

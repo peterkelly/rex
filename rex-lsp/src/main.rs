@@ -319,6 +319,9 @@ fn hover_type_contents(text: &str, position: Position) -> Option<HoverContents> 
             Decl::Fn(_) => {
                 // `fn` bodies are represented in `program.expr_with_fns()`.
             }
+            Decl::DeclareFn(fd) => {
+                ts.inject_declare_fn_decl(fd).ok()?;
+            }
         }
     }
 
@@ -413,12 +416,12 @@ fn hover_type_in_expr(
         pat: &Pattern,
         out: &mut HashMap<String, Type>,
     ) {
-        match pat {
-            Pattern::Wildcard(..) => {}
-            Pattern::Var(v) => {
-                out.insert(v.name.as_ref().to_string(), scrutinee_ty.clone());
-            }
-            Pattern::Named(_span, ctor, args) => {
+	        match pat {
+	            Pattern::Wildcard(..) => {}
+	            Pattern::Var(v) => {
+	                out.insert(v.name.as_ref().to_string(), scrutinee_ty.clone());
+	            }
+	            Pattern::Named(_span, ctor, args) => {
                 let Some(schemes) = ts.env.lookup(ctor) else {
                     return;
                 };
@@ -432,14 +435,26 @@ fn hover_type_in_expr(
                     return;
                 };
 
-                for (subpat, arg_ty) in args.iter().zip(arg_tys.iter()) {
-                    add_bindings_from_pattern(ts, &arg_ty.apply(&s), subpat, out);
-                }
-            }
-            Pattern::List(_span, elems) => {
-                let tv = ts.supply.fresh(None);
-                let elem = Type::var(tv.clone());
-                let list_ty = Type::app(Type::con("List", 1), elem.clone());
+	                for (subpat, arg_ty) in args.iter().zip(arg_tys.iter()) {
+	                    add_bindings_from_pattern(ts, &arg_ty.apply(&s), subpat, out);
+	                }
+	            }
+	            Pattern::Tuple(_span, elems) => {
+	                let elem_tys: Vec<Type> = (0..elems.len())
+	                    .map(|_| Type::var(ts.supply.fresh(None)))
+	                    .collect();
+	                let expected = Type::tuple(elem_tys.clone());
+	                let Ok(s) = unify(scrutinee_ty, &expected) else {
+	                    return;
+	                };
+	                for (p, ty) in elems.iter().zip(elem_tys.iter()) {
+	                    add_bindings_from_pattern(ts, &ty.apply(&s), p, out);
+	                }
+	            }
+	            Pattern::List(_span, elems) => {
+	                let tv = ts.supply.fresh(None);
+	                let elem = Type::var(tv.clone());
+	                let list_ty = Type::app(Type::con("List", 1), elem.clone());
                 let Ok(s) = unify(scrutinee_ty, &list_ty) else {
                     return;
                 };
@@ -457,32 +472,32 @@ fn hover_type_in_expr(
                 };
                 let elem_ty = elem.apply(&s);
                 let list_ty = list_ty.apply(&s);
-                add_bindings_from_pattern(ts, &elem_ty, head.as_ref(), out);
-                add_bindings_from_pattern(ts, &list_ty, tail.as_ref(), out);
-            }
-            Pattern::Dict(_span, keys) => match scrutinee_ty.as_ref() {
-                TypeKind::Record(fields) => {
-                    for key in keys {
-                        if let Some((_, ty)) = fields.iter().find(|(n, _)| n == key) {
-                            out.insert(key.as_ref().to_string(), ty.clone());
-                        }
-                    }
-                }
-                _ => {
-                    let tv = ts.supply.fresh(None);
-                    let elem = Type::var(tv.clone());
+	                add_bindings_from_pattern(ts, &elem_ty, head.as_ref(), out);
+	                add_bindings_from_pattern(ts, &list_ty, tail.as_ref(), out);
+	            }
+	            Pattern::Dict(_span, keys) => match scrutinee_ty.as_ref() {
+	                TypeKind::Record(fields) => {
+	                    for (key, pat) in keys {
+	                        if let Some((_, ty)) = fields.iter().find(|(n, _)| n == key) {
+	                            add_bindings_from_pattern(ts, ty, pat, out);
+	                        }
+	                    }
+	                }
+	                _ => {
+	                    let tv = ts.supply.fresh(None);
+	                    let elem = Type::var(tv.clone());
                     let dict_ty = Type::app(Type::con("Dict", 1), elem.clone());
                     let Ok(s) = unify(scrutinee_ty, &dict_ty) else {
                         return;
-                    };
-                    let elem_ty = elem.apply(&s);
-                    for key in keys {
-                        out.insert(key.as_ref().to_string(), elem_ty.clone());
-                    }
-                }
-            },
-        }
-    }
+	                    };
+	                    let elem_ty = elem.apply(&s);
+	                    for (_key, pat) in keys {
+	                        add_bindings_from_pattern(ts, &elem_ty, pat, out);
+	                    }
+	                }
+	            },
+	        }
+	    }
 
     fn visit(
         ts: &mut TypeSystem,
@@ -788,6 +803,12 @@ fn push_type_diagnostics(text: &str, program: &Program, diagnostics: &mut Vec<Di
             }
             Decl::Fn(fd) => {
                 if let Err(err) = ts.inject_fn_decl(fd) {
+                    push_ts_error(err, diagnostics);
+                    return;
+                }
+            }
+            Decl::DeclareFn(fd) => {
+                if let Err(err) = ts.inject_declare_fn_decl(fd) {
                     push_ts_error(err, diagnostics);
                     return;
                 }
@@ -1886,6 +1907,9 @@ fn index_decl_spans(program: &Program, tokens: &Tokens) -> DeclSpanIndex {
             Decl::Fn(fd) => {
                 fn_defs.insert(fd.name.name.as_ref().to_string(), fd.name.span);
             }
+            Decl::DeclareFn(fd) => {
+                fn_defs.insert(fd.name.name.as_ref().to_string(), fd.name.span);
+            }
         }
     }
 
@@ -1910,10 +1934,6 @@ fn definition_span_for_value_ident(
         return None;
     }
 
-    fn span_contains_span(outer: Span, inner: Span) -> bool {
-        position_leq(outer.begin, inner.begin) && position_leq(inner.end, outer.end)
-    }
-
     fn lookup_binding(bindings: &[(String, Span)], ident: &str) -> Option<Span> {
         bindings
             .iter()
@@ -1921,20 +1941,11 @@ fn definition_span_for_value_ident(
             .find_map(|(name, span)| (name == ident).then_some(*span))
     }
 
-    fn token_span_for_ident_in_span(tokens: &Tokens, within: Span, ident: &str) -> Option<Span> {
-        tokens.items.iter().find_map(|t| match t {
-            Token::Ident(name, span, ..) if name == ident && span_contains_span(within, *span) => {
-                Some(*span)
-            }
-            _ => None,
-        })
-    }
-
     fn definition_in_pattern(
         pat: &Pattern,
         position: RexPosition,
         ident: &str,
-        tokens: &Tokens,
+        _tokens: &Tokens,
     ) -> Option<Span> {
         if !position_in_span(position, *pat.span()) {
             return None;
@@ -1944,47 +1955,49 @@ fn definition_span_for_value_ident(
             Pattern::Var(var) => (var.name.as_ref() == ident).then_some(var.span),
             Pattern::Named(_span, _name, args) => args
                 .iter()
-                .find_map(|arg| definition_in_pattern(arg, position, ident, tokens)),
+                .find_map(|arg| definition_in_pattern(arg, position, ident, _tokens)),
+            Pattern::Tuple(_span, elems) => elems
+                .iter()
+                .find_map(|elem| definition_in_pattern(elem, position, ident, _tokens)),
             Pattern::List(_span, elems) => elems
                 .iter()
-                .find_map(|elem| definition_in_pattern(elem, position, ident, tokens)),
+                .find_map(|elem| definition_in_pattern(elem, position, ident, _tokens)),
             Pattern::Cons(_span, head, tail) => {
-                definition_in_pattern(head, position, ident, tokens)
-                    .or_else(|| definition_in_pattern(tail, position, ident, tokens))
+                definition_in_pattern(head, position, ident, _tokens)
+                    .or_else(|| definition_in_pattern(tail, position, ident, _tokens))
             }
-            Pattern::Dict(span, keys) => {
-                if keys.iter().any(|k| k.as_ref() == ident) {
-                    token_span_for_ident_in_span(tokens, *span, ident).or(Some(*span))
-                } else {
-                    None
-                }
-            }
+            Pattern::Dict(_span, fields) => fields
+                .iter()
+                .find_map(|(_, p)| definition_in_pattern(p, position, ident, _tokens)),
             Pattern::Wildcard(..) => None,
         }
     }
 
-    fn push_pattern_bindings(pat: &Pattern, bindings: &mut Vec<(String, Span)>, tokens: &Tokens) {
+    fn push_pattern_bindings(pat: &Pattern, bindings: &mut Vec<(String, Span)>, _tokens: &Tokens) {
         match pat {
             Pattern::Var(var) => bindings.push((var.name.to_string(), var.span)),
             Pattern::Named(_span, _name, args) => {
                 for arg in args {
-                    push_pattern_bindings(arg, bindings, tokens);
+                    push_pattern_bindings(arg, bindings, _tokens);
+                }
+            }
+            Pattern::Tuple(_span, elems) => {
+                for elem in elems {
+                    push_pattern_bindings(elem, bindings, _tokens);
                 }
             }
             Pattern::List(_span, elems) => {
                 for elem in elems {
-                    push_pattern_bindings(elem, bindings, tokens);
+                    push_pattern_bindings(elem, bindings, _tokens);
                 }
             }
             Pattern::Cons(_span, head, tail) => {
-                push_pattern_bindings(head, bindings, tokens);
-                push_pattern_bindings(tail, bindings, tokens);
+                push_pattern_bindings(head, bindings, _tokens);
+                push_pattern_bindings(tail, bindings, _tokens);
             }
-            Pattern::Dict(span, keys) => {
-                for key in keys {
-                    let key_span =
-                        token_span_for_ident_in_span(tokens, *span, key.as_ref()).unwrap_or(*span);
-                    bindings.push((key.to_string(), key_span));
+            Pattern::Dict(_span, fields) => {
+                for (_key, pat) in fields {
+                    push_pattern_bindings(pat, bindings, _tokens);
                 }
             }
             Pattern::Wildcard(..) => {}
@@ -2118,6 +2131,11 @@ fn collect_pattern_vars(pattern: &Pattern, vars: &mut Vec<String>) {
                 collect_pattern_vars(arg, vars);
             }
         }
+        Pattern::Tuple(_, elems) => {
+            for elem in elems {
+                collect_pattern_vars(elem, vars);
+            }
+        }
         Pattern::List(_, elems) => {
             for elem in elems {
                 collect_pattern_vars(elem, vars);
@@ -2127,9 +2145,9 @@ fn collect_pattern_vars(pattern: &Pattern, vars: &mut Vec<String>) {
             collect_pattern_vars(head, vars);
             collect_pattern_vars(tail, vars);
         }
-        Pattern::Dict(_, keys) => {
-            for key in keys {
-                vars.push(key.to_string());
+        Pattern::Dict(_, fields) => {
+            for (_key, pat) in fields {
+                collect_pattern_vars(pat, vars);
             }
         }
         Pattern::Wildcard(_) => {}

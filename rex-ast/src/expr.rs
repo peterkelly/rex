@@ -86,9 +86,10 @@ pub enum Pattern {
     Wildcard(Span),                         // _
     Var(Var),                               // x
     Named(Span, Symbol, Vec<Pattern>),      // Ok x y z
+    Tuple(Span, Vec<Pattern>),              // (x, y, z)
     List(Span, Vec<Pattern>),               // [x, y, z]
     Cons(Span, Box<Pattern>, Box<Pattern>), // x:xs
-    Dict(Span, Vec<Symbol>),                // {a, b, c}
+    Dict(Span, Vec<(Symbol, Pattern)>),     // {a, b, c} or {a: x, b: y}
 }
 
 impl Pattern {
@@ -97,6 +98,7 @@ impl Pattern {
             Pattern::Wildcard(span, ..)
             | Pattern::Var(Var { span, .. })
             | Pattern::Named(span, ..)
+            | Pattern::Tuple(span, ..)
             | Pattern::List(span, ..)
             | Pattern::Cons(span, ..)
             | Pattern::Dict(span, ..) => span,
@@ -111,9 +113,10 @@ impl Pattern {
                 name: var.name.clone(),
             }),
             Pattern::Named(_, name, ps) => Pattern::Named(span, name.clone(), ps.clone()),
+            Pattern::Tuple(_, ps) => Pattern::Tuple(span, ps.clone()),
             Pattern::List(_, ps) => Pattern::List(span, ps.clone()),
             Pattern::Cons(_, head, tail) => Pattern::Cons(span, head.clone(), tail.clone()),
-            Pattern::Dict(_, keys) => Pattern::Dict(span, keys.clone()),
+            Pattern::Dict(_, fields) => Pattern::Dict(span, fields.clone()),
         }
     }
 
@@ -126,6 +129,10 @@ impl Pattern {
                 name.clone(),
                 ps.iter().map(|p| p.reset_spans()).collect(),
             ),
+            Pattern::Tuple(_, ps) => Pattern::Tuple(
+                Span::default(),
+                ps.iter().map(|p| p.reset_spans()).collect(),
+            ),
             Pattern::List(_, ps) => Pattern::List(
                 Span::default(),
                 ps.iter().map(|p| p.reset_spans()).collect(),
@@ -135,7 +142,13 @@ impl Pattern {
                 Box::new(head.reset_spans()),
                 Box::new(tail.reset_spans()),
             ),
-            Pattern::Dict(_, keys) => Pattern::Dict(Span::default(), keys.clone()),
+            Pattern::Dict(_, fields) => Pattern::Dict(
+                Span::default(),
+                fields
+                    .iter()
+                    .map(|(k, p)| (k.clone(), p.reset_spans()))
+                    .collect(),
+            ),
         }
     }
 }
@@ -152,6 +165,16 @@ impl Display for Pattern {
                 }
                 Ok(())
             }
+            Pattern::Tuple(_, ps) => {
+                '('.fmt(f)?;
+                for (i, p) in ps.iter().enumerate() {
+                    p.fmt(f)?;
+                    if i + 1 < ps.len() {
+                        ", ".fmt(f)?;
+                    }
+                }
+                ')'.fmt(f)
+            }
             Pattern::List(_, ps) => {
                 '['.fmt(f)?;
                 for (i, p) in ps.iter().enumerate() {
@@ -163,11 +186,21 @@ impl Display for Pattern {
                 ']'.fmt(f)
             }
             Pattern::Cons(_, head, tail) => write!(f, "{}:{}", head, tail),
-            Pattern::Dict(_, keys) => {
+            Pattern::Dict(_, fields) => {
                 '{'.fmt(f)?;
-                for (i, key) in keys.iter().enumerate() {
-                    key.fmt(f)?;
-                    if i + 1 < keys.len() {
+                for (i, (key, pat)) in fields.iter().enumerate() {
+                    // Use shorthand when possible to keep output stable with old syntax.
+                    match pat {
+                        Pattern::Var(var) if var.name == *key => {
+                            key.fmt(f)?;
+                        }
+                        _ => {
+                            key.fmt(f)?;
+                            ": ".fmt(f)?;
+                            pat.fmt(f)?;
+                        }
+                    }
+                    if i + 1 < fields.len() {
                         ", ".fmt(f)?;
                     }
                 }
@@ -327,6 +360,15 @@ pub struct FnDecl {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct DeclareFnDecl {
+    pub span: Span,
+    pub name: Var,
+    pub params: Vec<(Var, TypeExpr)>,
+    pub ret: TypeExpr,
+    pub constraints: Vec<TypeConstraint>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ClassMethodSig {
     pub name: Symbol,
     pub typ: TypeExpr,
@@ -360,6 +402,7 @@ pub struct InstanceDecl {
 pub enum Decl {
     Type(TypeDecl),
     Fn(FnDecl),
+    DeclareFn(DeclareFnDecl),
     Class(ClassDecl),
     Instance(InstanceDecl),
 }

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rex_ast::expr::{
-    ClassDecl, ClassMethodSig, Expr, FnDecl, InstanceDecl, InstanceMethodImpl, Pattern, Scope,
-    Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
+    ClassDecl, ClassMethodSig, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
+    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
 };
 use rex_lexer::span::Span;
 use rex_gas::{GasMeter, OutOfGas};
@@ -658,6 +658,28 @@ fn reject_ambiguous_scheme(scheme: &Scheme) -> Result<(), TypeError> {
     Err(TypeError::AmbiguousTypeVars { vars, constraints })
 }
 
+fn scheme_compatible(existing: &Scheme, declared: &Scheme) -> bool {
+    let s = match unify(&existing.typ, &declared.typ) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    let existing_preds = existing.preds.apply(&s);
+    let declared_preds = declared.preds.apply(&s);
+
+    let mut lhs: Vec<(Symbol, String)> = existing_preds
+        .iter()
+        .map(|p| (p.class.clone(), p.typ.to_string()))
+        .collect();
+    let mut rhs: Vec<(Symbol, String)> = declared_preds
+        .iter()
+        .map(|p| (p.class.clone(), p.typ.to_string()))
+        .collect();
+    lhs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    rhs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    lhs == rhs
+}
+
 #[derive(Debug)]
 struct Unifier<'g> {
     // `subs[id] = Some(t)` means type variable `id` has been bound to `t`.
@@ -1065,6 +1087,10 @@ impl TypeEnv {
         self.values = self.values.insert(name, schemes);
     }
 
+    pub fn remove(&mut self, name: &Symbol) {
+        self.values = self.values.remove(name);
+    }
+
     pub fn lookup(&self, name: &Symbol) -> Option<&[Scheme]> {
         self.values.get(name).map(|schemes| schemes.as_slice())
     }
@@ -1389,6 +1415,11 @@ pub struct TypeSystem {
     pub adts: HashMap<Symbol, AdtDecl>,
     pub class_info: HashMap<Symbol, ClassInfo>,
     pub class_methods: HashMap<Symbol, ClassMethodInfo>,
+    /// Names introduced by `declare fn` (forward declarations).
+    ///
+    /// These are placeholders in the type environment and must not block a later
+    /// real definition (e.g. `fn foo = ...` or host/CLI injection).
+    pub declared_values: HashSet<Symbol>,
     pub supply: TypeVarSupply,
 }
 
@@ -1431,6 +1462,7 @@ impl TypeSystem {
             adts: HashMap::new(),
             class_info: HashMap::new(),
             class_methods: HashMap::new(),
+            declared_values: HashSet::new(),
             supply: TypeVarSupply::new(),
         }
     }
@@ -1442,11 +1474,15 @@ impl TypeSystem {
     }
 
     pub fn add_value(&mut self, name: impl AsRef<str>, scheme: Scheme) {
-        self.env.extend(sym(name.as_ref()), scheme);
+        let name = sym(name.as_ref());
+        self.declared_values.remove(&name);
+        self.env.extend(name, scheme);
     }
 
     pub fn add_overload(&mut self, name: impl AsRef<str>, scheme: Scheme) {
-        self.env.extend_overload(sym(name.as_ref()), scheme);
+        let name = sym(name.as_ref());
+        self.declared_values.remove(&name);
+        self.env.extend_overload(name, scheme);
     }
 
     pub fn inject_class(&mut self, name: impl AsRef<str>, supers: Vec<Symbol>) {
@@ -1658,8 +1694,14 @@ impl TypeSystem {
     pub fn inject_fn_decl(&mut self, decl: &FnDecl) -> Result<(), TypeError> {
         let span = decl.span;
         (|| {
-            if self.env.lookup(&decl.name.name).is_some() {
-                return Err(TypeError::DuplicateValue(decl.name.name.clone()));
+            let name = &decl.name.name;
+            if self.env.lookup(name).is_some() {
+                if self.declared_values.remove(name) {
+                    // A forward declaration should not block the real definition.
+                    self.env.remove(name);
+                } else {
+                    return Err(TypeError::DuplicateValue(decl.name.name.clone()));
+                }
             }
 
             // Lower a `fn` declaration to the same lambda shape used by
@@ -1727,6 +1769,54 @@ impl TypeSystem {
             // methods only needs the scheme in the environment; evaluation
             // happens in `rex-engine`.
             let _ = typed;
+            Ok(())
+        })()
+        .map_err(|err| with_span(&span, err))
+    }
+
+    pub fn inject_declare_fn_decl(&mut self, decl: &DeclareFnDecl) -> Result<(), TypeError> {
+        let span = decl.span;
+        (|| {
+            // Build the declared signature type.
+            let mut sig = decl.ret.clone();
+            for (_, ann) in decl.params.iter().rev() {
+                let span = Span::from_begin_end(ann.span().begin, sig.span().end);
+                sig = TypeExpr::Fun(span, Box::new(ann.clone()), Box::new(sig));
+            }
+
+            let mut ann_vars: HashMap<Symbol, TypeVar> = HashMap::new();
+            let expected =
+                type_from_annotation_expr_vars(&self.adts, &sig, &mut ann_vars, &mut self.supply)?;
+            let declared_preds =
+                predicates_from_constraints(&self.adts, &decl.constraints, &mut ann_vars, &mut self.supply)?;
+
+            let mut vars: Vec<TypeVar> = ann_vars.values().cloned().collect();
+            vars.sort_by_key(|v| v.id);
+            let scheme = Scheme::new(vars, declared_preds, expected);
+            reject_ambiguous_scheme(&scheme)?;
+
+            // Validate referenced classes exist (and are spelled correctly).
+            for pred in &scheme.preds {
+                let _ = entails(&self.classes, &[], pred)?;
+            }
+
+            let name = &decl.name.name;
+
+            // If there is already a real definition (prelude/host/`fn`), treat
+            // `declare fn` as documentation only and ignore it.
+            if self.env.lookup(name).is_some() && !self.declared_values.contains(name) {
+                return Ok(());
+            }
+
+            if let Some(existing) = self.env.lookup(name) {
+                if existing.iter().any(|s| scheme_compatible(s, &scheme)) {
+                    return Ok(());
+                }
+                return Err(TypeError::DuplicateValue(decl.name.name.clone()));
+            }
+
+            self.env.extend(decl.name.name.clone(), scheme);
+            self.declared_values.insert(decl.name.name.clone());
             Ok(())
         })()
         .map_err(|err| with_span(&span, err))
@@ -3497,11 +3587,34 @@ fn infer_pattern(
                 .collect();
             Ok((preds, bindings))
         }
-        Pattern::Dict(_, keys) => {
-            if let TypeKind::Record(fields) = scrutinee_ty.as_ref() {
+        Pattern::Tuple(_, elems) => {
+            // Unify against a tuple type of the right arity.
+            let mut elem_tys: Vec<Type> = (0..elems.len())
+                .map(|i| Type::var(supply.fresh(Some(format!("t{i}").into()))))
+                .collect();
+            let expected = Type::tuple(elem_tys.clone());
+            unifier.unify(scrutinee_ty, &expected)?;
+            elem_tys = elem_tys.into_iter().map(|t| unifier.apply_type(&t)).collect();
+
+            let mut preds = Vec::new();
+            let mut bindings = Vec::new();
+            for (p, ty) in elems.iter().zip(elem_tys.iter()) {
+                let (p_preds, p_binds) = infer_pattern(unifier, supply, env, p, ty)?;
+                preds.extend(p_preds);
+                bindings.extend(p_binds);
+            }
+            let bindings = bindings
+                .into_iter()
+                .map(|(name, ty)| (name, unifier.apply_type(&ty)))
+                .collect();
+            Ok((preds, bindings))
+        }
+        Pattern::Dict(_, fields) => {
+            if let TypeKind::Record(ty_fields) = scrutinee_ty.as_ref() {
+                let mut preds = Vec::new();
                 let mut bindings = Vec::new();
-                for key in keys {
-                    let ty = fields
+                for (key, pat) in fields {
+                    let ty = ty_fields
                         .iter()
                         .find(|(name, _)| name == key)
                         .map(|(_, ty)| unifier.apply_type(ty))
@@ -3509,16 +3622,33 @@ fn infer_pattern(
                             field: key.clone(),
                             typ: scrutinee_ty.to_string(),
                         })?;
-                    bindings.push((key.clone(), ty));
+                    let (p_preds, p_binds) = infer_pattern(unifier, supply, env, pat, &ty)?;
+                    preds.extend(p_preds);
+                    bindings.extend(p_binds);
                 }
-                Ok((vec![], bindings))
+                let bindings = bindings
+                    .into_iter()
+                    .map(|(name, ty)| (name, unifier.apply_type(&ty)))
+                    .collect();
+                Ok((preds, bindings))
             } else {
                 let elem_tv = Type::var(supply.fresh(Some("v".into())));
                 let dict_ty = Type::app(Type::con("Dict", 1), elem_tv.clone());
                 unifier.unify(scrutinee_ty, &dict_ty)?;
                 let elem_ty = unifier.apply_type(&elem_tv);
-                let bindings = keys.iter().map(|k| (k.clone(), elem_ty.clone())).collect();
-                Ok((vec![], bindings))
+
+                let mut preds = Vec::new();
+                let mut bindings = Vec::new();
+                for (_key, pat) in fields {
+                    let (p_preds, p_binds) = infer_pattern(unifier, supply, env, pat, &elem_ty)?;
+                    preds.extend(p_preds);
+                    bindings.extend(p_binds);
+                }
+                let bindings = bindings
+                    .into_iter()
+                    .map(|(name, ty)| (name, unifier.apply_type(&ty)))
+                    .collect();
+                Ok((preds, bindings))
             }
         }
         }
@@ -3749,9 +3879,64 @@ mod tests {
                     let _ = ts.inject_instance_decl(id)?;
                 }
                 rex_ast::expr::Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
+                rex_ast::expr::Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn declare_fn_injects_scheme_for_use_sites() {
+        let program = parse_program(
+            r#"
+            declare fn id x: a -> a
+            id 1
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        inject_decls(&mut ts, &program.decls).unwrap();
+        let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
+        assert!(preds.is_empty());
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn declare_fn_is_noop_when_matching_existing_scheme() {
+        let mut ts = TypeSystem::with_prelude();
+        ts.add_value(
+            "foo",
+            Scheme::new(
+                vec![],
+                vec![],
+                Type::fun(Type::con("i32", 0), Type::con("i32", 0)),
+            ),
+        );
+
+        let program = parse_program(
+            r#"
+            declare fn foo x: i32 -> i32
+            0
+            "#,
+        );
+        let rex_ast::expr::Decl::DeclareFn(fd) = &program.decls[0] else {
+            panic!("expected declare fn decl");
+        };
+        ts.inject_declare_fn_decl(fd).unwrap();
+    }
+
+    #[test]
+    fn unit_type_parses_and_infers() {
+        let program = parse_program(
+            r#"
+            fn unit_id x: () -> () = x
+            unit_id ()
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude();
+        inject_decls(&mut ts, &program.decls).unwrap();
+        let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
+        assert!(preds.is_empty());
+        assert_eq!(ty, Type::tuple(vec![]));
     }
 
     fn strip_span(mut err: TypeError) -> TypeError {

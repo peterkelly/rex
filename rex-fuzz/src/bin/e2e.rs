@@ -26,6 +26,7 @@ fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_
                 ts.inject_instance_decl(inst_decl)?;
             }
             Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
+            Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
         }
     }
     Ok(())
@@ -93,4 +94,3 @@ fn main() {
 
     handle.join().expect("fuzz thread panicked");
 }
-
