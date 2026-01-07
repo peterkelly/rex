@@ -22,7 +22,9 @@ fn eval(code: &str) -> Result<rex_engine::Value, String> {
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
-    engine.eval(program.expr.as_ref()).map_err(|e| format!("{e}"))
+    engine
+        .eval(program.expr.as_ref())
+        .map_err(|e| format!("{e}"))
 }
 
 #[derive(Rex, Debug, PartialEq)]
@@ -162,7 +164,10 @@ fn derive_generic_worked_example_polymorphic_adt() {
         panic!("expected tuple, got {v}");
     };
     assert_eq!(items.len(), 2);
-    assert_eq!(Maybe::<i32>::from_value(&items[0], "a").unwrap(), Maybe::Just(1));
+    assert_eq!(
+        Maybe::<i32>::from_value(&items[0], "a").unwrap(),
+        Maybe::Just(1)
+    );
     assert_eq!(
         Maybe::<bool>::from_value(&items[1], "b").unwrap(),
         Maybe::Just(true)
@@ -173,6 +178,108 @@ fn derive_generic_worked_example_polymorphic_adt() {
 enum Shape {
     Rectangle(i32, i32),
     Circle(i32),
+}
+
+#[test]
+fn derive_can_be_used_in_injected_native_functions() {
+    let tokens = Token::tokenize(
+        r#"
+        bump_y (MyStruct {
+            x = true,
+            y = 42,
+            tags = ["a", "b", "c"],
+            props = { a = 1, b = 2 },
+            inner = MyInnerStruct { x = false, y = 7 },
+            pair = (1, "hi", true),
+            renamed = 9
+        })
+        "#,
+    )
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    let mut engine = Engine::with_prelude();
+    MyInnerStruct::inject_rex(&mut engine).unwrap();
+    MyStruct::inject_rex(&mut engine).unwrap();
+
+    engine
+        .inject_fn1("bump_y", |mut s: MyStruct| {
+            s.y += 1;
+            s
+        })
+        .unwrap();
+
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let bumped = MyStruct::from_value(&v, "bumped").unwrap();
+    assert_eq!(bumped.y, 43);
+
+    engine
+        .inject_value(
+            "const_struct",
+            MyStruct {
+                x: false,
+                y: 100,
+                tags: vec![],
+                props: HashMap::new(),
+                inner: MyInnerStruct { x: true, y: 1 },
+                pair: (2, "ok".into(), false),
+                renamed_field: 0,
+            },
+        )
+        .unwrap();
+    let tokens = Token::tokenize("const_struct.y").unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    assert!(matches!(v, rex_engine::Value::I32(100)));
+}
+
+#[test]
+fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
+    let mut engine = Engine::with_prelude();
+    Shape::inject_rex(&mut engine).unwrap();
+
+    engine
+        .inject_value("shape", Shape::Rectangle(3, 4))
+        .unwrap();
+
+    let tokens = Token::tokenize(
+        r#"
+        match shape
+            when Rectangle w h -> w * h
+            when Circle r -> r
+        "#,
+    )
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    assert!(matches!(v, rex_engine::Value::I32(12)));
+}
+
+#[test]
+fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
+    let mut engine = Engine::with_prelude();
+    Maybe::<i32>::inject_rex(&mut engine).unwrap();
+
+    engine
+        .inject_fn1("unwrap_or_zero", |m: Maybe<i32>| match m {
+            Maybe::Just(v) => v,
+            Maybe::Nothing => 0,
+        })
+        .unwrap();
+
+    let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let rex_engine::Value::Tuple(items) = v else {
+        panic!("expected tuple, got {v}");
+    };
+    assert!(matches!(items[0], rex_engine::Value::I32(5)));
+    assert!(matches!(items[1], rex_engine::Value::I32(0)));
 }
 
 #[test]

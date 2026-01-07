@@ -13,7 +13,9 @@ fn eval_to_string(code: &str) -> Result<String, String> {
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
-    let value = engine.eval(program.expr.as_ref()).map_err(|e| format!("{e}"))?;
+    let value = engine
+        .eval(program.expr.as_ref())
+        .map_err(|e| format!("{e}"))?;
     Ok(format!("{value}"))
 }
 

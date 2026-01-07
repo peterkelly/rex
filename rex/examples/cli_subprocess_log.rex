@@ -9,20 +9,12 @@ Notes:
     and also emit a tracing log event at the corresponding level.
 -}
 
-declare fn error a -> string where Pretty a
-declare fn warn a -> string where Pretty a
-declare fn info a -> string where Pretty a
-declare fn debug a -> string where Pretty a
+import std.io
+import std.process
 
-type Process = Process i64
-
-declare fn subprocess { cmd: string, args: List string } -> Process
-declare fn wait Process -> Process
-declare fn stdout Process -> Array u8
-
-let _   = debug "spawning..." in
-let p   = subprocess { cmd = "sh", args = ["-c", "printf hi"] } in
-let _   = wait p in
-let out = stdout p in
-let msg = info out in
+let _ = io.debug "spawning..." in
+let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in
+let _ = process.wait p in
+let out = process.stdout p in
+let msg = io.info out in
 (msg, count out)

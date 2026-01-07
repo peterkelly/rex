@@ -19,7 +19,7 @@ This is polymorphic: it can be used at any type (`a -> a`).
 Ask the CLI for the type:
 
 ```sh
-cargo run -p rex -- run --type -c '\\x -> x'
+cargo run -p rex -- run --emit-type -c '\\x -> x'
 ```
 
 ## Inference plus operators
@@ -50,4 +50,3 @@ For details on ambiguity and defaulting, see `docs/SPEC.md`.
 1. Add a type annotation to a `let` binding.
 2. Use expression ascription with `is`.
 3. Restructure code so an argument forces a type (e.g. apply a polymorphic function).
-

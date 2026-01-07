@@ -58,4 +58,3 @@ fn main() {
 
     handle.join().expect("fuzz thread panicked");
 }
-

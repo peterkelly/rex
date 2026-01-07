@@ -755,6 +755,7 @@ dependencies = [
  "rex-parser",
  "rex-proc-macro",
  "rex-ts",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "uuid",

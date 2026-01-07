@@ -344,6 +344,7 @@ pub struct TypeVariant {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeDecl {
     pub span: Span,
+    pub is_pub: bool,
     pub name: Symbol,
     pub params: Vec<Symbol>,
     pub variants: Vec<TypeVariant>,
@@ -352,6 +353,7 @@ pub struct TypeDecl {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct FnDecl {
     pub span: Span,
+    pub is_pub: bool,
     pub name: Var,
     pub params: Vec<(Var, TypeExpr)>,
     pub ret: TypeExpr,
@@ -362,6 +364,7 @@ pub struct FnDecl {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DeclareFnDecl {
     pub span: Span,
+    pub is_pub: bool,
     pub name: Var,
     pub params: Vec<(Var, TypeExpr)>,
     pub ret: TypeExpr,
@@ -377,6 +380,7 @@ pub struct ClassMethodSig {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ClassDecl {
     pub span: Span,
+    pub is_pub: bool,
     pub name: Symbol,
     pub params: Vec<Symbol>,
     pub supers: Vec<TypeConstraint>,
@@ -392,6 +396,7 @@ pub struct InstanceMethodImpl {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct InstanceDecl {
     pub span: Span,
+    pub is_pub: bool,
     pub class: Symbol,
     pub head: TypeExpr,
     pub context: Vec<TypeConstraint>,
@@ -399,10 +404,32 @@ pub struct InstanceDecl {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportPath {
+    Local {
+        segments: Vec<Symbol>,
+        sha: Option<String>,
+    },
+    Remote {
+        url: String,
+        sha: Option<String>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImportDecl {
+    pub span: Span,
+    pub is_pub: bool,
+    pub path: ImportPath,
+    pub alias: Symbol,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub enum Decl {
     Type(TypeDecl),
     Fn(FnDecl),
     DeclareFn(DeclareFnDecl),
+    Import(ImportDecl),
     Class(ClassDecl),
     Instance(InstanceDecl),
 }

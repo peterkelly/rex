@@ -3,8 +3,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{
-    Arc,
-    Mutex,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::task::{Context, Poll};
@@ -36,7 +35,8 @@ impl CancellationToken {
 
     pub fn cancel(&self) {
         self.inner.cancelled.store(true, Ordering::SeqCst);
-        let wakers = std::mem::take(&mut *self.inner.wakers.lock().expect("poisoned cancel wakers"));
+        let wakers =
+            std::mem::take(&mut *self.inner.wakers.lock().expect("poisoned cancel wakers"));
         for w in wakers {
             w.wake();
         }
@@ -47,7 +47,9 @@ impl CancellationToken {
     }
 
     pub fn cancelled(&self) -> Cancelled {
-        Cancelled { token: self.clone() }
+        Cancelled {
+            token: self.clone(),
+        }
     }
 }
 

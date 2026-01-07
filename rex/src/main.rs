@@ -1,17 +1,16 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
-use std::io::{self, Read};
 use std::io::IsTerminal;
+use std::io::{self, BufRead, Read, Write};
 use std::thread;
 
 use clap::{Args, Parser, Subcommand};
-use rex_ast::expr::Decl;
-use rex_engine::Engine;
+use rex_engine::{Engine, ReplState};
 use rex_gas::{GasCosts, GasMeter};
 use rex_lexer::Token;
 use rex_parser::{Parser as RexParser, ParserLimits};
-use rex_ts::TypeSystem;
+use serde_json::json;
 
 mod cli_prelude;
 
@@ -27,6 +26,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Run(RunArgs),
+    Repl(ReplArgs),
 }
 
 #[derive(Args)]
@@ -54,20 +54,28 @@ struct RunArgs {
     #[arg(long = "stdin", required_unless_present_any = ["file", "code"])]
     stdin: bool,
 
-    /// Print the parsed AST and exit.
+    /// Print the parsed AST as JSON and exit.
     #[arg(long = "emit-ast")]
     emit_ast: bool,
 
-    /// Print the inferred type and exit.
-    #[arg(long = "type")]
+    /// Print the inferred type as JSON and exit.
+    #[arg(long = "emit-type", alias = "type")]
     emit_type: bool,
+
+    /// Additional module include roots (searched after local-relative imports).
+    #[arg(long = "include", value_name = "DIR")]
+    include: Vec<String>,
 
     /// Stack size (in MiB) used for parsing/type inference/evaluation.
     #[arg(long = "stack-size-mb", default_value_t = 16)]
     stack_size_mb: usize,
 
     /// Maximum nesting depth allowed during parsing (defaults to a safe limit).
-    #[arg(long = "max-nesting", value_name = "N", conflicts_with = "no_max_nesting")]
+    #[arg(
+        long = "max-nesting",
+        value_name = "N",
+        conflicts_with = "no_max_nesting"
+    )]
     max_nesting: Option<usize>,
 
     /// Disable the parsing nesting-depth limit.
@@ -75,6 +83,37 @@ struct RunArgs {
     no_max_nesting: bool,
 
     /// Gas budget (in abstract units) for parsing + type inference + evaluation.
+    #[arg(long = "gas", default_value_t = 10_000_000)]
+    gas: u64,
+
+    /// Disable gas metering.
+    #[arg(long = "no-gas")]
+    no_gas: bool,
+}
+
+#[derive(Args)]
+struct ReplArgs {
+    /// Additional module include roots (searched after local-relative imports).
+    #[arg(long = "include", value_name = "DIR")]
+    include: Vec<String>,
+
+    /// Stack size (in MiB) used for parsing/type inference/evaluation.
+    #[arg(long = "stack-size-mb", default_value_t = 16)]
+    stack_size_mb: usize,
+
+    /// Maximum nesting depth allowed during parsing (defaults to a safe limit).
+    #[arg(
+        long = "max-nesting",
+        value_name = "N",
+        conflicts_with = "no_max_nesting"
+    )]
+    max_nesting: Option<usize>,
+
+    /// Disable the parsing nesting-depth limit.
+    #[arg(long = "no-max-nesting")]
+    no_max_nesting: bool,
+
+    /// Gas budget (in abstract units) for parsing + type inference + evaluation (per input).
     #[arg(long = "gas", default_value_t = 10_000_000)]
     gas: u64,
 
@@ -114,6 +153,7 @@ fn init_tracing() {
 fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Command::Run(args) => run_cmd(args),
+        Command::Repl(args) => repl_cmd(args),
     }
 }
 
@@ -124,6 +164,7 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         stdin,
         emit_ast,
         emit_type,
+        include,
         stack_size_mb,
         max_nesting,
         no_max_nesting,
@@ -131,6 +172,7 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         no_gas,
     } = args;
 
+    let file_for_modules = file.clone();
     let source = if let Some(code) = code {
         code
     } else if stdin {
@@ -139,8 +181,8 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
             .read_to_string(&mut buf)
             .map_err(|e| format!("failed to read stdin: {e}"))?;
         buf
-    } else if let Some(path) = file {
-        fs::read_to_string(&path).map_err(|e| format!("failed to read `{path}`: {e}"))?
+    } else if let Some(path) = &file {
+        fs::read_to_string(path).map_err(|e| format!("failed to read `{path}`: {e}"))?
     } else {
         return Err("missing input (file or `-c/--code`)".into());
     };
@@ -164,7 +206,18 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
     let handle = thread::Builder::new()
         .name("rex-run".to_string())
         .stack_size(stack_size)
-        .spawn(move || run_source(&source, emit_ast, emit_type, gas, no_gas, parser_limits))
+        .spawn(move || {
+            run_source(
+                &source,
+                file_for_modules,
+                include,
+                emit_ast,
+                emit_type,
+                gas,
+                no_gas,
+                parser_limits,
+            )
+        })
         .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
 
     match handle.join() {
@@ -173,8 +226,159 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
     }
 }
 
+fn repl_cmd(args: ReplArgs) -> Result<(), String> {
+    let ReplArgs {
+        include,
+        stack_size_mb,
+        max_nesting,
+        no_max_nesting,
+        gas,
+        no_gas,
+    } = args;
+
+    let stack_size = stack_size_mb
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| "stack size overflow".to_string())?;
+
+    let parser_limits = if no_max_nesting {
+        ParserLimits::unlimited()
+    } else if let Some(max_nesting) = max_nesting {
+        ParserLimits {
+            max_nesting: Some(max_nesting),
+        }
+    } else {
+        ParserLimits::safe_defaults()
+    };
+
+    let handle = thread::Builder::new()
+        .name("rex-repl".to_string())
+        .stack_size(stack_size)
+        .spawn(move || repl_loop(include, gas, no_gas, parser_limits))
+        .map_err(|e| format!("failed to spawn repl thread: {e}"))?;
+
+    match handle.join() {
+        Ok(res) => res,
+        Err(_) => Err("repl thread panicked".into()),
+    }
+}
+
+fn repl_loop(
+    include: Vec<String>,
+    gas_budget: u64,
+    no_gas: bool,
+    parser_limits: ParserLimits,
+) -> Result<(), String> {
+    let mut engine = Engine::with_prelude();
+    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
+    engine.add_default_resolvers();
+    for root in include {
+        engine
+            .add_include_resolver(&root)
+            .map_err(|e| format!("{e}"))?;
+    }
+
+    let mut state = ReplState::new();
+
+    let interactive = io::stdin().is_terminal();
+    let mut stdin = io::stdin().lock();
+    let mut stderr = io::stderr().lock();
+
+    let mut buffer = String::new();
+    loop {
+        if interactive {
+            if buffer.is_empty() {
+                write!(stderr, "rex> ").ok();
+            } else {
+                write!(stderr, "...> ").ok();
+            }
+            stderr.flush().ok();
+        }
+
+        let mut line = String::new();
+        let n = stdin
+            .read_line(&mut line)
+            .map_err(|e| format!("failed to read input: {e}"))?;
+        if n == 0 {
+            if interactive {
+                writeln!(stderr).ok();
+            }
+            break;
+        }
+
+        if buffer.is_empty() && line.trim().is_empty() {
+            continue;
+        }
+
+        buffer.push_str(&line);
+        let parse_source = if is_imports_only(&buffer) {
+            format!("{buffer}\n()")
+        } else {
+            buffer.clone()
+        };
+
+        let costs = GasCosts::sensible_defaults();
+        let mut gas = if no_gas {
+            GasMeter::unlimited(costs)
+        } else {
+            GasMeter::new(Some(gas_budget), costs)
+        };
+
+        let tokens = match Token::tokenize(&parse_source) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("error: lex error: {e}");
+                buffer.clear();
+                continue;
+            }
+        };
+        let mut parser = RexParser::new(tokens);
+        parser.set_limits(parser_limits);
+        let program = match parser.parse_program_with_gas(&mut gas) {
+            Ok(p) => p,
+            Err(errs) => {
+                let incomplete = !errs.is_empty()
+                    && errs
+                        .iter()
+                        .all(|e| e.message.trim() == "unexpected EOF");
+                if incomplete {
+                    continue;
+                }
+                eprintln!("{}", format_parse_errors(&errs));
+                buffer.clear();
+                continue;
+            }
+        };
+
+        match engine.eval_repl_program_with_gas(&program, &mut state, &mut gas) {
+            Ok(v) => println!("{v}"),
+            Err(e) => eprintln!("error: {e}"),
+        }
+        buffer.clear();
+    }
+
+    Ok(())
+}
+
+fn is_imports_only(buffer: &str) -> bool {
+    let mut saw_import = false;
+    for line in buffer.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("import ") || trimmed.starts_with("pub import ") {
+            saw_import = true;
+            continue;
+        }
+        return false;
+    }
+    saw_import
+}
+
 fn run_source(
     source: &str,
+    file: Option<String>,
+    include: Vec<String>,
     emit_ast: bool,
     emit_type: bool,
     gas: u64,
@@ -195,44 +399,102 @@ fn run_source(
         .parse_program_with_gas(&mut gas)
         .map_err(|errs| format_parse_errors(&errs))?;
 
-    if emit_ast {
-        println!("{program:#?}");
-    }
-
-    if emit_type {
-        let mut ts = TypeSystem::with_prelude();
-        cli_prelude::inject_cli_prelude_schemes(&mut ts);
-        inject_type_env_decls(&mut ts, &program.decls).map_err(|e| format!("{e}"))?;
-        let (preds, ty) = ts
-            .infer_with_gas(program.expr.as_ref(), &mut gas)
-            .map_err(|e| format!("{e}"))?;
-        if preds.is_empty() {
-            println!("{ty}");
-        } else {
-            let constraints = preds
-                .iter()
-                .map(|p| format!("{} {}", p.class, p.typ))
-                .collect::<Vec<_>>()
-                .join(", ");
-            println!("type: {ty}");
-            println!("constraints: {constraints}");
-        }
-    }
-
     if emit_ast || emit_type {
+        let type_json = if emit_type {
+            Some(infer_type_json(
+                source,
+                file.as_deref(),
+                &include,
+                &mut gas,
+            )?)
+        } else {
+            None
+        };
+        let out = emit_json(&program, emit_ast, type_json)?;
+        println!("{out}");
         return Ok(());
     }
 
     let mut engine = Engine::with_prelude();
     cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
-    engine
-        .inject_decls(&program.decls)
-        .map_err(|e| format!("{e}"))?;
-    let value = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .map_err(|e| format!("{e}"))?;
+    engine.add_default_resolvers();
+    for root in include {
+        engine
+            .add_include_resolver(&root)
+            .map_err(|e| format!("{e}"))?;
+    }
+
+    let value = if let Some(path) = file {
+        engine
+            .eval_module_file_with_gas(&path, &mut gas)
+            .map_err(|e| format!("{e}"))?
+    } else {
+        engine
+            .eval_snippet_with_gas(source, &mut gas)
+            .map_err(|e| format!("{e}"))?
+    };
     println!("{value}");
     Ok(())
+}
+
+fn emit_json(
+    program: &rex_ast::expr::Program,
+    emit_ast: bool,
+    type_json: Option<serde_json::Value>,
+) -> Result<String, String> {
+    match (emit_ast, type_json) {
+        (true, None) => serde_json::to_string_pretty(program)
+            .map_err(|e| format!("failed to serialize AST to JSON: {e}")),
+        (false, Some(type_json)) => serde_json::to_string_pretty(&type_json)
+            .map_err(|e| format!("failed to serialize type to JSON: {e}")),
+        (true, Some(type_json)) => serde_json::to_string_pretty(&json!({
+            "ast": program,
+            "type": type_json,
+        }))
+        .map_err(|e| format!("failed to serialize outputs to JSON: {e}")),
+        (false, None) => Err("internal error: emit_json called with no outputs".into()),
+    }
+}
+
+fn infer_type_json(
+    source: &str,
+    file: Option<&str>,
+    include: &[String],
+    gas: &mut GasMeter,
+) -> Result<serde_json::Value, String> {
+    let mut engine = Engine::with_prelude();
+    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
+    engine.add_default_resolvers();
+    for root in include {
+        engine
+            .add_include_resolver(root)
+            .map_err(|e| format!("{e}"))?;
+    }
+
+    let (preds, ty) = if let Some(path) = file {
+        engine
+            .infer_module_file_with_gas(path, gas)
+            .map_err(|e| format!("{e}"))?
+    } else {
+        engine
+            .infer_snippet_with_gas(source, gas)
+            .map_err(|e| format!("{e}"))?
+    };
+
+    let constraints = preds
+        .iter()
+        .map(|p| {
+            json!({
+                "class": p.class.to_string(),
+                "type": p.typ.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "type": ty.to_string(),
+        "constraints": constraints,
+    }))
 }
 
 fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
@@ -243,21 +505,6 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     out
 }
 
-fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
-    for decl in decls {
-        match decl {
-            Decl::Type(ty) => ts.inject_type_decl(ty)?,
-            Decl::Class(class_decl) => ts.inject_class_decl(class_decl)?,
-            Decl::Instance(inst_decl) => {
-                ts.inject_instance_decl(inst_decl)?;
-            }
-            Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
-            Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,5 +513,36 @@ mod tests {
     #[test]
     fn cli_shape_is_stable() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn emit_ast_and_type_are_json() {
+        let source = "1 + 2";
+        let tokens = Token::tokenize(source).expect("lex");
+        let mut parser = RexParser::new(tokens);
+        parser.set_limits(ParserLimits::safe_defaults());
+
+        let costs = GasCosts::sensible_defaults();
+        let mut gas = GasMeter::unlimited(costs);
+        let program = parser.parse_program_with_gas(&mut gas).expect("parse");
+
+        let ty_json = infer_type_json(source, None, &[], &mut gas).expect("infer");
+        let ast_out = emit_json(&program, true, None).expect("emit ast");
+        let type_out = emit_json(&program, false, Some(ty_json.clone())).expect("emit type");
+        let both_out = emit_json(&program, true, Some(ty_json)).expect("emit both");
+
+        serde_json::from_str::<serde_json::Value>(&ast_out).expect("ast json");
+        serde_json::from_str::<serde_json::Value>(&type_out).expect("type json");
+        serde_json::from_str::<serde_json::Value>(&both_out).expect("both json");
+    }
+
+    #[test]
+    fn emit_type_resolves_imports() {
+        let costs = GasCosts::sensible_defaults();
+        let mut gas = GasMeter::unlimited(costs);
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/modules_basic/main_no_alias.rex");
+        let json = infer_type_json("", path.to_str(), &[], &mut gas).expect("infer");
+        assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
     }
 }

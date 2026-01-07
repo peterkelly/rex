@@ -70,8 +70,8 @@ cargo run -p rex -- run -c 'map ((*) 2) [1, 2, 3]'
 
 Other useful flags:
 
-- `--emit-ast`: print parsed AST and exit
-- `--type`: print inferred type (and constraints) and exit
+- `--emit-ast`: print parsed AST as JSON and exit
+- `--emit-type` (alias: `--type`): print inferred type as JSON and exit
 - `--stdin`: read a program from stdin
 - `--stack-size-mb`: control the runner thread stack size
 - `--max-nesting`: cap syntactic nesting depth during parsing

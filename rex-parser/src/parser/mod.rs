@@ -7,9 +7,9 @@ use std::{
 };
 
 use rex_ast::expr::{
-    intern, ClassDecl, ClassMethodSig, DeclareFnDecl, Decl, Expr, FnDecl, InstanceDecl,
-    InstanceMethodImpl, Pattern, Program, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr,
-    TypeVariant, Var,
+    intern, ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath,
+    InstanceDecl, InstanceMethodImpl, Pattern, Program, Scope, Symbol, TypeConstraint, TypeDecl,
+    TypeExpr, TypeVariant, Var,
 };
 use rex_lexer::{
     span::{Position, Span, Spanned},
@@ -80,8 +80,8 @@ impl Parser {
                 Ok((intern(&name), span))
             }
             token if Self::operator_token_name(&token).is_some() => {
-                let (name, span) = Self::operator_token_name(&token)
-                    .expect("checked operator_token_name is_some");
+                let (name, span) =
+                    Self::operator_token_name(&token).expect("checked operator_token_name is_some");
                 self.next_token();
                 Ok((intern(name), span))
             }
@@ -217,36 +217,49 @@ impl Parser {
     pub fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
         let mut decls = Vec::new();
         loop {
+            let mut is_pub = false;
+            if let Token::Pub(..) = self.current_token() {
+                is_pub = true;
+                self.next_token();
+            }
+
             match self.current_token() {
-                Token::Type(..) => match self.parse_type_decl() {
+                Token::Type(..) => match self.parse_type_decl(is_pub) {
                     Ok(decl) => decls.push(Decl::Type(decl)),
                     Err(e) => {
                         self.record_error(e);
                         break;
                     }
                 },
-                Token::Fn(..) => match self.parse_fn_decl() {
+                Token::Fn(..) => match self.parse_fn_decl(is_pub) {
                     Ok(decl) => decls.push(Decl::Fn(decl)),
                     Err(e) => {
                         self.record_error(e);
                         break;
                     }
                 },
-                Token::Declare(..) => match self.parse_declare_fn_decl_toplevel() {
+                Token::Declare(..) => match self.parse_declare_fn_decl_toplevel(is_pub) {
                     Ok(decl) => decls.push(Decl::DeclareFn(decl)),
                     Err(e) => {
                         self.record_error(e);
                         break;
                     }
                 },
-                Token::Class(..) => match self.parse_class_decl() {
+                Token::Import(..) => match self.parse_import_decl(is_pub) {
+                    Ok(decl) => decls.push(Decl::Import(decl)),
+                    Err(e) => {
+                        self.record_error(e);
+                        break;
+                    }
+                },
+                Token::Class(..) => match self.parse_class_decl(is_pub) {
                     Ok(decl) => decls.push(Decl::Class(decl)),
                     Err(e) => {
                         self.record_error(e);
                         break;
                     }
                 },
-                Token::Instance(..) => match self.parse_instance_decl() {
+                Token::Instance(..) => match self.parse_instance_decl(is_pub) {
                     Ok(decl) => decls.push(Decl::Instance(decl)),
                     Err(e) => {
                         self.record_error(e);
@@ -257,11 +270,17 @@ impl Parser {
             }
         }
 
-        let expr = match self.parse_expr() {
-            Ok(expr) => expr,
-            Err(e) => {
-                self.record_error(e);
-                return Err(self.errors.clone());
+        let expr = if matches!(self.current_token(), Token::Eof(..)) {
+            // The trailing expression is optional; a declarations-only file
+            // evaluates to unit `()`.
+            Expr::Tuple(self.eof, vec![])
+        } else {
+            match self.parse_expr() {
+                Ok(expr) => expr,
+                Err(e) => {
+                    self.record_error(e);
+                    return Err(self.errors.clone());
+                }
             }
         };
 
@@ -285,7 +304,10 @@ impl Parser {
         }
     }
 
-    pub fn parse_program_with_gas(&mut self, gas: &mut GasMeter) -> Result<Program, Vec<ParserErr>> {
+    pub fn parse_program_with_gas(
+        &mut self,
+        gas: &mut GasMeter,
+    ) -> Result<Program, Vec<ParserErr>> {
         let token_cost = gas
             .costs
             .parse_token
@@ -1339,7 +1361,10 @@ impl Parser {
         }
     }
 
-    fn parse_type_constraints_slice(&self, slice: &[Token]) -> Result<Vec<TypeConstraint>, ParserErr> {
+    fn parse_type_constraints_slice(
+        &self,
+        slice: &[Token],
+    ) -> Result<Vec<TypeConstraint>, ParserErr> {
         if slice.is_empty() {
             return Err(ParserErr::new(
                 self.eof,
@@ -1382,7 +1407,7 @@ impl Parser {
         }
     }
 
-    fn parse_class_decl(&mut self) -> Result<ClassDecl, ParserErr> {
+    fn parse_class_decl(&mut self, is_pub: bool) -> Result<ClassDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Class(span, ..) => {
                 self.next_token();
@@ -1528,6 +1553,7 @@ impl Parser {
 
         Ok(ClassDecl {
             span: Span::from_begin_end(span_begin, span_end),
+            is_pub,
             name,
             params,
             supers,
@@ -1535,7 +1561,7 @@ impl Parser {
         })
     }
 
-    fn parse_instance_decl(&mut self) -> Result<InstanceDecl, ParserErr> {
+    fn parse_instance_decl(&mut self, is_pub: bool) -> Result<InstanceDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Instance(span, ..) => {
                 self.next_token();
@@ -1683,6 +1709,7 @@ impl Parser {
 
         Ok(InstanceDecl {
             span: Span::from_begin_end(span_begin, span_end),
+            is_pub,
             class,
             head,
             context,
@@ -1690,7 +1717,7 @@ impl Parser {
         })
     }
 
-    fn parse_fn_decl(&mut self) -> Result<FnDecl, ParserErr> {
+    fn parse_fn_decl(&mut self, is_pub: bool) -> Result<FnDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Fn(span, ..) => {
                 self.next_token();
@@ -1720,6 +1747,176 @@ impl Parser {
 
         let name_var = Var::with_span(name_span, name);
         let mut params: Vec<(Var, TypeExpr)> = Vec::new();
+
+        // Signature form:
+        //   fn add : i32 -> i32 -> i32 = \x y -> x + y
+        //
+        // This desugars back into the existing `FnDecl { params, ret, body }` shape by:
+        // - flattening the signature `a -> b -> c` into param types `[a, b]` and ret `c`
+        // - extracting lambda binders from the body when present (so we keep user-chosen arg names)
+        // - otherwise, eta-expanding the body to match the declared arity
+        if matches!(self.current_token(), Token::Colon(..)) {
+            self.next_token();
+
+            // Parse a full type signature up to `where` or `=`.
+            let sig_start = self.token_cursor;
+            let mut depth = 0usize;
+            let mut where_idx = None;
+            let mut assign_idx = None;
+            for i in sig_start..self.tokens.len() {
+                match self.tokens[i] {
+                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                        depth = depth.saturating_sub(1)
+                    }
+                    Token::Where(..) if depth == 0 => {
+                        where_idx = Some(i);
+                        break;
+                    }
+                    Token::Assign(..) if depth == 0 => {
+                        assign_idx = Some(i);
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+
+            let Some(sig_end) = where_idx.or(assign_idx) else {
+                return Err(ParserErr::new(self.eof, "expected `=`".to_string()));
+            };
+            let sig = self.parse_type_expr_slice(&self.tokens[sig_start..sig_end])?;
+            self.token_cursor = sig_end;
+
+            let mut constraints = Vec::new();
+            if matches!(self.current_token(), Token::Where(..)) {
+                self.next_token();
+                constraints = self.parse_type_constraints()?;
+            }
+
+            // `=`
+            match self.current_token() {
+                Token::Assign(..) => self.next_token(),
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `=` got {}", token),
+                    ));
+                }
+            }
+
+            // Parse a body expression, delimited by newline (unless inside parens/brackets/braces).
+            let body_start = self.token_cursor;
+            let body_line = match self.tokens.get(body_start) {
+                Some(tok) => tok.span().begin.line,
+                None => return Err(ParserErr::new(self.eof, "unexpected EOF".to_string())),
+            };
+            let mut depth = 0usize;
+            let mut body_end = body_start;
+            for i in body_start..self.tokens.len() {
+                let tok = &self.tokens[i];
+                if depth == 0 && tok.span().begin.line > body_line {
+                    break;
+                }
+                match tok {
+                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                        depth = depth.saturating_sub(1)
+                    }
+                    _ => {}
+                }
+                body_end = i + 1;
+            }
+            let body_expr = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
+            self.token_cursor = body_end;
+            let body = Arc::new(body_expr);
+            let span_end = body.span().end;
+
+            // Flatten `a -> b -> c` into params=[a,b], ret=c so downstream code can
+            // reconstruct the same function type.
+            let mut param_tys = Vec::new();
+            let mut cur = sig;
+            let ret = loop {
+                match cur {
+                    TypeExpr::Fun(_, arg, next_ret) => {
+                        param_tys.push(*arg);
+                        cur = *next_ret;
+                    }
+                    other => break other,
+                }
+            };
+            if param_tys.is_empty() {
+                return Err(ParserErr::new(
+                    *ret.span(),
+                    "expected function type after `:`; use `let` for values".to_string(),
+                ));
+            }
+
+            let arity = param_tys.len();
+            let mut body_constraints = Vec::new();
+            let (params, body) = if matches!(body.as_ref(), Expr::Lam(..)) {
+                let mut lam_params: Vec<Var> = Vec::new();
+                let mut cur = body.clone();
+                while matches!(cur.as_ref(), Expr::Lam(..)) {
+                    let Expr::Lam(_span, _scope, param, _ann, lam_constraints, next) = cur.as_ref()
+                    else {
+                        break;
+                    };
+                    if !lam_constraints.is_empty() {
+                        body_constraints.extend(lam_constraints.iter().cloned());
+                    }
+                    lam_params.push(param.clone());
+                    cur = next.clone();
+                }
+
+                if lam_params.len() != arity {
+                    return Err(ParserErr::new(
+                        *body.span(),
+                        format!(
+                            "lambda has {} parameter(s) but signature expects {}",
+                            lam_params.len(),
+                            arity
+                        ),
+                    ));
+                }
+
+                let params: Vec<(Var, TypeExpr)> = lam_params
+                    .into_iter()
+                    .zip(param_tys)
+                    .map(|(v, ann)| (v, ann))
+                    .collect();
+                (params, cur)
+            } else {
+                // No leading lambda: eta-expand to match the declared arity.
+                let var_span = *body.span();
+                let vars: Vec<Var> = (0..arity)
+                    .map(|i| Var::with_span(var_span, format!("_arg{i}")))
+                    .collect();
+
+                let mut applied = body.clone();
+                for v in &vars {
+                    applied = Arc::new(Expr::App(
+                        Span::from_begin_end(applied.span().begin, applied.span().end),
+                        applied,
+                        Arc::new(Expr::Var(v.clone())),
+                    ));
+                }
+
+                let params: Vec<(Var, TypeExpr)> = vars.into_iter().zip(param_tys).collect();
+                (params, applied)
+            };
+
+            constraints.extend(body_constraints);
+
+            return Ok(FnDecl {
+                span: Span::from_begin_end(span_begin, span_end),
+                is_pub,
+                name: name_var,
+                params,
+                ret,
+                constraints,
+                body,
+            });
+        }
 
         let is_named_param_head = |token: &Token, next: &Token| {
             matches!(token, Token::Ident(..)) && matches!(next, Token::Colon(..))
@@ -1965,7 +2162,9 @@ impl Parser {
                     let mut stop_span = None;
                     for i in ty_start..self.tokens.len() {
                         match self.tokens[i] {
-                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
+                                depth += 1
+                            }
                             Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
                                 depth = depth.saturating_sub(1)
                             }
@@ -2105,6 +2304,7 @@ impl Parser {
 
         Ok(FnDecl {
             span: Span::from_begin_end(span_begin, span_end),
+            is_pub,
             name: name_var,
             params,
             ret,
@@ -2113,7 +2313,7 @@ impl Parser {
         })
     }
 
-    fn parse_declare_fn_decl_toplevel(&mut self) -> Result<DeclareFnDecl, ParserErr> {
+    fn parse_declare_fn_decl_toplevel(&mut self, is_pub: bool) -> Result<DeclareFnDecl, ParserErr> {
         let start_idx = self.token_cursor;
         let start_line = self
             .tokens
@@ -2151,7 +2351,7 @@ impl Parser {
             eof,
         };
         let mut parser = Parser::new(tokens);
-        let decl = parser.parse_declare_fn_decl()?;
+        let decl = parser.parse_declare_fn_decl(is_pub)?;
         match parser.current_token() {
             Token::Eof(..) => {}
             token => {
@@ -2167,7 +2367,7 @@ impl Parser {
         Ok(decl)
     }
 
-    fn parse_declare_fn_decl(&mut self) -> Result<DeclareFnDecl, ParserErr> {
+    fn parse_declare_fn_decl(&mut self, is_pub: bool) -> Result<DeclareFnDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Declare(span, ..) => {
                 self.next_token();
@@ -2207,6 +2407,12 @@ impl Parser {
 
         let name_var = Var::with_span(name_span, name);
         let mut params: Vec<(Var, TypeExpr)> = Vec::new();
+
+        // Allow an optional signature delimiter:
+        //   declare fn id : a -> a
+        if matches!(self.current_token(), Token::Colon(..)) {
+            self.next_token();
+        }
 
         let is_named_param_head = |token: &Token, next: &Token| {
             matches!(token, Token::Ident(..)) && matches!(next, Token::Colon(..))
@@ -2317,6 +2523,7 @@ impl Parser {
                 .unwrap_or(ret.span().end);
             return Ok(DeclareFnDecl {
                 span: Span::from_begin_end(span_begin, span_end),
+                is_pub,
                 name: name_var,
                 params,
                 ret,
@@ -2557,7 +2764,9 @@ impl Parser {
                     let mut stop_span = None;
                     for i in ty_start..self.tokens.len() {
                         match self.tokens[i] {
-                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
+                                depth += 1
+                            }
                             Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
                                 depth = depth.saturating_sub(1)
                             }
@@ -2651,6 +2860,7 @@ impl Parser {
             .unwrap_or(ret.span().end);
         Ok(DeclareFnDecl {
             span: Span::from_begin_end(span_begin, span_end),
+            is_pub,
             name: name_var,
             params,
             ret,
@@ -2658,7 +2868,154 @@ impl Parser {
         })
     }
 
-    fn parse_type_decl(&mut self) -> Result<TypeDecl, ParserErr> {
+    fn parse_import_decl(&mut self, is_pub: bool) -> Result<ImportDecl, ParserErr> {
+        let span_begin = match self.current_token() {
+            Token::Import(span, ..) => {
+                self.next_token();
+                span.begin
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `import` got {}", token),
+                ));
+            }
+        };
+
+        let (path, mut span_end, default_alias) = match self.current_token() {
+            Token::HttpsUrl(url, span, ..) => {
+                let span = span;
+                let url = url.clone();
+                self.next_token();
+                let (base_url, sha) = match url.split_once('#') {
+                    Some((a, b)) if !b.is_empty() => (a.to_string(), Some(b.to_string())),
+                    _ => (url, None),
+                };
+                let alias = base_url
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("")
+                    .trim_end_matches(".rex")
+                    .to_string();
+                (
+                    ImportPath::Remote { url: base_url, sha },
+                    span.end,
+                    if alias.is_empty() {
+                        None
+                    } else {
+                        Some(intern(&alias))
+                    },
+                )
+            }
+            Token::Ident(..) => {
+                let mut segs: Vec<Symbol> = Vec::new();
+                let (first, first_span) = match self.current_token() {
+                    Token::Ident(name, span, ..) => (intern(&name), span),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected module path segment got {}", token),
+                        ));
+                    }
+                };
+                let mut end = first_span.end;
+                segs.push(first);
+                self.next_token();
+
+                while matches!(self.current_token(), Token::Dot(..)) {
+                    self.next_token();
+                    let (seg, seg_span) = match self.current_token() {
+                        Token::Ident(name, span, ..) => (intern(&name), span),
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected module path segment got {}", token),
+                            ));
+                        }
+                    };
+                    segs.push(seg);
+                    end = seg_span.end;
+                    self.next_token();
+                }
+
+                let sha = if matches!(self.current_token(), Token::HashTag(..)) {
+                    self.next_token();
+                    match self.current_token() {
+                        Token::Ident(s, span, ..) => {
+                            let span = span;
+                            self.next_token();
+                            end = end.max(span.end);
+                            Some(s.clone())
+                        }
+                        Token::Int(n, span, ..) => {
+                            let span = span;
+                            self.next_token();
+                            end = end.max(span.end);
+                            Some(n.to_string())
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected sha token got {}", token),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                let default_alias = segs.last().cloned();
+                (
+                    ImportPath::Local {
+                        segments: segs,
+                        sha,
+                    },
+                    end,
+                    default_alias,
+                )
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected module path got {}", token),
+                ));
+            }
+        };
+
+        let alias = if matches!(self.current_token(), Token::As(..)) {
+            self.next_token();
+            match self.current_token() {
+                Token::Ident(name, span, ..) => {
+                    let span = span;
+                    self.next_token();
+                    span_end = span_end.max(span.end);
+                    intern(&name)
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected alias name got {}", token),
+                    ));
+                }
+            }
+        } else {
+            default_alias.ok_or_else(|| {
+                ParserErr::new(
+                    Span::from_begin_end(span_begin, span_end),
+                    "import requires `as <alias>`".to_string(),
+                )
+            })?
+        };
+
+        self.skip_newlines();
+        Ok(ImportDecl {
+            span: Span::from_begin_end(span_begin, span_end),
+            is_pub,
+            path,
+            alias,
+        })
+    }
+
+    fn parse_type_decl(&mut self, is_pub: bool) -> Result<TypeDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Type(span, ..) => {
                 self.next_token();
@@ -2725,6 +3082,7 @@ impl Parser {
 
         Ok(TypeDecl {
             span: Span::from_begin_end(span_begin, span_end),
+            is_pub,
             name,
             params,
             variants,
@@ -3396,7 +3754,9 @@ fn count_expr_nodes(expr: &Expr) -> u64 {
         | Expr::Uuid(..)
         | Expr::DateTime(..)
         | Expr::Var(..) => 1,
-        Expr::Tuple(_, xs) | Expr::List(_, xs) => 1 + xs.iter().map(|e| count_expr_nodes(e)).sum::<u64>(),
+        Expr::Tuple(_, xs) | Expr::List(_, xs) => {
+            1 + xs.iter().map(|e| count_expr_nodes(e)).sum::<u64>()
+        }
         Expr::Dict(_, kvs) => 1 + kvs.values().map(|e| count_expr_nodes(e)).sum::<u64>(),
         Expr::RecordUpdate(_, base, updates) => {
             1 + count_expr_nodes(base) + updates.values().map(|e| count_expr_nodes(e)).sum::<u64>()
@@ -3405,14 +3765,19 @@ fn count_expr_nodes(expr: &Expr) -> u64 {
         Expr::Project(_, e, _) => 1 + count_expr_nodes(e),
         Expr::Lam(_, _, _, ann, constraints, body) => {
             let ann_nodes = ann.as_ref().map(count_type_expr_nodes).unwrap_or(0);
-            let constraint_nodes = constraints.iter().map(count_type_constraint_nodes).sum::<u64>();
+            let constraint_nodes = constraints
+                .iter()
+                .map(count_type_constraint_nodes)
+                .sum::<u64>();
             1 + ann_nodes + constraint_nodes + count_expr_nodes(body)
         }
         Expr::Let(_, _, ann, def, body) => {
             let ann_nodes = ann.as_ref().map(count_type_expr_nodes).unwrap_or(0);
             1 + ann_nodes + count_expr_nodes(def) + count_expr_nodes(body)
         }
-        Expr::Ite(_, a, b, c) => 1 + count_expr_nodes(a) + count_expr_nodes(b) + count_expr_nodes(c),
+        Expr::Ite(_, a, b, c) => {
+            1 + count_expr_nodes(a) + count_expr_nodes(b) + count_expr_nodes(c)
+        }
         Expr::Match(_, scrutinee, arms) => {
             1 + count_expr_nodes(scrutinee)
                 + arms
@@ -3432,7 +3797,10 @@ fn count_pattern_nodes(pat: &Pattern) -> u64 {
         }
         Pattern::Cons(_, a, b) => 1 + count_pattern_nodes(a) + count_pattern_nodes(b),
         Pattern::Dict(_, fields) => {
-            1 + fields.iter().map(|(_, p)| count_pattern_nodes(p)).sum::<u64>()
+            1 + fields
+                .iter()
+                .map(|(_, p)| count_pattern_nodes(p))
+                .sum::<u64>()
         }
     }
 }
@@ -3444,9 +3812,16 @@ fn count_type_constraint_nodes(c: &TypeConstraint) -> u64 {
 fn count_type_expr_nodes(ty: &TypeExpr) -> u64 {
     match ty {
         TypeExpr::Name(..) => 1,
-        TypeExpr::App(_, a, b) | TypeExpr::Fun(_, a, b) => 1 + count_type_expr_nodes(a) + count_type_expr_nodes(b),
+        TypeExpr::App(_, a, b) | TypeExpr::Fun(_, a, b) => {
+            1 + count_type_expr_nodes(a) + count_type_expr_nodes(b)
+        }
         TypeExpr::Tuple(_, elems) => 1 + elems.iter().map(count_type_expr_nodes).sum::<u64>(),
-        TypeExpr::Record(_, fields) => 1 + fields.iter().map(|(_, t)| count_type_expr_nodes(t)).sum::<u64>(),
+        TypeExpr::Record(_, fields) => {
+            1 + fields
+                .iter()
+                .map(|(_, t)| count_type_expr_nodes(t))
+                .sum::<u64>()
+        }
     }
 }
 
@@ -3507,7 +3882,9 @@ mod tests {
     fn test_max_nesting_depth_is_enforced_during_parse() {
         let code = format!("{}0{}", "(".repeat(6), ")".repeat(6));
         let mut parser = Parser::new(Token::tokenize(&code).unwrap());
-        parser.set_limits(ParserLimits { max_nesting: Some(5) });
+        parser.set_limits(ParserLimits {
+            max_nesting: Some(5),
+        });
 
         let errs = parser.parse_program().unwrap_err();
         assert!(
@@ -3628,6 +4005,93 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_fn_decl_signature_form_with_lambda_body() {
+        let code = r#"
+        fn add : i32 -> i32 -> i32 = \x y -> x + y
+        add 1 2
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("add"));
+                assert_eq!(fd.params.len(), 2);
+                assert_eq!(fd.params[0].0.name, intern("x"));
+                assert!(matches!(
+                    fd.params[0].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
+                ));
+                assert_eq!(fd.params[1].0.name, intern("y"));
+                assert!(matches!(
+                    fd.params[1].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
+                ));
+                assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "i32"));
+                assert!(fd.constraints.is_empty());
+                assert!(!matches!(fd.body.as_ref(), Expr::Lam(..)));
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fn_decl_signature_form_eta_expands_non_lambda_body() {
+        let code = r#"
+        fn inc : i32 -> i32 = add 1
+        inc
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("inc"));
+                assert_eq!(fd.params.len(), 1);
+                assert_eq!(fd.params[0].0.name, intern("_arg0"));
+                assert!(matches!(
+                    fd.params[0].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
+                ));
+                assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "i32"));
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fn_decl_signature_form_where_constraints() {
+        let code = r#"
+        fn my_fun : a -> b -> c where Iterable (a, b) = \x y -> x
+        my_fun
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("my_fun"));
+                assert_eq!(fd.params.len(), 2);
+                assert!(matches!(
+                    fd.constraints[0].class,
+                    ref n if n.as_ref() == "Iterable"
+                ));
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fn_decl_signature_form_rejects_mismatched_lambda_arity() {
+        let code = r#"
+        fn add : i32 -> i32 -> i32 = \x -> x
+        add
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        assert!(parser.parse_program().is_err());
+    }
+
+    #[test]
     fn test_parse_fn_decl_where_constraints() {
         let code = r#"
         fn my_fun x: a -> y: b -> c where Iterable (a, b) = x
@@ -3720,6 +4184,37 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_declare_fn_decl_bare_signature_with_colon() {
+        let code = r#"
+        declare fn info : a -> string where Pretty a
+        0
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program().unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::DeclareFn(fd) => {
+                assert_eq!(fd.name.name, intern("info"));
+                assert_eq!(fd.params.len(), 1);
+                assert!(matches!(
+                    fd.params[0].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "a"
+                ));
+                assert!(matches!(
+                    fd.ret,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "string"
+                ));
+                assert_eq!(fd.constraints.len(), 1);
+                assert!(matches!(
+                    fd.constraints[0].class,
+                    ref n if n.as_ref() == "Pretty"
+                ));
+            }
+            other => panic!("expected declare fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_parse_declare_fn_decl_rejects_body() {
         let code = r#"
         declare fn my_fun x: a -> a = x
@@ -3743,10 +4238,7 @@ mod tests {
                 assert_eq!(fd.name.name, intern("apply"));
                 assert_eq!(fd.params.len(), 2);
                 assert_eq!(fd.params[0].0.name, intern("x"));
-                assert!(matches!(
-                    fd.params[0].1,
-                    TypeExpr::Fun(_, _, _)
-                ));
+                assert!(matches!(fd.params[0].1, TypeExpr::Fun(_, _, _)));
                 assert_eq!(fd.params[1].0.name, intern("y"));
                 assert!(matches!(
                     fd.params[1].1,

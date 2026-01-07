@@ -4,8 +4,8 @@ use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 use syn::{
-    Attribute, Data, DeriveInput, Error, Fields, GenericArgument, Generics, Ident, LitStr,
-    PathArguments, Type, parse_quote, spanned::Spanned,
+    parse_quote, spanned::Spanned, Attribute, Data, DeriveInput, Error, Fields, GenericArgument,
+    Generics, Ident, LitStr, PathArguments, Type,
 };
 
 #[proc_macro_derive(Rex, attributes(rex, serde))]
@@ -35,7 +35,11 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
 
     let rust_ident = &ast.ident;
     let type_name = opts.name;
-    let type_param_idents: Vec<Ident> = ast.generics.type_params().map(|p| p.ident.clone()).collect();
+    let type_param_idents: Vec<Ident> = ast
+        .generics
+        .type_params()
+        .map(|p| p.ident.clone())
+        .collect();
     let type_param_count = type_param_idents.len();
 
     let mut rex_type_generics = ast.generics.clone();
@@ -121,7 +125,11 @@ fn serde_rename_from_attrs(attrs: &[Attribute]) -> Result<Option<String>, Error>
     Ok(None)
 }
 
-fn adt_decl_fn(ast: &DeriveInput, type_name: &str, type_params: &[Ident]) -> Result<TokenStream2, Error> {
+fn adt_decl_fn(
+    ast: &DeriveInput,
+    type_name: &str,
+    type_params: &[Ident],
+) -> Result<TokenStream2, Error> {
     let param_names: Vec<LitStr> = type_params
         .iter()
         .map(|p| LitStr::new(&p.to_string(), Span::call_site()))
@@ -243,11 +251,17 @@ fn adt_decl_fn(ast: &DeriveInput, type_name: &str, type_params: &[Ident]) -> Res
                 adt
             }})
         }
-        Data::Union(_) => Err(Error::new(ast.span(), "`#[derive(Rex)]` only supports structs and enums")),
+        Data::Union(_) => Err(Error::new(
+            ast.span(),
+            "`#[derive(Rex)]` only supports structs and enums",
+        )),
     }
 }
 
-fn rex_type_expr(ty: &Type, adt_params: &HashMap<String, TokenStream2>) -> Result<TokenStream2, Error> {
+fn rex_type_expr(
+    ty: &Type,
+    adt_params: &HashMap<String, TokenStream2>,
+) -> Result<TokenStream2, Error> {
     match ty {
         Type::Tuple(tuple) => {
             let elems = tuple
@@ -445,7 +459,11 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
     }
 }
 
-fn from_value_expr(value_expr: TokenStream2, ty: &Type, name_expr: TokenStream2) -> Result<TokenStream2, Error> {
+fn from_value_expr(
+    value_expr: TokenStream2,
+    ty: &Type,
+    name_expr: TokenStream2,
+) -> Result<TokenStream2, Error> {
     match ty {
         Type::Tuple(tuple) => {
             let elem_tys = tuple.elems.iter().collect::<Vec<_>>();
@@ -582,7 +600,9 @@ fn from_value_expr(value_expr: TokenStream2, ty: &Type, name_expr: TokenStream2)
                         }
                     }})
                 }
-                _ => Ok(quote! { <#type_path as ::rex_engine::FromValue>::from_value(#value_expr, #name_expr) }),
+                _ => Ok(
+                    quote! { <#type_path as ::rex_engine::FromValue>::from_value(#value_expr, #name_expr) },
+                ),
             }
         }
         other => Err(Error::new(
@@ -715,7 +735,12 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
             }}
         }
-        Data::Union(_) => return Err(Error::new(ast.span(), "`#[derive(Rex)]` only supports structs and enums")),
+        Data::Union(_) => {
+            return Err(Error::new(
+                ast.span(),
+                "`#[derive(Rex)]` only supports structs and enums",
+            ))
+        }
     };
 
     let mut generics = ast.generics.clone();
@@ -786,7 +811,8 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             Fields::Unnamed(fields) => {
                 let mut decs = Vec::new();
                 for (idx, field) in fields.unnamed.iter().enumerate() {
-                    let decode = from_value_expr(quote!(&args[#idx]), &field.ty, name_expr.clone())?;
+                    let decode =
+                        from_value_expr(quote!(&args[#idx]), &field.ty, name_expr.clone())?;
                     decs.push(quote!(#decode?));
                 }
                 let len = fields.unnamed.len();
@@ -832,7 +858,9 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             .unnamed
                             .iter()
                             .enumerate()
-                            .map(|(i, f)| from_value_expr(quote!(&args[#i]), &f.ty, name_expr.clone()))
+                            .map(|(i, f)| {
+                                from_value_expr(quote!(&args[#i]), &f.ty, name_expr.clone())
+                            })
                             .collect::<Result<Vec<_>, _>>()?
                             .into_iter()
                             .map(|d| quote!(#d?))

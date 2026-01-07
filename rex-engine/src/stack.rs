@@ -22,4 +22,3 @@ where
             .map_err(|_| EngineError::Internal("worker thread panicked".into()))
     })
 }
-

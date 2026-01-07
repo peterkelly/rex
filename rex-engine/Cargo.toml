@@ -13,10 +13,10 @@ async-recursion = { workspace = true }
 futures = { workspace = true }
 rex-gas = { workspace = true }
 tracing = { workspace = true }
+rex-lexer = { workspace = true }
+rex-parser = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-rex-lexer = { workspace = true }
-rex-parser = { workspace = true }

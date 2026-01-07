@@ -30,17 +30,17 @@ Notes:
 Top-level functions can also have a `where` clause:
 
 ```rex
-fn sum_list xs: List i32 -> i32 where Foldable List = foldl (+) 0 xs
+fn sum_list : List i32 -> i32 where Foldable List = \xs -> foldl (+) 0 xs
 ```
 
-Constraints appear after the return type and before `=`.
+Constraints appear after the type signature and before `=`.
 
 ### Multiple constraints
 
 Constraints are comma-separated:
 
 ```rex
-fn demo xs: List i32 -> i32 where Foldable List, AdditiveMonoid i32 = foldl (+) 0 xs
+fn demo : List i32 -> i32 where Foldable List, AdditiveMonoid i32 = \xs -> foldl (+) 0 xs
 ```
 
 :::{note}

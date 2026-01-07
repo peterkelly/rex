@@ -45,9 +45,11 @@ pub enum Token {
     Fn(Span),
     For(Span),
     If(Span),
+    Import(Span),
     Is(Span),
     Instance(Span),
     Match(Span),
+    Pub(Span),
     Type(Span),
     When(Span),
     Then(Span),
@@ -105,6 +107,7 @@ pub enum Token {
     String(String, Span),
 
     // Idents
+    HttpsUrl(String, Span),
     Ident(String, Span),
 
     // Eof
@@ -159,12 +162,16 @@ impl Token {
                     Token::For(span)
                 } else if capture.name("If").is_some() {
                     Token::If(span)
+                } else if capture.name("Import").is_some() {
+                    Token::Import(span)
                 } else if capture.name("Is").is_some() {
                     Token::Is(span)
                 } else if capture.name("Instance").is_some() {
                     Token::Instance(span)
                 } else if capture.name("Match").is_some() {
                     Token::Match(span)
+                } else if capture.name("Pub").is_some() {
+                    Token::Pub(span)
                 } else if capture.name("Type").is_some() {
                     Token::Type(span)
                 } else if capture.name("When").is_some() {
@@ -282,6 +289,9 @@ impl Token {
                 }
 
                 // Idents
+                else if let Some(m) = capture.name("HttpsUrl") {
+                    Token::HttpsUrl(m.as_str().to_string(), span)
+                }
                 else if let Some(m) = capture.name("Ident") {
                     Token::Ident(m.as_str().to_string(), span)
                 }
@@ -321,9 +331,11 @@ impl Token {
                     r"(?P<Fn>\bfn\b)|",
                     r"(?P<For>\bfor\b)|",
                     r"(?P<If>\bif\b)|",
+                    r"(?P<Import>\bimport\b)|",
                     r"(?P<Is>\bis\b)|",
                     r"(?P<Instance>\binstance\b)|",
                     r"(?P<Match>\bmatch\b)|",
+                    r"(?P<Pub>\bpub\b)|",
                     r"(?P<Type>\btype\b)|",
                     r"(?P<When>\bwhen\b)|",
                     r"(?P<Then>\bthen\b)|",
@@ -378,6 +390,8 @@ impl Token {
                     r"(?P<Null>\bnull\b)|",
                     r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
                     r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
+                    // URL-ish bare tokens (used by module imports)
+                    r"(?P<HttpsUrl>https://[^\s]+)|",
                     // Idents
                     r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
                     // Unexpected
@@ -397,7 +411,7 @@ impl Token {
             Eq(..) | Ne(..) | Lt(..) | Le(..) | Gt(..) | Ge(..) => Precedence(3),
             Add(..) | Sub(..) | Concat(..) => Precedence(4),
             Mul(..) | Div(..) | Mod(..) => Precedence(5),
-            Ident(..) => Precedence::highest(),
+            Ident(..) | HttpsUrl(..) => Precedence::highest(),
             _ => Precedence::lowest(),
         }
     }
@@ -420,9 +434,11 @@ impl Spanned for Token {
             Fn(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Import(span, ..) => span,
             Is(span, ..) => span,
             Instance(span, ..) => span,
             Match(span, ..) => span,
+            Pub(span, ..) => span,
             Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
@@ -480,6 +496,7 @@ impl Spanned for Token {
             String(_, span, ..) => span,
 
             // Idents
+            HttpsUrl(_, span, ..) => span,
             Ident(_, span, ..) => span,
 
             // Eof
@@ -499,9 +516,11 @@ impl Spanned for Token {
             Fn(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Import(span, ..) => span,
             Is(span, ..) => span,
             Instance(span, ..) => span,
             Match(span, ..) => span,
+            Pub(span, ..) => span,
             Type(span, ..) => span,
             When(span, ..) => span,
             Then(span, ..) => span,
@@ -559,6 +578,7 @@ impl Spanned for Token {
             String(_, span, ..) => span,
 
             // Idents
+            HttpsUrl(_, span, ..) => span,
             Ident(_, span, ..) => span,
 
             // Eof
@@ -580,9 +600,11 @@ impl Display for Token {
             Fn(..) => write!(f, "fn"),
             For(..) => write!(f, "for"),
             If(..) => write!(f, "if"),
+            Import(..) => write!(f, "import"),
             Is(..) => write!(f, "is"),
             Instance(..) => write!(f, "instance"),
             Match(..) => write!(f, "match"),
+            Pub(..) => write!(f, "pub"),
             Type(..) => write!(f, "type"),
             When(..) => write!(f, "when"),
             Then(..) => write!(f, "then"),
@@ -640,6 +662,7 @@ impl Display for Token {
             String(x, ..) => write!(f, "{}", x),
 
             // Idents
+            HttpsUrl(url, ..) => write!(f, "{}", url),
             Ident(ident, ..) => write!(f, "{}", ident),
 
             // Eof
@@ -648,6 +671,7 @@ impl Display for Token {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Tokens {
     pub items: Vec<Token>,
     pub eof: Span,

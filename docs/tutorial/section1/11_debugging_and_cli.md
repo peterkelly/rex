@@ -33,7 +33,7 @@ cargo run -p rex -- run --emit-ast -c '1 + 2'
 Show the inferred type and exit:
 
 ```sh
-cargo run -p rex -- run --type -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex -- run --emit-type -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 ## “Parse error”: start small
@@ -65,4 +65,3 @@ Typical fixes:
 - use the value in a context that forces a type (e.g. `zero + 1`).
 
 The exact defaulting rules for numeric types are described in `docs/SPEC.md`.
-

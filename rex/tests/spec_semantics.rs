@@ -35,7 +35,10 @@ in
     let EngineError::Type(te) = err else {
         panic!("expected type error, got {err}");
     };
-    assert!(matches!(strip_type_span(te), TypeError::FieldNotKnown { .. }));
+    assert!(matches!(
+        strip_type_span(te),
+        TypeError::FieldNotKnown { .. }
+    ));
 }
 
 #[test]

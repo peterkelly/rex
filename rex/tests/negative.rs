@@ -43,16 +43,12 @@ fn expect_type_err(code: &str, f: impl FnOnce(&TypeError) -> bool) {
 
 fn expect_engine_err(code: &str, f: impl FnOnce(&EngineError) -> bool) {
     let err = compile_err(code);
-    assert!(
-        f(&err),
-        "unexpected engine error: {err:?}\ncode:\n{code}"
-    );
+    assert!(f(&err), "unexpected engine error: {err:?}\ncode:\n{code}");
 }
 
 #[test]
 fn parse_rejects_invalid_programs() {
     let cases: &[(&str, &str)] = &[
-        ("empty", ""),
         ("unterminated_paren", "("),
         ("orphan_close_paren", ")"),
         ("unterminated_bracket", "[1, 2"),
@@ -89,26 +85,18 @@ fn compile_rejects_invalid_programs() {
             "x",
             |e| matches!(e, TypeError::UnknownVar(name) if name.as_ref() == "x"),
         ),
-        (
-            "if_condition_not_bool",
-            "if 1 then 2 else 3",
-            |e| matches!(e, TypeError::Unification(..)),
-        ),
-        (
-            "if_branches_must_match",
-            "if true then 1 else false",
-            |e| matches!(e, TypeError::Unification(..)),
-        ),
-        (
-            "self_application_occurs_check",
-            "\\x -> x x",
-            |e| matches!(e, TypeError::Occurs(..)),
-        ),
-        (
-            "apply_non_function",
-            "1 2",
-            |e| matches!(e, TypeError::Unification(..)),
-        ),
+        ("if_condition_not_bool", "if 1 then 2 else 3", |e| {
+            matches!(e, TypeError::Unification(..))
+        }),
+        ("if_branches_must_match", "if true then 1 else false", |e| {
+            matches!(e, TypeError::Unification(..))
+        }),
+        ("self_application_occurs_check", "\\x -> x x", |e| {
+            matches!(e, TypeError::Occurs(..))
+        }),
+        ("apply_non_function", "1 2", |e| {
+            matches!(e, TypeError::Unification(..))
+        }),
         (
             "unknown_constructor_in_pattern",
             "match 1 when Foo -> 1",
@@ -136,11 +124,9 @@ fn compile_rejects_invalid_programs() {
             "#,
             |e| matches!(e, TypeError::NonExhaustiveMatch { .. }),
         ),
-        (
-            "type_annotation_must_match",
-            "let x: bool = 1 in x",
-            |e| matches!(e, TypeError::Unification(..)),
-        ),
+        ("type_annotation_must_match", "let x: bool = 1 in x", |e| {
+            matches!(e, TypeError::Unification(..))
+        }),
         (
             "unknown_field_projection",
             r#"
@@ -160,7 +146,12 @@ fn compile_rejects_invalid_programs() {
         (
             "record_update_requires_record_like_base",
             "{ 1 with { x = 2 } }",
-            |e| matches!(e, TypeError::UnknownField { .. } | TypeError::FieldNotKnown { .. }),
+            |e| {
+                matches!(
+                    e,
+                    TypeError::UnknownField { .. } | TypeError::FieldNotKnown { .. }
+                )
+            },
         ),
         (
             "unknown_type_in_annotation",
@@ -255,11 +246,12 @@ fn compile_rejects_invalid_programs() {
             "#,
             |e| matches!(e, TypeError::NoInstance(class, _) if class.as_ref() == "C"),
         ),
-        (
-            "projection_requires_record_like_base",
-            "1.x",
-            |e| matches!(e, TypeError::UnknownField { .. } | TypeError::FieldNotKnown { .. }),
-        ),
+        ("projection_requires_record_like_base", "1.x", |e| {
+            matches!(
+                e,
+                TypeError::UnknownField { .. } | TypeError::FieldNotKnown { .. }
+            )
+        }),
         (
             "non_exhaustive_match_on_record_adt",
             r#"
@@ -312,7 +304,14 @@ fn compile_rejects_invalid_programs() {
             match v
                 when Bar { x } -> x
             "#,
-            |e| matches!(e, TypeError::UnknownField { .. } | TypeError::FieldNotKnown { .. } | TypeError::Unification(..)),
+            |e| {
+                matches!(
+                    e,
+                    TypeError::UnknownField { .. }
+                        | TypeError::FieldNotKnown { .. }
+                        | TypeError::Unification(..)
+                )
+            },
         ),
         (
             "ambiguous_type_variable_only_in_constraints",
@@ -325,9 +324,7 @@ fn compile_rejects_invalid_programs() {
 
             my_fn [[1, 2], [3]]
             "#,
-            |e| {
-                matches!(e, TypeError::AmbiguousTypeVars { constraints, .. } if constraints.contains("Default"))
-            },
+            |e| matches!(e, TypeError::AmbiguousTypeVars { constraints, .. } if constraints.contains("Default")),
         ),
         (
             "constraint_kind_mismatch_rejected",
@@ -365,13 +362,11 @@ fn compile_rejects_invalid_programs() {
 
 #[test]
 fn compile_rejects_invalid_programs_engine_errors() {
-    let cases: &[(&str, &str, fn(&EngineError) -> bool)] = &[
-        (
-            "ambiguous_overload_requires_application",
-            "prim_fold",
-            |e| matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "prim_fold"),
-        ),
-    ];
+    let cases: &[(&str, &str, fn(&EngineError) -> bool)] = &[(
+        "ambiguous_overload_requires_application",
+        "prim_fold",
+        |e| matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "prim_fold"),
+    )];
 
     for (name, code, pred) in cases {
         expect_engine_err(code, *pred);

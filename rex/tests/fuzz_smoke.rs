@@ -17,6 +17,7 @@ fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_
             }
             Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
             Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
+            Decl::Import(..) => {}
         }
     }
     Ok(())
@@ -55,9 +56,9 @@ fn fuzz_smoke_pipeline_does_not_panic() {
         .unwrap_or(200);
 
     let charset: &[char] = &[
-        ' ', '\n', '\t', 'a', 'b', 'c', 'x', 'y', 'z', 'A', 'B', 'C', '_', '0', '1', '2', '3',
-        '(', ')', '[', ']', '{', '}', ',', ':', '=', '\\', '-', '>', '+', '*', '/', '%', '<', '>',
-        '.', '"', '\'', '|', '&', 'λ', '→',
+        ' ', '\n', '\t', 'a', 'b', 'c', 'x', 'y', 'z', 'A', 'B', 'C', '_', '0', '1', '2', '3', '(',
+        ')', '[', ']', '{', '}', ',', ':', '=', '\\', '-', '>', '+', '*', '/', '%', '<', '>', '.',
+        '"', '\'', '|', '&', 'λ', '→',
     ];
 
     let mut rng = XorShift64::new(0x7265_785f_6675_7a7a);

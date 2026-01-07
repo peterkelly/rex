@@ -16,7 +16,7 @@ fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) {
                 ts.inject_instance_decl(inst_decl)
                     .expect("failed to inject prelude instance decl");
             }
-            Decl::Type(..) | Decl::Fn(..) | Decl::DeclareFn(..) => {}
+            Decl::Type(..) | Decl::Fn(..) | Decl::DeclareFn(..) | Decl::Import(..) => {}
         }
     }
 }
@@ -113,17 +113,27 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             ts.add_overload("prim_zero", Scheme::new(vec![], vec![], t.clone()));
             ts.add_overload(
                 "prim_add",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(t.clone(), Type::fun(t.clone(), t.clone())),
+                ),
             );
         }
 
-        let multiplicative = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64"];
+        let multiplicative = [
+            "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+        ];
         for prim in multiplicative {
             let t = Type::con(prim, 0);
             ts.add_overload("prim_one", Scheme::new(vec![], vec![], t.clone()));
             ts.add_overload(
                 "prim_mul",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(t.clone(), Type::fun(t.clone(), t.clone())),
+                ),
             );
         }
 
@@ -132,7 +142,11 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             let t = Type::con(prim, 0);
             ts.add_overload(
                 "prim_sub",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(t.clone(), Type::fun(t.clone(), t.clone())),
+                ),
             );
             ts.add_overload(
                 "prim_negate",
@@ -144,7 +158,11 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             let t = Type::con(prim, 0);
             ts.add_overload(
                 "prim_div",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(t.clone(), Type::fun(t.clone(), t.clone())),
+                ),
             );
         }
 
@@ -153,14 +171,20 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             let t = Type::con(prim, 0);
             ts.add_overload(
                 "prim_mod",
-                Scheme::new(vec![], vec![], Type::fun(t.clone(), Type::fun(t.clone(), t.clone()))),
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(t.clone(), Type::fun(t.clone(), t.clone())),
+                ),
             );
         }
     }
 
     // Ordering intrinsics (monomorphic overloads).
     {
-        let ord = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string"];
+        let ord = [
+            "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
+        ];
         for prim in ord {
             let t = Type::con(prim, 0);
             ts.add_overload(
@@ -314,7 +338,10 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                     Scheme::new(
                         vec![a_tv.clone(), b_tv.clone()],
                         vec![],
-                        Type::fun(step_l.clone(), Type::fun(b.clone(), Type::fun(fa, b.clone()))),
+                        Type::fun(
+                            step_l.clone(),
+                            Type::fun(b.clone(), Type::fun(fa, b.clone())),
+                        ),
                     ),
                 );
             };
@@ -469,7 +496,11 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 );
             };
 
-            add_for(list_of(a.clone()), list_of(b.clone()), list_of(pair.clone()));
+            add_for(
+                list_of(a.clone()),
+                list_of(b.clone()),
+                list_of(pair.clone()),
+            );
             add_for(array_of(a.clone()), array_of(b.clone()), array_of(pair));
         }
 
@@ -659,11 +690,19 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) {
         let opt_a = option_of(a.clone());
         ts.add_value(
             "is_some",
-            Scheme::new(vec![a_tv.clone()], vec![], Type::fun(opt_a.clone(), bool_ty.clone())),
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(opt_a.clone(), bool_ty.clone()),
+            ),
         );
         ts.add_value(
             "is_none",
-            Scheme::new(vec![a_tv.clone()], vec![], Type::fun(opt_a.clone(), bool_ty.clone())),
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(opt_a.clone(), bool_ty.clone()),
+            ),
         );
     }
 

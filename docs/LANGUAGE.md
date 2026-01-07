@@ -19,7 +19,7 @@ A Rex program consists of:
 Example:
 
 ```rex
-fn inc (x: i32) -> i32 = x + 1
+fn inc : i32 -> i32 = \x -> x + 1
 
 let
   xs = [1, 2, 3]
@@ -212,10 +212,10 @@ match s
 
 ### Functions (`fn`)
 
-Top-level functions are declared with explicit parameter types and a result type:
+Top-level functions are declared with an explicit type signature and a value (typically a lambda):
 
 ```rex
-fn add (x: i32) -> i32 -> i32 = \y -> x + y
+fn add : i32 -> i32 -> i32 = \x y -> x + y
 ```
 
 ### Type Classes (`class`)

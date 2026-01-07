@@ -1,4 +1,4 @@
-fn inc (x: i32) -> i32 = x + 1
+fn inc : i32 -> i32 = \x -> x + 1
 
 class Bump a where
     bump : a -> a
@@ -18,4 +18,3 @@ let
     also_forty_two = add5 37
 in
     (forty_two, also_forty_two)
-

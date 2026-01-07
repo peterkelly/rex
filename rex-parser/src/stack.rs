@@ -3,7 +3,7 @@ use std::thread;
 use rex_ast::expr::Program;
 use rex_lexer::span::Span;
 
-use crate::{Parser, error::ParserErr};
+use crate::{error::ParserErr, Parser};
 
 pub const DEFAULT_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -18,7 +18,12 @@ pub fn parse_program_with_stack_size(
             let mut parser = parser;
             parser.parse_program()
         })
-        .map_err(|e| vec![ParserErr::new(Span::default(), format!("internal error: {e}"))])?;
+        .map_err(|e| {
+            vec![ParserErr::new(
+                Span::default(),
+                format!("internal error: {e}"),
+            )]
+        })?;
     handle
         .join()
         .map_err(|_| vec![ParserErr::new(Span::default(), "parser thread panicked")])?

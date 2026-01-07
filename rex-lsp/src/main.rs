@@ -1,18 +1,24 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeSet, HashMap};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-use rex_ast::expr::{Decl, Expr, Pattern, Program, TypeDecl, TypeExpr};
+use rex_ast::expr::{
+    intern, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern,
+    Program, TypeDecl, TypeExpr, Var,
+};
 use rex_lexer::{
     span::{Position as RexPosition, Span, Spanned},
     LexicalError, Token, Tokens,
 };
 use rex_parser::Parser;
+use rex_ts::Types;
 use rex_ts::{
     instantiate, unify, Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr,
     TypedExprKind,
 };
-use rex_ts::Types;
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
@@ -32,6 +38,918 @@ const BUILTIN_TYPES: &[&str] = &[
 ];
 const BUILTIN_VALUES: &[&str] = &["true", "false", "null", "Some", "None", "Ok", "Err"];
 
+#[derive(Clone)]
+struct ImportModuleInfo {
+    path: Option<PathBuf>,
+    value_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>, // field -> internal name
+    export_defs: HashMap<String, Span>,
+}
+
+fn stdlib_source(module: &str) -> Option<&'static str> {
+    match module {
+        "std.io" => Some(
+            r#"
+pub declare fn debug (x: a) -> string where Pretty a
+pub declare fn info (x: a) -> string where Pretty a
+pub declare fn warn (x: a) -> string where Pretty a
+pub declare fn error (x: a) -> string where Pretty a
+
+pub declare fn write_all (fd: i32) -> (contents: Array u8) -> ()
+pub declare fn read_all (fd: i32) -> Array u8
+"#,
+        ),
+        "std.process" => Some(
+            r#"
+pub type Subprocess = Subprocess { id: uuid }
+
+pub declare fn spawn (opts: { cmd: string, args: List string }) -> Subprocess
+pub declare fn wait (p: Subprocess) -> i32
+pub declare fn stdout (p: Subprocess) -> Array u8
+pub declare fn stderr (p: Subprocess) -> Array u8
+"#,
+        ),
+        _ => None,
+    }
+}
+
+fn sha256_hex(input: &[u8]) -> String {
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let mut h0: u32 = 0x6a09e667;
+    let mut h1: u32 = 0xbb67ae85;
+    let mut h2: u32 = 0x3c6ef372;
+    let mut h3: u32 = 0xa54ff53a;
+    let mut h4: u32 = 0x510e527f;
+    let mut h5: u32 = 0x9b05688c;
+    let mut h6: u32 = 0x1f83d9ab;
+    let mut h7: u32 = 0x5be0cd19;
+
+    let bit_len = (input.len() as u64) * 8;
+    let mut msg = Vec::with_capacity(((input.len() + 9 + 63) / 64) * 64);
+    msg.extend_from_slice(input);
+    msg.push(0x80);
+    while (msg.len() % 64) != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bit_len.to_be_bytes());
+
+    for chunk in msg.chunks_exact(64) {
+        let mut w = [0u32; 64];
+        for (i, word) in w.iter_mut().take(16).enumerate() {
+            let b = &chunk[i * 4..i * 4 + 4];
+            *word = u32::from_be_bytes([b[0], b[1], b[2], b[3]]);
+        }
+        for i in 16..64 {
+            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
+            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(w[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = h0;
+        let mut b = h1;
+        let mut c = h2;
+        let mut d = h3;
+        let mut e = h4;
+        let mut f = h5;
+        let mut g = h6;
+        let mut h = h7;
+
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(w[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        h0 = h0.wrapping_add(a);
+        h1 = h1.wrapping_add(b);
+        h2 = h2.wrapping_add(c);
+        h3 = h3.wrapping_add(d);
+        h4 = h4.wrapping_add(e);
+        h5 = h5.wrapping_add(f);
+        h6 = h6.wrapping_add(g);
+        h7 = h7.wrapping_add(h);
+    }
+
+    let out = [
+        h0.to_be_bytes(),
+        h1.to_be_bytes(),
+        h2.to_be_bytes(),
+        h3.to_be_bytes(),
+        h4.to_be_bytes(),
+        h5.to_be_bytes(),
+        h6.to_be_bytes(),
+        h7.to_be_bytes(),
+    ]
+    .concat();
+
+    let mut s = String::with_capacity(64);
+    for b in out {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
+fn is_ident_like(name: &str) -> bool {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn prelude_completion_values() -> &'static Vec<(String, CompletionItemKind)> {
+    static PRELUDE_VALUES: OnceLock<Vec<(String, CompletionItemKind)>> = OnceLock::new();
+    PRELUDE_VALUES.get_or_init(|| {
+        let ts = TypeSystem::with_prelude();
+        let mut out = Vec::new();
+        for (name, schemes) in ts.env.values.iter() {
+            let name = name.as_ref().to_string();
+            if !is_ident_like(&name) {
+                continue;
+            }
+            let is_fun = schemes
+                .iter()
+                .any(|scheme| matches!(scheme.typ.as_ref(), TypeKind::Fun(..)));
+            let kind = if is_fun {
+                CompletionItemKind::FUNCTION
+            } else {
+                CompletionItemKind::VARIABLE
+            };
+            out.push((name, kind));
+        }
+        out.sort_by(|(a, _), (b, _)| a.cmp(b));
+        out
+    })
+}
+
+fn module_prefix(hash: &str) -> String {
+    let short = if hash.len() >= 16 { &hash[..16] } else { hash };
+    format!("@m{short}")
+}
+
+fn resolve_local_import(importer: &Path, segments: &[rex_ast::expr::Symbol]) -> Option<PathBuf> {
+    let base_dir = importer.parent()?;
+    let mut dir = base_dir.to_path_buf();
+    let mut idx = 0usize;
+    while idx < segments.len() && segments[idx].as_ref() == "super" {
+        dir = dir.parent()?.to_path_buf();
+        idx += 1;
+    }
+
+    let mut path = dir;
+    for seg in &segments[idx..segments.len().saturating_sub(1)] {
+        path.push(seg.as_ref());
+    }
+    let last = segments.last()?;
+    path.push(format!("{}.rex", last.as_ref()));
+    path.canonicalize().ok()
+}
+
+fn rewrite_type_expr(
+    ty: &TypeExpr,
+    type_map: &HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>,
+) -> TypeExpr {
+    match ty {
+        TypeExpr::Name(span, name) => {
+            if let Some(new) = type_map.get(name) {
+                TypeExpr::Name(*span, new.clone())
+            } else {
+                TypeExpr::Name(*span, name.clone())
+            }
+        }
+        TypeExpr::App(span, f, x) => TypeExpr::App(
+            *span,
+            Box::new(rewrite_type_expr(f, type_map)),
+            Box::new(rewrite_type_expr(x, type_map)),
+        ),
+        TypeExpr::Fun(span, a, b) => TypeExpr::Fun(
+            *span,
+            Box::new(rewrite_type_expr(a, type_map)),
+            Box::new(rewrite_type_expr(b, type_map)),
+        ),
+        TypeExpr::Tuple(span, elems) => TypeExpr::Tuple(
+            *span,
+            elems
+                .iter()
+                .map(|e| rewrite_type_expr(e, type_map))
+                .collect(),
+        ),
+        TypeExpr::Record(span, fields) => TypeExpr::Record(
+            *span,
+            fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), rewrite_type_expr(ty, type_map)))
+                .collect(),
+        ),
+    }
+}
+
+fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<rex_ast::expr::Symbol>) {
+    match pat {
+        Pattern::Wildcard(..) => {}
+        Pattern::Var(v) => out.push(v.name.clone()),
+        Pattern::Named(_, _, args) => {
+            for arg in args {
+                collect_pattern_bindings(arg, out);
+            }
+        }
+        Pattern::Tuple(_, elems) | Pattern::List(_, elems) => {
+            for elem in elems {
+                collect_pattern_bindings(elem, out);
+            }
+        }
+        Pattern::Cons(_, head, tail) => {
+            collect_pattern_bindings(head, out);
+            collect_pattern_bindings(tail, out);
+        }
+        Pattern::Dict(_, fields) => {
+            for (_, pat) in fields {
+                collect_pattern_bindings(pat, out);
+            }
+        }
+    }
+}
+
+fn rewrite_import_projections_expr(
+    expr: &Expr,
+    bound: &mut BTreeSet<rex_ast::expr::Symbol>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Expr {
+    match expr {
+        Expr::Project(span, base, field) => {
+            if let Expr::Var(v) = base.as_ref() {
+                if !bound.contains(&v.name) {
+                    if let Some(info) = imports.get(&v.name) {
+                        if let Some(internal) = info.value_map.get(field) {
+                            return Expr::Var(Var {
+                                span: *span,
+                                name: internal.clone(),
+                            });
+                        }
+                        diagnostics.push(diagnostic_for_span(
+                            *span,
+                            format!("module `{}` does not export `{}`", v.name, field),
+                        ));
+                    }
+                }
+            }
+            Expr::Project(
+                *span,
+                std::sync::Arc::new(rewrite_import_projections_expr(
+                    base,
+                    bound,
+                    imports,
+                    diagnostics,
+                )),
+                field.clone(),
+            )
+        }
+        Expr::Var(v) => Expr::Var(v.clone()),
+        Expr::Bool(span, v) => Expr::Bool(*span, *v),
+        Expr::Uint(span, v) => Expr::Uint(*span, *v),
+        Expr::Int(span, v) => Expr::Int(*span, *v),
+        Expr::Float(span, v) => Expr::Float(*span, *v),
+        Expr::String(span, v) => Expr::String(*span, v.clone()),
+        Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
+        Expr::DateTime(span, v) => Expr::DateTime(*span, *v),
+        Expr::Tuple(span, elems) => Expr::Tuple(
+            *span,
+            elems
+                .iter()
+                .map(|e| {
+                    std::sync::Arc::new(rewrite_import_projections_expr(
+                        e,
+                        bound,
+                        imports,
+                        diagnostics,
+                    ))
+                })
+                .collect(),
+        ),
+        Expr::List(span, elems) => Expr::List(
+            *span,
+            elems
+                .iter()
+                .map(|e| {
+                    std::sync::Arc::new(rewrite_import_projections_expr(
+                        e,
+                        bound,
+                        imports,
+                        diagnostics,
+                    ))
+                })
+                .collect(),
+        ),
+        Expr::Dict(span, kvs) => Expr::Dict(
+            *span,
+            kvs.iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        std::sync::Arc::new(rewrite_import_projections_expr(
+                            v,
+                            bound,
+                            imports,
+                            diagnostics,
+                        )),
+                    )
+                })
+                .collect(),
+        ),
+        Expr::RecordUpdate(span, base, updates) => Expr::RecordUpdate(
+            *span,
+            std::sync::Arc::new(rewrite_import_projections_expr(
+                base,
+                bound,
+                imports,
+                diagnostics,
+            )),
+            updates
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        std::sync::Arc::new(rewrite_import_projections_expr(
+                            v,
+                            bound,
+                            imports,
+                            diagnostics,
+                        )),
+                    )
+                })
+                .collect(),
+        ),
+        Expr::App(span, f, x) => Expr::App(
+            *span,
+            std::sync::Arc::new(rewrite_import_projections_expr(
+                f,
+                bound,
+                imports,
+                diagnostics,
+            )),
+            std::sync::Arc::new(rewrite_import_projections_expr(
+                x,
+                bound,
+                imports,
+                diagnostics,
+            )),
+        ),
+        Expr::Lam(span, scope, param, ann, constraints, body) => {
+            bound.insert(param.name.clone());
+            let out = Expr::Lam(
+                *span,
+                scope.clone(),
+                param.clone(),
+                ann.clone(),
+                constraints.clone(),
+                std::sync::Arc::new(rewrite_import_projections_expr(
+                    body,
+                    bound,
+                    imports,
+                    diagnostics,
+                )),
+            );
+            bound.remove(&param.name);
+            out
+        }
+        Expr::Let(span, var, ann, val, body) => {
+            let val = std::sync::Arc::new(rewrite_import_projections_expr(
+                val,
+                bound,
+                imports,
+                diagnostics,
+            ));
+            bound.insert(var.name.clone());
+            let body = std::sync::Arc::new(rewrite_import_projections_expr(
+                body,
+                bound,
+                imports,
+                diagnostics,
+            ));
+            bound.remove(&var.name);
+            Expr::Let(*span, var.clone(), ann.clone(), val, body)
+        }
+        Expr::Ite(span, c, t, e) => Expr::Ite(
+            *span,
+            std::sync::Arc::new(rewrite_import_projections_expr(
+                c,
+                bound,
+                imports,
+                diagnostics,
+            )),
+            std::sync::Arc::new(rewrite_import_projections_expr(
+                t,
+                bound,
+                imports,
+                diagnostics,
+            )),
+            std::sync::Arc::new(rewrite_import_projections_expr(
+                e,
+                bound,
+                imports,
+                diagnostics,
+            )),
+        ),
+        Expr::Match(span, scrutinee, arms) => {
+            let scrutinee = std::sync::Arc::new(rewrite_import_projections_expr(
+                scrutinee,
+                bound,
+                imports,
+                diagnostics,
+            ));
+            let mut out_arms = Vec::new();
+            for (pat, arm_expr) in arms {
+                let mut binds = Vec::new();
+                collect_pattern_bindings(pat, &mut binds);
+                for b in &binds {
+                    bound.insert(b.clone());
+                }
+                let arm_expr = std::sync::Arc::new(rewrite_import_projections_expr(
+                    arm_expr,
+                    bound,
+                    imports,
+                    diagnostics,
+                ));
+                for b in &binds {
+                    bound.remove(b);
+                }
+                out_arms.push((pat.clone(), arm_expr));
+            }
+            Expr::Match(*span, scrutinee, out_arms)
+        }
+        Expr::Ann(span, e, t) => Expr::Ann(
+            *span,
+            std::sync::Arc::new(rewrite_import_projections_expr(
+                e,
+                bound,
+                imports,
+                diagnostics,
+            )),
+            t.clone(),
+        ),
+    }
+}
+
+fn rewrite_program_import_projections(
+    program: &Program,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Program {
+    let decls = program
+        .decls
+        .iter()
+        .map(|decl| match decl {
+            Decl::Fn(fd) => {
+                let mut bound: BTreeSet<rex_ast::expr::Symbol> =
+                    fd.params.iter().map(|(v, _)| v.name.clone()).collect();
+                let body = std::sync::Arc::new(rewrite_import_projections_expr(
+                    fd.body.as_ref(),
+                    &mut bound,
+                    imports,
+                    diagnostics,
+                ));
+                Decl::Fn(FnDecl {
+                    span: fd.span,
+                    is_pub: fd.is_pub,
+                    name: fd.name.clone(),
+                    params: fd.params.clone(),
+                    ret: fd.ret.clone(),
+                    constraints: fd.constraints.clone(),
+                    body,
+                })
+            }
+            Decl::Instance(inst) => {
+                let methods = inst
+                    .methods
+                    .iter()
+                    .map(|m| {
+                        let mut bound = BTreeSet::new();
+                        let body = std::sync::Arc::new(rewrite_import_projections_expr(
+                            m.body.as_ref(),
+                            &mut bound,
+                            imports,
+                            diagnostics,
+                        ));
+                        rex_ast::expr::InstanceMethodImpl {
+                            name: m.name.clone(),
+                            body,
+                        }
+                    })
+                    .collect();
+                Decl::Instance(InstanceDecl {
+                    span: inst.span,
+                    is_pub: inst.is_pub,
+                    class: inst.class.clone(),
+                    head: inst.head.clone(),
+                    context: inst.context.clone(),
+                    methods,
+                })
+            }
+            other => other.clone(),
+        })
+        .collect();
+
+    let mut bound = BTreeSet::new();
+    let expr = std::sync::Arc::new(rewrite_import_projections_expr(
+        program.expr.as_ref(),
+        &mut bound,
+        imports,
+        diagnostics,
+    ));
+
+    Program { decls, expr }
+}
+
+fn prepare_program_with_imports(
+    uri: &Url,
+    program: &Program,
+) -> std::result::Result<
+    (
+        Program,
+        TypeSystem,
+        HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+        Vec<Diagnostic>,
+    ),
+    String,
+> {
+    let mut ts = TypeSystem::with_prelude();
+    let mut diagnostics = Vec::new();
+
+    let importer = uri.to_file_path().ok();
+
+    let mut imports: HashMap<rex_ast::expr::Symbol, ImportModuleInfo> = HashMap::new();
+
+    for decl in &program.decls {
+        let Decl::Import(ImportDecl {
+            span, path, alias, ..
+        }) = decl
+        else {
+            continue;
+        };
+        let import_span = *span;
+
+        let (segments, expected_sha) = match path {
+            ImportPath::Local { segments, sha } => (segments.as_slice(), sha.as_deref()),
+            ImportPath::Remote { .. } => {
+                // LSP does not attempt network fetches; leave it unresolved.
+                continue;
+            }
+        };
+
+        let module_name = segments
+            .iter()
+            .map(|s| s.as_ref())
+            .collect::<Vec<_>>()
+            .join(".");
+
+        let (module_path, hash, source, module_label, keep_constraints) =
+            if let Some(source) = stdlib_source(&module_name) {
+                let hash = sha256_hex(source.as_bytes());
+                if let Some(expected) = expected_sha {
+                    let expected = expected.to_ascii_lowercase();
+                    if !hash.starts_with(&expected) {
+                        diagnostics.push(diagnostic_for_span(
+                            import_span,
+                            format!(
+                                "sha mismatch for `{module_name}`: expected #{expected}, got #{hash}",
+                            ),
+                        ));
+                    }
+                }
+                (None, hash, source.to_string(), module_name, true)
+            } else {
+                let Some(importer) = importer.as_ref() else {
+                    // Without a stable file location we cannot resolve local imports.
+                    // (Stdlib imports are handled above.)
+                    continue;
+                };
+                let Some(module_path) = resolve_local_import(importer, segments) else {
+                    diagnostics.push(diagnostic_for_span(
+                        import_span,
+                        format!("module not found for import `{module_name}`"),
+                    ));
+                    continue;
+                };
+
+                let bytes = match fs::read(&module_path) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        diagnostics.push(diagnostic_for_span(
+                            import_span,
+                            format!("failed to read module `{}`: {e}", module_path.display()),
+                        ));
+                        continue;
+                    }
+                };
+                let hash = sha256_hex(&bytes);
+                if let Some(expected) = expected_sha {
+                    let expected = expected.to_ascii_lowercase();
+                    if !hash.starts_with(&expected) {
+                        diagnostics.push(diagnostic_for_span(
+                            import_span,
+                            format!(
+                                "sha mismatch for `{}`: expected #{expected}, got #{hash}",
+                                module_path.display()
+                            ),
+                        ));
+                    }
+                }
+
+                let source = match String::from_utf8(bytes) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        diagnostics.push(diagnostic_for_span(
+                            import_span,
+                            format!("module `{}` is not utf-8: {e}", module_path.display()),
+                        ));
+                        continue;
+                    }
+                };
+                (
+                    Some(module_path.clone()),
+                    hash,
+                    source,
+                    module_path.display().to_string(),
+                    false,
+                )
+            };
+
+        let tokens = match Token::tokenize(&source) {
+            Ok(t) => t,
+            Err(err) => {
+                let LexicalError::UnexpectedToken(span) = err;
+                diagnostics.push(diagnostic_for_span(
+                    import_span,
+                    format!(
+                        "lex error in module `{}` at {}:{}",
+                        module_label,
+                        span.begin.line,
+                        span.begin.column
+                    ),
+                ));
+                continue;
+            }
+        };
+
+        let mut parser = Parser::new(tokens.clone());
+        let module_program = match parser.parse_program() {
+            Ok(p) => p,
+            Err(errs) => {
+                for err in errs {
+                    diagnostics.push(diagnostic_for_span(
+                        import_span,
+                        format!(
+                            "parse error in module `{}` at {}:{}: {}",
+                            module_label,
+                            err.span.begin.line,
+                            err.span.begin.column,
+                            err.message
+                        ),
+                    ));
+                    if diagnostics.len() >= MAX_DIAGNOSTICS {
+                        break;
+                    }
+                }
+                continue;
+            }
+        };
+
+        let index = index_decl_spans(&module_program, &tokens);
+        let prefix = module_prefix(&hash);
+
+        let mut type_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
+        for decl in &module_program.decls {
+            if let Decl::Type(td) = decl {
+                type_map.insert(
+                    td.name.clone(),
+                    intern(&format!("{prefix}.{}", td.name.as_ref())),
+                );
+            }
+        }
+
+        // Inject module type decls (renamed) so exported signatures can refer to them.
+        for decl in &module_program.decls {
+            let Decl::Type(td) = decl else { continue };
+            let name = type_map
+                .get(&td.name)
+                .cloned()
+                .unwrap_or_else(|| td.name.clone());
+            let variants = td
+                .variants
+                .iter()
+                .map(|v| rex_ast::expr::TypeVariant {
+                    name: intern(&format!("{prefix}.{}", v.name.as_ref())),
+                    args: v
+                        .args
+                        .iter()
+                        .map(|t| rewrite_type_expr(t, &type_map))
+                        .collect(),
+                })
+                .collect();
+            let td2 = TypeDecl {
+                span: td.span,
+                is_pub: td.is_pub,
+                name,
+                params: td.params.clone(),
+                variants,
+            };
+            let _ = ts.inject_type_decl(&td2);
+        }
+
+        let mut value_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
+        let mut export_names: BTreeSet<String> = BTreeSet::new();
+
+        // Exported functions (pub only)
+        for decl in &module_program.decls {
+            match decl {
+                Decl::Fn(fd) if fd.is_pub => {
+                    let internal = intern(&format!("{prefix}.{}", fd.name.name.as_ref()));
+                    value_map.insert(intern(fd.name.name.as_ref()), internal.clone());
+                    export_names.insert(fd.name.name.as_ref().to_string());
+
+                    let params = fd
+                        .params
+                        .iter()
+                        .map(|(v, ty)| (v.clone(), rewrite_type_expr(ty, &type_map)))
+                        .collect();
+                    let ret = rewrite_type_expr(&fd.ret, &type_map);
+                    let decl = DeclareFnDecl {
+                        span: fd.span,
+                        is_pub: true,
+                        name: Var {
+                            span: fd.name.span,
+                            name: internal,
+                        },
+                        params,
+                        ret,
+                        constraints: keep_constraints
+                            .then(|| fd.constraints.clone())
+                            .unwrap_or_default(),
+                    };
+                    let _ = ts.inject_declare_fn_decl(&decl);
+                }
+                Decl::DeclareFn(df) if df.is_pub => {
+                    let internal = intern(&format!("{prefix}.{}", df.name.name.as_ref()));
+                    value_map.insert(intern(df.name.name.as_ref()), internal.clone());
+                    export_names.insert(df.name.name.as_ref().to_string());
+
+                    let params = df
+                        .params
+                        .iter()
+                        .map(|(v, ty)| (v.clone(), rewrite_type_expr(ty, &type_map)))
+                        .collect();
+                    let ret = rewrite_type_expr(&df.ret, &type_map);
+                    let decl = DeclareFnDecl {
+                        span: df.span,
+                        is_pub: true,
+                        name: Var {
+                            span: df.name.span,
+                            name: internal,
+                        },
+                        params,
+                        ret,
+                        constraints: keep_constraints
+                            .then(|| df.constraints.clone())
+                            .unwrap_or_default(),
+                    };
+                    let _ = ts.inject_declare_fn_decl(&decl);
+                }
+                Decl::Type(td) if td.is_pub => {
+                    // Public constructors are accessible as values.
+                    for variant in &td.variants {
+                        let internal = intern(&format!("{prefix}.{}", variant.name.as_ref()));
+                        value_map.insert(variant.name.clone(), internal);
+                        export_names.insert(variant.name.as_ref().to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut export_defs = HashMap::new();
+        for name in &export_names {
+            if let Some(span) = index
+                .fn_defs
+                .get(name)
+                .copied()
+                .or_else(|| index.ctor_defs.get(name).copied())
+            {
+                export_defs.insert(name.clone(), span);
+            }
+        }
+
+        imports.insert(
+            alias.clone(),
+            ImportModuleInfo {
+                path: module_path,
+                value_map,
+                export_defs,
+            },
+        );
+    }
+
+    let rewritten = rewrite_program_import_projections(program, &imports, &mut diagnostics);
+    Ok((rewritten, ts, imports, diagnostics))
+}
+
+fn completion_exports_for_module_alias(
+    uri: &Url,
+    program: &Program,
+    alias: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let alias_sym = intern(alias);
+    let Some(import_decl) = program.decls.iter().find_map(|d| {
+        let Decl::Import(id) = d else { return None };
+        if id.alias == alias_sym {
+            Some(id)
+        } else {
+            None
+        }
+    }) else {
+        return Ok(Vec::new());
+    };
+
+    let ImportPath::Local { segments, sha: _ } = &import_decl.path else {
+        return Ok(Vec::new());
+    };
+
+    let module_name = segments
+        .iter()
+        .map(|s| s.as_ref())
+        .collect::<Vec<_>>()
+        .join(".");
+
+    let source = if let Some(source) = stdlib_source(&module_name) {
+        source.to_string()
+    } else {
+        let importer = uri
+            .to_file_path()
+            .map_err(|_| "not a file uri".to_string())?;
+        let Some(module_path) = resolve_local_import(&importer, segments) else {
+            return Ok(Vec::new());
+        };
+        fs::read_to_string(&module_path).map_err(|e| e.to_string())?
+    };
+    let tokens = Token::tokenize(&source).map_err(|e| e.to_string())?;
+    let mut parser = Parser::new(tokens);
+    let module_program = parser
+        .parse_program()
+        .map_err(|_| "parse error".to_string())?;
+
+    let mut exports = BTreeSet::new();
+    for decl in &module_program.decls {
+        match decl {
+            Decl::Fn(fd) if fd.is_pub => {
+                exports.insert(fd.name.name.as_ref().to_string());
+            }
+            Decl::DeclareFn(df) if df.is_pub => {
+                exports.insert(df.name.name.as_ref().to_string());
+            }
+            Decl::Type(td) if td.is_pub => {
+                for variant in &td.variants {
+                    exports.insert(variant.name.as_ref().to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(exports.into_iter().collect())
+}
+
 struct RexServer {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
@@ -46,7 +964,7 @@ impl RexServer {
     }
 
     async fn publish_diagnostics(&self, uri: Url, text: &str) {
-        let diagnostics = diagnostics_from_text(text);
+        let diagnostics = diagnostics_from_text(&uri, text);
         self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
@@ -129,7 +1047,7 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
-        let contents = hover_type_contents(&text, position).or_else(|| {
+        let contents = hover_type_contents(&uri, &text, position).or_else(|| {
             let word = word_at_position(&text, position)?;
             hover_contents(&word)
         });
@@ -149,7 +1067,7 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
-        let items = completion_items(&text, position);
+        let items = completion_items(&uri, &text, position);
         Ok(Some(CompletionResponse::Array(items)))
     }
 
@@ -169,6 +1087,8 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
+        let imported_projection = imported_projection_at_position(&tokens, position);
+
         let Some((ident, _token_span)) = ident_token_at_position(&tokens, position) else {
             return Ok(None);
         };
@@ -182,6 +1102,28 @@ impl LanguageServer for RexServer {
         let Ok(program) = parser.parse_program() else {
             return Ok(None);
         };
+
+        // If the cursor is on `alias.field` and `alias` is a local import, jump
+        // to the exported declaration in the imported module.
+        if let Some((alias, field)) = imported_projection {
+            if let Ok((_rewritten, _ts, imports, _diags)) =
+                prepare_program_with_imports(&uri, &program)
+            {
+                let alias_sym = intern(&alias);
+                if let Some(info) = imports.get(&alias_sym) {
+                    if let Some(span) = info.export_defs.get(&field) {
+                        if let Some(path) = info.path.as_ref() {
+                            if let Ok(module_uri) = Url::from_file_path(path) {
+                                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                                    uri: module_uri,
+                                    range: span_to_range(*span),
+                                })));
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         let index = index_decl_spans(&program, &tokens);
         let pos = lsp_to_rex_position(position);
@@ -206,13 +1148,16 @@ impl LanguageServer for RexServer {
         let value_def =
             definition_span_for_value_ident(root_expr, pos, &ident, &mut Vec::new(), &tokens);
 
-        let instance_method_def = index.instance_method_defs.iter().find_map(|(span, methods)| {
-            if position_in_span(pos, *span) {
-                methods.get(&ident).copied()
-            } else {
-                None
-            }
-        });
+        let instance_method_def = index
+            .instance_method_defs
+            .iter()
+            .find_map(|(span, methods)| {
+                if position_in_span(pos, *span) {
+                    methods.get(&ident).copied()
+                } else {
+                    None
+                }
+            });
 
         let target_span = value_def
             .or_else(|| instance_method_def)
@@ -234,7 +1179,7 @@ impl LanguageServer for RexServer {
     }
 }
 
-fn diagnostics_from_text(text: &str) -> Vec<Diagnostic> {
+fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     match Token::tokenize(text) {
@@ -254,7 +1199,7 @@ fn diagnostics_from_text(text: &str) -> Vec<Diagnostic> {
                     }
                     Ok(program) => {
                         if diagnostics.len() < MAX_DIAGNOSTICS {
-                            push_type_diagnostics(text, &program, &mut diagnostics);
+                            push_type_diagnostics(uri, text, &program, &mut diagnostics);
                         }
                     }
                 };
@@ -276,12 +1221,14 @@ struct HoverType {
     overloads: Vec<String>,
 }
 
-fn hover_type_contents(text: &str, position: Position) -> Option<HoverContents> {
+fn hover_type_contents(uri: &Url, text: &str, position: Position) -> Option<HoverContents> {
     let tokens = Token::tokenize(text).ok()?;
     let (name, name_span, name_is_ident) = name_token_at_position(&tokens, position)?;
 
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().ok()?;
+    let (program, mut ts, _imports, _import_diags) =
+        prepare_program_with_imports(uri, &program).ok()?;
 
     let pos = lsp_to_rex_position(position);
 
@@ -303,7 +1250,6 @@ fn hover_type_contents(text: &str, position: Position) -> Option<HoverContents> 
         }
     }
 
-    let mut ts = TypeSystem::with_prelude();
     let mut prepared_target_instance = None;
 
     for (decl_idx, decl) in program.decls.iter().enumerate() {
@@ -322,6 +1268,7 @@ fn hover_type_contents(text: &str, position: Position) -> Option<HoverContents> 
             Decl::DeclareFn(fd) => {
                 ts.inject_declare_fn_decl(fd).ok()?;
             }
+            Decl::Import(..) => {}
         }
     }
 
@@ -416,12 +1363,12 @@ fn hover_type_in_expr(
         pat: &Pattern,
         out: &mut HashMap<String, Type>,
     ) {
-	        match pat {
-	            Pattern::Wildcard(..) => {}
-	            Pattern::Var(v) => {
-	                out.insert(v.name.as_ref().to_string(), scrutinee_ty.clone());
-	            }
-	            Pattern::Named(_span, ctor, args) => {
+        match pat {
+            Pattern::Wildcard(..) => {}
+            Pattern::Var(v) => {
+                out.insert(v.name.as_ref().to_string(), scrutinee_ty.clone());
+            }
+            Pattern::Named(_span, ctor, args) => {
                 let Some(schemes) = ts.env.lookup(ctor) else {
                     return;
                 };
@@ -435,26 +1382,26 @@ fn hover_type_in_expr(
                     return;
                 };
 
-	                for (subpat, arg_ty) in args.iter().zip(arg_tys.iter()) {
-	                    add_bindings_from_pattern(ts, &arg_ty.apply(&s), subpat, out);
-	                }
-	            }
-	            Pattern::Tuple(_span, elems) => {
-	                let elem_tys: Vec<Type> = (0..elems.len())
-	                    .map(|_| Type::var(ts.supply.fresh(None)))
-	                    .collect();
-	                let expected = Type::tuple(elem_tys.clone());
-	                let Ok(s) = unify(scrutinee_ty, &expected) else {
-	                    return;
-	                };
-	                for (p, ty) in elems.iter().zip(elem_tys.iter()) {
-	                    add_bindings_from_pattern(ts, &ty.apply(&s), p, out);
-	                }
-	            }
-	            Pattern::List(_span, elems) => {
-	                let tv = ts.supply.fresh(None);
-	                let elem = Type::var(tv.clone());
-	                let list_ty = Type::app(Type::con("List", 1), elem.clone());
+                for (subpat, arg_ty) in args.iter().zip(arg_tys.iter()) {
+                    add_bindings_from_pattern(ts, &arg_ty.apply(&s), subpat, out);
+                }
+            }
+            Pattern::Tuple(_span, elems) => {
+                let elem_tys: Vec<Type> = (0..elems.len())
+                    .map(|_| Type::var(ts.supply.fresh(None)))
+                    .collect();
+                let expected = Type::tuple(elem_tys.clone());
+                let Ok(s) = unify(scrutinee_ty, &expected) else {
+                    return;
+                };
+                for (p, ty) in elems.iter().zip(elem_tys.iter()) {
+                    add_bindings_from_pattern(ts, &ty.apply(&s), p, out);
+                }
+            }
+            Pattern::List(_span, elems) => {
+                let tv = ts.supply.fresh(None);
+                let elem = Type::var(tv.clone());
+                let list_ty = Type::app(Type::con("List", 1), elem.clone());
                 let Ok(s) = unify(scrutinee_ty, &list_ty) else {
                     return;
                 };
@@ -472,32 +1419,32 @@ fn hover_type_in_expr(
                 };
                 let elem_ty = elem.apply(&s);
                 let list_ty = list_ty.apply(&s);
-	                add_bindings_from_pattern(ts, &elem_ty, head.as_ref(), out);
-	                add_bindings_from_pattern(ts, &list_ty, tail.as_ref(), out);
-	            }
-	            Pattern::Dict(_span, keys) => match scrutinee_ty.as_ref() {
-	                TypeKind::Record(fields) => {
-	                    for (key, pat) in keys {
-	                        if let Some((_, ty)) = fields.iter().find(|(n, _)| n == key) {
-	                            add_bindings_from_pattern(ts, ty, pat, out);
-	                        }
-	                    }
-	                }
-	                _ => {
-	                    let tv = ts.supply.fresh(None);
-	                    let elem = Type::var(tv.clone());
+                add_bindings_from_pattern(ts, &elem_ty, head.as_ref(), out);
+                add_bindings_from_pattern(ts, &list_ty, tail.as_ref(), out);
+            }
+            Pattern::Dict(_span, keys) => match scrutinee_ty.as_ref() {
+                TypeKind::Record(fields) => {
+                    for (key, pat) in keys {
+                        if let Some((_, ty)) = fields.iter().find(|(n, _)| n == key) {
+                            add_bindings_from_pattern(ts, ty, pat, out);
+                        }
+                    }
+                }
+                _ => {
+                    let tv = ts.supply.fresh(None);
+                    let elem = Type::var(tv.clone());
                     let dict_ty = Type::app(Type::con("Dict", 1), elem.clone());
                     let Ok(s) = unify(scrutinee_ty, &dict_ty) else {
                         return;
-	                    };
-	                    let elem_ty = elem.apply(&s);
-	                    for (_key, pat) in keys {
-	                        add_bindings_from_pattern(ts, &elem_ty, pat, out);
-	                    }
-	                }
-	            },
-	        }
-	    }
+                    };
+                    let elem_ty = elem.apply(&s);
+                    for (_key, pat) in keys {
+                        add_bindings_from_pattern(ts, &elem_ty, pat, out);
+                    }
+                }
+            },
+        }
+    }
 
     fn visit(
         ts: &mut TypeSystem,
@@ -533,30 +1480,30 @@ fn hover_type_in_expr(
             ) = (&expr, &typed.kind)
             {
                 if span_contains_span(*expr.span(), name_span) {
-                for ((_pat, _arm_body), (typed_pat, _typed_arm_body)) in
-                    arms.iter().zip(typed_arms.iter())
-                {
-                    // The `Pattern` is cloned into the typed tree; use either.
-                    let pat_span = *typed_pat.span();
-                    if span_contains_span(pat_span, name_span) {
-                        let mut bindings: HashMap<String, Type> = HashMap::new();
-                        add_bindings_from_pattern(ts, &scrutinee.typ, typed_pat, &mut bindings);
-                        if let Some(ty) = bindings.get(name) {
-                            consider(
-                                best,
-                                HoverType {
-                                    span: name_span,
-                                    label: name.to_string(),
-                                    typ: ty.to_string(),
-                                    overloads: Vec::new(),
-                                },
-                            );
+                    for ((_pat, _arm_body), (typed_pat, _typed_arm_body)) in
+                        arms.iter().zip(typed_arms.iter())
+                    {
+                        // The `Pattern` is cloned into the typed tree; use either.
+                        let pat_span = *typed_pat.span();
+                        if span_contains_span(pat_span, name_span) {
+                            let mut bindings: HashMap<String, Type> = HashMap::new();
+                            add_bindings_from_pattern(ts, &scrutinee.typ, typed_pat, &mut bindings);
+                            if let Some(ty) = bindings.get(name) {
+                                consider(
+                                    best,
+                                    HoverType {
+                                        span: name_span,
+                                        label: name.to_string(),
+                                        typ: ty.to_string(),
+                                        overloads: Vec::new(),
+                                    },
+                                );
+                            }
+                            break;
                         }
-                        break;
                     }
                 }
             }
-        }
         }
 
         // 2) Binding sites: `let x = ...` and lambda params.
@@ -601,7 +1548,10 @@ fn hover_type_in_expr(
                     best,
                 );
             }
-            (Expr::Lam(_span, _scope, param, _ann, _constraints, body), TypedExprKind::Lam { body: tbody, .. }) => {
+            (
+                Expr::Lam(_span, _scope, param, _ann, _constraints, body),
+                TypedExprKind::Lam { body: tbody, .. },
+            ) => {
                 if span_contains_pos(param.span, pos) {
                     let param_ty = match typed.typ.as_ref() {
                         TypeKind::Fun(a, _b) => a.to_string(),
@@ -617,7 +1567,16 @@ fn hover_type_in_expr(
                         },
                     );
                 }
-                visit(ts, body.as_ref(), tbody.as_ref(), pos, name, name_span, name_is_ident, best);
+                visit(
+                    ts,
+                    body.as_ref(),
+                    tbody.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
             }
             (Expr::Var(v), TypedExprKind::Var { overloads, .. }) => {
                 if span_contains_pos(v.span, pos) {
@@ -633,7 +1592,16 @@ fn hover_type_in_expr(
                 }
             }
             (Expr::Ann(_span, inner, _ann), _) => {
-                visit(ts, inner.as_ref(), typed, pos, name, name_span, name_is_ident, best);
+                visit(
+                    ts,
+                    inner.as_ref(),
+                    typed,
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
             }
             (Expr::Tuple(_span, elems), TypedExprKind::Tuple(telems)) => {
                 for (e, t) in elems.iter().zip(telems.iter()) {
@@ -648,34 +1616,152 @@ fn hover_type_in_expr(
             (Expr::Dict(_span, kvs), TypedExprKind::Dict(tkvs)) => {
                 for (k, v) in kvs {
                     if let Some(tv) = tkvs.get(k) {
-                        visit(ts, v.as_ref(), tv, pos, name, name_span, name_is_ident, best);
+                        visit(
+                            ts,
+                            v.as_ref(),
+                            tv,
+                            pos,
+                            name,
+                            name_span,
+                            name_is_ident,
+                            best,
+                        );
                     }
                 }
             }
-            (Expr::RecordUpdate(_span, base, updates), TypedExprKind::RecordUpdate { base: tbase, updates: tupdates }) => {
-                visit(ts, base.as_ref(), tbase.as_ref(), pos, name, name_span, name_is_ident, best);
+            (
+                Expr::RecordUpdate(_span, base, updates),
+                TypedExprKind::RecordUpdate {
+                    base: tbase,
+                    updates: tupdates,
+                },
+            ) => {
+                visit(
+                    ts,
+                    base.as_ref(),
+                    tbase.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
                 for (k, v) in updates {
                     if let Some(tv) = tupdates.get(k) {
-                        visit(ts, v.as_ref(), tv, pos, name, name_span, name_is_ident, best);
+                        visit(
+                            ts,
+                            v.as_ref(),
+                            tv,
+                            pos,
+                            name,
+                            name_span,
+                            name_is_ident,
+                            best,
+                        );
                     }
                 }
             }
             (Expr::App(_span, f, x), TypedExprKind::App(tf, tx)) => {
-                visit(ts, f.as_ref(), tf.as_ref(), pos, name, name_span, name_is_ident, best);
-                visit(ts, x.as_ref(), tx.as_ref(), pos, name, name_span, name_is_ident, best);
+                visit(
+                    ts,
+                    f.as_ref(),
+                    tf.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
+                visit(
+                    ts,
+                    x.as_ref(),
+                    tx.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
             }
             (Expr::Project(_span, e, _field), TypedExprKind::Project { expr: te, .. }) => {
-                visit(ts, e.as_ref(), te.as_ref(), pos, name, name_span, name_is_ident, best);
+                visit(
+                    ts,
+                    e.as_ref(),
+                    te.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
             }
-            (Expr::Ite(_span, c, t, e), TypedExprKind::Ite { cond, then_expr, else_expr }) => {
-                visit(ts, c.as_ref(), cond.as_ref(), pos, name, name_span, name_is_ident, best);
-                visit(ts, t.as_ref(), then_expr.as_ref(), pos, name, name_span, name_is_ident, best);
-                visit(ts, e.as_ref(), else_expr.as_ref(), pos, name, name_span, name_is_ident, best);
+            (
+                Expr::Ite(_span, c, t, e),
+                TypedExprKind::Ite {
+                    cond,
+                    then_expr,
+                    else_expr,
+                },
+            ) => {
+                visit(
+                    ts,
+                    c.as_ref(),
+                    cond.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
+                visit(
+                    ts,
+                    t.as_ref(),
+                    then_expr.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
+                visit(
+                    ts,
+                    e.as_ref(),
+                    else_expr.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
             }
-            (Expr::Match(_span, scrutinee, arms), TypedExprKind::Match { scrutinee: tscrut, arms: tarms }) => {
-                visit(ts, scrutinee.as_ref(), tscrut.as_ref(), pos, name, name_span, name_is_ident, best);
+            (
+                Expr::Match(_span, scrutinee, arms),
+                TypedExprKind::Match {
+                    scrutinee: tscrut,
+                    arms: tarms,
+                },
+            ) => {
+                visit(
+                    ts,
+                    scrutinee.as_ref(),
+                    tscrut.as_ref(),
+                    pos,
+                    name,
+                    name_span,
+                    name_is_ident,
+                    best,
+                );
                 for ((_pat, arm_body), (_tpat, tarm_body)) in arms.iter().zip(tarms.iter()) {
-                    visit(ts, arm_body.as_ref(), tarm_body, pos, name, name_span, name_is_ident, best);
+                    visit(
+                        ts,
+                        arm_body.as_ref(),
+                        tarm_body,
+                        pos,
+                        name,
+                        name_span,
+                        name_is_ident,
+                        best,
+                    );
                 }
             }
             _ => {}
@@ -683,7 +1769,16 @@ fn hover_type_in_expr(
     }
 
     let mut best = None;
-    visit(ts, expr, typed, pos, name, name_span, name_is_ident, &mut best);
+    visit(
+        ts,
+        expr,
+        typed,
+        pos,
+        name,
+        name_span,
+        name_is_ident,
+        &mut best,
+    );
     best
 }
 
@@ -760,7 +1855,12 @@ fn diagnostic_for_span(span: Span, message: impl Into<String>) -> Diagnostic {
     }
 }
 
-fn push_type_diagnostics(text: &str, program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+fn push_type_diagnostics(
+    uri: &Url,
+    text: &str,
+    program: &Program,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     // Type inference is meaningfully more expensive than lex/parse, and we run
     // diagnostics on every full-text change. Keep the cost model explicit.
     const MAX_TYPECHECK_BYTES: usize = 256 * 1024;
@@ -768,7 +1868,20 @@ fn push_type_diagnostics(text: &str, program: &Program, diagnostics: &mut Vec<Di
         return;
     }
 
-    let mut ts = TypeSystem::with_prelude();
+    let (program, mut ts, _imports, import_diags) = match prepare_program_with_imports(uri, program)
+    {
+        Ok(v) => v,
+        Err(err) => {
+            diagnostics.push(diagnostic_for_span(Span::default(), err));
+            return;
+        }
+    };
+    diagnostics.extend(import_diags);
+    if diagnostics.len() >= MAX_DIAGNOSTICS {
+        diagnostics.truncate(MAX_DIAGNOSTICS);
+        return;
+    }
+
     for decl in &program.decls {
         match decl {
             Decl::Type(ty) => {
@@ -813,6 +1926,7 @@ fn push_type_diagnostics(text: &str, program: &Program, diagnostics: &mut Vec<Di
                     return;
                 }
             }
+            Decl::Import(..) => {}
         }
     }
 
@@ -950,7 +2064,7 @@ fn value_doc(word: &str) -> Option<&'static str> {
     }
 }
 
-fn completion_items(text: &str, position: Position) -> Vec<CompletionItem> {
+fn completion_items(uri: &Url, text: &str, position: Position) -> Vec<CompletionItem> {
     let field_mode = is_field_completion(text, position);
     let base_ident = if field_mode {
         field_base_ident(text, position)
@@ -965,6 +2079,7 @@ fn completion_items(text: &str, position: Position) -> Vec<CompletionItem> {
                 position,
                 field_mode,
                 base_ident.as_deref(),
+                uri,
             );
         }
     }
@@ -977,8 +2092,19 @@ fn completion_items_from_program(
     position: Position,
     field_mode: bool,
     base_ident: Option<&str>,
+    uri: &Url,
 ) -> Vec<CompletionItem> {
     if field_mode {
+        if let Some(base_ident) = base_ident {
+            if let Ok(exports) = completion_exports_for_module_alias(uri, program, base_ident) {
+                if !exports.is_empty() {
+                    return exports
+                        .into_iter()
+                        .map(|label| completion_item(label, CompletionItemKind::FIELD))
+                        .collect();
+                }
+            }
+        }
         if let Some(fields) = field_completion_for_position(program, position, base_ident) {
             return fields
                 .into_iter()
@@ -989,10 +2115,22 @@ fn completion_items_from_program(
     }
 
     let mut value_kinds = values_in_scope_at_position(program, position);
+    let pos = lsp_to_rex_position(position);
+    for decl in &program.decls {
+        let Decl::Import(id) = decl else { continue };
+        if position_in_span(pos, id.span) || position_leq(id.span.end, pos) {
+            value_kinds
+                .entry(id.alias.as_ref().to_string())
+                .or_insert(CompletionItemKind::MODULE);
+        }
+    }
     for value in BUILTIN_VALUES {
         value_kinds
             .entry((*value).to_string())
             .or_insert(CompletionItemKind::VARIABLE);
+    }
+    for (value, kind) in prelude_completion_values() {
+        value_kinds.entry(value.clone()).or_insert(*kind);
     }
     for ctor in collect_constructors(program) {
         value_kinds
@@ -1805,6 +2943,55 @@ fn ident_token_at_position(tokens: &Tokens, position: Position) -> Option<(Strin
     None
 }
 
+fn imported_projection_at_position(
+    tokens: &Tokens,
+    position: Position,
+) -> Option<(String, String)> {
+    fn is_trivia(token: &Token) -> bool {
+        matches!(
+            token,
+            Token::Whitespace(..) | Token::CommentL(..) | Token::CommentR(..)
+        )
+    }
+
+    fn prev_non_trivia(tokens: &Tokens, start: usize) -> Option<usize> {
+        let mut idx = start;
+        while idx > 0 {
+            idx -= 1;
+            if !is_trivia(&tokens.items[idx]) {
+                return Some(idx);
+            }
+        }
+        None
+    }
+
+    let mut ident_index = None;
+    let mut field = None;
+    for (idx, token) in tokens.items.iter().enumerate() {
+        let Token::Ident(name, span, ..) = token else {
+            continue;
+        };
+        if range_touches_position(span_to_range(*span), position) {
+            ident_index = Some(idx);
+            field = Some(name.clone());
+            break;
+        }
+    }
+    let ident_index = ident_index?;
+    let field = field?;
+
+    let dot_idx = prev_non_trivia(tokens, ident_index)?;
+    if !matches!(tokens.items[dot_idx], Token::Dot(..)) {
+        return None;
+    }
+    let base_idx = prev_non_trivia(tokens, dot_idx)?;
+    let Token::Ident(base, ..) = &tokens.items[base_idx] else {
+        return None;
+    };
+
+    Some((base.clone(), field))
+}
+
 struct DeclSpanIndex {
     type_defs: HashMap<String, Span>,
     ctor_defs: HashMap<String, Span>,
@@ -1910,6 +3097,7 @@ fn index_decl_spans(program: &Program, tokens: &Tokens) -> DeclSpanIndex {
             Decl::DeclareFn(fd) => {
                 fn_defs.insert(fd.name.name.as_ref().to_string(), fd.name.span);
             }
+            Decl::Import(..) => {}
         }
     }
 
@@ -2275,4 +3463,25 @@ async fn main() {
 
     let (service, socket) = LspService::new(RexServer::new);
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stdlib_imports_typecheck_for_non_file_uri() {
+        let uri = Url::parse("untitled:Test.rex").expect("uri");
+        let text = r#"
+import std.io
+import std.process
+
+let _ = io.debug "hi" in
+let p = process.spawn { cmd = "sh", args = ["-c"] } in
+process.wait p
+"#;
+
+        let diags = diagnostics_from_text(&uri, text);
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
 }

@@ -57,7 +57,7 @@
     },
     "keywords": {
       "name": "keyword.control.rex",
-      "match": "\\b(as|class|declare|else|fn|for|if|in|instance|is|let|match|then|type|when|where|with)\\b"
+      "match": "\\b(as|class|declare|else|fn|for|if|import|in|instance|is|let|match|pub|then|type|when|where|with)\\b"
     },
     "constants": {
       "name": "constant.language.rex",

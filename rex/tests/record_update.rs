@@ -27,4 +27,3 @@ fn record_update_end_to_end() {
     assert_eq!(a, 6);
     assert_eq!(b, 2);
 }
-

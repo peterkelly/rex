@@ -32,6 +32,7 @@ fn inject_decls_ts(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::Ty
             }
             Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
             Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
+            Decl::Import(..) => {}
         }
     }
     Ok(())

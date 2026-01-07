@@ -57,17 +57,17 @@ let add1 = (+) 1 in add1 41
 
 ## Top-level functions (`fn`)
 
-Top-level functions require explicit parameter types and a result type:
+Top-level functions require an explicit type signature:
 
 ```rex
-fn add (x: i32) -> i32 -> i32 = \y -> x + y
+fn add : i32 -> i32 -> i32 = \x y -> x + y
 ```
 
 This declares a function that takes an `i32` and returns another function `i32 -> i32`.
 
-### `fn` parameter syntax (two forms)
+### Legacy `fn` header forms
 
-The parser accepts both of these:
+The parser still accepts older forms that put parameter names/types in the header:
 
 ```rex
 fn inc (x: i32) -> i32 = x + 1
@@ -88,7 +88,7 @@ fn add x: i32 -> y: i32 -> i32 = x + y
 Top-level functions can also have type-class constraints:
 
 ```rex
-fn sum_list xs: List i32 -> i32 where Foldable List = foldl (+) 0 xs
+fn sum_list : List i32 -> i32 where Foldable List = \xs -> foldl (+) 0 xs
 ```
 
 If you haven’t seen `where` constraints before, Section 2 covers them in detail.
