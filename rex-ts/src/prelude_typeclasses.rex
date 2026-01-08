@@ -288,7 +288,7 @@ instance Eq (Option a) <= Eq a
 instance Eq (Array a) <= Eq a
     == = prim_array_eq
     != = prim_array_ne
-instance Eq (Result e a) <= Eq e, Eq a
+instance Eq (Result a e) <= Eq a, Eq e
     == = \x y ->
         match x
             when Ok a0 ->
@@ -426,7 +426,7 @@ instance Pretty (Option a) <= Pretty a
             when Some a0 -> "Some(" + pretty a0 + ")"
             when None -> "None"
 
-instance Pretty (Result e a) <= Pretty e, Pretty a
+instance Pretty (Result a e) <= Pretty a, Pretty e
     pretty = \x ->
         match x
             when Ok a0 -> "Ok(" + pretty a0 + ")"

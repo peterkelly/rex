@@ -15,7 +15,7 @@ These are available by default:
 
 - `List a` (with constructors `Empty` and `Cons`)
 - `Option a` (constructors `Some` and `None`)
-- `Result e a` (constructors `Err` and `Ok`)
+- `Result a e` (constructors `Err` and `Ok`)
 - `Array a`
 - `Dict a`
 

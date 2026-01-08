@@ -1,6 +1,6 @@
-let
-    inc = \x -> x + 1,
-    ok = (Ok 1) is Result string i32,
-    bad = (Err "bad") is Result string i32
-in
-    (map inc ok, map inc bad)
+	let
+	    inc = \x -> x + 1,
+	    ok = (Ok 1) is Result i32 string,
+	    bad = (Err "bad") is Result i32 string
+	in
+	    (map inc ok, map inc bad)

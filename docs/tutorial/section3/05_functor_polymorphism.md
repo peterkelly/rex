@@ -41,7 +41,7 @@ At this call site, `f` must be `List i32 -> List i32`, so Rex selects `Functor L
 ## Contrast: ambiguous non-function values
 
 Some overloaded values are ambiguous if you don’t force a type. For example, `pure 1` could be a
-`List i32`, `Option i32`, `Array i32`, `Result e i32`, etc.
+`List i32`, `Option i32`, `Array i32`, `Result i32 e`, etc.
 
 Fix it by forcing a type:
 

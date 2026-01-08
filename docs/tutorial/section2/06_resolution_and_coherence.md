@@ -34,7 +34,7 @@ If you use an overloaded method as a *non-function value* and the type is not de
 resolution can be ambiguous and Rex will error.
 
 For example, `pure 1` is ambiguous by itself because it could be `List i32`, `Option i32`,
-`Array i32`, `Result e i32`, etc.
+`Array i32`, `Result i32 e`, etc.
 
 Fix it by forcing a type:
 

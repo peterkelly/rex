@@ -11,7 +11,7 @@ Examples of primitive and constructed types:
 ```rex
 -- bool, i32, f32, string
 -- (a, b) for tuples
--- List a, Option a, Result e a (prelude)
+-- List a, Option a, Result a e (prelude)
 ```
 
 Function types are right-associative:

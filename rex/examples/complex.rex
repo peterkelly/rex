@@ -4,8 +4,8 @@ type Tree
     = Leaf { value: i32 }
     | Node { left: Tree, right: Tree }
 
-fn foo : i32 -> i32 -> i32 = \x y -> x * 2
-fn bar : i32 -> i32 -> i32 = \x y -> x * 2
+fn foo : i32 → i32 → i32 = λ x y → x * 2
+fn bar : i32 → i32 → i32 = λ x y → x * 2
 
 let
     t = Node { 
@@ -15,7 +15,7 @@ let
         }, 
         right = Leaf { value = 3 } 
     },
-    v = match t when Leaf { value } -> value when Node {} -> 0,
+    v = match t when Leaf { value } → value when Node {} → 0,
     add = λ x y → x + y,
     mk_box = λ x → Box { value = x },
     unbox = λ b → b.value,

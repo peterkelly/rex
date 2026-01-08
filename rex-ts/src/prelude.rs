@@ -223,6 +223,35 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         }
     }
 
+    // JSON stringification (used by `std.json`'s `Pretty` instance).
+    //
+    // This is intentionally a `prim_` helper with a polymorphic type so the
+    // `std.json` module can stay purely-Rex at the surface level.
+    {
+        let a_tv = ts.supply.fresh(Some(sym("a")));
+        let a = Type::var(a_tv.clone());
+        ts.add_value(
+            "prim_json_stringify",
+            Scheme::new(vec![a_tv], vec![], Type::fun(a, string_ty.clone())),
+        );
+    }
+
+    // prim_json_parse : string -> Result a string
+    //
+    // The ok type is polymorphic so `std.json` can instantiate it as
+    // `Result std.json.Value string` (and then wrap the string error into
+    // `DecodeError`).
+    {
+        let a_tv = ts.supply.fresh(Some(sym("a")));
+        let a = Type::var(a_tv.clone());
+        let result_con = Type::con("Result", 2);
+        let result_as = Type::app(Type::app(result_con, string_ty.clone()), a);
+        ts.add_value(
+            "prim_json_parse",
+            Scheme::new(vec![a_tv], vec![], Type::fun(string_ty.clone(), result_as)),
+        );
+    }
+
     // Collection intrinsics used by the standard type class instances.
     //
     // These are all `prim_` because they are the host-provided “bottom layer”.
@@ -539,6 +568,110 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                 );
             }
         }
+
+        // prim_array_from_list
+        {
+            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let a = Type::var(a_tv.clone());
+            ts.add_value(
+                "prim_array_from_list",
+                Scheme::new(
+                    vec![a_tv],
+                    vec![],
+                    Type::fun(list_of(a.clone()), array_of(a)),
+                ),
+            );
+        }
+
+        // prim_dict_map : (a -> b) -> Dict a -> Dict b
+        {
+            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let a = Type::var(a_tv.clone());
+            let b = Type::var(b_tv.clone());
+            let dict_a = Type::app(Type::con("Dict", 1), a.clone());
+            let dict_b = Type::app(Type::con("Dict", 1), b.clone());
+            ts.add_value(
+                "prim_dict_map",
+                Scheme::new(
+                    vec![a_tv, b_tv],
+                    vec![],
+                    Type::fun(Type::fun(a, b), Type::fun(dict_a, dict_b)),
+                ),
+            );
+        }
+
+        // prim_dict_traverse_result : (a -> Result b e) -> Dict a -> Result (Dict b) e
+        {
+            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let e_tv = ts.supply.fresh(Some(sym("e")));
+            let a = Type::var(a_tv.clone());
+            let b = Type::var(b_tv.clone());
+            let e = Type::var(e_tv.clone());
+            let dict_a = Type::app(Type::con("Dict", 1), a.clone());
+            let dict_b = Type::app(Type::con("Dict", 1), b.clone());
+            let result_eb = result_of(b.clone(), e.clone());
+            let result_edictb = result_of(dict_b, e);
+            ts.add_value(
+                "prim_dict_traverse_result",
+                Scheme::new(
+                    vec![a_tv, b_tv, e_tv],
+                    vec![],
+                    Type::fun(Type::fun(a, result_eb), Type::fun(dict_a, result_edictb)),
+                ),
+            );
+        }
+
+        // Numeric conversions used by `std.json`.
+        //
+        // We model these as primitive intrinsics to keep Rex code simple and to
+        // make overflow/rounding rules explicit at the host boundary.
+        for src in [
+            "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+        ] {
+            let t = Type::con(src, 0);
+            ts.add_overload("prim_to_f64", Scheme::new(vec![], vec![], Type::fun(t, Type::con("f64", 0))));
+        }
+
+        for (name, dst) in [
+            ("prim_f64_to_u8", "u8"),
+            ("prim_f64_to_u16", "u16"),
+            ("prim_f64_to_u32", "u32"),
+            ("prim_f64_to_u64", "u64"),
+            ("prim_f64_to_i8", "i8"),
+            ("prim_f64_to_i16", "i16"),
+            ("prim_f64_to_i32", "i32"),
+            ("prim_f64_to_i64", "i64"),
+            ("prim_f64_to_f32", "f32"),
+        ] {
+            let dst_ty = Type::con(dst, 0);
+            ts.add_value(
+                name,
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(Type::con("f64", 0), option_of(dst_ty)),
+                ),
+            );
+        }
+
+        ts.add_value(
+            "prim_parse_uuid",
+            Scheme::new(
+                vec![],
+                vec![],
+                Type::fun(Type::con("string", 0), option_of(Type::con("uuid", 0))),
+            ),
+        );
+        ts.add_value(
+            "prim_parse_datetime",
+            Scheme::new(
+                vec![],
+                vec![],
+                Type::fun(Type::con("string", 0), option_of(Type::con("datetime", 0))),
+            ),
+        );
     }
 }
 

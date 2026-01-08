@@ -186,7 +186,22 @@ impl Display for Type {
                 None => write!(f, "t{}", tv.id),
             },
             TypeKind::Con(c) => write!(f, "{}", c.name),
-            TypeKind::App(l, r) => write!(f, "({} {})", l, r),
+            TypeKind::App(l, r) => {
+                // Internally `Result` is represented as `Result err ok` so it can be partially
+                // applied as `Result err` for HKTs (Functor/Monad/etc).
+                //
+                // User-facing syntax is `Result ok err` (Rust-style), so render the fully
+                // applied form with swapped arguments.
+                if let TypeKind::App(head, err) = l.as_ref() {
+                    if matches!(
+                        head.as_ref(),
+                        TypeKind::Con(c) if c.name.as_ref() == "Result" && c.arity == 2
+                    ) {
+                        return write!(f, "(Result {} {})", r, err);
+                    }
+                }
+                write!(f, "({} {})", l, r)
+            }
             TypeKind::Fun(a, b) => write!(f, "({} -> {})", a, b),
             TypeKind::Tuple(elems) => {
                 write!(f, "(")?;
@@ -1747,12 +1762,12 @@ impl TypeSystem {
             // a top-level scheme.
             let mut lam_body = decl.body.clone();
             let mut lam_end = lam_body.span().end;
-            for (idx, (param, ann)) in decl.params.iter().enumerate().rev() {
-                let lam_constraints = if idx == 0 {
-                    decl.constraints.clone()
-                } else {
-                    Vec::new()
-                };
+            for (param, ann) in decl.params.iter().rev() {
+                // `fn` declarations already carry an explicit signature (including `where`
+                // constraints). Feeding those constraints back into lambda inference is
+                // redundant and can accidentally create fresh, unlinked type variables
+                // (notably when the constrained type only appears in the return type).
+                let lam_constraints = Vec::new();
                 let span = Span::from_begin_end(param.span.begin, lam_end);
                 lam_body = Arc::new(Expr::Lam(
                     span,
@@ -2004,7 +2019,7 @@ impl TypeSystem {
             TypeExpr::App(_, fun, arg) => {
                 let fty = self.type_from_expr(decl, params, fun)?;
                 let aty = self.type_from_expr(decl, params, arg)?;
-                Ok(Type::app(fty, aty))
+                Ok(type_app_with_result_syntax(fty, aty))
             }
             TypeExpr::Fun(_, arg, ret) => {
                 let arg_ty = self.type_from_expr(decl, params, arg)?;
@@ -2320,7 +2335,7 @@ fn type_from_annotation_expr(
         TypeExpr::App(_, fun, arg) => {
             let fty = type_from_annotation_expr(adts, fun)?;
             let aty = type_from_annotation_expr(adts, arg)?;
-            Ok(Type::app(fty, aty))
+            Ok(type_app_with_result_syntax(fty, aty))
         }
         TypeExpr::Fun(_, arg, ret) => {
             let arg_ty = type_from_annotation_expr(adts, arg)?;
@@ -2376,7 +2391,7 @@ fn type_from_annotation_expr_vars(
         TypeExpr::App(_, fun, arg) => {
             let fty = type_from_annotation_expr_vars(adts, fun, vars, supply)?;
             let aty = type_from_annotation_expr_vars(adts, arg, vars, supply)?;
-            Ok(Type::app(fty, aty))
+            Ok(type_app_with_result_syntax(fty, aty))
         }
         TypeExpr::Fun(_, arg, ret) => {
             let arg_ty = type_from_annotation_expr_vars(adts, arg, vars, supply)?;
@@ -2422,6 +2437,21 @@ fn normalize_type_name(name: &Symbol) -> Symbol {
     } else {
         name.clone()
     }
+}
+
+fn type_app_with_result_syntax(fun: Type, arg: Type) -> Type {
+    // Support Rust-style `Result ok err` syntax while keeping the internal
+    // representation as `Result err ok` (so `Result err` remains the 1-argument
+    // type constructor used for HKTs).
+    if let TypeKind::App(head, ok) = fun.as_ref() {
+        if matches!(
+            head.as_ref(),
+            TypeKind::Con(c) if c.name.as_ref() == "Result" && c.arity == 2
+        ) {
+            return Type::app(Type::app(head.clone(), arg), ok.clone());
+        }
+    }
+    Type::app(fun, arg)
 }
 
 fn collect_lambda_chain(

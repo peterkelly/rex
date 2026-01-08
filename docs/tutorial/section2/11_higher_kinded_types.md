@@ -8,7 +8,7 @@ Some types take type parameters:
 
 - `List a`
 - `Option a`
-- `Result e a`
+- `Result a e`
 
 The bare names `List` and `Option` are *type constructors* (they still need an `a`).
 
@@ -39,10 +39,11 @@ instance Functor (Result e)
 ```
 
 `Result e` means: “fix the error type to `e`, leaving one type parameter for the `Ok` value”.
+Written fully (with both parameters), that’s `Result a e`.
 
 So `Result e` behaves like a unary type constructor:
 
-- `Result e a` is “a result with error type `e` and value type `a`”
+- `Result a e` is “a result with `Ok` type `a` and `Err` type `e`”
 - `map` transforms the `Ok` value and leaves `Err` alone
 
 ## Recognizing partial application in types
@@ -52,4 +53,3 @@ Whenever you see something like `(Result e)` or `(Either e)` in other languages,
 > “We pinned one type parameter to turn a multi-parameter type into a unary constructor.”
 
 This idea shows up again for `Applicative (Result e)` and `Monad (Result e)`.
-

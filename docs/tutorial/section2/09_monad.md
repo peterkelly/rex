@@ -36,7 +36,7 @@ With `Option`, monadic sequencing means “stop early if something is missing”
 
 ## `Result` as a Monad
 
-`Result e a` is useful for short-circuiting on the first `Err`:
+`Result a e` is useful for short-circuiting on the first `Err`:
 
 ```rex
 let

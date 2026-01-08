@@ -18,6 +18,7 @@ use rex_ts::{
 };
 use uuid::Uuid;
 
+use crate::modules::virtual_export_name;
 use crate::modules::ModuleSystem;
 use crate::{CancellationToken, EngineError, Env};
 
@@ -381,8 +382,17 @@ impl OverloadedFn {
         mut self,
         engine: &Engine,
         arg: Value,
+        func_type: Option<&Type>,
         arg_type: Option<&Type>,
     ) -> Result<Value, EngineError> {
+        if let Some(expected) = func_type {
+            let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
+                name: self.name.clone(),
+                expected: self.typ.to_string(),
+                got: expected.to_string(),
+            })?;
+            self.typ = self.typ.apply(&subst);
+        }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(arg_type, &arg)?;
@@ -435,9 +445,18 @@ impl OverloadedFn {
         mut self,
         engine: &Engine,
         arg: Value,
+        func_type: Option<&Type>,
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
     ) -> Result<Value, EngineError> {
+        if let Some(expected) = func_type {
+            let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
+                name: self.name.clone(),
+                expected: self.typ.to_string(),
+                got: expected.to_string(),
+            })?;
+            self.typ = self.typ.apply(&subst);
+        }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(arg_type, &arg)?;
@@ -497,8 +516,17 @@ impl OverloadedFn {
         mut self,
         engine: &Engine,
         arg: Value,
+        func_type: Option<&Type>,
         arg_type: Option<&Type>,
     ) -> Result<Value, EngineError> {
+        if let Some(expected) = func_type {
+            let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
+                name: self.name.clone(),
+                expected: self.typ.to_string(),
+                got: expected.to_string(),
+            })?;
+            self.typ = self.typ.apply(&subst);
+        }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(arg_type, &arg)?;
@@ -550,9 +578,18 @@ impl OverloadedFn {
         mut self,
         engine: &Engine,
         arg: Value,
+        func_type: Option<&Type>,
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
     ) -> Result<Value, EngineError> {
+        if let Some(expected) = func_type {
+            let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
+                name: self.name.clone(),
+                expected: self.typ.to_string(),
+                got: expected.to_string(),
+            })?;
+            self.typ = self.typ.apply(&subst);
+        }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(arg_type, &arg)?;
@@ -1803,6 +1840,7 @@ impl Engine {
         inject_numeric_ops(self)?;
         inject_list_builtins(self)?;
         inject_option_result_builtins(self)?;
+        inject_json_primops(self)?;
         self.register_prelude_typeclass_instances()?;
         Ok(())
     }
@@ -2838,6 +2876,10 @@ fn array_type(elem: Type) -> Type {
     Type::app(Type::con("Array", 1), elem)
 }
 
+fn dict_type(elem: Type) -> Type {
+    Type::app(Type::con("Dict", 1), elem)
+}
+
 fn option_type(elem: Type) -> Type {
     Type::app(Type::con("Option", 1), elem)
 }
@@ -2872,6 +2914,21 @@ fn array_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
     }
 }
 
+fn dict_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
+    match typ.as_ref() {
+        TypeKind::App(head, elem)
+            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Dict")) =>
+        {
+            Ok(elem.clone())
+        }
+        _ => Err(EngineError::NativeType {
+            name: sym(name),
+            expected: "Dict a".into(),
+            got: typ.to_string(),
+        }),
+    }
+}
+
 fn option_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option")) => {
@@ -2893,13 +2950,13 @@ fn result_types(typ: &Type, name: &str) -> Result<(Type, Type), EngineError> {
             }
             _ => Err(EngineError::NativeType {
                 name: sym(name),
-                expected: "Result e a".into(),
+                expected: "Result a e".into(),
                 got: typ.to_string(),
             }),
         },
         _ => Err(EngineError::NativeType {
             name: sym(name),
-            expected: "Result e a".into(),
+            expected: "Result a e".into(),
             got: typ.to_string(),
         }),
     }
@@ -3809,6 +3866,474 @@ fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError> {
     engine.inject_fn2("prim_mod", |a: i16, b: i16| -> i16 { a % b })?;
     engine.inject_fn2("prim_mod", |a: i32, b: i32| -> i32 { a % b })?;
     engine.inject_fn2("prim_mod", |a: i64, b: i64| -> i64 { a % b })?;
+
+    // Numeric conversions (used by `std.json`).
+    engine.inject_fn1("prim_to_f64", |x: u8| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: u16| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: u32| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: u64| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: i8| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: i16| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: i32| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: i64| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: f32| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |x: f64| -> f64 { x })?;
+
+    // f64 -> Option <number> conversions (used by `std.json`).
+    // - reject NaN/±inf
+    // - for integer types: require integral `x` (fract == 0) and in range
+    {
+        let f64_ty = Type::con("f64", 0);
+
+        let inject = |engine: &mut Engine,
+                      name: &'static str,
+                      dst_ty: Type,
+                      conv: fn(f64) -> Option<Value>|
+         -> Result<(), EngineError> {
+            let scheme = Scheme::new(vec![], vec![], Type::fun(f64_ty.clone(), option_type(dst_ty)));
+            engine.inject_native_scheme_typed(name, scheme, 1, move |_e, _t, args| {
+                let Value::F64(x) = args[0] else {
+                    return Err(EngineError::NativeType {
+                        name: sym(name),
+                        expected: "f64".into(),
+                        got: args[0].type_name().into(),
+                    });
+                };
+                Ok(option_from_value(conv(x)))
+            })
+        };
+
+        inject(engine, "prim_f64_to_u8", Type::con("u8", 0), |x| {
+            if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
+                Some(Value::U8(x as u8))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_u16", Type::con("u16", 0), |x| {
+            if x.is_finite()
+                && x.fract() == 0.0
+                && x >= u16::MIN as f64
+                && x <= u16::MAX as f64
+            {
+                Some(Value::U16(x as u16))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_u32", Type::con("u32", 0), |x| {
+            if x.is_finite()
+                && x.fract() == 0.0
+                && x >= u32::MIN as f64
+                && x <= u32::MAX as f64
+            {
+                Some(Value::U32(x as u32))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_u64", Type::con("u64", 0), |x| {
+            if x.is_finite()
+                && x.fract() == 0.0
+                && x >= u64::MIN as f64
+                && x <= u64::MAX as f64
+            {
+                Some(Value::U64(x as u64))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_i8", Type::con("i8", 0), |x| {
+            if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
+                Some(Value::I8(x as i8))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_i16", Type::con("i16", 0), |x| {
+            if x.is_finite()
+                && x.fract() == 0.0
+                && x >= i16::MIN as f64
+                && x <= i16::MAX as f64
+            {
+                Some(Value::I16(x as i16))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_i32", Type::con("i32", 0), |x| {
+            if x.is_finite()
+                && x.fract() == 0.0
+                && x >= i32::MIN as f64
+                && x <= i32::MAX as f64
+            {
+                Some(Value::I32(x as i32))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_i64", Type::con("i64", 0), |x| {
+            if x.is_finite()
+                && x.fract() == 0.0
+                && x >= i64::MIN as f64
+                && x <= i64::MAX as f64
+            {
+                Some(Value::I64(x as i64))
+            } else {
+                None
+            }
+        })?;
+        inject(engine, "prim_f64_to_f32", Type::con("f32", 0), |x| {
+            if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
+                Some(Value::F32(x as f32))
+            } else {
+                None
+            }
+        })?;
+    }
+
+    Ok(())
+}
+
+fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError> {
+    // List -> Array conversion.
+    {
+        let a_tv = engine.types.supply.fresh(Some("a".into()));
+        let a = Type::var(a_tv.clone());
+        let list_a = list_type(a.clone());
+        let array_a = array_type(a);
+        let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(list_a, array_a));
+        engine.inject_native_scheme_typed(
+            "prim_array_from_list",
+            scheme,
+            1,
+            |_engine, _call_type, args| {
+                let values = list_to_vec(&args[0], "prim_array_from_list")?;
+                Ok(Value::Array(values))
+            },
+        )?;
+    }
+
+    // Dict mapping and traversal helpers (used by `std.json`).
+    {
+        let a_tv = engine.types.supply.fresh(Some("a".into()));
+        let b_tv = engine.types.supply.fresh(Some("b".into()));
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let dict_a = dict_type(a.clone());
+        let dict_b = dict_type(b.clone());
+        let scheme = Scheme::new(
+            vec![a_tv, b_tv],
+            vec![],
+            Type::fun(Type::fun(a.clone(), b.clone()), Type::fun(dict_a.clone(), dict_b)),
+        );
+        engine.inject_native_scheme_typed("prim_dict_map", scheme, 2, |engine, call_type, args| {
+            let (arg_tys, _res_ty) = split_fun_chain("prim_dict_map", call_type, 2)?;
+            let func_ty = arg_tys[0].clone();
+            let dict_ty = arg_tys[1].clone();
+            let elem_ty = dict_elem_type(&dict_ty, "prim_dict_map")?;
+            let Value::Dict(map) = &args[1] else {
+                return Err(EngineError::NativeType {
+                    name: sym("prim_dict_map"),
+                    expected: "dict".into(),
+                    got: args[1].type_name().into(),
+                });
+            };
+            let mut out: BTreeMap<Symbol, Value> = BTreeMap::new();
+            for (k, v) in map {
+                let mapped = apply(
+                    engine,
+                    args[0].clone(),
+                    v.clone(),
+                    Some(&func_ty),
+                    Some(&elem_ty),
+                )?;
+                out.insert(k.clone(), mapped);
+            }
+            Ok(Value::Dict(out))
+        })?;
+    }
+
+    {
+        let a_tv = engine.types.supply.fresh(Some("a".into()));
+        let b_tv = engine.types.supply.fresh(Some("b".into()));
+        let e_tv = engine.types.supply.fresh(Some("e".into()));
+        let a = Type::var(a_tv.clone());
+        let b = Type::var(b_tv.clone());
+        let e = Type::var(e_tv.clone());
+        let dict_a = dict_type(a.clone());
+        let dict_b = dict_type(b.clone());
+        let scheme = Scheme::new(
+            vec![a_tv, b_tv, e_tv],
+            vec![],
+            Type::fun(
+                Type::fun(a.clone(), result_type(b.clone(), e.clone())),
+                Type::fun(dict_a.clone(), result_type(dict_b, e.clone())),
+            ),
+        );
+        engine.inject_native_scheme_typed(
+            "prim_dict_traverse_result",
+            scheme,
+            2,
+            |engine, call_type, args| {
+                let (arg_tys, _res_ty) = split_fun_chain("prim_dict_traverse_result", call_type, 2)?;
+                let func_ty = arg_tys[0].clone();
+                let dict_ty = arg_tys[1].clone();
+                let elem_ty = dict_elem_type(&dict_ty, "prim_dict_traverse_result")?;
+                let Value::Dict(map) = &args[1] else {
+                    return Err(EngineError::NativeType {
+                        name: sym("prim_dict_traverse_result"),
+                        expected: "dict".into(),
+                        got: args[1].type_name().into(),
+                    });
+                };
+
+                let mut out: BTreeMap<Symbol, Value> = BTreeMap::new();
+                for (k, v) in map {
+                    let mapped = apply(
+                        engine,
+                        args[0].clone(),
+                        v.clone(),
+                        Some(&func_ty),
+                        Some(&elem_ty),
+                    )?;
+                    match result_value(&mapped)? {
+                        Ok(ok) => {
+                            out.insert(k.clone(), ok);
+                        }
+                        Err(err) => return Ok(result_from_value(Err(err))),
+                    }
+                }
+
+                Ok(result_from_value(Ok(Value::Dict(out))))
+            },
+        )?;
+    }
+
+    // Parsing helpers used by `std.json` instances.
+    {
+        let string_ty = Type::con("string", 0);
+        let uuid_ty = Type::con("uuid", 0);
+        let scheme = Scheme::new(vec![], vec![], Type::fun(string_ty.clone(), option_type(uuid_ty)));
+        engine.inject_native_scheme_typed("prim_parse_uuid", scheme, 1, |_engine, _call_type, args| {
+            let Value::String(s) = &args[0] else {
+                return Err(EngineError::NativeType {
+                    name: sym("prim_parse_uuid"),
+                    expected: "string".into(),
+                    got: args[0].type_name().into(),
+                });
+            };
+            let parsed = Uuid::parse_str(s).ok().map(Value::Uuid);
+            Ok(option_from_value(parsed))
+        })?;
+    }
+
+    {
+        let string_ty = Type::con("string", 0);
+        let dt_ty = Type::con("datetime", 0);
+        let scheme = Scheme::new(vec![], vec![], Type::fun(string_ty.clone(), option_type(dt_ty)));
+        engine.inject_native_scheme_typed(
+            "prim_parse_datetime",
+            scheme,
+            1,
+            |_engine, _call_type, args| {
+                let Value::String(s) = &args[0] else {
+                    return Err(EngineError::NativeType {
+                        name: sym("prim_parse_datetime"),
+                        expected: "string".into(),
+                        got: args[0].type_name().into(),
+                    });
+                };
+                let parsed = DateTime::parse_from_rfc3339(s)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&Utc))
+                    .map(Value::DateTime);
+                Ok(option_from_value(parsed))
+            },
+        )?;
+    }
+
+    // prim_json_stringify : a -> string
+    //
+    // Used by `std.json` to implement `Pretty Value` (JSON-encoded string).
+    {
+        let a_tv = engine.types.supply.fresh(Some("a".into()));
+        let a = Type::var(a_tv.clone());
+        let string_ty = Type::con("string", 0);
+        let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, string_ty));
+
+        #[derive(Clone)]
+        struct Tags {
+            null: Symbol,
+            bool_: Symbol,
+            string: Symbol,
+            number: Symbol,
+            array: Symbol,
+            object: Symbol,
+        }
+
+        let tags = Tags {
+            null: sym(&virtual_export_name("std.json", "Null")),
+            bool_: sym(&virtual_export_name("std.json", "Bool")),
+            string: sym(&virtual_export_name("std.json", "String")),
+            number: sym(&virtual_export_name("std.json", "Number")),
+            array: sym(&virtual_export_name("std.json", "Array")),
+            object: sym(&virtual_export_name("std.json", "Object")),
+        };
+
+        fn to_serde_json(v: &Value, tags: &Tags) -> Option<serde_json::Value> {
+            match v {
+                Value::Adt(tag, _) if tag == &tags.null => Some(serde_json::Value::Null),
+                Value::Adt(tag, args) if tag == &tags.bool_ => match args.as_slice() {
+                    [Value::Bool(b)] => Some(serde_json::Value::Bool(*b)),
+                    _ => None,
+                },
+                Value::Adt(tag, args) if tag == &tags.string => match args.as_slice() {
+                    [Value::String(s)] => Some(serde_json::Value::String(s.clone())),
+                    _ => None,
+                },
+                Value::Adt(tag, args) if tag == &tags.number => match args.as_slice() {
+                    [Value::F64(n)] => serde_json::Number::from_f64(*n)
+                        .map(serde_json::Value::Number)
+                        .or(Some(serde_json::Value::Null)),
+                    _ => None,
+                },
+                Value::Adt(tag, args) if tag == &tags.array => match args.as_slice() {
+                    [Value::Array(xs)] => {
+                        let mut out = Vec::with_capacity(xs.len());
+                        for x in xs {
+                            out.push(to_serde_json(x, tags)?);
+                        }
+                        Some(serde_json::Value::Array(out))
+                    }
+                    _ => None,
+                },
+                Value::Adt(tag, args) if tag == &tags.object => match args.as_slice() {
+                    [Value::Dict(map)] => {
+                        let mut out = serde_json::Map::with_capacity(map.len());
+                        for (k, v) in map {
+                            out.insert(k.as_ref().to_string(), to_serde_json(v, tags)?);
+                        }
+                        Some(serde_json::Value::Object(out))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+
+        engine.inject_native_scheme_typed(
+            "prim_json_stringify",
+            scheme,
+            1,
+            move |_engine, _call_type, args| {
+                let Some(v) = args.first() else {
+                    return Err(EngineError::Internal(
+                        "prim_json_stringify expected 1 argument".into(),
+                    ));
+                };
+                let Some(json) = to_serde_json(v, &tags) else {
+                    return Ok(Value::String("<non-std.json.Value>".into()));
+                };
+                Ok(Value::String(json.to_string()))
+            },
+        )?;
+    }
+
+    // prim_json_parse : string -> Result a string
+    //
+    // This returns `Ok <std.json.Value>` when `a` is instantiated to the
+    // qualified `std.json.Value` type. It's a primop, so we keep it minimal and
+    // let `std.json.parse/from_string` wrap the string error into `DecodeError`.
+    {
+        let a_tv = engine.types.supply.fresh(Some("a".into()));
+        let a = Type::var(a_tv.clone());
+        let string_ty = Type::con("string", 0);
+        let result_con = Type::con("Result", 2);
+        let result_as = Type::app(Type::app(result_con, string_ty.clone()), a);
+        let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(string_ty.clone(), result_as));
+
+        #[derive(Clone)]
+        struct Tags {
+            null: Symbol,
+            bool_: Symbol,
+            string: Symbol,
+            number: Symbol,
+            array: Symbol,
+            object: Symbol,
+        }
+
+        let tags = Tags {
+            null: sym(&virtual_export_name("std.json", "Null")),
+            bool_: sym(&virtual_export_name("std.json", "Bool")),
+            string: sym(&virtual_export_name("std.json", "String")),
+            number: sym(&virtual_export_name("std.json", "Number")),
+            array: sym(&virtual_export_name("std.json", "Array")),
+            object: sym(&virtual_export_name("std.json", "Object")),
+        };
+
+        fn to_json_value(v: &serde_json::Value, tags: &Tags) -> Result<Value, String> {
+            match v {
+                serde_json::Value::Null => Ok(Value::Adt(tags.null.clone(), vec![])),
+                serde_json::Value::Bool(b) => Ok(Value::Adt(tags.bool_.clone(), vec![Value::Bool(*b)])),
+                serde_json::Value::String(s) => {
+                    Ok(Value::Adt(tags.string.clone(), vec![Value::String(s.clone())]))
+                }
+                serde_json::Value::Number(n) => {
+                    let Some(f) = n.as_f64() else {
+                        return Err("expected JSON number representable as f64".into());
+                    };
+                    Ok(Value::Adt(tags.number.clone(), vec![Value::F64(f)]))
+                }
+                serde_json::Value::Array(xs) => {
+                    let mut out = Vec::with_capacity(xs.len());
+                    for x in xs {
+                        out.push(to_json_value(x, tags)?);
+                    }
+                    Ok(Value::Adt(tags.array.clone(), vec![Value::Array(out)]))
+                }
+                serde_json::Value::Object(obj) => {
+                    let mut out = BTreeMap::new();
+                    for (k, v) in obj {
+                        out.insert(intern(k.as_str()), to_json_value(v, tags)?);
+                    }
+                    Ok(Value::Adt(tags.object.clone(), vec![Value::Dict(out)]))
+                }
+            }
+        }
+
+        fn result_ok(v: Value) -> Value {
+            Value::Adt(sym("Ok"), vec![v])
+        }
+
+        fn result_err(msg: String) -> Value {
+            Value::Adt(sym("Err"), vec![Value::String(msg)])
+        }
+
+        engine.inject_native_scheme_typed(
+            "prim_json_parse",
+            scheme,
+            1,
+            move |_engine, _call_type, args| {
+                let Value::String(s) = &args[0] else {
+                    return Err(EngineError::NativeType {
+                        name: sym("prim_json_parse"),
+                        expected: "string".into(),
+                        got: args[0].type_name().into(),
+                    });
+                };
+                let parsed: serde_json::Value = match serde_json::from_str(s) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(result_err(e.to_string())),
+                };
+                match to_json_value(&parsed, &tags) {
+                    Ok(v) => Ok(result_ok(v)),
+                    Err(msg) => Ok(result_err(msg)),
+                }
+            },
+        )?;
+    }
+
     Ok(())
 }
 
@@ -5792,7 +6317,7 @@ fn apply(
             eval_typed_expr(engine, &env, &body)
         }
         Value::Native(native) => native.apply(engine, arg, arg_type),
-        Value::Overloaded(over) => over.apply(engine, arg, arg_type),
+        Value::Overloaded(over) => over.apply(engine, arg, func_type, arg_type),
         other => Err(EngineError::NotCallable(other.type_name().into())),
     }
 }
@@ -6154,7 +6679,7 @@ fn apply_with_gas(
             eval_typed_expr_with_gas(engine, &env, &body, gas)
         }
         Value::Native(native) => native.apply_with_gas(engine, arg, arg_type, gas),
-        Value::Overloaded(over) => over.apply_with_gas(engine, arg, arg_type, gas),
+        Value::Overloaded(over) => over.apply_with_gas(engine, arg, func_type, arg_type, gas),
         other => Err(EngineError::NotCallable(other.type_name().into())),
     }
 }
@@ -6583,7 +7108,7 @@ async fn apply_async(
             eval_typed_expr_async(engine, &env, &body).await
         }
         Value::Native(native) => native.apply_async(engine, arg, arg_type).await,
-        Value::Overloaded(over) => over.apply_async(engine, arg, arg_type).await,
+        Value::Overloaded(over) => over.apply_async(engine, arg, func_type, arg_type).await,
         other => Err(EngineError::NotCallable(other.type_name().into())),
     }
 }
@@ -6631,7 +7156,9 @@ async fn apply_async_with_gas(
                 .apply_async_with_gas(engine, arg, arg_type, gas)
                 .await
         }
-        Value::Overloaded(over) => over.apply_async_with_gas(engine, arg, arg_type, gas).await,
+        Value::Overloaded(over) => over
+            .apply_async_with_gas(engine, arg, func_type, arg_type, gas)
+            .await,
         other => Err(EngineError::NotCallable(other.type_name().into())),
     }
 }

@@ -185,8 +185,8 @@ fn hkt_functor_option_and_result() {
             inc = \x -> x + 1,
             a = fmap inc (Some 1),
             b = fmap inc (None is Option i32),
-            c = fmap inc ((Ok 1) is Result string i32),
-            d = fmap inc ((Err "bad") is Result string i32)
+            c = fmap inc ((Ok 1) is Result i32 string),
+            d = fmap inc ((Err "bad") is Result i32 string)
         in
             (a, b, c, d)
         "#,

@@ -790,6 +790,7 @@ dependencies = [
  "rex-lexer",
  "rex-parser",
  "rex-ts",
+ "serde_json",
  "thiserror",
  "tracing",
  "uuid",

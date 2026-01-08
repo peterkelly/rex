@@ -1,6 +1,6 @@
 # Example: `Result` workflows
 
-`Result e a` short-circuits on `Err`.
+`Result a e` short-circuits on `Err`.
 
 ## Goal
 
