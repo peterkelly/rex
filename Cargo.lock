@@ -750,11 +750,11 @@ dependencies = [
  "clap",
  "rex-ast",
  "rex-engine",
- "rex-gas",
  "rex-lexer",
  "rex-parser",
  "rex-proc-macro",
  "rex-ts",
+ "rex-util",
  "serde_json",
  "tracing",
  "tracing-subscriber",
@@ -786,10 +786,10 @@ dependencies = [
  "chrono",
  "futures",
  "rex-ast",
- "rex-gas",
  "rex-lexer",
  "rex-parser",
  "rex-ts",
+ "rex-util",
  "serde_json",
  "thiserror",
  "tracing",
@@ -802,16 +802,10 @@ version = "0.1.0"
 dependencies = [
  "rex-ast",
  "rex-engine",
- "rex-gas",
  "rex-lexer",
  "rex-parser",
  "rex-ts",
-]
-
-[[package]]
-name = "rex-gas"
-version = "0.1.0"
-dependencies = [
+ "rex-util",
  "thiserror",
 ]
 
@@ -833,6 +827,7 @@ dependencies = [
  "rex-lexer",
  "rex-parser",
  "rex-ts",
+ "rex-util",
  "tokio",
  "tower-lsp",
 ]
@@ -843,8 +838,8 @@ version = "0.1.0"
 dependencies = [
  "regex",
  "rex-ast",
- "rex-gas",
  "rex-lexer",
+ "rex-util",
  "thiserror",
 ]
 
@@ -863,12 +858,19 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "rex-ast",
- "rex-gas",
  "rex-lexer",
  "rex-parser",
+ "rex-util",
  "rpds",
  "thiserror",
  "uuid",
+]
+
+[[package]]
+name = "rex-util"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]

@@ -6,11 +6,11 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use rex_ast::expr::{
-    ClassDecl, ClassMethodSig, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
+    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
     Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
 };
-use rex_gas::{GasMeter, OutOfGas};
 use rex_lexer::span::Span;
+use rex_util::{GasMeter, OutOfGas};
 use rpds::HashTrieMapSync;
 use uuid::Uuid;
 
@@ -789,7 +789,9 @@ fn max_head_app_arity_for_var(ty: &Type, var_id: TypeVarId) -> usize {
                     args += 1;
                     head = left;
                 }
-                if let TypeKind::Var(tv) = head.as_ref() && tv.id == var_id {
+                if let TypeKind::Var(tv) = head.as_ref()
+                    && tv.id == var_id
+                {
                     max_arity = max_arity.max(args);
                 }
                 stack.push(l);
@@ -997,7 +999,9 @@ fn record_elem_type_unifier(
 }
 
 fn bind(tv: &TypeVar, t: &Type) -> Result<Subst, TypeError> {
-    if let TypeKind::Var(var) = t.as_ref() && var.id == tv.id {
+    if let TypeKind::Var(var) = t.as_ref()
+        && var.id == tv.id
+    {
         return Ok(Subst::new_sync());
     }
     if t.ftv().contains(&tv.id) {
@@ -1490,10 +1494,31 @@ impl TypeSystem {
         }
     }
 
-    pub fn with_prelude() -> Self {
+    pub fn with_prelude() -> Result<Self, TypeError> {
         let mut ts = TypeSystem::new();
-        prelude::build_prelude(&mut ts);
-        ts
+        prelude::build_prelude(&mut ts)?;
+        Ok(ts)
+    }
+
+    pub fn inject_decl(&mut self, decl: &Decl) -> Result<(), TypeError> {
+        match decl {
+            Decl::Type(ty) => self.inject_type_decl(ty),
+            Decl::Class(class_decl) => self.inject_class_decl(class_decl),
+            Decl::Instance(inst_decl) => {
+                let _ = self.inject_instance_decl(inst_decl)?;
+                Ok(())
+            }
+            Decl::Fn(fd) => self.inject_fn_decl(fd),
+            Decl::DeclareFn(fd) => self.inject_declare_fn_decl(fd),
+            Decl::Import(..) => Ok(()),
+        }
+    }
+
+    pub fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), TypeError> {
+        for decl in decls {
+            self.inject_decl(decl)?;
+        }
+        Ok(())
     }
 
     pub fn add_value(&mut self, name: impl AsRef<str>, scheme: Scheme) {
@@ -1939,12 +1964,13 @@ impl TypeSystem {
             })?;
 
         let (preds, typ) = instantiate(scheme, &mut self.supply);
-        let class_pred = preds
-            .iter()
-            .find(|p| &p.class == class)
-            .ok_or(TypeError::UnsupportedExpr(
-                "class method scheme missing class predicate",
-            ))?;
+        let class_pred =
+            preds
+                .iter()
+                .find(|p| &p.class == class)
+                .ok_or(TypeError::UnsupportedExpr(
+                    "class method scheme missing class predicate",
+                ))?;
         let s = unify(&class_pred.typ, head)?;
         Ok(typ.apply(&s))
     }
@@ -2498,7 +2524,11 @@ fn type_app_with_result_syntax(fun: Type, arg: Type) -> Type {
     Type::app(fun, arg)
 }
 
-type LambdaChain<'a> = (Vec<(Symbol, Option<TypeExpr>)>, Vec<TypeConstraint>, &'a Expr);
+type LambdaChain<'a> = (
+    Vec<(Symbol, Option<TypeExpr>)>,
+    Vec<TypeConstraint>,
+    &'a Expr,
+);
 
 fn collect_lambda_chain<'a>(expr: &'a Expr) -> LambdaChain<'a> {
     let mut params = Vec::new();
@@ -3432,6 +3462,80 @@ fn known_variant_from_expr_with_known(
     }
 }
 
+fn select_record_variant<'a, F>(
+    adts: &'a HashMap<Symbol, AdtDecl>,
+    base_ty: &Type,
+    known_variant: Option<KnownVariant>,
+    field_for_errors: &Symbol,
+    matches_fields: F,
+) -> Result<(&'a AdtDecl, &'a AdtVariant), TypeError>
+where
+    F: Fn(&[(Symbol, Type)]) -> bool,
+{
+    if let Some(info) = known_variant {
+        let adt = adts
+            .get(&info.adt)
+            .ok_or_else(|| TypeError::UnknownTypeName(info.adt.clone()))?;
+        let variant = adt
+            .variants
+            .iter()
+            .find(|v| v.name == info.variant)
+            .ok_or_else(|| TypeError::UnknownField {
+                field: field_for_errors.clone(),
+                typ: base_ty.to_string(),
+            })?;
+        return Ok((adt, variant));
+    }
+
+    if let Some(adt_name) = type_head_name(base_ty) {
+        let adt = adts.get(adt_name).ok_or_else(|| TypeError::UnknownField {
+            field: field_for_errors.clone(),
+            typ: base_ty.to_string(),
+        })?;
+        if adt.variants.len() == 1 {
+            return Ok((adt, &adt.variants[0]));
+        }
+        return Err(TypeError::FieldNotKnown {
+            field: field_for_errors.clone(),
+            typ: base_ty.to_string(),
+        });
+    }
+
+    if matches!(base_ty.as_ref(), TypeKind::Var(_)) {
+        let mut candidates = Vec::new();
+        for adt in adts.values() {
+            if adt.variants.len() != 1 {
+                continue;
+            }
+            let variant = &adt.variants[0];
+            let Some(fields) = record_fields(variant) else {
+                continue;
+            };
+            if matches_fields(fields) {
+                candidates.push((adt, variant));
+            }
+        }
+        if candidates.len() == 1 {
+            return Ok(candidates.remove(0));
+        }
+        if candidates.is_empty() {
+            return Err(TypeError::UnknownField {
+                field: field_for_errors.clone(),
+                typ: base_ty.to_string(),
+            });
+        }
+        return Err(TypeError::FieldNotKnown {
+            field: field_for_errors.clone(),
+            typ: base_ty.to_string(),
+        });
+    }
+
+    Err(TypeError::UnknownField {
+        field: field_for_errors.clone(),
+        typ: base_ty.to_string(),
+    })
+}
+
 fn resolve_record_update(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
@@ -3446,68 +3550,12 @@ fn resolve_record_update(
 
     let field_for_errors = update_fields.first().cloned().unwrap_or_else(|| sym("_"));
 
-    let (adt, variant) = if let Some(info) = known_variant {
-        let adt = adts
-            .get(&info.adt)
-            .ok_or_else(|| TypeError::UnknownTypeName(info.adt.clone()))?;
-        let variant = adt
-            .variants
-            .iter()
-            .find(|v| v.name == info.variant)
-            .ok_or_else(|| TypeError::UnknownField {
-                field: field_for_errors.clone(),
-                typ: base_ty.to_string(),
-            })?;
-        (adt, variant)
-    } else if let Some(adt_name) = type_head_name(base_ty) {
-        let adt = adts.get(adt_name).ok_or_else(|| TypeError::UnknownField {
-            field: field_for_errors.clone(),
-            typ: base_ty.to_string(),
-        })?;
-        if adt.variants.len() == 1 {
-            (adt, &adt.variants[0])
-        } else {
-            return Err(TypeError::FieldNotKnown {
-                field: field_for_errors.clone(),
-                typ: base_ty.to_string(),
-            });
-        }
-    } else if matches!(base_ty.as_ref(), TypeKind::Var(_)) {
-        let mut candidates = Vec::new();
-        for adt in adts.values() {
-            if adt.variants.len() != 1 {
-                continue;
-            }
-            let variant = &adt.variants[0];
-            let Some(fields) = record_fields(variant) else {
-                continue;
-            };
-            if update_fields
+    let (adt, variant) =
+        select_record_variant(adts, base_ty, known_variant, &field_for_errors, |fields| {
+            update_fields
                 .iter()
                 .all(|field| fields.iter().any(|(name, _)| name == field))
-            {
-                candidates.push((adt, variant));
-            }
-        }
-        if candidates.len() == 1 {
-            candidates.remove(0)
-        } else if candidates.is_empty() {
-            return Err(TypeError::UnknownField {
-                field: field_for_errors.clone(),
-                typ: base_ty.to_string(),
-            });
-        } else {
-            return Err(TypeError::FieldNotKnown {
-                field: field_for_errors.clone(),
-                typ: base_ty.to_string(),
-            });
-        }
-    } else {
-        return Err(TypeError::UnknownField {
-            field: field_for_errors.clone(),
-            typ: base_ty.to_string(),
-        });
-    };
+        })?;
 
     let (result_ty, fields) =
         instantiate_variant_fields(adt, variant, supply).ok_or_else(|| {
@@ -3543,64 +3591,9 @@ fn resolve_projection(
     known_variant: Option<KnownVariant>,
     field: &Symbol,
 ) -> Result<Type, TypeError> {
-    let (adt, variant) = if let Some(info) = known_variant {
-        let adt = adts
-            .get(&info.adt)
-            .ok_or_else(|| TypeError::UnknownTypeName(info.adt.clone()))?;
-        let variant = adt
-            .variants
-            .iter()
-            .find(|v| v.name == info.variant)
-            .ok_or_else(|| TypeError::UnknownField {
-                field: field.clone(),
-                typ: base_ty.to_string(),
-            })?;
-        (adt, variant)
-    } else if let Some(adt_name) = type_head_name(base_ty) {
-        let adt = adts.get(adt_name).ok_or_else(|| TypeError::UnknownField {
-            field: field.clone(),
-            typ: base_ty.to_string(),
-        })?;
-        if adt.variants.len() == 1 {
-            (adt, &adt.variants[0])
-        } else {
-            return Err(TypeError::FieldNotKnown {
-                field: field.clone(),
-                typ: base_ty.to_string(),
-            });
-        }
-    } else if matches!(base_ty.as_ref(), TypeKind::Var(_)) {
-        let mut candidates = Vec::new();
-            for adt in adts.values() {
-                if adt.variants.len() != 1 {
-                    continue;
-                }
-                let variant = &adt.variants[0];
-                if let Some(fields) = record_fields(variant)
-                    && fields.iter().any(|(name, _)| name == field)
-                {
-                    candidates.push((adt, variant));
-                }
-            }
-            if candidates.len() == 1 {
-                candidates.remove(0)
-        } else if candidates.is_empty() {
-            return Err(TypeError::UnknownField {
-                field: field.clone(),
-                typ: base_ty.to_string(),
-            });
-        } else {
-            return Err(TypeError::FieldNotKnown {
-                field: field.clone(),
-                typ: base_ty.to_string(),
-            });
-        }
-    } else {
-        return Err(TypeError::UnknownField {
-            field: field.clone(),
-            typ: base_ty.to_string(),
-        });
-    };
+    let (adt, variant) = select_record_variant(adts, base_ty, known_variant, field, |fields| {
+        fields.iter().any(|(name, _)| name == field)
+    })?;
 
     let (result_ty, fields) =
         instantiate_variant_fields(adt, variant, supply).ok_or_else(|| {
@@ -3879,7 +3872,7 @@ fn check_match_exhaustive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rex_gas::{GasCosts, GasMeter};
+    use rex_util::{GasCosts, GasMeter};
 
     fn tvar(id: TypeVarId, name: &str) -> Type {
         Type::var(TypeVar::new(id, Some(sym(name))))
@@ -3925,7 +3918,7 @@ mod tests {
 
     #[test]
     fn entail_superclasses() {
-        let ts = TypeSystem::with_prelude();
+        let ts = TypeSystem::with_prelude().unwrap();
         let pred = Predicate::new("Semiring", Type::con("i32", 0));
         let given = [Predicate::new("AdditiveGroup", Type::con("i32", 0))];
         assert!(entails(&ts.classes, &given, &pred).unwrap());
@@ -3933,7 +3926,7 @@ mod tests {
 
     #[test]
     fn entail_instances() {
-        let ts = TypeSystem::with_prelude();
+        let ts = TypeSystem::with_prelude().unwrap();
         let pred = Predicate::new("Field", Type::con("f32", 0));
         assert!(entails(&ts.classes, &[], &pred).unwrap());
 
@@ -3943,7 +3936,7 @@ mod tests {
 
     #[test]
     fn prelude_injects_functions() {
-        let ts = TypeSystem::with_prelude();
+        let ts = TypeSystem::with_prelude().unwrap();
         let minus = ts.env.lookup(&sym("-")).expect("minus in env");
         let div = ts.env.lookup(&sym("/")).expect("div in env");
         assert_eq!(minus.len(), 1);
@@ -3958,7 +3951,7 @@ mod tests {
 
     #[test]
     fn adt_constructors_are_present() {
-        let ts = TypeSystem::with_prelude();
+        let ts = TypeSystem::with_prelude().unwrap();
         assert!(ts.env.lookup(&sym("Empty")).is_some());
         assert!(ts.env.lookup(&sym("Cons")).is_some());
         assert!(ts.env.lookup(&sym("Ok")).is_some());
@@ -3998,27 +3991,11 @@ mod tests {
             .parse_program_with_stack_size(128 * 1024 * 1024)
             .unwrap();
         let expr = program.expr;
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts
             .infer_with_stack_size(expr.as_ref(), 64 * 1024 * 1024)
             .unwrap();
         assert_eq!(ty, Type::app(Type::con("List", 1), Type::con("i32", 0)));
-    }
-
-    fn inject_decls(ts: &mut TypeSystem, decls: &[rex_ast::expr::Decl]) -> Result<(), TypeError> {
-        for decl in decls {
-            match decl {
-                rex_ast::expr::Decl::Type(td) => ts.inject_type_decl(td)?,
-                rex_ast::expr::Decl::Class(cd) => ts.inject_class_decl(cd)?,
-                rex_ast::expr::Decl::Instance(id) => {
-                    let _ = ts.inject_instance_decl(id)?;
-                }
-                rex_ast::expr::Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
-                rex_ast::expr::Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
-                rex_ast::expr::Decl::Import(..) => {}
-            }
-        }
-        Ok(())
     }
 
     #[test]
@@ -4029,8 +4006,8 @@ mod tests {
             id 1
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
-        inject_decls(&mut ts, &program.decls).unwrap();
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        ts.inject_decls(&program.decls).unwrap();
         let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert!(preds.is_empty());
         assert_eq!(ty, Type::con("i32", 0));
@@ -4038,7 +4015,7 @@ mod tests {
 
     #[test]
     fn declare_fn_is_noop_when_matching_existing_scheme() {
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         ts.add_value(
             "foo",
             Scheme::new(
@@ -4068,8 +4045,8 @@ mod tests {
             unit_id ()
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
-        inject_decls(&mut ts, &program.decls).unwrap();
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        ts.inject_decls(&program.decls).unwrap();
         let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert!(preds.is_empty());
         assert_eq!(ty, Type::tuple(vec![]));
@@ -4085,7 +4062,7 @@ mod tests {
     #[test]
     fn type_errors_include_span() {
         let expr = parse_expr("missing");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = ts.infer(expr.as_ref()).unwrap_err();
         match err {
             TypeError::Spanned { span, error } => {
@@ -4102,7 +4079,7 @@ mod tests {
     #[test]
     fn infer_with_gas_rejects_out_of_budget() {
         let expr = parse_expr("1");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let mut gas = GasMeter::new(
             Some(0),
             GasCosts {
@@ -4125,7 +4102,7 @@ mod tests {
                 id (id 420, id 6.9, id "str")
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
             Type::con("i32", 0),
@@ -4138,7 +4115,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_ok() {
         let expr = parse_expr("let x: i32 = 42 in x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
     }
@@ -4146,7 +4123,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_lambda_param() {
         let expr = parse_expr("\\ (a : f32) -> a");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::fun(Type::con("f32", 0), Type::con("f32", 0)));
     }
@@ -4154,7 +4131,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_is_alias() {
         let expr = parse_expr("\"hi\" is str");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("string", 0));
     }
@@ -4162,7 +4139,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_mismatch_error() {
         let expr = parse_expr("let x: i32 = 3.14 in x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4178,7 +4155,7 @@ mod tests {
                 (x.field1, x.field2)
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(decl) = decl {
                 ts.inject_type_decl(decl).unwrap();
@@ -4200,7 +4177,7 @@ mod tests {
                 x.field1
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(decl) = decl {
                 ts.inject_type_decl(decl).unwrap();
@@ -4221,7 +4198,7 @@ mod tests {
                 x.field1
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(decl) = decl {
                 ts.inject_type_decl(decl).unwrap();
@@ -4242,7 +4219,7 @@ mod tests {
                 f (Boxed { value = 1 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(decl) = decl {
                 ts.inject_type_decl(decl).unwrap();
@@ -4265,7 +4242,7 @@ mod tests {
                     when MyVariant2 _ -> 0
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(decl) = decl {
                 ts.inject_type_decl(decl).unwrap();
@@ -4293,7 +4270,7 @@ mod tests {
                     when None -> 0
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
     }
@@ -4310,7 +4287,7 @@ mod tests {
                 (apply id 1, apply id "hi", apply wrap true)
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
             Type::con("i32", 0),
@@ -4334,7 +4311,7 @@ mod tests {
                 unwrap (Ok (Some 5))
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
     }
@@ -4352,7 +4329,7 @@ mod tests {
                 (head_or 0 [1, 2, 3], head_or 0 [])
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)]);
         assert_eq!(ty, expected);
@@ -4371,7 +4348,7 @@ mod tests {
                 sum (Pair { left = 1, right = 2 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(decl) = decl {
                 ts.inject_type_decl(decl).unwrap();
@@ -4389,7 +4366,7 @@ mod tests {
             add 1 2
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
@@ -4403,7 +4380,7 @@ mod tests {
             add 1 2
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
@@ -4417,7 +4394,7 @@ mod tests {
             (my_add 1 2, my_add 1.0 2.0)
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(
@@ -4429,12 +4406,14 @@ mod tests {
     #[test]
     fn infer_additive_monoid_constraint() {
         let expr = parse_expr("\\x y -> x + y");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "AdditiveMonoid");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+        if let TypeKind::Fun(a, rest) = ty.as_ref()
+            && let TypeKind::Fun(b, c) = rest.as_ref()
+        {
             assert_eq!(a.as_ref(), b.as_ref());
             assert_eq!(b.as_ref(), c.as_ref());
             assert_eq!(preds[0].typ, a.clone());
@@ -4446,12 +4425,14 @@ mod tests {
     #[test]
     fn infer_multiplicative_monoid_constraint() {
         let expr = parse_expr("\\x y -> x * y");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "MultiplicativeMonoid");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+        if let TypeKind::Fun(a, rest) = ty.as_ref()
+            && let TypeKind::Fun(b, c) = rest.as_ref()
+        {
             assert_eq!(a.as_ref(), b.as_ref());
             assert_eq!(b.as_ref(), c.as_ref());
             assert_eq!(preds[0].typ, a.clone());
@@ -4463,12 +4444,14 @@ mod tests {
     #[test]
     fn infer_additive_group_constraint() {
         let expr = parse_expr("\\x y -> x - y");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "AdditiveGroup");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+        if let TypeKind::Fun(a, rest) = ty.as_ref()
+            && let TypeKind::Fun(b, c) = rest.as_ref()
+        {
             assert_eq!(a.as_ref(), b.as_ref());
             assert_eq!(b.as_ref(), c.as_ref());
             assert_eq!(preds[0].typ, a.clone());
@@ -4480,12 +4463,14 @@ mod tests {
     #[test]
     fn infer_integral_constraint() {
         let expr = parse_expr("\\x y -> x % y");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "Integral");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+        if let TypeKind::Fun(a, rest) = ty.as_ref()
+            && let TypeKind::Fun(b, c) = rest.as_ref()
+        {
             assert_eq!(a.as_ref(), b.as_ref());
             assert_eq!(b.as_ref(), c.as_ref());
             assert_eq!(preds[0].typ, a.clone());
@@ -4497,7 +4482,7 @@ mod tests {
     #[test]
     fn infer_literal_addition_defaults() {
         let expr = parse_expr("1 + 2");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
         assert_eq!(preds.len(), 1);
@@ -4509,7 +4494,7 @@ mod tests {
     #[test]
     fn infer_mod_defaults() {
         let expr = parse_expr("1 % 2");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
         assert_eq!(preds.len(), 1);
@@ -4521,7 +4506,7 @@ mod tests {
     #[test]
     fn infer_get_list_type() {
         let expr = parse_expr("get 1 [1, 2, 3]");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
         assert_eq!(preds.len(), 1);
@@ -4532,7 +4517,7 @@ mod tests {
     #[test]
     fn infer_get_tuple_type() {
         let expr = parse_expr("get 1 (1, 2, 3)");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
         assert_eq!(preds.len(), 1);
@@ -4543,7 +4528,7 @@ mod tests {
     #[test]
     fn infer_division_defaults() {
         let expr = parse_expr("1.0 / 2.0");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("f32", 0));
         assert_eq!(preds.len(), 1);
@@ -4555,7 +4540,7 @@ mod tests {
     #[test]
     fn infer_unbound_variable_error() {
         let expr = parse_expr("missing");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(
             err,
@@ -4566,7 +4551,7 @@ mod tests {
     #[test]
     fn infer_if_branch_type_mismatch_error() {
         let expr = parse_expr(r#"if true then 1 else "no""#);
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -4580,7 +4565,7 @@ mod tests {
     #[test]
     fn infer_unknown_pattern_constructor_error() {
         let expr = parse_expr("match 1 when Nope -> 1");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(
             err,
@@ -4608,7 +4593,7 @@ mod tests {
     #[test]
     fn infer_if_cond_not_bool_error() {
         let expr = parse_expr("if 1 then 2 else 3");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -4622,7 +4607,7 @@ mod tests {
     #[test]
     fn infer_apply_non_function_error() {
         let expr = parse_expr("1 2");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4630,7 +4615,7 @@ mod tests {
     #[test]
     fn infer_list_element_mismatch_error() {
         let expr = parse_expr("[1, true]");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -4644,7 +4629,7 @@ mod tests {
     #[test]
     fn infer_dict_value_mismatch_error() {
         let expr = parse_expr("{a = 1, b = true}");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -4658,7 +4643,7 @@ mod tests {
     #[test]
     fn infer_match_list_on_non_list_error() {
         let expr = parse_expr("match 1 when [x] -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4666,7 +4651,7 @@ mod tests {
     #[test]
     fn infer_pattern_constructor_arity_error() {
         let expr = parse_expr("match (Ok 1) when Ok x y -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(
             err,
@@ -4677,7 +4662,7 @@ mod tests {
     #[test]
     fn infer_match_arm_type_mismatch_error() {
         let expr = parse_expr(r#"match 1 when _ -> 1 when _ -> "no""#);
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -4691,7 +4676,7 @@ mod tests {
     #[test]
     fn infer_match_option_on_non_option_error() {
         let expr = parse_expr("match 1 when Some x -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4699,7 +4684,7 @@ mod tests {
     #[test]
     fn infer_dict_pattern_on_non_dict_error() {
         let expr = parse_expr("match 1 when {a} -> a");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4707,7 +4692,7 @@ mod tests {
     #[test]
     fn infer_cons_pattern_on_non_list_error() {
         let expr = parse_expr("match 1 when x:xs -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4715,7 +4700,7 @@ mod tests {
     #[test]
     fn infer_apply_wrong_arg_type_error() {
         let expr = parse_expr("(\\x -> x + 1) true");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4723,7 +4708,7 @@ mod tests {
     #[test]
     fn infer_self_application_occurs_error() {
         let expr = parse_expr("\\x -> x x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Occurs(_, _)));
     }
@@ -4731,7 +4716,7 @@ mod tests {
     #[test]
     fn infer_apply_constructor_too_many_args_error() {
         let expr = parse_expr("Some 1 2");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4739,7 +4724,7 @@ mod tests {
     #[test]
     fn infer_operator_type_mismatch_error() {
         let expr = parse_expr("1 + true");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -4747,7 +4732,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_match_is_error() {
         let expr = parse_expr("match (Ok 1) when Ok x -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -4755,7 +4740,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_match_on_bound_var_error() {
         let expr = parse_expr("let x = Ok 1 in match x when Ok y -> y");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -4763,7 +4748,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_match_in_lambda_error() {
         let expr = parse_expr("\\x -> match x when Ok y -> y");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -4771,7 +4756,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_option_match_error() {
         let expr = parse_expr("match (Some 1) when Some x -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -4784,7 +4769,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_result_match_error() {
         let expr = parse_expr("match (Err 1) when Ok x -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -4797,7 +4782,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_list_missing_empty_error() {
         let expr = parse_expr("match [1, 2] when x:xs -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -4810,7 +4795,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_list_match_on_bound_var_error() {
         let expr = parse_expr("let xs = [1, 2] in match xs when x:xs -> x");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -4818,7 +4803,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_list_missing_cons_error() {
         let expr = parse_expr("match [1] when [] -> 0");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -4831,59 +4816,40 @@ mod tests {
     #[test]
     fn infer_match_list_patterns_on_result_error() {
         let expr = parse_expr("match (Ok 1) when [] -> 0 when x:xs -> 1");
-        let mut ts = TypeSystem::with_prelude();
+        let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
 
     #[test]
-    fn infer_division_missing_field_instance() {
-        let expr = parse_expr("1 / 2");
-        let mut ts = TypeSystem::with_prelude();
-        let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
-        let pred = preds
-            .iter()
-            .find(|p| p.class.as_ref() == "Field" && p.typ == Type::con("i32", 0))
-            .expect("expected Field i32 constraint");
-        assert!(!entails(&ts.classes, &[], pred).unwrap());
-    }
+    fn infer_missing_instances_produce_unsatisfied_predicates() {
+        for (name, code) in [
+            ("division", "1 / 2"),
+            ("eq_dict", "{a = 1} == {a = 2}"),
+            ("min_bool", "min [true]"),
+            ("map_dict", r#"map (\x -> x) {a = 1}"#),
+        ] {
+            let (class, pred_type, expected_ty) = match name {
+                "division" => ("Field", Type::con("i32", 0), Some(Type::con("i32", 0))),
+                "eq_dict" => ("Eq", dict_of(Type::con("i32", 0)), None),
+                "min_bool" => ("Ord", Type::con("bool", 0), None),
+                "map_dict" => ("Functor", Type::con("Dict", 1), None),
+                _ => unreachable!("unknown test case {name}"),
+            };
 
-    #[test]
-    fn infer_eq_missing_instance_for_dict() {
-        let expr = parse_expr("{a = 1} == {a = 2}");
-        let mut ts = TypeSystem::with_prelude();
-        let (preds, _ty) = ts.infer(expr.as_ref()).unwrap();
-        let dict_i32 = dict_of(Type::con("i32", 0));
-        let pred = preds
-            .iter()
-            .find(|p| p.class.as_ref() == "Eq" && p.typ == dict_i32)
-            .expect("expected Eq (Dict i32) constraint");
-        assert!(!entails(&ts.classes, &[], pred).unwrap());
-    }
+            let expr = parse_expr(code);
+            let mut ts = TypeSystem::with_prelude().unwrap();
+            let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
+            if let Some(expected) = expected_ty {
+                assert_eq!(ty, expected, "{name}");
+            }
 
-    #[test]
-    fn infer_min_missing_ord_instance_for_bool() {
-        let expr = parse_expr("min [true]");
-        let mut ts = TypeSystem::with_prelude();
-        let (preds, _ty) = ts.infer(expr.as_ref()).unwrap();
-        let pred = preds
-            .iter()
-            .find(|p| p.class.as_ref() == "Ord" && p.typ == Type::con("bool", 0))
-            .expect("expected Ord bool constraint");
-        assert!(!entails(&ts.classes, &[], pred).unwrap());
-    }
-
-    #[test]
-    fn infer_map_missing_functor_instance_for_dict() {
-        let expr = parse_expr(r#"map (\x -> x) {a = 1}"#);
-        let mut ts = TypeSystem::with_prelude();
-        let (preds, _ty) = ts.infer(expr.as_ref()).unwrap();
-        let pred = preds
-            .iter()
-            .find(|p| p.class.as_ref() == "Functor" && p.typ == Type::con("Dict", 1))
-            .expect("expected Functor Dict constraint");
-        assert!(!entails(&ts.classes, &[], pred).unwrap());
+            let pred = preds
+                .iter()
+                .find(|p| p.class.as_ref() == class && p.typ == pred_type)
+                .unwrap();
+            assert!(!entails(&ts.classes, &[], pred).unwrap(), "{name}");
+        }
     }
 
     #[test]
@@ -4898,8 +4864,8 @@ mod tests {
               bar
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
-        inject_decls(&mut ts, &program.decls).unwrap();
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        ts.inject_decls(&program.decls).unwrap();
         let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(typ.to_string(), "Foo");
     }
@@ -4915,8 +4881,8 @@ mod tests {
               { foo with { y = 2 } }
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
-        inject_decls(&mut ts, &program.decls).unwrap();
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        ts.inject_decls(&program.decls).unwrap();
         let err = ts.infer(program.expr.as_ref()).unwrap_err();
         let err = strip_span(err);
         assert!(matches!(err, TypeError::UnknownField { .. }));
@@ -4933,8 +4899,8 @@ mod tests {
               f (Bar { x = 1 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
-        inject_decls(&mut ts, &program.decls).unwrap();
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        ts.inject_decls(&program.decls).unwrap();
         let err = ts.infer(program.expr.as_ref()).unwrap_err();
         let err = strip_span(err);
         assert!(matches!(err, TypeError::FieldNotKnown { .. }));
@@ -4954,8 +4920,8 @@ mod tests {
               f (Bar { x = 1 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
-        inject_decls(&mut ts, &program.decls).unwrap();
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        ts.inject_decls(&program.decls).unwrap();
         let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(typ.to_string(), "Foo");
     }
@@ -4970,8 +4936,8 @@ mod tests {
               f { x = 1, y = 2 }
             "#,
         );
-        let mut ts = TypeSystem::with_prelude();
-        inject_decls(&mut ts, &program.decls).unwrap();
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        ts.inject_decls(&program.decls).unwrap();
         let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(typ.to_string(), "{x: i32, y: i32}");
     }

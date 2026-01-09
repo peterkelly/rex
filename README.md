@@ -33,6 +33,7 @@ This repo is a Cargo workspace. The key crates are:
 - `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
 - `rex`: CLI binary (`cargo run -p rex -- ...`)
 - `rex-fuzz`: stdin-driven fuzz harness binaries
+- `rex-util`: small shared helpers (e.g. module hashing, bundled stdlib sources)
 - `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
 
 ## Docs
@@ -93,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude()?;
     engine.inject_decls(&program.decls)?;
     let value = engine.eval(program.expr.as_ref())?;
     println!("{value}");
@@ -119,7 +120,7 @@ let program = Parser::new(tokens)
     .parse_program_with_stack_size(rex_parser::DEFAULT_STACK_SIZE_BYTES)
     .map_err(|errs| format!("{errs:?}"))?;
 
-let mut ts = TypeSystem::with_prelude();
+let mut ts = TypeSystem::with_prelude()?;
 // If you parsed type/class/instance/function decls, inject them before inference:
 // for decl in &program.decls { ... }
 let (_preds, ty) = ts.infer_with_stack_size(program.expr.as_ref(), rex_ts::DEFAULT_STACK_SIZE_BYTES)?;
@@ -130,7 +131,7 @@ println!("{ty}");
 
 Derive support lives in `rex-proc-macro`. The derive generates:
 
-- an ADT declaration (`T::rex_adt_decl`) + injection helper (`T::inject_rex`)
+- an ADT declaration (`T::rex_adt_decl` returning `Result<AdtDecl, EngineError>`) + injection helper (`T::inject_rex`)
 - `IntoValue` and `FromValue` to convert between Rust values and `rex_engine::Value`
 
 ```rust
@@ -143,10 +144,14 @@ struct Point {
     y: i32,
 }
 
-let mut engine = Engine::with_prelude();
+let mut engine = Engine::with_prelude()?;
 Point::inject_rex(&mut engine)?;
 
-let value = engine.eval(rex_parser::Parser::new(rex_lexer::Token::tokenize("Point { x = 1, y = 2 }")?).parse_program().unwrap().expr.as_ref())?;
+let tokens = rex_lexer::Token::tokenize("Point { x = 1, y = 2 }")?;
+let program = rex_parser::Parser::new(tokens)
+    .parse_program()
+    .map_err(|errs| format!("{errs:?}"))?;
+let value = engine.eval(program.expr.as_ref())?;
 let point = Point::from_value(&value, "point")?;
 assert_eq!(point, Point { x: 1, y: 2 });
 ```
@@ -183,7 +188,7 @@ The `where` keyword is optional. A class/instance method block is recognized by 
 
 Class methods are values: using `default` produces a `Default T` constraint, and evaluation resolves the right instance based on the inferred type `T`.
 
-Prelude type classes and instances (including the methods for numeric operators and comparisons) live in `rex-ts/src/prelude_typeclasses.rex` and are injected by `TypeSystem::with_prelude()`.
+Prelude type classes and instances (including the methods for numeric operators and comparisons) live in `rex-ts/src/prelude_typeclasses.rex` and are injected by `TypeSystem::with_prelude()?`.
 
 The prelude instances typically point at Rust-backed intrinsics with the `prim_` prefix (for example `prim_add`, `prim_zero`, `prim_eq`). Think of these as the Rex equivalent of GHC primops: the surface language stays “single source” (classes + instances are Rex), but the lowest-level implementations are still provided by the host.
 

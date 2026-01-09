@@ -1,16 +1,21 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 use proc_macro::TokenStream;
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 use syn::{
-    parse_quote, spanned::Spanned, Attribute, Data, DeriveInput, Error, Fields, GenericArgument,
-    Generics, Ident, LitStr, PathArguments, Type,
+    Attribute, Data, DeriveInput, Error, Fields, GenericArgument, Generics, Ident, LitStr,
+    PathArguments, Type, parse_quote, spanned::Spanned,
 };
 
 #[proc_macro_derive(Rex, attributes(rex, serde))]
 pub fn derive_rex(input: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(input).unwrap();
+    let ast: DeriveInput = match syn::parse(input) {
+        Ok(ast) => ast,
+        Err(e) => return e.to_compile_error().into(),
+    };
     match expand(&ast) {
         Ok(ts) => ts.into(),
         Err(e) => e.to_compile_error().into(),
@@ -63,13 +68,13 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
     let inject_fn = quote! {
         impl #impl_generics #rust_ident #ty_generics #where_clause {
-            pub fn rex_adt_decl(engine: &mut ::rex_engine::Engine) -> ::rex_ts::AdtDecl {
-                #adt_decl_fn
+            pub fn inject_rex(engine: &mut ::rex_engine::Engine) -> Result<(), ::rex_engine::EngineError> {
+                let adt = Self::rex_adt_decl(engine)?;
+                engine.inject_adt(adt)
             }
 
-            pub fn inject_rex(engine: &mut ::rex_engine::Engine) -> Result<(), ::rex_engine::EngineError> {
-                let adt = Self::rex_adt_decl(engine);
-                engine.inject_adt(adt)
+            pub fn rex_adt_decl(engine: &mut ::rex_engine::Engine) -> Result<::rex_ts::AdtDecl, ::rex_engine::EngineError> {
+                #adt_decl_fn
             }
         }
     };
@@ -149,7 +154,7 @@ fn adt_decl_fn(
         param_bindings.push(quote! {
             let #p_ident = adt
                 .param_type(&::rex_ast::expr::intern(#p_lit))
-                .expect("missing ADT parameter type");
+                .ok_or_else(|| ::rex_engine::EngineError::UnknownType(::rex_ast::expr::intern(#type_name)))?;
         });
         param_map.insert(p_name, quote!(#p_ident.clone()));
     }
@@ -178,7 +183,7 @@ fn adt_decl_fn(
                     #(#param_bindings)*
                     let record = ::rex_ts::Type::record(::std::vec![#(#field_inits,)*]);
                     adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![record]);
-                    adt
+                    Ok(adt)
                 }})
             }
             Fields::Unnamed(fields) => {
@@ -192,14 +197,14 @@ fn adt_decl_fn(
                     #adt_decl
                     #(#param_bindings)*
                     adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![#(#args,)*]);
-                    adt
+                    Ok(adt)
                 }})
             }
             Fields::Unit => Ok(quote! {{
                 #adt_decl
                 #(#param_bindings)*
                 adt.add_variant(::rex_ast::expr::intern(#type_name), ::std::vec![]);
-                adt
+                Ok(adt)
             }}),
         },
         Data::Enum(data) => {
@@ -248,7 +253,7 @@ fn adt_decl_fn(
                 #adt_decl
                 #(#param_bindings)*
                 #(#variants)*
-                adt
+                Ok(adt)
             }})
         }
         Data::Union(_) => Err(Error::new(
@@ -739,7 +744,7 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             return Err(Error::new(
                 ast.span(),
                 "`#[derive(Rex)]` only supports structs and enums",
-            ))
+            ));
         }
     };
 
@@ -764,11 +769,13 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => {
                 let mut field_decodes = Vec::new();
+                let mut field_idents = Vec::new();
                 for field in &fields.named {
                     let ident = field
                         .ident
                         .as_ref()
                         .ok_or_else(|| Error::new(field.span(), "expected named field"))?;
+                    field_idents.push(ident.clone());
                     let mut name = ident.to_string();
                     if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
                         name = rename;
@@ -784,14 +791,13 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                         let #ident = #decode?;
                     });
                 }
-                let fields_init = fields.named.iter().map(|f| f.ident.as_ref().unwrap());
                 Ok(quote! {{
                     match value {
                         ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == 1 => {
                             match &args[0] {
                                 ::rex_engine::Value::Dict(map) => {
                                     #(#field_decodes)*
-                                    Ok(Self { #(#fields_init,)* })
+                                    Ok(Self { #(#field_idents,)* })
                                 }
                                 other => Err(::rex_engine::EngineError::NativeType {
                                     name: ::rex_ast::expr::intern(name),

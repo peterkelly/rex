@@ -12,7 +12,7 @@ fn eval(code: &str) -> Result<rex_engine::Value, String> {
         .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     MyInnerStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
     MyStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
     Boxed::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
@@ -102,10 +102,10 @@ fn derive_generic_worked_example_polymorphic_adt() {
     // The proc-macro generates *both*:
     // - `RexType` for Rust values (e.g. `Maybe<i32>` -> `Maybe i32`)
     // - an `AdtDecl` with a type parameter `T` (so `Just` has scheme `a -> Maybe a`)
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
 
     // Build the ADT surface (params + variants) and sanity-check that it really uses a type var.
-    let adt = Maybe::<i32>::rex_adt_decl(&mut engine);
+    let adt = Maybe::<i32>::rex_adt_decl(&mut engine).unwrap();
     assert_eq!(adt.name.as_ref(), "Maybe");
     assert_eq!(adt.params.len(), 1);
 
@@ -199,7 +199,7 @@ fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
     MyStruct::inject_rex(&mut engine).unwrap();
 
@@ -237,7 +237,7 @@ fn derive_can_be_used_in_injected_native_functions() {
 
 #[test]
 fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     Shape::inject_rex(&mut engine).unwrap();
 
     engine
@@ -261,7 +261,7 @@ fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
 
 #[test]
 fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     Maybe::<i32>::inject_rex(&mut engine).unwrap();
 
     engine

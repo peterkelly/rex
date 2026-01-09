@@ -9,7 +9,7 @@ fn eval_to_string(code: &str) -> Result<String, String> {
         .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;

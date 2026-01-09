@@ -22,7 +22,7 @@ fn compile_err(code: &str) -> EngineError {
         panic!("expected parse success, got: {errs:?}\ncode:\n{code}");
     });
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     if let Err(e) = engine.inject_decls(&program.decls) {
         return e;
     }

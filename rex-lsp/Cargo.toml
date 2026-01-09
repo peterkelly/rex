@@ -1,7 +1,7 @@
 [package]
 name = "rex-lsp"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
@@ -10,3 +10,7 @@ rex-lexer = { workspace = true }
 rex-ast = { workspace = true }
 rex-parser = { workspace = true }
 rex-ts = { workspace = true }
+rex-util = { workspace = true }
+
+[lints]
+workspace = true

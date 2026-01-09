@@ -1,6 +1,6 @@
 use rex_ast::expr::Symbol;
-use rex_gas::OutOfGas;
 use rex_ts::TypeError;
+use rex_util::OutOfGas;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {

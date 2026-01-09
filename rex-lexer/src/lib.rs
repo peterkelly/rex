@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 //! Lexical analysis for Rex.
 
@@ -118,6 +119,15 @@ pub enum Token {
 pub enum LexicalError {
     #[error("Unexpected token {0}")]
     UnexpectedToken(Span),
+    #[error("invalid {kind} literal `{text}`: {error}")]
+    InvalidLiteral {
+        kind: &'static str,
+        text: String,
+        error: String,
+        span: Span,
+    },
+    #[error("internal lexer error: {0}")]
+    Internal(String),
 }
 
 impl Token {
@@ -126,11 +136,13 @@ impl Token {
         let mut column = 1;
         let mut tokens = Vec::new();
 
-        for capture in Token::regex().captures_iter(input) {
-            let lexeme = capture
-                .get(0)
-                .expect("token regex always has capture group 0")
-                .as_str();
+        let re = Token::regex()?;
+        for capture in re.captures_iter(input) {
+            let Some(lexeme) = capture.get(0).map(|m| m.as_str()) else {
+                return Err(LexicalError::Internal(
+                    "regex capture missing group 0".into(),
+                ));
+            };
             let begin_line = line;
             let begin_column = column;
             column += lexeme.chars().count();
@@ -272,13 +284,31 @@ impl Token {
 
                 // Literals
                 else if let Some(m) = capture.name("Bool") {
-                    let v = bool::from_str(m.as_str()).expect("Bool capture matches true|false");
+                    let text = m.as_str();
+                    let v = bool::from_str(text).map_err(|e| LexicalError::InvalidLiteral {
+                        kind: "bool",
+                        text: text.to_string(),
+                        error: e.to_string(),
+                        span,
+                    })?;
                     Token::Bool(v, span)
                 } else if let Some(m) = capture.name("Float") {
-                    let v = f64::from_str(m.as_str()).expect("Float capture is valid f64");
+                    let text = m.as_str();
+                    let v = f64::from_str(text).map_err(|e| LexicalError::InvalidLiteral {
+                        kind: "float",
+                        text: text.to_string(),
+                        error: e.to_string(),
+                        span,
+                    })?;
                     Token::Float(v, span)
                 } else if let Some(m) = capture.name("Int") {
-                    let v = u64::from_str(m.as_str()).expect("Int capture is valid u64");
+                    let text = m.as_str();
+                    let v = u64::from_str(text).map_err(|e| LexicalError::InvalidLiteral {
+                        kind: "int",
+                        text: text.to_string(),
+                        error: e.to_string(),
+                        span,
+                    })?;
                     Token::Int(v, span)
                 } else if capture.name("Null").is_some() {
                     Token::Null(span)
@@ -318,88 +348,92 @@ impl Token {
     ///
     /// # Return
     /// An unwrapped Regex object.
-    pub fn regex() -> regex::Regex {
-        static TOKEN_REGEX: OnceLock<regex::Regex> = OnceLock::new();
-        TOKEN_REGEX
-            .get_or_init(|| {
-                regex::Regex::from_str(concat!(
-                    // Reserved keywords (with word boundaries)
-                    r"(?P<As>\bas\b)|",
-                    r"(?P<Class>\bclass\b)|",
-                    r"(?P<Declare>\bdeclare\b)|",
-                    r"(?P<Else>\belse\b)|",
-                    r"(?P<Fn>\bfn\b)|",
-                    r"(?P<For>\bfor\b)|",
-                    r"(?P<If>\bif\b)|",
-                    r"(?P<Import>\bimport\b)|",
-                    r"(?P<Is>\bis\b)|",
-                    r"(?P<Instance>\binstance\b)|",
-                    r"(?P<Match>\bmatch\b)|",
-                    r"(?P<Pub>\bpub\b)|",
-                    r"(?P<Type>\btype\b)|",
-                    r"(?P<When>\bwhen\b)|",
-                    r"(?P<Then>\bthen\b)|",
-                    r"(?P<With>\bwith\b)|",
-                    r"(?P<Where>\bwhere\b)|",
-                    // Symbols
-                    r"(?P<ArrowL><-|←)|",
-                    r"(?P<ArrowR>->|→)|",
-                    r"(?P<BackSlash>\\|λ)|",
-                    r"(?P<CommentL>\{-)|",
-                    r"(?P<CommentR>-\})|",
-                    r"(?P<BraceL>\{)|",
-                    r"(?P<BraceR>\})|",
-                    r"(?P<BracketL>\[)|",
-                    r"(?P<BracketR>\])|",
-                    r"(?P<ColonColon>::)|", // Must go before :
-                    r"(?P<Colon>:)|",
-                    r"(?P<Comma>,)|",
-                    r"(?P<DotDot>\.\.)|",
-                    r"(?P<HashTag>\#)|",
-                    r"(?P<In>\bin\b)|",   // Added word boundaries
-                    r"(?P<Let>\blet\b)|", // Added word boundaries
-                    r"(?P<LambdaR>->)|",
-                    r"(?P<ParenL>\()|",
-                    r"(?P<ParenR>\))|",
-                    r"(?P<Question>\?)|",
-                    r"(?P<SemiColon>;)|",
-                    r"(?P<Whitespace>( |\t))|",
-                    r"(?P<WhitespaceNewline>(\n|\r))|",
-                    // Operators
-                    r"(?P<Concat>\+\+)|",
-                    r"(?P<Add>\+)|",
-                    r"(?P<And>&&)|",
-                    r"(?P<Div>/)|",
-                    r"(?P<Dot>\.)|",
-                    r"(?P<Equal>==)|",
-                    r"(?P<Assign>=)|", // Must come after `==`
-                    r"(?P<NotEqual>!=)|",
-                    r"(?P<LessThanEq><=)|",
-                    r"(?P<LessThan><)|",
-                    r"(?P<GreaterThanEq>>=)|",
-                    r"(?P<GreaterThan>>)|",
-                    r"(?P<Mod>%)|",
-                    r"(?P<Mul>\*)|",
-                    r"(?P<Or>\|\|)|",
-                    r"(?P<Pipe>\|)|",
-                    r"(?P<Sub>-)|",
-                    // Literals (with word boundaries for bool and null)
-                    r"(?P<Bool>\b(true|false)\b)|",
-                    r"(?P<Float>[0-9]+\.[0-9]+)|",
-                    r"(?P<Int>[0-9]+)|",
-                    r"(?P<Null>\bnull\b)|",
-                    r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
-                    r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
-                    // URL-ish bare tokens (used by module imports)
-                    r"(?P<HttpsUrl>https://[^\s]+)|",
-                    // Idents
-                    r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
-                    // Unexpected
-                    r"(.)",
-                ))
-                .expect("token regex is valid")
-            })
-            .clone()
+    pub fn regex() -> Result<&'static regex::Regex, LexicalError> {
+        static TOKEN_REGEX: OnceLock<Result<regex::Regex, String>> = OnceLock::new();
+        let compiled = TOKEN_REGEX.get_or_init(|| {
+            regex::Regex::from_str(concat!(
+                // Reserved keywords (with word boundaries)
+                r"(?P<As>\bas\b)|",
+                r"(?P<Class>\bclass\b)|",
+                r"(?P<Declare>\bdeclare\b)|",
+                r"(?P<Else>\belse\b)|",
+                r"(?P<Fn>\bfn\b)|",
+                r"(?P<For>\bfor\b)|",
+                r"(?P<If>\bif\b)|",
+                r"(?P<Import>\bimport\b)|",
+                r"(?P<Is>\bis\b)|",
+                r"(?P<Instance>\binstance\b)|",
+                r"(?P<Match>\bmatch\b)|",
+                r"(?P<Pub>\bpub\b)|",
+                r"(?P<Type>\btype\b)|",
+                r"(?P<When>\bwhen\b)|",
+                r"(?P<Then>\bthen\b)|",
+                r"(?P<With>\bwith\b)|",
+                r"(?P<Where>\bwhere\b)|",
+                // Symbols
+                r"(?P<ArrowL><-|←)|",
+                r"(?P<ArrowR>->|→)|",
+                r"(?P<BackSlash>\\|λ)|",
+                r"(?P<CommentL>\{-)|",
+                r"(?P<CommentR>-\})|",
+                r"(?P<BraceL>\{)|",
+                r"(?P<BraceR>\})|",
+                r"(?P<BracketL>\[)|",
+                r"(?P<BracketR>\])|",
+                r"(?P<ColonColon>::)|", // Must go before :
+                r"(?P<Colon>:)|",
+                r"(?P<Comma>,)|",
+                r"(?P<DotDot>\.\.)|",
+                r"(?P<HashTag>\#)|",
+                r"(?P<In>\bin\b)|",   // Added word boundaries
+                r"(?P<Let>\blet\b)|", // Added word boundaries
+                r"(?P<LambdaR>->)|",
+                r"(?P<ParenL>\()|",
+                r"(?P<ParenR>\))|",
+                r"(?P<Question>\?)|",
+                r"(?P<SemiColon>;)|",
+                r"(?P<Whitespace>( |\t))|",
+                r"(?P<WhitespaceNewline>(\n|\r))|",
+                // Operators
+                r"(?P<Concat>\+\+)|",
+                r"(?P<Add>\+)|",
+                r"(?P<And>&&)|",
+                r"(?P<Div>/)|",
+                r"(?P<Dot>\.)|",
+                r"(?P<Equal>==)|",
+                r"(?P<Assign>=)|", // Must come after `==`
+                r"(?P<NotEqual>!=)|",
+                r"(?P<LessThanEq><=)|",
+                r"(?P<LessThan><)|",
+                r"(?P<GreaterThanEq>>=)|",
+                r"(?P<GreaterThan>>)|",
+                r"(?P<Mod>%)|",
+                r"(?P<Mul>\*)|",
+                r"(?P<Or>\|\|)|",
+                r"(?P<Pipe>\|)|",
+                r"(?P<Sub>-)|",
+                // Literals (with word boundaries for bool and null)
+                r"(?P<Bool>\b(true|false)\b)|",
+                r"(?P<Float>[0-9]+\.[0-9]+)|",
+                r"(?P<Int>[0-9]+)|",
+                r"(?P<Null>\bnull\b)|",
+                r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
+                r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
+                // URL-ish bare tokens (used by module imports)
+                r"(?P<HttpsUrl>https://[^\s]+)|",
+                // Idents
+                r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
+                // Unexpected
+                r"(.)",
+            ))
+            .map_err(|e| e.to_string())
+        });
+        match compiled {
+            Ok(re) => Ok(re),
+            Err(msg) => Err(LexicalError::Internal(format!(
+                "failed to compile token regex: {msg}"
+            ))),
+        }
     }
 
     pub fn precedence(&self) -> Precedence {

@@ -39,7 +39,7 @@ let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-let mut engine = Engine::with_prelude();
+let mut engine = Engine::with_prelude()?;
 engine.inject_decls(&program.decls)?;
 let value = engine.eval(program.expr.as_ref())?;
 println!("{value}");
@@ -56,7 +56,7 @@ let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-let mut ts = TypeSystem::with_prelude();
+let mut ts = TypeSystem::with_prelude()?;
 for decl in &program.decls {
     match decl {
         rex_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
@@ -113,7 +113,7 @@ let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-let mut ts = TypeSystem::with_prelude();
+let mut ts = TypeSystem::with_prelude()?;
 for decl in &program.decls {
     match decl {
         rex_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
@@ -153,7 +153,7 @@ let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-let mut engine = Engine::with_prelude();
+let mut engine = Engine::with_prelude()?;
 engine.inject_decls(&program.decls)?;
 let value = engine.eval(program.expr.as_ref())?;
 println!("{value}");
@@ -166,7 +166,7 @@ println!("{value}");
 ```rust
 use rex_engine::Engine;
 
-let mut engine = Engine::with_prelude();
+let mut engine = Engine::with_prelude()?;
 engine.inject_value("answer", 42i32)?;
 engine.inject_fn1("inc", |x: i32| x + 1)?;
 ```
@@ -179,9 +179,15 @@ If your host functions are async, inject them with `inject_async_fn*` and evalua
 ```rust
 use rex_engine::Engine;
 
-let mut engine = Engine::with_prelude();
+let mut engine = Engine::with_prelude()?;
 engine.inject_async_fn1("inc", |x: i32| async move { x + 1 })?;
-let v = engine.eval_async(rex_parser::Parser::new(rex_lexer::Token::tokenize("inc 1")?).parse_program().unwrap().expr.as_ref()).await?;
+
+let tokens = rex_lexer::Token::tokenize("inc 1")?;
+let mut parser = rex_parser::Parser::new(tokens);
+let program = parser
+    .parse_program()
+    .map_err(|errs| format!("parse error: {errs:?}"))?;
+let v = engine.eval_async(program.expr.as_ref()).await?;
 println!("{v}");
 ```
 
@@ -196,9 +202,12 @@ use futures::executor::block_on;
 
 let tokens = rex_lexer::Token::tokenize("stall")?;
 let mut parser = rex_parser::Parser::new(tokens);
-let expr = parser.parse_program().unwrap().expr;
+let expr = parser
+    .parse_program()
+    .map_err(|errs| format!("parse error: {errs:?}"))?
+    .expr;
 
-let mut engine = Engine::with_prelude();
+let mut engine = Engine::with_prelude()?;
 engine.inject_async_fn0_cancellable("stall", |token: CancellationToken| async move {
     token.cancelled().await;
     0i32
@@ -207,7 +216,9 @@ engine.inject_async_fn0_cancellable("stall", |token: CancellationToken| async mo
 let token = engine.cancellation_token();
 let handle = std::thread::spawn(move || block_on(engine.eval_async(expr.as_ref())));
 token.cancel();
-let res = handle.join().unwrap();
+let res = handle
+    .join()
+    .map_err(|_| EngineError::Module("evaluation thread panicked".into()))?;
 assert!(matches!(res, Err(EngineError::Cancelled)));
 ```
 
@@ -248,15 +259,15 @@ enum Maybe<T> {
     Nothing,
 }
 
-let mut engine = Engine::with_prelude();
+let mut engine = Engine::with_prelude()?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
 let v = engine.eval(
     rex_parser::Parser::new(rex_lexer::Token::tokenize("Just 1")?)
         .parse_program()
-        .unwrap()
+        .map_err(|errs| format!("parse error: {errs:?}"))?
         .expr
-        .as_ref()
+        .as_ref(),
 )?;
 assert_eq!(Maybe::<i32>::from_value(&v, "v")?, Maybe::Just(1));
 ```

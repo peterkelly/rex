@@ -7,17 +7,17 @@ use std::{
 };
 
 use rex_ast::expr::{
-    intern, ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath,
+    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath,
     InstanceDecl, InstanceMethodImpl, Pattern, Program, Scope, Symbol, TypeConstraint, TypeDecl,
-    TypeExpr, TypeVariant, Var,
+    TypeExpr, TypeVariant, Var, intern,
 };
 use rex_lexer::{
-    span::{Position, Span, Spanned},
     Token, Tokens,
+    span::{Position, Span, Spanned},
 };
 
 use crate::{error::ParserErr, op::Operator};
-use rex_gas::GasMeter;
+use rex_util::GasMeter;
 
 pub struct Parser {
     token_cursor: usize,
@@ -78,16 +78,17 @@ impl Parser {
                 self.next_token();
                 Ok((intern(&name), span))
             }
-            token if Self::operator_token_name(&token).is_some() => {
-                let (name, span) =
-                    Self::operator_token_name(&token).expect("checked operator_token_name is_some");
-                self.next_token();
-                Ok((intern(name), span))
+            token => {
+                if let Some((name, span)) = Self::operator_token_name(&token) {
+                    self.next_token();
+                    Ok((intern(name), span))
+                } else {
+                    Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected identifier or operator name got {}", token),
+                    ))
+                }
             }
-            token => Err(ParserErr::new(
-                *token.span(),
-                format!("expected identifier or operator name got {}", token),
-            )),
         }
     }
 
@@ -121,13 +122,13 @@ impl Parser {
         span: Span,
         f: impl FnOnce(&mut Self) -> Result<T, ParserErr>,
     ) -> Result<T, ParserErr> {
-        if let Some(max) = self.limits.max_nesting {
-            if self.nesting_depth >= max {
-                return Err(ParserErr::new(
-                    span,
-                    format!("maximum nesting depth exceeded (max {max})"),
-                ));
-            }
+        if let Some(max) = self.limits.max_nesting
+            && self.nesting_depth >= max
+        {
+            return Err(ParserErr::new(
+                span,
+                format!("maximum nesting depth exceeded (max {max})"),
+            ));
         }
         self.nesting_depth += 1;
         let res = f(self);
@@ -174,6 +175,236 @@ impl Parser {
     fn next_token(&mut self) {
         self.token_cursor += 1;
         self.skip_newlines();
+    }
+
+    fn expect_colon(&mut self) -> Result<(), ParserErr> {
+        let token = self.current_token();
+        match token {
+            Token::Colon(..) => {
+                self.next_token();
+                Ok(())
+            }
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("expected `:` got {}", token),
+            )),
+        }
+    }
+
+    fn expect_assign(&mut self) -> Result<(), ParserErr> {
+        let token = self.current_token();
+        match token {
+            Token::Assign(..) => {
+                self.next_token();
+                Ok(())
+            }
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("expected `=` got {}", token),
+            )),
+        }
+    }
+
+    fn expect_paren_r(&mut self) -> Result<Span, ParserErr> {
+        let token = self.current_token();
+        match token {
+            Token::ParenR(span, ..) => {
+                self.next_token();
+                Ok(span)
+            }
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("expected `)` got {}", token),
+            )),
+        }
+    }
+
+    fn expect_ident(&mut self, what: &str) -> Result<(String, Span), ParserErr> {
+        match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                self.next_token();
+                Ok((name, span))
+            }
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("expected {what} got {}", token),
+            )),
+        }
+    }
+
+    fn is_value_name_token(token: &Token) -> bool {
+        matches!(token, Token::Ident(..)) || Self::operator_token_name(token).is_some()
+    }
+
+    fn parse_layout_block<T>(
+        &mut self,
+        has_block: bool,
+        block_indent: Option<usize>,
+        mut parse_item: impl FnMut(&mut Self) -> Result<T, ParserErr>,
+    ) -> Result<Vec<T>, ParserErr> {
+        if !has_block {
+            return Ok(Vec::new());
+        }
+
+        let mut items = Vec::new();
+        loop {
+            let token = self.current_token();
+            if !Self::is_value_name_token(&token) {
+                break;
+            }
+            let span = *token.span();
+            if let Some(indent) = block_indent
+                && span.begin.column != indent
+            {
+                break;
+            }
+            items.push(parse_item(self)?);
+        }
+        Ok(items)
+    }
+
+    fn find_token_at_depth0(
+        &self,
+        start: usize,
+        end: usize,
+        mut matches: impl FnMut(&Token) -> bool,
+    ) -> Option<usize> {
+        let mut depth = 0usize;
+        let end = end.min(self.tokens.len());
+        for i in start..end {
+            match &self.tokens[i] {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                _ => {}
+            }
+            if depth == 0 && matches(&self.tokens[i]) {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn find_same_line_end(&self, start_idx: usize) -> Result<usize, ParserErr> {
+        let start_line = self
+            .tokens
+            .get(start_idx)
+            .ok_or_else(|| ParserErr::new(self.eof, "unexpected EOF".to_string()))?
+            .span()
+            .begin
+            .line;
+
+        let mut depth = 0usize;
+        let mut end_idx = start_idx;
+        for i in start_idx..self.tokens.len() {
+            let tok = &self.tokens[i];
+            if depth == 0 && tok.span().begin.line > start_line {
+                break;
+            }
+            match tok {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                _ => {}
+            }
+            end_idx = i + 1;
+        }
+        Ok(end_idx)
+    }
+
+    fn paren_group_has_top_level_comma(&self, paren_start: usize) -> bool {
+        let mut depth = 0usize;
+        for i in (paren_start + 1)..self.tokens.len() {
+            match self.tokens[i] {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth = depth.saturating_sub(1)
+                }
+                Token::Comma(..) if depth == 0 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn paren_group_has_top_level_colon(&self, paren_start: usize) -> bool {
+        let mut depth = 0usize;
+        for i in (paren_start + 1)..self.tokens.len() {
+            match self.tokens[i] {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth = depth.saturating_sub(1)
+                }
+                Token::Colon(..) if depth == 0 => return true,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn parse_legacy_param_group(&mut self) -> Result<Vec<(Var, TypeExpr)>, ParserErr> {
+        match self.current_token() {
+            Token::ParenL(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected `(` got {}", token),
+                ));
+            }
+        }
+
+        let mut params = Vec::new();
+        if matches!(self.current_token(), Token::ParenR(..)) {
+            self.next_token();
+            return Ok(params);
+        }
+
+        loop {
+            let (param_name, param_span) = self.expect_ident("parameter name")?;
+            self.expect_colon()?;
+
+            let ty_start = self.token_cursor;
+            let ty_end = self
+                .find_token_at_depth0(ty_start, self.tokens.len(), |t| {
+                    matches!(t, Token::Comma(..) | Token::ParenR(..))
+                })
+                .ok_or_else(|| {
+                    ParserErr::new(
+                        self.eof,
+                        "expected `,` or `)` after parameter type".to_string(),
+                    )
+                })?;
+            let ann = self.parse_type_expr_slice(&self.tokens[ty_start..ty_end])?;
+            self.token_cursor = ty_end;
+            params.push((Var::with_span(param_span, param_name), ann));
+
+            match self.current_token() {
+                Token::Comma(..) => {
+                    self.next_token();
+                    continue;
+                }
+                Token::ParenR(..) => {
+                    self.next_token();
+                    break;
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `,` or `)` got {}", token),
+                    ));
+                }
+            }
+        }
+
+        Ok(params)
     }
 
     // Advances by exactly one token and does *not* skip newlines.
@@ -1009,40 +1240,10 @@ impl Parser {
             }
             Token::ParenL(span_begin, ..) => {
                 self.next_token();
-                let (name, name_span) = match self.current_token() {
-                    Token::Ident(name, span, ..) => {
-                        self.next_token();
-                        (name, span)
-                    }
-                    token => {
-                        return Err(ParserErr::new(
-                            *token.span(),
-                            format!("expected parameter name got {}", token),
-                        ));
-                    }
-                };
-                match self.current_token() {
-                    Token::Colon(..) => self.next_token(),
-                    token => {
-                        return Err(ParserErr::new(
-                            *token.span(),
-                            format!("expected `:` got {}", token),
-                        ));
-                    }
-                }
+                let (name, name_span) = self.expect_ident("parameter name")?;
+                self.expect_colon()?;
                 let ann = self.parse_type_expr()?;
-                let span_end = match self.current_token() {
-                    Token::ParenR(span, ..) => {
-                        self.next_token();
-                        span.end
-                    }
-                    token => {
-                        return Err(ParserErr::new(
-                            *token.span(),
-                            format!("expected `)` got {}", token),
-                        ));
-                    }
-                };
+                let span_end = self.expect_paren_r()?.end;
                 Ok((
                     Var::with_span(name_span, name),
                     Some(ann),
@@ -1116,17 +1317,7 @@ impl Parser {
             }
 
             // =
-            match self.current_token() {
-                Token::Assign(_span, ..) => {
-                    self.next_token();
-                }
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected `=` got {}", token),
-                    ));
-                }
-            }
+            self.expect_assign()?;
             // Parse the variable definition
             decls.push_back((var, ann, self.parse_expr()?));
             // Parse `,` or `in`
@@ -1304,11 +1495,15 @@ impl Parser {
         ))
     }
 
+    fn eof_for_slice(&self, slice: &[Token]) -> Span {
+        slice.last().map(|t| *t.span()).unwrap_or(self.eof)
+    }
+
     fn parse_type_expr_slice(&self, slice: &[Token]) -> Result<TypeExpr, ParserErr> {
         if slice.is_empty() {
             return Err(ParserErr::new(self.eof, "expected type".to_string()));
         }
-        let eof = *slice.last().unwrap().span();
+        let eof = self.eof_for_slice(slice);
         let tokens = Tokens {
             items: slice.to_vec(),
             eof,
@@ -1328,7 +1523,7 @@ impl Parser {
         if slice.is_empty() {
             return Err(ParserErr::new(self.eof, "expected type".to_string()));
         }
-        let eof = *slice.last().unwrap().span();
+        let eof = self.eof_for_slice(slice);
         let tokens = Tokens {
             items: slice.to_vec(),
             eof,
@@ -1354,7 +1549,7 @@ impl Parser {
                 "expected type constraint".to_string(),
             ));
         }
-        let eof = *slice.last().unwrap().span();
+        let eof = self.eof_for_slice(slice);
         let tokens = Tokens {
             items: slice.to_vec(),
             eof,
@@ -1374,7 +1569,7 @@ impl Parser {
         if slice.is_empty() {
             return Err(ParserErr::new(self.eof, "expected expression".to_string()));
         }
-        let eof = *slice.last().unwrap().span();
+        let eof = self.eof_for_slice(slice);
         let tokens = Tokens {
             items: slice.to_vec(),
             eof,
@@ -1472,7 +1667,6 @@ impl Parser {
         // Method signatures are a layout block: each signature starts at the
         // indentation of the first method name after `where` (or after the
         // class header if `where` is omitted).
-        let mut methods = Vec::new();
         let implicit_method_start = if saw_where {
             false
         } else {
@@ -1481,7 +1675,7 @@ impl Parser {
             let next = self.peek_token(1);
             token_span.begin.column > class_indent
                 && matches!(next, Token::Colon(..))
-                && (matches!(token, Token::Ident(..)) || Self::operator_token_name(&token).is_some())
+                && Self::is_value_name_token(&token)
         };
         let has_method_block = saw_where || implicit_method_start;
         let block_indent = if has_method_block {
@@ -1493,38 +1687,20 @@ impl Parser {
             None
         };
 
-        while has_method_block
-            && (matches!(self.current_token(), Token::Ident(..))
-                || Self::operator_token_name(&self.current_token()).is_some())
-        {
-            let span = *self.current_token().span();
-            if let Some(indent) = block_indent {
-                if span.begin.column != indent {
-                    break;
-                }
-            }
-            let (m_name, _name_span) = self.parse_value_name()?;
+        let methods = self.parse_layout_block(has_method_block, block_indent, |parser| {
+            let (m_name, _name_span) = parser.parse_value_name()?;
+            parser.expect_colon()?;
 
-            match self.current_token() {
-                Token::Colon(..) => self.next_token(),
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected `:` got {}", token),
-                    ));
-                }
-            }
-
-            let start_idx = self.token_cursor;
-            let end_idx = find_layout_expr_end(&self.tokens, start_idx, block_indent, |t, next| {
-                matches!(next, Token::Colon(..))
-                    && (matches!(t, Token::Ident(..)) || Self::operator_token_name(t).is_some())
-            });
-            let typ = self.parse_type_expr_slice(&self.tokens[start_idx..end_idx])?;
-            self.token_cursor = end_idx;
-            self.skip_newlines();
-            methods.push(ClassMethodSig { name: m_name, typ });
-        }
+            let start_idx = parser.token_cursor;
+            let end_idx =
+                find_layout_expr_end(&parser.tokens, start_idx, block_indent, |t, next| {
+                    matches!(next, Token::Colon(..)) && Self::is_value_name_token(t)
+                });
+            let typ = parser.parse_type_expr_slice(&parser.tokens[start_idx..end_idx])?;
+            parser.token_cursor = end_idx;
+            parser.skip_newlines();
+            Ok(ClassMethodSig { name: m_name, typ })
+        })?;
 
         let span_end = methods
             .last()
@@ -1589,18 +1765,18 @@ impl Parser {
         let mut header_end = head.span().end;
 
         let mut context = Vec::new();
-        if let Some(Token::Le(span, ..)) = self.tokens.get(self.token_cursor).cloned() {
-            if span.begin.line == header_line {
-                self.next_token_raw();
-                let start_idx = self.token_cursor;
-                let end_idx = find_layout_header_clause_end(&self.tokens, start_idx, |t| {
-                    matches!(t, Token::Where(..))
-                });
-                context = self.parse_type_constraints_slice(&self.tokens[start_idx..end_idx])?;
-                self.token_cursor = end_idx;
-                if let Some(last) = context.last() {
-                    header_end = header_end.max(last.typ.span().end);
-                }
+        if let Some(Token::Le(span, ..)) = self.tokens.get(self.token_cursor).cloned()
+            && span.begin.line == header_line
+        {
+            self.next_token_raw();
+            let start_idx = self.token_cursor;
+            let end_idx = find_layout_header_clause_end(&self.tokens, start_idx, |t| {
+                matches!(t, Token::Where(..))
+            });
+            context = self.parse_type_constraints_slice(&self.tokens[start_idx..end_idx])?;
+            self.token_cursor = end_idx;
+            if let Some(last) = context.last() {
+                header_end = header_end.max(last.typ.span().end);
             }
         }
 
@@ -1630,7 +1806,7 @@ impl Parser {
             let next = self.peek_token(1);
             token_span.begin.column > instance_indent
                 && matches!(next, Token::Assign(..))
-                && (matches!(token, Token::Ident(..)) || Self::operator_token_name(&token).is_some())
+                && Self::is_value_name_token(&token)
         };
 
         let block_indent = if has_method_block {
@@ -1642,43 +1818,24 @@ impl Parser {
             None
         };
 
-        let mut methods = Vec::new();
-        while has_method_block
-            && (matches!(self.current_token(), Token::Ident(..))
-                || Self::operator_token_name(&self.current_token()).is_some())
-        {
-            let span = *self.current_token().span();
-            if let Some(indent) = block_indent {
-                if span.begin.column != indent {
-                    break;
-                }
-            }
-            let (name, _name_span) = self.parse_value_name()?;
+        let methods = self.parse_layout_block(has_method_block, block_indent, |parser| {
+            let (name, _name_span) = parser.parse_value_name()?;
+            parser.expect_assign()?;
 
-            match self.current_token() {
-                Token::Assign(..) => self.next_token(),
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected `=` got {}", token),
-                    ));
-                }
-            }
+            let start_idx = parser.token_cursor;
+            let end_idx =
+                find_layout_expr_end(&parser.tokens, start_idx, block_indent, |t, next| {
+                    matches!(next, Token::Assign(..)) && Self::is_value_name_token(t)
+                });
+            let body = parser.parse_expr_slice(&parser.tokens[start_idx..end_idx])?;
+            parser.token_cursor = end_idx;
+            parser.skip_newlines();
 
-            let start_idx = self.token_cursor;
-            let end_idx = find_layout_expr_end(&self.tokens, start_idx, block_indent, |t, next| {
-                matches!(next, Token::Assign(..))
-                    && (matches!(t, Token::Ident(..)) || Self::operator_token_name(t).is_some())
-            });
-            let body = self.parse_expr_slice(&self.tokens[start_idx..end_idx])?;
-            self.token_cursor = end_idx;
-            self.skip_newlines();
-
-            methods.push(InstanceMethodImpl {
+            Ok(InstanceMethodImpl {
                 name,
                 body: Arc::new(body),
-            });
-        }
+            })
+        })?;
 
         let span_end = methods
             .last()
@@ -1738,30 +1895,11 @@ impl Parser {
 
             // Parse a full type signature up to `where` or `=`.
             let sig_start = self.token_cursor;
-            let mut depth = 0usize;
-            let mut where_idx = None;
-            let mut assign_idx = None;
-            for i in sig_start..self.tokens.len() {
-                match self.tokens[i] {
-                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                        depth = depth.saturating_sub(1)
-                    }
-                    Token::Where(..) if depth == 0 => {
-                        where_idx = Some(i);
-                        break;
-                    }
-                    Token::Assign(..) if depth == 0 => {
-                        assign_idx = Some(i);
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-
-            let Some(sig_end) = where_idx.or(assign_idx) else {
-                return Err(ParserErr::new(self.eof, "expected `=`".to_string()));
-            };
+            let sig_end = self
+                .find_token_at_depth0(sig_start, self.tokens.len(), |t| {
+                    matches!(t, Token::Where(..) | Token::Assign(..))
+                })
+                .ok_or_else(|| ParserErr::new(self.eof, "expected `=`".to_string()))?;
             let sig = self.parse_type_expr_slice(&self.tokens[sig_start..sig_end])?;
             self.token_cursor = sig_end;
 
@@ -1772,38 +1910,11 @@ impl Parser {
             }
 
             // `=`
-            match self.current_token() {
-                Token::Assign(..) => self.next_token(),
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected `=` got {}", token),
-                    ));
-                }
-            }
+            self.expect_assign()?;
 
             // Parse a body expression, delimited by newline (unless inside parens/brackets/braces).
             let body_start = self.token_cursor;
-            let body_line = match self.tokens.get(body_start) {
-                Some(tok) => tok.span().begin.line,
-                None => return Err(ParserErr::new(self.eof, "unexpected EOF".to_string())),
-            };
-            let mut depth = 0usize;
-            let mut body_end = body_start;
-            for i in body_start..self.tokens.len() {
-                let tok = &self.tokens[i];
-                if depth == 0 && tok.span().begin.line > body_line {
-                    break;
-                }
-                match tok {
-                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                        depth = depth.saturating_sub(1)
-                    }
-                    _ => {}
-                }
-                body_end = i + 1;
-            }
+            let body_end = self.find_same_line_end(body_start)?;
             let body_expr = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
             self.token_cursor = body_end;
             let body = Arc::new(body_expr);
@@ -1857,10 +1968,7 @@ impl Parser {
                     ));
                 }
 
-                let params: Vec<(Var, TypeExpr)> = lam_params
-                    .into_iter()
-                    .zip(param_tys)
-                    .collect();
+                let params: Vec<(Var, TypeExpr)> = lam_params.into_iter().zip(param_tys).collect();
                 (params, cur)
             } else {
                 // No leading lambda: eta-expand to match the declared arity.
@@ -1913,113 +2021,11 @@ impl Parser {
         //   fn foo (x: a, y: b) -> i32 = ...
         // First, handle the legacy multi-parameter paren list `(x: a, y: b) -> ...`.
         if matches!(self.current_token(), Token::ParenL(..)) {
-            // Detect a top-level comma within the first `(...)` group.
-            let paren_start = self.token_cursor;
-            let mut depth = 0usize;
-            let mut has_comma = false;
-            for i in (paren_start + 1)..self.tokens.len() {
-                match self.tokens[i] {
-                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                        if depth == 0 {
-                            break;
-                        }
-                        depth = depth.saturating_sub(1)
-                    }
-                    Token::Comma(..) if depth == 0 => {
-                        has_comma = true;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-
             // `()` is also treated as the legacy group syntax (nullary functions).
-            if has_comma || matches!(self.peek_token(1), Token::ParenR(..)) {
-                // (x: a, y: b)
-                self.next_token();
-                if !matches!(self.current_token(), Token::ParenR(..)) {
-                    loop {
-                        let (param_name, param_span) = match self.current_token() {
-                            Token::Ident(name, span, ..) => {
-                                self.next_token();
-                                (name, span)
-                            }
-                            token => {
-                                return Err(ParserErr::new(
-                                    *token.span(),
-                                    format!("expected parameter name got {}", token),
-                                ));
-                            }
-                        };
-                        match self.current_token() {
-                            Token::Colon(..) => self.next_token(),
-                            token => {
-                                return Err(ParserErr::new(
-                                    *token.span(),
-                                    format!("expected `:` got {}", token),
-                                ));
-                            }
-                        }
-
-                        // Parse the parameter type, stopping at `,` or `)` at depth 0.
-                        let ty_start = self.token_cursor;
-                        let mut depth = 0usize;
-                        let mut ty_end = None;
-                        for i in ty_start..self.tokens.len() {
-                            match self.tokens[i] {
-                                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
-                                    depth += 1
-                                }
-                                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                                    if depth == 0 {
-                                        ty_end = Some(i);
-                                        break;
-                                    }
-                                    depth = depth.saturating_sub(1)
-                                }
-                                Token::Comma(..) if depth == 0 => {
-                                    ty_end = Some(i);
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                        let Some(ty_end) = ty_end else {
-                            return Err(ParserErr::new(
-                                self.eof,
-                                "expected `,` or `)` after parameter type".to_string(),
-                            ));
-                        };
-                        let ann = self.parse_type_expr_slice(&self.tokens[ty_start..ty_end])?;
-                        self.token_cursor = ty_end;
-                        params.push((Var::with_span(param_span, param_name), ann));
-
-                        match self.current_token() {
-                            Token::Comma(..) => {
-                                self.next_token();
-                                continue;
-                            }
-                            Token::ParenR(..) => break,
-                            token => {
-                                return Err(ParserErr::new(
-                                    *token.span(),
-                                    format!("expected `,` or `)` got {}", token),
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                match self.current_token() {
-                    Token::ParenR(..) => self.next_token(),
-                    token => {
-                        return Err(ParserErr::new(
-                            *token.span(),
-                            format!("expected `)` got {}", token),
-                        ));
-                    }
-                }
+            if self.paren_group_has_top_level_comma(self.token_cursor)
+                || matches!(self.peek_token(1), Token::ParenR(..))
+            {
+                params = self.parse_legacy_param_group()?;
 
                 // `->`
                 match self.current_token() {
@@ -2044,88 +2050,27 @@ impl Parser {
                 if is_paren_param_head(&tok, &next, &next2) {
                     // (x: a)
                     self.next_token(); // `(`
-                    let (param_name, param_span) = match self.current_token() {
-                        Token::Ident(name, span, ..) => {
-                            self.next_token();
-                            (name, span)
-                        }
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected parameter name got {}", token),
-                            ));
-                        }
-                    };
-                    match self.current_token() {
-                        Token::Colon(..) => self.next_token(),
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `:` got {}", token),
-                            ));
-                        }
-                    }
+                    let (param_name, param_span) = self.expect_ident("parameter name")?;
+                    self.expect_colon()?;
 
                     // Parse the parameter type, stopping at the closing `)` at depth 0.
                     let ty_start = self.token_cursor;
-                    let mut depth = 0usize;
-                    let mut rparen_idx = None;
-                    for i in ty_start..self.tokens.len() {
-                        match self.tokens[i] {
-                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
-                                depth += 1
-                            }
-                            Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                                if depth == 0 {
-                                    rparen_idx = Some(i);
-                                    break;
-                                }
-                                depth = depth.saturating_sub(1)
-                            }
-                            _ => {}
-                        }
-                    }
-                    let Some(rparen_idx) = rparen_idx else {
-                        return Err(ParserErr::new(self.eof, "expected `)`".to_string()));
-                    };
+                    let rparen_idx = self
+                        .find_token_at_depth0(ty_start, self.tokens.len(), |t| {
+                            matches!(t, Token::ParenR(..))
+                        })
+                        .ok_or_else(|| ParserErr::new(self.eof, "expected `)`".to_string()))?;
                     let ann = self.parse_type_expr_slice(&self.tokens[ty_start..rparen_idx])?;
                     self.token_cursor = rparen_idx;
 
-                    match self.current_token() {
-                        Token::ParenR(..) => self.next_token(),
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `)` got {}", token),
-                            ));
-                        }
-                    }
+                    let _ = self.expect_paren_r()?;
 
                     params.push((Var::with_span(param_span, param_name), ann));
                 } else if is_named_param_head(&tok, &next) {
                     // x: a -> y: b -> i32
-                    let (param_name, param_span) = match self.current_token() {
-                        Token::Ident(name, span, ..) => {
-                            self.next_token();
-                            (name, span)
-                        }
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected parameter name got {}", token),
-                            ));
-                        }
-                    };
+                    let (param_name, param_span) = self.expect_ident("parameter name")?;
 
-                    match self.current_token() {
-                        Token::Colon(..) => self.next_token(),
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `:` got {}", token),
-                            ));
-                        }
-                    }
+                    self.expect_colon()?;
 
                     // Parse the parameter type, stopping at the `->` separator at depth 0.
                     // To use a function type as a parameter type, parentheses are required:
@@ -2194,42 +2139,17 @@ impl Parser {
 
         // Find `=` and (optional) `where` between return type and `=`.
         let ret_start = self.token_cursor;
-        let mut depth = 0usize;
-        let mut assign_idx = None;
-        for i in ret_start..self.tokens.len() {
-            match self.tokens[i] {
-                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                    depth = depth.saturating_sub(1)
-                }
-                Token::Assign(..) if depth == 0 => {
-                    assign_idx = Some(i);
-                    break;
-                }
-                _ => {}
-            }
-        }
-        let assign_idx = assign_idx.ok_or_else(|| {
-            ParserErr::new(self.eof, "expected `=` in function declaration".to_string())
-        })?;
+        let assign_idx = self
+            .find_token_at_depth0(ret_start, self.tokens.len(), |t| {
+                matches!(t, Token::Assign(..))
+            })
+            .ok_or_else(|| {
+                ParserErr::new(self.eof, "expected `=` in function declaration".to_string())
+            })?;
 
-        let mut where_idx = None;
-        depth = 0;
-        for i in ret_start..assign_idx {
-            match self.tokens[i] {
-                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                    depth = depth.saturating_sub(1)
-                }
-                Token::Where(..) if depth == 0 => {
-                    where_idx = Some(i);
-                    break;
-                }
-                _ => {}
-            }
-        }
-
-        let ret_end = where_idx.unwrap_or(assign_idx);
+        let ret_end = self
+            .find_token_at_depth0(ret_start, assign_idx, |t| matches!(t, Token::Where(..)))
+            .unwrap_or(assign_idx);
         let ret = self.parse_type_expr_slice(&self.tokens[ret_start..ret_end])?;
         self.token_cursor = ret_end;
 
@@ -2240,38 +2160,11 @@ impl Parser {
         }
 
         // `=`
-        match self.current_token() {
-            Token::Assign(..) => self.next_token(),
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected `=` got {}", token),
-                ));
-            }
-        }
+        self.expect_assign()?;
 
         // Parse a body expression, delimited by newline (unless inside parens/brackets/braces).
         let body_start = self.token_cursor;
-        let body_line = match self.tokens.get(body_start) {
-            Some(tok) => tok.span().begin.line,
-            None => return Err(ParserErr::new(self.eof, "unexpected EOF".to_string())),
-        };
-        let mut depth = 0usize;
-        let mut body_end = body_start;
-        for i in body_start..self.tokens.len() {
-            let tok = &self.tokens[i];
-            if depth == 0 && tok.span().begin.line > body_line {
-                break;
-            }
-            match tok {
-                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                    depth = depth.saturating_sub(1)
-                }
-                _ => {}
-            }
-            body_end = i + 1;
-        }
+        let body_end = self.find_same_line_end(body_start)?;
         let body = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
         self.token_cursor = body_end;
         let span_end = body.span().end;
@@ -2289,31 +2182,8 @@ impl Parser {
 
     fn parse_declare_fn_decl_toplevel(&mut self, is_pub: bool) -> Result<DeclareFnDecl, ParserErr> {
         let start_idx = self.token_cursor;
-        let start_line = self
-            .tokens
-            .get(start_idx)
-            .ok_or_else(|| ParserErr::new(self.eof, "unexpected EOF".to_string()))?
-            .span()
-            .begin
-            .line;
-
         // `declare fn` has no body, so we parse only the declaration line.
-        let mut depth = 0usize;
-        let mut end_idx = start_idx;
-        for i in start_idx..self.tokens.len() {
-            let tok = &self.tokens[i];
-            if depth == 0 && tok.span().begin.line > start_line {
-                break;
-            }
-            match tok {
-                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                    depth = depth.saturating_sub(1)
-                }
-                _ => {}
-            }
-            end_idx = i + 1;
-        }
+        let end_idx = self.find_same_line_end(start_idx)?;
 
         let eof = self
             .tokens
@@ -2411,26 +2281,7 @@ impl Parser {
                 use_named_params = true;
             } else {
                 // Disambiguate legacy `(x: a, y: b)` params from grouped type expressions like `(a, b) -> c`.
-                let paren_start = self.token_cursor;
-                let mut depth = 0usize;
-                let mut saw_colon = false;
-                for i in (paren_start + 1)..self.tokens.len() {
-                    match self.tokens[i] {
-                        Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                        Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                            if depth == 0 {
-                                break;
-                            }
-                            depth = depth.saturating_sub(1)
-                        }
-                        Token::Colon(..) if depth == 0 => {
-                            saw_colon = true;
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                if saw_colon {
+                if self.paren_group_has_top_level_colon(self.token_cursor) {
                     use_named_params = true;
                 }
             }
@@ -2439,29 +2290,22 @@ impl Parser {
         if !use_named_params {
             // Parse a bare type signature.
             let sig_start = self.token_cursor;
-            let mut depth = 0usize;
-            let mut where_idx = None;
-            for i in sig_start..self.tokens.len() {
-                match self.tokens[i] {
-                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                        depth = depth.saturating_sub(1)
-                    }
-                    Token::Where(..) if depth == 0 => {
-                        where_idx = Some(i);
-                        break;
-                    }
-                    Token::Assign(span, ..) if depth == 0 => {
+            let stop_idx = self.find_token_at_depth0(sig_start, self.tokens.len(), |t| {
+                matches!(t, Token::Where(..) | Token::Assign(..))
+            });
+            let sig_end = match stop_idx {
+                Some(i) => match self.tokens[i] {
+                    Token::Where(..) => i,
+                    Token::Assign(span, ..) => {
                         return Err(ParserErr::new(
                             span,
                             "declare fn cannot have a body; use `fn`".to_string(),
                         ));
                     }
-                    _ => {}
-                }
-            }
-
-            let sig_end = where_idx.unwrap_or(self.tokens.len());
+                    _ => i,
+                },
+                None => self.tokens.len(),
+            };
             let sig = self.parse_type_expr_slice(&self.tokens[sig_start..sig_end])?;
             self.token_cursor = sig_end;
 
@@ -2511,113 +2355,11 @@ impl Parser {
         // Params (legacy syntax, still accepted):
         //   declare fn foo (x: a, y: b) -> i32
         if matches!(self.current_token(), Token::ParenL(..)) {
-            // Detect a top-level comma within the first `(...)` group.
-            let paren_start = self.token_cursor;
-            let mut depth = 0usize;
-            let mut has_comma = false;
-            for i in (paren_start + 1)..self.tokens.len() {
-                match self.tokens[i] {
-                    Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                    Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                        if depth == 0 {
-                            break;
-                        }
-                        depth = depth.saturating_sub(1)
-                    }
-                    Token::Comma(..) if depth == 0 => {
-                        has_comma = true;
-                        break;
-                    }
-                    _ => {}
-                }
-            }
-
             // `()` is also treated as the legacy group syntax (nullary functions).
-            if has_comma || matches!(self.peek_token(1), Token::ParenR(..)) {
-                // (x: a, y: b)
-                self.next_token();
-                if !matches!(self.current_token(), Token::ParenR(..)) {
-                    loop {
-                        let (param_name, param_span) = match self.current_token() {
-                            Token::Ident(name, span, ..) => {
-                                self.next_token();
-                                (name, span)
-                            }
-                            token => {
-                                return Err(ParserErr::new(
-                                    *token.span(),
-                                    format!("expected parameter name got {}", token),
-                                ));
-                            }
-                        };
-                        match self.current_token() {
-                            Token::Colon(..) => self.next_token(),
-                            token => {
-                                return Err(ParserErr::new(
-                                    *token.span(),
-                                    format!("expected `:` got {}", token),
-                                ));
-                            }
-                        }
-
-                        // Parse the parameter type, stopping at `,` or `)` at depth 0.
-                        let ty_start = self.token_cursor;
-                        let mut depth = 0usize;
-                        let mut ty_end = None;
-                        for i in ty_start..self.tokens.len() {
-                            match self.tokens[i] {
-                                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
-                                    depth += 1
-                                }
-                                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                                    if depth == 0 {
-                                        ty_end = Some(i);
-                                        break;
-                                    }
-                                    depth = depth.saturating_sub(1)
-                                }
-                                Token::Comma(..) if depth == 0 => {
-                                    ty_end = Some(i);
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                        let Some(ty_end) = ty_end else {
-                            return Err(ParserErr::new(
-                                self.eof,
-                                "expected `,` or `)` after parameter type".to_string(),
-                            ));
-                        };
-                        let ann = self.parse_type_expr_slice(&self.tokens[ty_start..ty_end])?;
-                        self.token_cursor = ty_end;
-                        params.push((Var::with_span(param_span, param_name), ann));
-
-                        match self.current_token() {
-                            Token::Comma(..) => {
-                                self.next_token();
-                                continue;
-                            }
-                            Token::ParenR(..) => break,
-                            token => {
-                                return Err(ParserErr::new(
-                                    *token.span(),
-                                    format!("expected `,` or `)` got {}", token),
-                                ));
-                            }
-                        }
-                    }
-                }
-
-                match self.current_token() {
-                    Token::ParenR(..) => self.next_token(),
-                    token => {
-                        return Err(ParserErr::new(
-                            *token.span(),
-                            format!("expected `)` got {}", token),
-                        ));
-                    }
-                }
+            if self.paren_group_has_top_level_comma(self.token_cursor)
+                || matches!(self.peek_token(1), Token::ParenR(..))
+            {
+                params = self.parse_legacy_param_group()?;
 
                 // `->`
                 match self.current_token() {
@@ -2642,88 +2384,26 @@ impl Parser {
                 if is_paren_param_head(&tok, &next, &next2) {
                     // (x: a)
                     self.next_token(); // `(`
-                    let (param_name, param_span) = match self.current_token() {
-                        Token::Ident(name, span, ..) => {
-                            self.next_token();
-                            (name, span)
-                        }
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected parameter name got {}", token),
-                            ));
-                        }
-                    };
-                    match self.current_token() {
-                        Token::Colon(..) => self.next_token(),
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `:` got {}", token),
-                            ));
-                        }
-                    }
+                    let (param_name, param_span) = self.expect_ident("parameter name")?;
+                    self.expect_colon()?;
 
                     // Parse the parameter type, stopping at the closing `)` at depth 0.
                     let ty_start = self.token_cursor;
-                    let mut depth = 0usize;
-                    let mut rparen_idx = None;
-                    for i in ty_start..self.tokens.len() {
-                        match self.tokens[i] {
-                            Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => {
-                                depth += 1
-                            }
-                            Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                                if depth == 0 {
-                                    rparen_idx = Some(i);
-                                    break;
-                                }
-                                depth = depth.saturating_sub(1)
-                            }
-                            _ => {}
-                        }
-                    }
-                    let Some(rparen_idx) = rparen_idx else {
-                        return Err(ParserErr::new(self.eof, "expected `)`".to_string()));
-                    };
+                    let rparen_idx = self
+                        .find_token_at_depth0(ty_start, self.tokens.len(), |t| {
+                            matches!(t, Token::ParenR(..))
+                        })
+                        .ok_or_else(|| ParserErr::new(self.eof, "expected `)`".to_string()))?;
                     let ann = self.parse_type_expr_slice(&self.tokens[ty_start..rparen_idx])?;
                     self.token_cursor = rparen_idx;
 
-                    match self.current_token() {
-                        Token::ParenR(..) => self.next_token(),
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `)` got {}", token),
-                            ));
-                        }
-                    }
+                    let _ = self.expect_paren_r()?;
 
                     params.push((Var::with_span(param_span, param_name), ann));
                 } else if is_named_param_head(&tok, &next) {
                     // x: a -> y: b -> i32
-                    let (param_name, param_span) = match self.current_token() {
-                        Token::Ident(name, span, ..) => {
-                            self.next_token();
-                            (name, span)
-                        }
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected parameter name got {}", token),
-                            ));
-                        }
-                    };
-
-                    match self.current_token() {
-                        Token::Colon(..) => self.next_token(),
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                format!("expected `:` got {}", token),
-                            ));
-                        }
-                    }
+                    let (param_name, param_span) = self.expect_ident("parameter name")?;
+                    self.expect_colon()?;
 
                     // Parse the parameter type, stopping at the `->` separator at depth 0.
                     // To use a function type as a parameter type, parentheses are required:
@@ -2792,29 +2472,22 @@ impl Parser {
 
         // Find an (optional) `where` in the remaining tokens. `declare fn` must not have `=`.
         let ret_start = self.token_cursor;
-        let mut depth = 0usize;
-        let mut where_idx = None;
-        for i in ret_start..self.tokens.len() {
-            match self.tokens[i] {
-                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                    depth = depth.saturating_sub(1)
-                }
-                Token::Where(..) if depth == 0 => {
-                    where_idx = Some(i);
-                    break;
-                }
-                Token::Assign(span, ..) if depth == 0 => {
+        let stop_idx = self.find_token_at_depth0(ret_start, self.tokens.len(), |t| {
+            matches!(t, Token::Where(..) | Token::Assign(..))
+        });
+        let ret_end = match stop_idx {
+            Some(i) => match self.tokens[i] {
+                Token::Where(..) => i,
+                Token::Assign(span, ..) => {
                     return Err(ParserErr::new(
                         span,
                         "declare fn cannot have a body; use `fn`".to_string(),
                     ));
                 }
-                _ => {}
-            }
-        }
-
-        let ret_end = where_idx.unwrap_or(self.tokens.len());
+                _ => i,
+            },
+            None => self.tokens.len(),
+        };
         let ret = self.parse_type_expr_slice(&self.tokens[ret_start..ret_end])?;
         self.token_cursor = ret_end;
 
@@ -3308,15 +2981,19 @@ impl Parser {
         // If there are args, the head must be a constructor (identifier) pattern
         if let Pattern::Var(var) = head {
             let begin = var.span.begin;
-            let end = args.last().unwrap().span().end;
+            let end = args.last().map(|p| p.span().end).unwrap_or(begin);
             Ok(Pattern::Named(
                 Span::from_begin_end(begin, end),
                 var.name,
                 args,
             ))
         } else {
+            let span = args
+                .first()
+                .map(|p| *p.span())
+                .unwrap_or_else(|| *self.current_token().span());
             Err(ParserErr::new(
-                *args.first().unwrap().span(),
+                span,
                 "constructor patterns must start with an identifier",
             ))
         }
@@ -3771,7 +3448,7 @@ mod tests {
         expr::{Decl, Expr, Pattern, Scope, TypeExpr, Var},
         f, l, s, tup, u, v,
     };
-    use rex_lexer::{span, span::Span, Token};
+    use rex_lexer::{Token, span, span::Span};
 
     use super::*;
 

@@ -40,7 +40,7 @@ Bar.add 1 2
 "#,
     );
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine.eval_module_file(&main).unwrap();
     match value {
@@ -71,7 +71,7 @@ Bar.hidden 1
 "#,
     );
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let err = match engine.eval_module_file(&main) {
         Ok(v) => panic!("expected error, got {v}"),
@@ -105,7 +105,7 @@ Math.inc 41
 "#,
     );
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     engine.add_include_resolver(&include_root).unwrap();
     let value = engine.eval_module_file(&main).unwrap();
@@ -127,7 +127,7 @@ pub fn add x: i32 -> y: i32 -> i32 = x + y
 "#,
     );
 
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine
         .eval_snippet_at(
@@ -147,7 +147,7 @@ Bar.add 20 22
 
 #[test]
 fn std_json_encode_decode_smoke() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine
         .eval_snippet(
@@ -243,7 +243,7 @@ in
 
 #[test]
 fn std_json_roundtrip_nested() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine
         .eval_snippet(
@@ -291,7 +291,7 @@ in
 
 #[test]
 fn std_json_decode_errors_have_useful_messages() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine
         .eval_snippet(
@@ -349,7 +349,7 @@ in
 
 #[test]
 fn std_json_numeric_decode_errors() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine
         .eval_snippet(
@@ -389,7 +389,7 @@ in
 
 #[test]
 fn std_json_pretty_renders_valid_json() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine
         .eval_snippet(
@@ -438,7 +438,7 @@ in
 
 #[test]
 fn std_json_parse_and_from_string_roundtrip() {
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.add_default_resolvers();
     let value = engine
         .eval_snippet(

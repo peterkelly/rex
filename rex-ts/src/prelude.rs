@@ -4,37 +4,44 @@ use rex_ast::expr::{Decl, Program};
 use rex_lexer::Token;
 use rex_parser::Parser;
 
-use crate::{AdtDecl, Predicate, Scheme, Type, TypeSystem, sym};
+use crate::{AdtDecl, Predicate, Scheme, Type, TypeError, TypeSystem, sym};
 
-fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) {
-    for decl in &prelude_typeclasses_program().decls {
+fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeError> {
+    let program = prelude_typeclasses_program()?;
+    for decl in &program.decls {
         match decl {
-            Decl::Class(class_decl) => ts
-                .inject_class_decl(class_decl)
-                .expect("failed to inject prelude class decl"),
+            Decl::Class(class_decl) => ts.inject_class_decl(class_decl)?,
             Decl::Instance(inst_decl) => {
-                ts.inject_instance_decl(inst_decl)
-                    .expect("failed to inject prelude instance decl");
+                ts.inject_instance_decl(inst_decl)?;
             }
             Decl::Type(..) | Decl::Fn(..) | Decl::DeclareFn(..) | Decl::Import(..) => {}
         }
     }
+    Ok(())
 }
 
-pub fn prelude_typeclasses_program() -> &'static Program {
-    static PROGRAM: OnceLock<Program> = OnceLock::new();
-    PROGRAM.get_or_init(|| {
+pub fn prelude_typeclasses_program() -> Result<&'static Program, TypeError> {
+    static PROGRAM: OnceLock<Result<Program, String>> = OnceLock::new();
+    let parsed = PROGRAM.get_or_init(|| {
         let source = include_str!("prelude_typeclasses.rex");
-        let tokens = Token::tokenize(source).expect("failed to lex Rex prelude type class source");
+        let tokens =
+            Token::tokenize(source).map_err(|e| format!("prelude_typeclasses: lex error: {e}"))?;
         let mut parser = Parser::new(tokens);
-        parser.parse_program().unwrap_or_else(|errs| {
-            let mut out = String::from("failed to parse Rex prelude type class source:");
-            for err in errs {
-                out.push_str(&format!("\n  {err}"));
+        match parser.parse_program() {
+            Ok(program) => Ok(program),
+            Err(errs) => {
+                let mut out = String::from("prelude_typeclasses: parse error:");
+                for err in errs {
+                    out.push_str(&format!("\n  {err}"));
+                }
+                Err(out)
             }
-            panic!("{out}");
-        })
-    })
+        }
+    });
+    match parsed {
+        Ok(program) => Ok(program),
+        Err(msg) => Err(TypeError::Internal(msg.clone())),
+    }
 }
 
 fn inject_prelude_primops(ts: &mut TypeSystem) {
@@ -48,7 +55,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
     // Equality intrinsics.
     //
-    // WARM note: we make these “math-style” monomorphic overloads. Each
+    // Note: we make these “math-style” monomorphic overloads. Each
     // `prim_eq`/`prim_ne` implementation is tied to one concrete runtime type.
     // This avoids a single universal `eq` routine that switches on types at
     // runtime (harder to reason about, harder to optimize).
@@ -631,7 +638,10 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
         ] {
             let t = Type::con(src, 0);
-            ts.add_overload("prim_to_f64", Scheme::new(vec![], vec![], Type::fun(t, Type::con("f64", 0))));
+            ts.add_overload(
+                "prim_to_f64",
+                Scheme::new(vec![], vec![], Type::fun(t, Type::con("f64", 0))),
+            );
         }
 
         for (name, dst) in [
@@ -675,7 +685,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     }
 }
 
-pub(crate) fn build_prelude(ts: &mut TypeSystem) {
+pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
     // Primitive type constructors
     let prims = [
         "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string",
@@ -696,7 +706,9 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) {
         let a_name = sym("a");
         let list_params = vec![a_name.clone()];
         let mut list_adt = AdtDecl::new(&list_name, &list_params, &mut ts.supply);
-        let a = list_adt.param_type(&a_name).unwrap();
+        let a = list_adt.param_type(&a_name).ok_or_else(|| {
+            TypeError::Internal("prelude: List is missing type parameter `a`".into())
+        })?;
         let list_a = list_adt.result_type();
         list_adt.add_variant(sym("Empty"), vec![]);
         list_adt.add_variant(sym("Cons"), vec![a.clone(), list_a.clone()]);
@@ -707,7 +719,9 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) {
         let t_name = sym("t");
         let option_params = vec![t_name.clone()];
         let mut option_adt = AdtDecl::new(&option_name, &option_params, &mut ts.supply);
-        let t = option_adt.param_type(&t_name).unwrap();
+        let t = option_adt.param_type(&t_name).ok_or_else(|| {
+            TypeError::Internal("prelude: Option is missing type parameter `t`".into())
+        })?;
         option_adt.add_variant(sym("Some"), vec![t]);
         option_adt.add_variant(sym("None"), vec![]);
         ts.inject_adt(&option_adt);
@@ -718,15 +732,19 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) {
         let t_name = sym("t");
         let result_params = vec![e_name.clone(), t_name.clone()];
         let mut result_adt = AdtDecl::new(&result_name, &result_params, &mut ts.supply);
-        let e = result_adt.param_type(&e_name).unwrap();
-        let t = result_adt.param_type(&t_name).unwrap();
+        let e = result_adt.param_type(&e_name).ok_or_else(|| {
+            TypeError::Internal("prelude: Result is missing type parameter `e`".into())
+        })?;
+        let t = result_adt.param_type(&t_name).ok_or_else(|| {
+            TypeError::Internal("prelude: Result is missing type parameter `t`".into())
+        })?;
         result_adt.add_variant(sym("Err"), vec![e]);
         result_adt.add_variant(sym("Ok"), vec![t]);
         ts.inject_adt(&result_adt);
     }
 
     inject_prelude_primops(ts);
-    inject_prelude_classes_and_instances(ts);
+    inject_prelude_classes_and_instances(ts)?;
 
     // Helper constructors used to describe prelude schemes below.
     let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(sym(name)));
@@ -863,4 +881,6 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) {
             ),
         );
     }
+
+    Ok(())
 }

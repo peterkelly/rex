@@ -1,27 +1,10 @@
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use rex_ast::expr::Decl;
 use rex_engine::Engine;
-use rex_gas::{GasCosts, GasMeter};
 use rex_lexer::Token;
 use rex_parser::{Parser, ParserLimits};
 use rex_ts::TypeSystem;
-
-fn inject_type_env_decls(ts: &mut TypeSystem, decls: &[Decl]) -> Result<(), rex_ts::TypeError> {
-    for decl in decls {
-        match decl {
-            Decl::Type(ty) => ts.inject_type_decl(ty)?,
-            Decl::Class(class_decl) => ts.inject_class_decl(class_decl)?,
-            Decl::Instance(inst_decl) => {
-                ts.inject_instance_decl(inst_decl)?;
-            }
-            Decl::Fn(fd) => ts.inject_fn_decl(fd)?,
-            Decl::DeclareFn(fd) => ts.inject_declare_fn_decl(fd)?,
-            Decl::Import(..) => {}
-        }
-    }
-    Ok(())
-}
+use rex_util::{GasCosts, GasMeter};
 
 #[derive(Clone)]
 struct XorShift64 {
@@ -85,11 +68,11 @@ fn fuzz_smoke_pipeline_does_not_panic() {
                 Err(_) => return,
             };
 
-            let mut ts = TypeSystem::with_prelude();
-            let _ = inject_type_env_decls(&mut ts, &program.decls);
+            let mut ts = TypeSystem::with_prelude().unwrap();
+            let _ = ts.inject_decls(&program.decls);
             let _ = ts.infer_with_gas(program.expr.as_ref(), &mut gas);
 
-            let mut engine = Engine::with_prelude();
+            let mut engine = Engine::with_prelude().unwrap();
             let _ = engine.inject_decls(&program.decls);
             let _ = engine.eval_with_gas(program.expr.as_ref(), &mut gas);
         }));

@@ -14,7 +14,7 @@ fn eval(code: &str) -> Result<Value, EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let mut engine = Engine::with_prelude();
+    let mut engine = Engine::with_prelude().unwrap();
     engine.inject_decls(&program.decls)?;
     engine.eval(program.expr.as_ref())
 }

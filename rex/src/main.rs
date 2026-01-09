@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use std::fs;
 use std::io::IsTerminal;
@@ -7,9 +8,9 @@ use std::thread;
 
 use clap::{Args, Parser, Subcommand};
 use rex_engine::{Engine, ReplState};
-use rex_gas::{GasCosts, GasMeter};
 use rex_lexer::Token;
 use rex_parser::{Parser as RexParser, ParserLimits};
+use rex_util::{GasCosts, GasMeter};
 use serde_json::json;
 
 mod cli_prelude;
@@ -270,7 +271,8 @@ fn repl_loop(
     no_gas: bool,
     parser_limits: ParserLimits,
 ) -> Result<(), String> {
-    let mut engine = Engine::with_prelude();
+    let mut engine =
+        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
     cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
     engine.add_default_resolvers();
     for root in include {
@@ -338,10 +340,8 @@ fn repl_loop(
         let program = match parser.parse_program_with_gas(&mut gas) {
             Ok(p) => p,
             Err(errs) => {
-                let incomplete = !errs.is_empty()
-                    && errs
-                        .iter()
-                        .all(|e| e.message.trim() == "unexpected EOF");
+                let incomplete =
+                    !errs.is_empty() && errs.iter().all(|e| e.message.trim() == "unexpected EOF");
                 if incomplete {
                     continue;
                 }
@@ -387,6 +387,19 @@ struct RunSourceOpts {
     parser_limits: ParserLimits,
 }
 
+fn init_engine(include: &[String]) -> Result<Engine, String> {
+    let mut engine =
+        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
+    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| e.to_string())?;
+    engine.add_default_resolvers();
+    for root in include {
+        engine
+            .add_include_resolver(root)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(engine)
+}
+
 fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     let RunSourceOpts {
         file,
@@ -427,14 +440,7 @@ fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut engine = Engine::with_prelude();
-    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
-    engine.add_default_resolvers();
-    for root in include {
-        engine
-            .add_include_resolver(&root)
-            .map_err(|e| format!("{e}"))?;
-    }
+    let mut engine = init_engine(&include)?;
 
     let value = if let Some(path) = file {
         engine
@@ -474,14 +480,7 @@ fn infer_type_json(
     include: &[String],
     gas: &mut GasMeter,
 ) -> Result<serde_json::Value, String> {
-    let mut engine = Engine::with_prelude();
-    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
-    engine.add_default_resolvers();
-    for root in include {
-        engine
-            .add_include_resolver(root)
-            .map_err(|e| format!("{e}"))?;
-    }
+    let mut engine = init_engine(include)?;
 
     let (preds, ty) = if let Some(path) = file {
         engine
@@ -552,9 +551,34 @@ mod tests {
     fn emit_type_resolves_imports() {
         let costs = GasCosts::sensible_defaults();
         let mut gas = GasMeter::unlimited(costs);
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/modules_basic/main_no_alias.rex");
-        let json = infer_type_json("", path.to_str(), &[], &mut gas).expect("infer");
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("rex-import-test-{nonce}"));
+        std::fs::create_dir_all(root.join("foo")).expect("create temp module dir");
+
+        std::fs::write(
+            root.join("foo/bar.rex"),
+            r#"
+                pub fn add : i32 -> i32 -> i32 = \x y -> x + y
+                pub fn triple : i32 -> i32 = \x -> x * 3
+            "#,
+        )
+        .expect("write bar.rex");
+        let main_path = root.join("main.rex");
+        std::fs::write(
+            &main_path,
+            r#"
+                import foo.bar
+
+                bar.add (bar.triple 10) 2
+            "#,
+        )
+        .expect("write main.rex");
+
+        let json = infer_type_json("", main_path.to_str(), &[], &mut gas).expect("infer");
+        let _ = std::fs::remove_dir_all(&root);
         assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
     }
 }

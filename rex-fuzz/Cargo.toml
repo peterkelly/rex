@@ -1,14 +1,17 @@
 [package]
 name = "rex-fuzz"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [dependencies]
 rex-ast = { workspace = true }
 rex-engine = { workspace = true }
-rex-gas = { workspace = true }
 rex-lexer = { workspace = true }
 rex-parser = { workspace = true }
 rex-ts = { workspace = true }
+rex-util = { workspace = true }
+thiserror = { workspace = true }
 
+[lints]
+workspace = true

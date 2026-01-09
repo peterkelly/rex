@@ -3,7 +3,7 @@ use std::thread;
 use rex_ast::expr::Program;
 use rex_lexer::span::Span;
 
-use crate::{error::ParserErr, Parser};
+use crate::{Parser, error::ParserErr};
 
 pub const DEFAULT_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 

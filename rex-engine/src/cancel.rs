@@ -35,8 +35,11 @@ impl CancellationToken {
 
     pub fn cancel(&self) {
         self.inner.cancelled.store(true, Ordering::SeqCst);
-        let wakers =
-            std::mem::take(&mut *self.inner.wakers.lock().expect("poisoned cancel wakers"));
+        let mut wakers = match self.inner.wakers.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let wakers = std::mem::take(&mut *wakers);
         for w in wakers {
             w.wake();
         }
@@ -65,12 +68,10 @@ impl Future for Cancelled {
             return Poll::Ready(());
         }
         let waker = cx.waker().clone();
-        let mut wakers = self
-            .token
-            .inner
-            .wakers
-            .lock()
-            .expect("poisoned cancel wakers");
+        let mut wakers = match self.token.inner.wakers.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         if !wakers.iter().any(|w| w.will_wake(&waker)) {
             wakers.push(waker);
         }

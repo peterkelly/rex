@@ -1,11 +1,10 @@
 [package]
-name = "rex-gas"
+name = "rex-util"
 version = "0.1.0"
 edition = "2024"
-
-[dependencies]
-thiserror = { workspace = true }
 
 [lints]
 workspace = true
 
+[dependencies]
+thiserror = { workspace = true }

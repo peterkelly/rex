@@ -25,10 +25,11 @@ pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;
 static INTERNER: OnceLock<Mutex<HashMap<String, Symbol>>> = OnceLock::new();
 
 pub fn intern(name: &str) -> Symbol {
-    let mut table = INTERNER
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .expect("symbol interner lock");
+    let mutex = INTERNER.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut table = match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
     if let Some(existing) = table.get(name) {
         return existing.clone();
     }

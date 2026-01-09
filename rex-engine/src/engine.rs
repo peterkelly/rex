@@ -10,16 +10,16 @@ use futures::{FutureExt, future::BoxFuture, pin_mut};
 use rex_ast::expr::{
     ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, intern,
 };
-use rex_gas::GasMeter;
 use rex_ts::{
     AdtDecl, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type, TypeError, TypeKind,
     TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails,
     instantiate, unify,
 };
+use rex_util::GasMeter;
 use uuid::Uuid;
 
-use crate::modules::virtual_export_name;
 use crate::modules::ModuleSystem;
+use crate::modules::virtual_export_name;
 use crate::{CancellationToken, EngineError, Env};
 
 fn sym(name: &str) -> Symbol {
@@ -1123,18 +1123,19 @@ impl Engine {
         }
     }
 
-    pub fn with_prelude() -> Self {
+    pub fn with_prelude() -> Result<Self, EngineError> {
+        let types = TypeSystem::with_prelude()?;
         let mut engine = Engine {
             env: Env::new(),
             natives: NativeRegistry::default(),
             typeclasses: TypeclassRegistry::default(),
-            types: TypeSystem::with_prelude(),
+            types,
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
             modules: ModuleSystem::default(),
             cancel: CancellationToken::new(),
         };
-        engine.inject_prelude().expect("prelude injection failed");
-        engine
+        engine.inject_prelude()?;
+        Ok(engine)
     }
 
     /// Inject `debug`/`info`/`warn`/`error` logging functions backed by `tracing`.
@@ -1855,8 +1856,8 @@ impl Engine {
         // The type system prelude injects the *heads* of the standard instances.
         // The evaluator also needs the *method bodies* so class method lookup can
         // produce actual values at runtime.
-        let program = rex_ts::prelude_typeclasses_program();
-        for decl in &program.decls {
+        let program = rex_ts::prelude_typeclasses_program().map_err(EngineError::Type)?;
+        for decl in program.decls.iter() {
             let Decl::Instance(inst_decl) = decl else {
                 continue;
             };
@@ -2160,7 +2161,9 @@ impl Engine {
         let specialized = typed.as_ref().apply(&s);
         let value = eval_typed_expr(self, &def_env, &specialized)?;
 
-        if typ.ftv().is_empty() && let Ok(mut cache) = self.typeclass_cache.lock() {
+        if typ.ftv().is_empty()
+            && let Ok(mut cache) = self.typeclass_cache.lock()
+        {
             cache.insert((name.clone(), typ.clone()), value.clone());
         }
         Ok(value)
@@ -2694,7 +2697,9 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
             if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 =>
         {
             let elems = list_to_vec(value, "list")?;
-            let first = elems.first().ok_or_else(|| EngineError::UnknownType(sym("list")))?;
+            let first = elems
+                .first()
+                .ok_or_else(|| EngineError::UnknownType(sym("list")))?;
             let elem_ty = value_type(first)?;
             for elem in elems.iter().skip(1) {
                 let ty = value_type(elem)?;
@@ -2913,9 +2918,7 @@ fn array_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
 
 fn dict_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem)
-            if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Dict")) =>
-        {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Dict")) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -3887,7 +3890,11 @@ fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError> {
                       dst_ty: Type,
                       conv: fn(f64) -> Option<Value>|
          -> Result<(), EngineError> {
-            let scheme = Scheme::new(vec![], vec![], Type::fun(f64_ty.clone(), option_type(dst_ty)));
+            let scheme = Scheme::new(
+                vec![],
+                vec![],
+                Type::fun(f64_ty.clone(), option_type(dst_ty)),
+            );
             engine.inject_native_scheme_typed(name, scheme, 1, move |_e, _t, args| {
                 let Value::F64(x) = args[0] else {
                     return Err(EngineError::NativeType {
@@ -3908,33 +3915,21 @@ fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError> {
             }
         })?;
         inject(engine, "prim_f64_to_u16", Type::con("u16", 0), |x| {
-            if x.is_finite()
-                && x.fract() == 0.0
-                && x >= u16::MIN as f64
-                && x <= u16::MAX as f64
-            {
+            if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64 {
                 Some(Value::U16(x as u16))
             } else {
                 None
             }
         })?;
         inject(engine, "prim_f64_to_u32", Type::con("u32", 0), |x| {
-            if x.is_finite()
-                && x.fract() == 0.0
-                && x >= u32::MIN as f64
-                && x <= u32::MAX as f64
-            {
+            if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64 {
                 Some(Value::U32(x as u32))
             } else {
                 None
             }
         })?;
         inject(engine, "prim_f64_to_u64", Type::con("u64", 0), |x| {
-            if x.is_finite()
-                && x.fract() == 0.0
-                && x >= u64::MIN as f64
-                && x <= u64::MAX as f64
-            {
+            if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64 {
                 Some(Value::U64(x as u64))
             } else {
                 None
@@ -3948,33 +3943,21 @@ fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError> {
             }
         })?;
         inject(engine, "prim_f64_to_i16", Type::con("i16", 0), |x| {
-            if x.is_finite()
-                && x.fract() == 0.0
-                && x >= i16::MIN as f64
-                && x <= i16::MAX as f64
-            {
+            if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64 {
                 Some(Value::I16(x as i16))
             } else {
                 None
             }
         })?;
         inject(engine, "prim_f64_to_i32", Type::con("i32", 0), |x| {
-            if x.is_finite()
-                && x.fract() == 0.0
-                && x >= i32::MIN as f64
-                && x <= i32::MAX as f64
-            {
+            if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64 {
                 Some(Value::I32(x as i32))
             } else {
                 None
             }
         })?;
         inject(engine, "prim_f64_to_i64", Type::con("i64", 0), |x| {
-            if x.is_finite()
-                && x.fract() == 0.0
-                && x >= i64::MIN as f64
-                && x <= i64::MAX as f64
-            {
+            if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64 {
                 Some(Value::I64(x as i64))
             } else {
                 None
@@ -4022,33 +4005,41 @@ fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError> {
         let scheme = Scheme::new(
             vec![a_tv, b_tv],
             vec![],
-            Type::fun(Type::fun(a.clone(), b.clone()), Type::fun(dict_a.clone(), dict_b)),
+            Type::fun(
+                Type::fun(a.clone(), b.clone()),
+                Type::fun(dict_a.clone(), dict_b),
+            ),
         );
-        engine.inject_native_scheme_typed("prim_dict_map", scheme, 2, |engine, call_type, args| {
-            let (arg_tys, _res_ty) = split_fun_chain("prim_dict_map", call_type, 2)?;
-            let func_ty = arg_tys[0].clone();
-            let dict_ty = arg_tys[1].clone();
-            let elem_ty = dict_elem_type(&dict_ty, "prim_dict_map")?;
-            let Value::Dict(map) = &args[1] else {
-                return Err(EngineError::NativeType {
-                    name: sym("prim_dict_map"),
-                    expected: "dict".into(),
-                    got: args[1].type_name().into(),
-                });
-            };
-            let mut out: BTreeMap<Symbol, Value> = BTreeMap::new();
-            for (k, v) in map {
-                let mapped = apply(
-                    engine,
-                    args[0].clone(),
-                    v.clone(),
-                    Some(&func_ty),
-                    Some(&elem_ty),
-                )?;
-                out.insert(k.clone(), mapped);
-            }
-            Ok(Value::Dict(out))
-        })?;
+        engine.inject_native_scheme_typed(
+            "prim_dict_map",
+            scheme,
+            2,
+            |engine, call_type, args| {
+                let (arg_tys, _res_ty) = split_fun_chain("prim_dict_map", call_type, 2)?;
+                let func_ty = arg_tys[0].clone();
+                let dict_ty = arg_tys[1].clone();
+                let elem_ty = dict_elem_type(&dict_ty, "prim_dict_map")?;
+                let Value::Dict(map) = &args[1] else {
+                    return Err(EngineError::NativeType {
+                        name: sym("prim_dict_map"),
+                        expected: "dict".into(),
+                        got: args[1].type_name().into(),
+                    });
+                };
+                let mut out: BTreeMap<Symbol, Value> = BTreeMap::new();
+                for (k, v) in map {
+                    let mapped = apply(
+                        engine,
+                        args[0].clone(),
+                        v.clone(),
+                        Some(&func_ty),
+                        Some(&elem_ty),
+                    )?;
+                    out.insert(k.clone(), mapped);
+                }
+                Ok(Value::Dict(out))
+            },
+        )?;
     }
 
     {
@@ -4073,7 +4064,8 @@ fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError> {
             scheme,
             2,
             |engine, call_type, args| {
-                let (arg_tys, _res_ty) = split_fun_chain("prim_dict_traverse_result", call_type, 2)?;
+                let (arg_tys, _res_ty) =
+                    split_fun_chain("prim_dict_traverse_result", call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty, "prim_dict_traverse_result")?;
@@ -4111,24 +4103,37 @@ fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError> {
     {
         let string_ty = Type::con("string", 0);
         let uuid_ty = Type::con("uuid", 0);
-        let scheme = Scheme::new(vec![], vec![], Type::fun(string_ty.clone(), option_type(uuid_ty)));
-        engine.inject_native_scheme_typed("prim_parse_uuid", scheme, 1, |_engine, _call_type, args| {
-            let Value::String(s) = &args[0] else {
-                return Err(EngineError::NativeType {
-                    name: sym("prim_parse_uuid"),
-                    expected: "string".into(),
-                    got: args[0].type_name().into(),
-                });
-            };
-            let parsed = Uuid::parse_str(s).ok().map(Value::Uuid);
-            Ok(option_from_value(parsed))
-        })?;
+        let scheme = Scheme::new(
+            vec![],
+            vec![],
+            Type::fun(string_ty.clone(), option_type(uuid_ty)),
+        );
+        engine.inject_native_scheme_typed(
+            "prim_parse_uuid",
+            scheme,
+            1,
+            |_engine, _call_type, args| {
+                let Value::String(s) = &args[0] else {
+                    return Err(EngineError::NativeType {
+                        name: sym("prim_parse_uuid"),
+                        expected: "string".into(),
+                        got: args[0].type_name().into(),
+                    });
+                };
+                let parsed = Uuid::parse_str(s).ok().map(Value::Uuid);
+                Ok(option_from_value(parsed))
+            },
+        )?;
     }
 
     {
         let string_ty = Type::con("string", 0);
         let dt_ty = Type::con("datetime", 0);
-        let scheme = Scheme::new(vec![], vec![], Type::fun(string_ty.clone(), option_type(dt_ty)));
+        let scheme = Scheme::new(
+            vec![],
+            vec![],
+            Type::fun(string_ty.clone(), option_type(dt_ty)),
+        );
         engine.inject_native_scheme_typed(
             "prim_parse_datetime",
             scheme,
@@ -4272,10 +4277,13 @@ fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError> {
         fn to_json_value(v: &serde_json::Value, tags: &Tags) -> Result<Value, String> {
             match v {
                 serde_json::Value::Null => Ok(Value::Adt(tags.null.clone(), vec![])),
-                serde_json::Value::Bool(b) => Ok(Value::Adt(tags.bool_.clone(), vec![Value::Bool(*b)])),
-                serde_json::Value::String(s) => {
-                    Ok(Value::Adt(tags.string.clone(), vec![Value::String(s.clone())]))
+                serde_json::Value::Bool(b) => {
+                    Ok(Value::Adt(tags.bool_.clone(), vec![Value::Bool(*b)]))
                 }
+                serde_json::Value::String(s) => Ok(Value::Adt(
+                    tags.string.clone(),
+                    vec![Value::String(s.clone())],
+                )),
                 serde_json::Value::Number(n) => {
                     let Some(f) = n.as_f64() else {
                         return Err("expected JSON number representable as f64".into());
@@ -4355,17 +4363,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty, "prim_map")?;
-            let mut out = Vec::new();
-            for value in list_to_vec(&args[1], "prim_map")? {
-                let mapped = apply(
-                    engine,
-                    args[0].clone(),
-                    value,
-                    Some(&func_ty),
-                    Some(&elem_ty),
-                )?;
-                out.push(mapped);
-            }
+            let values = list_to_vec(&args[1], "prim_map")?;
+            let out = map_values(engine, args[0].clone(), &func_ty, &elem_ty, values)?;
             Ok(list_from_vec(out))
         })?;
     }
@@ -4390,17 +4389,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let func_ty = arg_tys[0].clone();
             let array_ty = arg_tys[1].clone();
             let elem_ty = array_elem_type(&array_ty, "prim_map")?;
-            let mut out = Vec::new();
-            for value in expect_array(&args[1], "prim_map")? {
-                let mapped = apply(
-                    engine,
-                    args[0].clone(),
-                    value,
-                    Some(&func_ty),
-                    Some(&elem_ty),
-                )?;
-                out.push(mapped);
-            }
+            let values = expect_array(&args[1], "prim_map")?;
+            let out = map_values(engine, args[0].clone(), &func_ty, &elem_ty, values)?;
             Ok(Value::Array(out))
         })?;
     }
@@ -4507,13 +4497,16 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = list_elem_type(&list_ty, "prim_foldl")?;
-            let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
-            let mut acc = args[1].clone();
-            for value in list_to_vec(&args[2], "prim_foldl")? {
-                let step = apply(engine, args[0].clone(), acc, Some(&func_ty), Some(&acc_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
-            Ok(acc)
+            let values = list_to_vec(&args[2], "prim_foldl")?;
+            foldl_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                values,
+            )
         })?;
     }
 
@@ -4544,13 +4537,16 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = array_elem_type(&array_ty, "prim_foldl")?;
-            let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
-            let mut acc = args[1].clone();
-            for value in expect_array(&args[2], "prim_foldl")? {
-                let step = apply(engine, args[0].clone(), acc, Some(&func_ty), Some(&acc_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
-            Ok(acc)
+            let values = expect_array(&args[2], "prim_foldl")?;
+            foldl_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                values,
+            )
         })?;
     }
 
@@ -4581,15 +4577,15 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = option_elem_type(&opt_ty, "prim_foldl")?;
-            let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
-            let acc = args[1].clone();
-            match option_value(&args[2])? {
-                Some(value) => {
-                    let step = apply(engine, args[0].clone(), acc, Some(&func_ty), Some(&acc_ty))?;
-                    apply(engine, step, value, Some(&step_ty), Some(&elem_ty))
-                }
-                None => Ok(acc),
-            }
+            foldl_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                option_value(&args[2])?.into_iter(),
+            )
         })?;
     }
 
@@ -4620,20 +4616,16 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = list_elem_type(&list_ty, "prim_foldr")?;
-            let step_ty = Type::fun(acc_ty.clone(), acc_ty.clone());
-            let mut acc = args[1].clone();
             let values = list_to_vec(&args[2], "prim_foldr")?;
-            for value in values.into_iter().rev() {
-                let step = apply(
-                    engine,
-                    args[0].clone(),
-                    value,
-                    Some(&func_ty),
-                    Some(&elem_ty),
-                )?;
-                acc = apply(engine, step, acc, Some(&step_ty), Some(&acc_ty))?;
-            }
-            Ok(acc)
+            foldr_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                values,
+            )
         })?;
     }
 
@@ -4664,20 +4656,16 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = array_elem_type(&array_ty, "prim_foldr")?;
-            let step_ty = Type::fun(acc_ty.clone(), acc_ty.clone());
-            let mut acc = args[1].clone();
             let values = expect_array(&args[2], "prim_foldr")?;
-            for value in values.into_iter().rev() {
-                let step = apply(
-                    engine,
-                    args[0].clone(),
-                    value,
-                    Some(&func_ty),
-                    Some(&elem_ty),
-                )?;
-                acc = apply(engine, step, acc, Some(&step_ty), Some(&acc_ty))?;
-            }
-            Ok(acc)
+            foldr_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                values,
+            )
         })?;
     }
 
@@ -4708,21 +4696,15 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = option_elem_type(&opt_ty, "prim_foldr")?;
-            let step_ty = Type::fun(acc_ty.clone(), acc_ty.clone());
-            let acc = args[1].clone();
-            match option_value(&args[2])? {
-                Some(value) => {
-                    let step = apply(
-                        engine,
-                        args[0].clone(),
-                        value,
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )?;
-                    apply(engine, step, acc, Some(&step_ty), Some(&acc_ty))
-                }
-                None => Ok(acc),
-            }
+            foldr_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                option_value(&args[2])?.into_iter().collect(),
+            )
         })?;
     }
 
@@ -4753,13 +4735,16 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = list_elem_type(&list_ty, "prim_fold")?;
-            let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
-            let mut acc = args[1].clone();
-            for value in list_to_vec(&args[2], "prim_fold")? {
-                let step = apply(engine, args[0].clone(), acc, Some(&func_ty), Some(&acc_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
-            Ok(acc)
+            let values = list_to_vec(&args[2], "prim_fold")?;
+            foldl_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                values,
+            )
         })?;
     }
 
@@ -4790,13 +4775,16 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = array_elem_type(&array_ty, "prim_fold")?;
-            let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
-            let mut acc = args[1].clone();
-            for value in expect_array(&args[2], "prim_fold")? {
-                let step = apply(engine, args[0].clone(), acc, Some(&func_ty), Some(&acc_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
-            Ok(acc)
+            let values = expect_array(&args[2], "prim_fold")?;
+            foldl_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                values,
+            )
         })?;
     }
 
@@ -4827,15 +4815,15 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 });
             }
             let elem_ty = option_elem_type(&opt_ty, "prim_fold")?;
-            let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
-            let acc = args[1].clone();
-            match option_value(&args[2])? {
-                Some(value) => {
-                    let step = apply(engine, args[0].clone(), acc, Some(&func_ty), Some(&acc_ty))?;
-                    apply(engine, step, value, Some(&step_ty), Some(&elem_ty))
-                }
-                None => Ok(acc),
-            }
+            foldl_values(
+                engine,
+                args[0].clone(),
+                &func_ty,
+                &acc_ty,
+                &elem_ty,
+                args[1].clone(),
+                option_value(&args[2])?.into_iter(),
+            )
         })?;
     }
 
@@ -4860,19 +4848,15 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty, "prim_filter")?;
-                let mut out = Vec::new();
-                for value in list_to_vec(&args[1], "prim_filter")? {
-                    let keep = apply(
-                        engine,
-                        args[0].clone(),
-                        value.clone(),
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )?;
-                    if expect_bool(&keep, "prim_filter")? {
-                        out.push(value);
-                    }
-                }
+                let values = list_to_vec(&args[1], "prim_filter")?;
+                let out = filter_values(
+                    engine,
+                    "prim_filter",
+                    args[0].clone(),
+                    &func_ty,
+                    &elem_ty,
+                    values,
+                )?;
                 Ok(list_from_vec(out))
             },
         )?;
@@ -4899,19 +4883,15 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty, "prim_filter")?;
-                let mut out = Vec::new();
-                for value in expect_array(&args[1], "prim_filter")? {
-                    let keep = apply(
-                        engine,
-                        args[0].clone(),
-                        value.clone(),
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )?;
-                    if expect_bool(&keep, "prim_filter")? {
-                        out.push(value);
-                    }
-                }
+                let values = expect_array(&args[1], "prim_filter")?;
+                let out = filter_values(
+                    engine,
+                    "prim_filter",
+                    args[0].clone(),
+                    &func_ty,
+                    &elem_ty,
+                    values,
+                )?;
                 Ok(Value::Array(out))
             },
         )?;
@@ -4978,19 +4958,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty, "prim_filter_map")?;
-                let mut out = Vec::new();
-                for value in list_to_vec(&args[1], "prim_filter_map")? {
-                    let mapped = apply(
-                        engine,
-                        args[0].clone(),
-                        value,
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )?;
-                    if let Some(v) = option_value(&mapped)? {
-                        out.push(v);
-                    }
-                }
+                let values = list_to_vec(&args[1], "prim_filter_map")?;
+                let out = filter_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values)?;
                 Ok(list_from_vec(out))
             },
         )?;
@@ -5020,19 +4989,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty, "prim_filter_map")?;
-                let mut out = Vec::new();
-                for value in expect_array(&args[1], "prim_filter_map")? {
-                    let mapped = apply(
-                        engine,
-                        args[0].clone(),
-                        value,
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )?;
-                    if let Some(v) = option_value(&mapped)? {
-                        out.push(v);
-                    }
-                }
+                let values = expect_array(&args[1], "prim_filter_map")?;
+                let out = filter_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values)?;
                 Ok(Value::Array(out))
             },
         )?;
@@ -5098,18 +5056,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty, "prim_flat_map")?;
-                let mut out = Vec::new();
-                for value in list_to_vec(&args[1], "prim_flat_map")? {
-                    let mapped = apply(
-                        engine,
-                        args[0].clone(),
-                        value,
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )?;
-                    let mut inner = list_to_vec(&mapped, "prim_flat_map")?;
-                    out.append(&mut inner);
-                }
+                let values = list_to_vec(&args[1], "prim_flat_map")?;
+                let out =
+                    flat_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values, |v| {
+                        list_to_vec(v, "prim_flat_map")
+                    })?;
                 Ok(list_from_vec(out))
             },
         )?;
@@ -5139,18 +5090,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty, "prim_flat_map")?;
-                let mut out = Vec::new();
-                for value in expect_array(&args[1], "prim_flat_map")? {
-                    let mapped = apply(
-                        engine,
-                        args[0].clone(),
-                        value,
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )?;
-                    let mut inner = expect_array(&mapped, "prim_flat_map")?;
-                    out.append(&mut inner);
-                }
+                let values = expect_array(&args[1], "prim_flat_map")?;
+                let out =
+                    flat_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values, |v| {
+                        expect_array(v, "prim_flat_map")
+                    })?;
                 Ok(Value::Array(out))
             },
         )?;
@@ -5385,13 +5329,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             }
             let plus = resolve_binary_op(engine, "+", &elem_ty)?;
             let plus_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
-            let step_ty = Type::fun(elem_ty.clone(), elem_ty.clone());
-            let mut acc = values.remove(0);
-            for value in values {
-                let step = apply(engine, plus.clone(), acc, Some(&plus_ty), Some(&elem_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
-            Ok(acc)
+            let acc = values.remove(0);
+            foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc, values)
         })?;
     }
 
@@ -5414,13 +5353,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             }
             let plus = resolve_binary_op(engine, "+", &elem_ty)?;
             let plus_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
-            let step_ty = Type::fun(elem_ty.clone(), elem_ty.clone());
-            let mut acc = values.remove(0);
-            for value in values {
-                let step = apply(engine, plus.clone(), acc, Some(&plus_ty), Some(&elem_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
-            Ok(acc)
+            let acc = values.remove(0);
+            foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc, values)
         })?;
     }
 
@@ -5466,11 +5400,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let div = resolve_binary_op(engine, "/", &elem_ty)?;
             let plus_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
             let step_ty = Type::fun(elem_ty.clone(), elem_ty.clone());
-            let mut acc = values.remove(0);
-            for value in values {
-                let step = apply(engine, plus.clone(), acc, Some(&plus_ty), Some(&elem_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
+            let acc0 = values.remove(0);
+            let acc = foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc0, values)?;
             let len_val = len_value_for_type(&elem_ty, len, "mean")?;
             let div_step = apply(engine, div.clone(), acc, Some(&plus_ty), Some(&elem_ty))?;
             apply(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty))
@@ -5499,11 +5430,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let div = resolve_binary_op(engine, "/", &elem_ty)?;
             let plus_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
             let step_ty = Type::fun(elem_ty.clone(), elem_ty.clone());
-            let mut acc = values.remove(0);
-            for value in values {
-                let step = apply(engine, plus.clone(), acc, Some(&plus_ty), Some(&elem_ty))?;
-                acc = apply(engine, step, value, Some(&step_ty), Some(&elem_ty))?;
-            }
+            let acc0 = values.remove(0);
+            let acc = foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc0, values)?;
             let len_val = len_value_for_type(&elem_ty, len, "mean")?;
             let div_step = apply(engine, div.clone(), acc, Some(&plus_ty), Some(&elem_ty))?;
             apply(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty))
@@ -5595,7 +5523,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             2,
             |_engine, _call_type, args| {
                 let n = i32::from_value(&args[0], "prim_take")?;
-                let n = if n < 0 { 0 } else { n as usize };
+                let n = as_nonneg_usize(n);
                 let xs = list_to_vec(&args[1], "prim_take")?;
                 Ok(list_from_vec(xs.into_iter().take(n).collect()))
             },
@@ -5617,7 +5545,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             2,
             |_engine, _call_type, args| {
                 let n = i32::from_value(&args[0], "prim_take")?;
-                let n = if n < 0 { 0 } else { n as usize };
+                let n = as_nonneg_usize(n);
                 let xs = expect_array(&args[1], "prim_take")?;
                 Ok(Value::Array(xs.into_iter().take(n).collect()))
             },
@@ -5639,7 +5567,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             2,
             |_engine, _call_type, args| {
                 let n = i32::from_value(&args[0], "prim_skip")?;
-                let n = if n < 0 { 0 } else { n as usize };
+                let n = as_nonneg_usize(n);
                 let xs = list_to_vec(&args[1], "prim_skip")?;
                 Ok(list_from_vec(xs.into_iter().skip(n).collect()))
             },
@@ -5661,7 +5589,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             2,
             |_engine, _call_type, args| {
                 let n = i32::from_value(&args[0], "prim_skip")?;
-                let n = if n < 0 { 0 } else { n as usize };
+                let n = as_nonneg_usize(n);
                 let xs = expect_array(&args[1], "prim_skip")?;
                 Ok(Value::Array(xs.into_iter().skip(n).collect()))
             },
@@ -5682,24 +5610,9 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty, "prim_get")?;
             let idx = i32::from_value(&args[0], "prim_get")?;
-            let idx_usize = if idx < 0 {
-                return Err(EngineError::IndexOutOfBounds {
-                    name: sym("prim_get"),
-                    index: idx,
-                    len: 0,
-                });
-            } else {
-                idx as usize
-            };
             let xs = list_to_vec(&args[1], "prim_get")?;
-            if idx_usize >= xs.len() {
-                return Err(EngineError::IndexOutOfBounds {
-                    name: sym("prim_get"),
-                    index: idx,
-                    len: xs.len(),
-                });
-            }
-            Ok(xs[idx_usize].clone())
+            let idx = checked_index(sym("prim_get"), idx, xs.len())?;
+            Ok(xs[idx].clone())
         })?;
     }
 
@@ -5717,24 +5630,9 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             let array_ty = arg_tys[1].clone();
             let _elem_ty = array_elem_type(&array_ty, "prim_get")?;
             let idx = i32::from_value(&args[0], "prim_get")?;
-            let idx_usize = if idx < 0 {
-                return Err(EngineError::IndexOutOfBounds {
-                    name: sym("prim_get"),
-                    index: idx,
-                    len: 0,
-                });
-            } else {
-                idx as usize
-            };
             let xs = expect_array(&args[1], "prim_get")?;
-            if idx_usize >= xs.len() {
-                return Err(EngineError::IndexOutOfBounds {
-                    name: sym("prim_get"),
-                    index: idx,
-                    len: xs.len(),
-                });
-            }
-            Ok(xs[idx_usize].clone())
+            let idx = checked_index(sym("prim_get"), idx, xs.len())?;
+            Ok(xs[idx].clone())
         })?;
     }
 
@@ -5756,15 +5654,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let tuple_ty = arg_tys[1].clone();
                 let _elem_ty = tuple_elem_type(&tuple_ty, "prim_get")?;
                 let idx = i32::from_value(&args[0], "prim_get")?;
-                let idx_usize = if idx < 0 {
-                    return Err(EngineError::IndexOutOfBounds {
-                        name: sym("prim_get"),
-                        index: idx,
-                        len: 0,
-                    });
-                } else {
-                    idx as usize
-                };
+                let idx_usize = checked_index(sym("prim_get"), idx, size)?;
                 match &args[1] {
                     Value::Tuple(xs) => {
                         if xs.len() != size {
@@ -5772,13 +5662,6 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                                 name: sym("prim_get"),
                                 expected: format!("tuple{}", size),
                                 got: format!("tuple{}", xs.len()),
-                            });
-                        }
-                        if idx_usize >= xs.len() {
-                            return Err(EngineError::IndexOutOfBounds {
-                                name: sym("prim_get"),
-                                index: idx,
-                                len: xs.len(),
                             });
                         }
                         Ok(xs[idx_usize].clone())
@@ -5809,11 +5692,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         engine.inject_native_scheme_typed("prim_zip", scheme, 2, |_engine, _call_type, args| {
             let xs = list_to_vec(&args[0], "prim_zip")?;
             let ys = list_to_vec(&args[1], "prim_zip")?;
-            let mut out = Vec::new();
-            for (x, y) in xs.into_iter().zip(ys.into_iter()) {
-                out.push(Value::Tuple(vec![x, y]));
-            }
-            Ok(list_from_vec(out))
+            Ok(list_from_vec(zip_tuple2(xs, ys)))
         })?;
     }
 
@@ -5833,11 +5712,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
         engine.inject_native_scheme_typed("prim_zip", scheme, 2, |_engine, _call_type, args| {
             let xs = expect_array(&args[0], "prim_zip")?;
             let ys = expect_array(&args[1], "prim_zip")?;
-            let mut out = Vec::new();
-            for (x, y) in xs.into_iter().zip(ys.into_iter()) {
-                out.push(Value::Tuple(vec![x, y]));
-            }
-            Ok(Value::Array(out))
+            Ok(Value::Array(zip_tuple2(xs, ys)))
         })?;
     }
 
@@ -5859,23 +5734,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             scheme,
             1,
             |_engine, _call_type, args| {
-                let mut left = Vec::new();
-                let mut right = Vec::new();
-                for value in list_to_vec(&args[0], "prim_unzip")? {
-                    match value {
-                        Value::Tuple(mut elems) if elems.len() == 2 => {
-                            right.push(elems.pop().unwrap());
-                            left.push(elems.pop().unwrap());
-                        }
-                        other => {
-                            return Err(EngineError::NativeType {
-                                name: sym("prim_unzip"),
-                                expected: "tuple2".into(),
-                                got: other.type_name().into(),
-                            });
-                        }
-                    }
-                }
+                let pairs = list_to_vec(&args[0], "prim_unzip")?;
+                let (left, right) = unzip_tuple2(sym("prim_unzip"), pairs)?;
                 Ok(Value::Tuple(vec![
                     list_from_vec(left),
                     list_from_vec(right),
@@ -5902,23 +5762,8 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             scheme,
             1,
             |_engine, _call_type, args| {
-                let mut left = Vec::new();
-                let mut right = Vec::new();
-                for value in expect_array(&args[0], "prim_unzip")? {
-                    match value {
-                        Value::Tuple(mut elems) if elems.len() == 2 => {
-                            right.push(elems.pop().unwrap());
-                            left.push(elems.pop().unwrap());
-                        }
-                        other => {
-                            return Err(EngineError::NativeType {
-                                name: sym("prim_unzip"),
-                                expected: "tuple2".into(),
-                                got: other.type_name().into(),
-                            });
-                        }
-                    }
-                }
+                let pairs = expect_array(&args[0], "prim_unzip")?;
+                let (left, right) = unzip_tuple2(sym("prim_unzip"), pairs)?;
                 Ok(Value::Tuple(vec![Value::Array(left), Value::Array(right)]))
             },
         )?;
@@ -5934,19 +5779,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(list_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("min", scheme, 1, |_engine, call_type, args| {
-            let min_name = sym("min");
             let (arg_tys, _res_ty) = split_fun_chain("min", call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty, "min")?;
-            let mut values = list_to_vec(&args[0], "min")?.into_iter();
-            let mut best = values.next().ok_or(EngineError::EmptySequence)?;
-            for value in values {
-                let ord = cmp_value_by_type(&min_name, &elem_ty, &value, &best)?;
-                if ord == std::cmp::Ordering::Less {
-                    best = value;
-                }
-            }
-            Ok(best)
+            let values = list_to_vec(&args[0], "min")?;
+            extremum_by_type("min", &elem_ty, values, std::cmp::Ordering::Less)
         })?;
     }
 
@@ -5960,19 +5797,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(array_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("min", scheme, 1, |_engine, call_type, args| {
-            let min_name = sym("min");
             let (arg_tys, _res_ty) = split_fun_chain("min", call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty, "min")?;
-            let mut values = expect_array(&args[0], "min")?.into_iter();
-            let mut best = values.next().ok_or(EngineError::EmptySequence)?;
-            for value in values {
-                let ord = cmp_value_by_type(&min_name, &elem_ty, &value, &best)?;
-                if ord == std::cmp::Ordering::Less {
-                    best = value;
-                }
-            }
-            Ok(best)
+            let values = expect_array(&args[0], "min")?;
+            extremum_by_type("min", &elem_ty, values, std::cmp::Ordering::Less)
         })?;
     }
 
@@ -6006,19 +5835,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(list_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("max", scheme, 1, |_engine, call_type, args| {
-            let max_name = sym("max");
             let (arg_tys, _res_ty) = split_fun_chain("max", call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty, "max")?;
-            let mut values = list_to_vec(&args[0], "max")?.into_iter();
-            let mut best = values.next().ok_or(EngineError::EmptySequence)?;
-            for value in values {
-                let ord = cmp_value_by_type(&max_name, &elem_ty, &value, &best)?;
-                if ord == std::cmp::Ordering::Greater {
-                    best = value;
-                }
-            }
-            Ok(best)
+            let values = list_to_vec(&args[0], "max")?;
+            extremum_by_type("max", &elem_ty, values, std::cmp::Ordering::Greater)
         })?;
     }
 
@@ -6032,19 +5853,11 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(array_a.clone(), a.clone()),
         );
         engine.inject_native_scheme_typed("max", scheme, 1, |_engine, call_type, args| {
-            let max_name = sym("max");
             let (arg_tys, _res_ty) = split_fun_chain("max", call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty, "max")?;
-            let mut values = expect_array(&args[0], "max")?.into_iter();
-            let mut best = values.next().ok_or(EngineError::EmptySequence)?;
-            for value in values {
-                let ord = cmp_value_by_type(&max_name, &elem_ty, &value, &best)?;
-                if ord == std::cmp::Ordering::Greater {
-                    best = value;
-                }
-            }
-            Ok(best)
+            let values = expect_array(&args[0], "max")?;
+            extremum_by_type("max", &elem_ty, values, std::cmp::Ordering::Greater)
         })?;
     }
 
@@ -6317,6 +6130,179 @@ fn apply(
         Value::Overloaded(over) => over.apply(engine, arg, func_type, arg_type),
         other => Err(EngineError::NotCallable(other.type_name().into())),
     }
+}
+
+fn map_values(
+    engine: &Engine,
+    func: Value,
+    func_ty: &Type,
+    elem_ty: &Type,
+    values: impl IntoIterator<Item = Value>,
+) -> Result<Vec<Value>, EngineError> {
+    values
+        .into_iter()
+        .map(|value| apply(engine, func.clone(), value, Some(func_ty), Some(elem_ty)))
+        .collect()
+}
+
+fn filter_values(
+    engine: &Engine,
+    name: &'static str,
+    pred: Value,
+    pred_ty: &Type,
+    elem_ty: &Type,
+    values: impl IntoIterator<Item = Value>,
+) -> Result<Vec<Value>, EngineError> {
+    let mut out = Vec::new();
+    for value in values {
+        let keep = apply(
+            engine,
+            pred.clone(),
+            value.clone(),
+            Some(pred_ty),
+            Some(elem_ty),
+        )?;
+        if expect_bool(&keep, name)? {
+            out.push(value);
+        }
+    }
+    Ok(out)
+}
+
+fn filter_map_values(
+    engine: &Engine,
+    func: Value,
+    func_ty: &Type,
+    elem_ty: &Type,
+    values: impl IntoIterator<Item = Value>,
+) -> Result<Vec<Value>, EngineError> {
+    let mut out = Vec::new();
+    for value in values {
+        let mapped = apply(engine, func.clone(), value, Some(func_ty), Some(elem_ty))?;
+        if let Some(v) = option_value(&mapped)? {
+            out.push(v);
+        }
+    }
+    Ok(out)
+}
+
+fn flat_map_values(
+    engine: &Engine,
+    func: Value,
+    func_ty: &Type,
+    elem_ty: &Type,
+    values: impl IntoIterator<Item = Value>,
+    mut extract: impl FnMut(&Value) -> Result<Vec<Value>, EngineError>,
+) -> Result<Vec<Value>, EngineError> {
+    let mut out = Vec::new();
+    for value in values {
+        let mapped = apply(engine, func.clone(), value, Some(func_ty), Some(elem_ty))?;
+        out.extend(extract(&mapped)?);
+    }
+    Ok(out)
+}
+
+fn foldl_values(
+    engine: &Engine,
+    func: Value,
+    func_ty: &Type,
+    acc_ty: &Type,
+    elem_ty: &Type,
+    mut acc: Value,
+    values: impl IntoIterator<Item = Value>,
+) -> Result<Value, EngineError> {
+    let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
+    for value in values {
+        let step = apply(engine, func.clone(), acc, Some(func_ty), Some(acc_ty))?;
+        acc = apply(engine, step, value, Some(&step_ty), Some(elem_ty))?;
+    }
+    Ok(acc)
+}
+
+fn foldr_values(
+    engine: &Engine,
+    func: Value,
+    func_ty: &Type,
+    acc_ty: &Type,
+    elem_ty: &Type,
+    mut acc: Value,
+    values: Vec<Value>,
+) -> Result<Value, EngineError> {
+    let step_ty = Type::fun(acc_ty.clone(), acc_ty.clone());
+    for value in values.into_iter().rev() {
+        let step = apply(engine, func.clone(), value, Some(func_ty), Some(elem_ty))?;
+        acc = apply(engine, step, acc, Some(&step_ty), Some(acc_ty))?;
+    }
+    Ok(acc)
+}
+
+fn extremum_by_type(
+    name: &'static str,
+    elem_ty: &Type,
+    values: Vec<Value>,
+    choose: std::cmp::Ordering,
+) -> Result<Value, EngineError> {
+    let name = sym(name);
+    let mut values = values.into_iter();
+    let mut best = values.next().ok_or(EngineError::EmptySequence)?;
+    for value in values {
+        let ord = cmp_value_by_type(&name, elem_ty, &value, &best)?;
+        if ord == choose {
+            best = value;
+        }
+    }
+    Ok(best)
+}
+
+fn checked_index(name: Symbol, index: i32, len: usize) -> Result<usize, EngineError> {
+    if index < 0 {
+        return Err(EngineError::IndexOutOfBounds { name, index, len });
+    }
+    let index_usize = index as usize;
+    if index_usize >= len {
+        return Err(EngineError::IndexOutOfBounds { name, index, len });
+    }
+    Ok(index_usize)
+}
+
+fn zip_tuple2(xs: Vec<Value>, ys: Vec<Value>) -> Vec<Value> {
+    xs.into_iter()
+        .zip(ys)
+        .map(|(x, y)| Value::Tuple(vec![x, y]))
+        .collect()
+}
+
+fn unzip_tuple2(name: Symbol, pairs: Vec<Value>) -> Result<(Vec<Value>, Vec<Value>), EngineError> {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    for value in pairs {
+        match value {
+            Value::Tuple(elems) => {
+                let len = elems.len();
+                let Ok([a, b]) = <[Value; 2]>::try_from(elems) else {
+                    return Err(EngineError::NativeType {
+                        name,
+                        expected: "tuple2".into(),
+                        got: format!("tuple{len}"),
+                    });
+                };
+                left.push(a);
+                right.push(b);
+            }
+            other => {
+                return Err(EngineError::NativeType {
+                    name,
+                    expected: "tuple2".into(),
+                    got: other.type_name().into(),
+                });
+            }
+        }
+    }
+    Ok((left, right))
+}
+
+fn as_nonneg_usize(n: i32) -> usize {
+    if n <= 0 { 0 } else { n as usize }
 }
 
 impl NativeFn {
@@ -7153,9 +7139,10 @@ async fn apply_async_with_gas(
                 .apply_async_with_gas(engine, arg, arg_type, gas)
                 .await
         }
-        Value::Overloaded(over) => over
-            .apply_async_with_gas(engine, arg, func_type, arg_type, gas)
-            .await,
+        Value::Overloaded(over) => {
+            over.apply_async_with_gas(engine, arg, func_type, arg_type, gas)
+                .await
+        }
         other => Err(EngineError::NotCallable(other.type_name().into())),
     }
 }
@@ -7224,7 +7211,7 @@ mod tests {
     use super::*;
     use futures::executor::block_on;
     use futures::future;
-    use rex_gas::{GasCosts, GasMeter};
+    use rex_util::{GasCosts, GasMeter};
     use std::path::Path;
 
     use crate::ReplState;
@@ -7247,7 +7234,7 @@ mod tests {
     }
 
     fn engine_with_arith() -> Engine {
-        Engine::with_prelude()
+        Engine::with_prelude().unwrap()
     }
 
     fn list_values(value: &Value) -> Vec<Value> {
@@ -7258,7 +7245,7 @@ mod tests {
     fn repl_persists_function_definitions() {
         let costs = GasCosts::sensible_defaults();
         let mut gas = GasMeter::unlimited(costs);
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         engine.add_default_resolvers();
         let mut state = ReplState::new();
 
@@ -7279,11 +7266,10 @@ mod tests {
     fn repl_persists_import_aliases() {
         let costs = GasCosts::sensible_defaults();
         let mut gas = GasMeter::unlimited(costs);
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         engine.add_default_resolvers();
 
-        let examples = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../rex/examples/modules_basic");
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex/examples/modules_basic");
         engine.add_include_resolver(&examples).unwrap();
 
         let mut state = ReplState::new();
@@ -7324,7 +7310,7 @@ mod tests {
     #[test]
     fn eval_async_native_injection() {
         let expr = parse("inc 1");
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         engine
             .inject_async_fn1("inc", |x: i32| async move { x + 1 })
             .unwrap();
@@ -7339,7 +7325,7 @@ mod tests {
     #[test]
     fn eval_async_can_be_cancelled() {
         let expr = parse("stall");
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
 
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         engine
@@ -7369,7 +7355,7 @@ mod tests {
     #[test]
     fn sync_eval_can_be_cancelled_while_blocking_on_async_native() {
         let expr = parse("stall");
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
 
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         engine
@@ -7398,7 +7384,7 @@ mod tests {
     #[test]
     fn eval_with_gas_rejects_out_of_budget() {
         let expr = parse("1");
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let mut gas = GasMeter::new(
             Some(0),
             GasCosts {
@@ -7416,7 +7402,7 @@ mod tests {
     #[test]
     fn native_per_impl_gas_cost_is_charged() {
         let expr = parse("foo");
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
         engine
             .inject_native_scheme_typed_with_gas_cost("foo", scheme, 0, 50, |_e, _t, _args| {
@@ -7461,7 +7447,7 @@ mod tests {
             .parse_program_with_stack_size(128 * 1024 * 1024)
             .unwrap();
         let expr = program.expr;
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine
             .eval_with_stack_size(expr.as_ref(), 64 * 1024 * 1024)
             .unwrap();
@@ -7713,7 +7699,7 @@ mod tests {
     #[test]
     fn eval_match_missing_arm_errors() {
         let expr = parse("match (Err 1) when Ok x -> x");
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let result = engine.eval(expr.as_ref());
         match result {
             Err(EngineError::Type(err)) => {
@@ -7727,7 +7713,7 @@ mod tests {
     #[test]
     fn eval_match_invalid_pattern_type_error() {
         let expr = parse("match (Ok 1) when [] -> 0 when x:xs -> 1");
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let result = engine.eval(expr.as_ref());
         match result {
             Err(EngineError::Type(err)) => {
@@ -7772,7 +7758,7 @@ mod tests {
                 )
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -7806,7 +7792,7 @@ mod tests {
                     when Box x -> x
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(ty) = decl {
                 engine.inject_type_decl(ty).unwrap();
@@ -7824,7 +7810,7 @@ mod tests {
             add 1 2
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(ty) = decl {
                 engine.inject_type_decl(ty).unwrap();
@@ -7843,7 +7829,7 @@ mod tests {
             my_add 1 2
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(ty) = decl {
                 engine.inject_type_decl(ty).unwrap();
@@ -7865,7 +7851,7 @@ mod tests {
                 (x.field1, x.field2)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(ty) = decl {
                 engine.inject_type_decl(ty).unwrap();
@@ -7897,7 +7883,7 @@ mod tests {
                     when MyVariant2 _ -> 0
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         for decl in &program.decls {
             if let rex_ast::expr::Decl::Type(ty) = decl {
                 engine.inject_type_decl(ty).unwrap();
@@ -7920,7 +7906,7 @@ mod tests {
                 (ys, zs, total)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -7951,7 +7937,7 @@ mod tests {
                 (xs, unzipped)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -7988,7 +7974,7 @@ mod tests {
                 (s, m, lo, hi)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -8019,7 +8005,7 @@ mod tests {
                 (opt2, res, ok, err)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -8047,7 +8033,7 @@ mod tests {
                 (a, b, c, d, e)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -8075,7 +8061,7 @@ mod tests {
                 (a, b, c)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -8102,7 +8088,7 @@ mod tests {
                 (count ys, total)
             "#,
         );
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         let value = engine.eval(expr.as_ref()).unwrap();
         match value {
             Value::Tuple(xs) => {
@@ -8116,7 +8102,7 @@ mod tests {
 
     #[test]
     fn eval_array_combinators() {
-        let mut engine = Engine::with_prelude();
+        let mut engine = Engine::with_prelude().unwrap();
         engine.inject_value("arr", vec![1i32, 2i32, 3i32]).unwrap();
         let expr = parse(
             r#"

@@ -14,6 +14,22 @@ fn sym(name: &str) -> Symbol {
     intern(name)
 }
 
+fn lock_mutex<'a, T>(
+    m: &'a Mutex<T>,
+    context: &str,
+) -> Result<std::sync::MutexGuard<'a, T>, EngineError> {
+    m.lock()
+        .map_err(|_| EngineError::Internal(format!("{context}: mutex poisoned (this is a bug)")))
+}
+
+fn lock_arc_mutex<'a, T>(
+    m: &'a Arc<Mutex<T>>,
+    context: &str,
+) -> Result<std::sync::MutexGuard<'a, T>, EngineError> {
+    m.lock()
+        .map_err(|_| EngineError::Internal(format!("{context}: mutex poisoned (this is a bug)")))
+}
+
 fn unit_value() -> Value {
     Value::Tuple(vec![])
 }
@@ -172,33 +188,33 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         move |_engine, _call_type, args| {
             let read_all_sym = read_all_sym.clone();
             async move {
-            if args.len() != 1 {
-                return Err(EngineError::NativeArity {
-                    name: read_all_sym,
-                    expected: 1,
-                    got: args.len(),
-                });
-            }
-            let Value::I32(fd) = args[0] else {
-                return Err(EngineError::NativeType {
-                    name: read_all_sym,
-                    expected: "i32".into(),
-                    got: value_type_name(&args[0]).into(),
-                });
-            };
+                if args.len() != 1 {
+                    return Err(EngineError::NativeArity {
+                        name: read_all_sym,
+                        expected: 1,
+                        got: args.len(),
+                    });
+                }
+                let Value::I32(fd) = args[0] else {
+                    return Err(EngineError::NativeType {
+                        name: read_all_sym,
+                        expected: "i32".into(),
+                        got: value_type_name(&args[0]).into(),
+                    });
+                };
 
-            if fd != 0 {
-                return Err(EngineError::Internal(format!(
-                    "read_all only supports fd 0 (stdin), got {fd}"
-                )));
-            }
+                if fd != 0 {
+                    return Err(EngineError::Internal(format!(
+                        "read_all only supports fd 0 (stdin), got {fd}"
+                    )));
+                }
 
-            let mut buf = Vec::new();
-            io::stdin()
-                .read_to_end(&mut buf)
-                .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
-            Ok(bytes_to_array_u8(buf))
-        }
+                let mut buf = Vec::new();
+                io::stdin()
+                    .read_to_end(&mut buf)
+                    .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
+                Ok(bytes_to_array_u8(buf))
+            }
         },
     )?;
 
@@ -215,44 +231,44 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         move |_engine, _call_type, args| {
             let write_all_sym = write_all_sym.clone();
             async move {
-            if args.len() != 2 {
-                return Err(EngineError::NativeArity {
-                    name: write_all_sym,
-                    expected: 2,
-                    got: args.len(),
-                });
-            }
-            let Value::I32(fd) = args[0] else {
-                return Err(EngineError::NativeType {
-                    name: write_all_sym,
-                    expected: "i32".into(),
-                    got: value_type_name(&args[0]).into(),
-                });
-            };
-            let bytes = array_u8_to_bytes(&args[1], write_all_sym.as_ref())?;
+                if args.len() != 2 {
+                    return Err(EngineError::NativeArity {
+                        name: write_all_sym,
+                        expected: 2,
+                        got: args.len(),
+                    });
+                }
+                let Value::I32(fd) = args[0] else {
+                    return Err(EngineError::NativeType {
+                        name: write_all_sym,
+                        expected: "i32".into(),
+                        got: value_type_name(&args[0]).into(),
+                    });
+                };
+                let bytes = array_u8_to_bytes(&args[1], write_all_sym.as_ref())?;
 
-            match fd {
-                1 => {
-                    let mut out = io::stdout().lock();
-                    out.write_all(&bytes)
-                        .and_then(|()| out.flush())
-                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
+                match fd {
+                    1 => {
+                        let mut out = io::stdout().lock();
+                        out.write_all(&bytes)
+                            .and_then(|()| out.flush())
+                            .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
+                    }
+                    2 => {
+                        let mut out = io::stderr().lock();
+                        out.write_all(&bytes)
+                            .and_then(|()| out.flush())
+                            .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
+                    }
+                    _ => {
+                        return Err(EngineError::Internal(format!(
+                            "write_all only supports fd 1 (stdout) and 2 (stderr), got {fd}"
+                        )));
+                    }
                 }
-                2 => {
-                    let mut out = io::stderr().lock();
-                    out.write_all(&bytes)
-                        .and_then(|()| out.flush())
-                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
-                }
-                _ => {
-                    return Err(EngineError::Internal(format!(
-                        "write_all only supports fd 1 (stdout) and 2 (stderr), got {fd}"
-                    )));
-                }
-            }
 
-            Ok(unit_value())
-        }
+                Ok(unit_value())
+            }
         },
     )?;
 
@@ -365,7 +381,8 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         entry_for_done.stdout_done.store(true, Ordering::Release);
                         Ok(())
                     });
-                    *entry.stdout_thread.lock().expect("poisoned stdout_thread") = Some(handle);
+                    *lock_mutex(&entry.stdout_thread, "std.process.spawn stdout_thread")? =
+                        Some(handle);
                 }
 
                 {
@@ -385,13 +402,19 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         entry_for_done.stderr_done.store(true, Ordering::Release);
                         Ok(())
                     });
-                    *entry.stderr_thread.lock().expect("poisoned stderr_thread") = Some(handle);
+                    *lock_mutex(&entry.stderr_thread, "std.process.spawn stderr_thread")? =
+                        Some(handle);
                 }
 
                 subprocess_registry()
                     .procs
                     .lock()
-                    .expect("poisoned subprocess registry")
+                    .map_err(|_| {
+                        EngineError::Internal(
+                            "std.process.spawn: subprocess registry mutex poisoned (this is a bug)"
+                                .into(),
+                        )
+                    })?
                     .insert(id, entry);
 
                 let mut payload = BTreeMap::new();
@@ -422,12 +445,12 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let id = subprocess_id(&args[0], &subprocess_ctor, wait_sym.as_ref())?;
                 let entry = subprocess_get(&id, wait_sym.as_ref())?;
 
-                if let Some(code) = *entry.exit_code.lock().expect("poisoned exit_code") {
+                if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
                     return Ok(Value::I32(code));
                 }
 
                 let status = {
-                    let mut child_guard = entry.child.lock().expect("poisoned child");
+                    let mut child_guard = lock_mutex(&entry.child, "std.process.wait child")?;
                     let Some(child) = child_guard.as_mut() else {
                         return Err(EngineError::Internal("subprocess already reaped".into()));
                     };
@@ -437,13 +460,17 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 };
 
                 let code = status.code().unwrap_or(-1);
-                *entry.exit_code.lock().expect("poisoned exit_code") = Some(code);
+                *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? = Some(code);
 
                 // Ensure pipes are drained.
                 if let Some(handle) = entry
                     .stdout_thread
                     .lock()
-                    .expect("poisoned stdout_thread")
+                    .map_err(|_| {
+                        EngineError::Internal(
+                            "std.process.wait: stdout_thread mutex poisoned (this is a bug)".into(),
+                        )
+                    })?
                     .take()
                 {
                     let _ = handle.join();
@@ -451,7 +478,11 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 if let Some(handle) = entry
                     .stderr_thread
                     .lock()
-                    .expect("poisoned stderr_thread")
+                    .map_err(|_| {
+                        EngineError::Internal(
+                            "std.process.wait: stderr_thread mutex poisoned (this is a bug)".into(),
+                        )
+                    })?
                     .take()
                 {
                     let _ = handle.join();
@@ -486,7 +517,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 }
                 let id = subprocess_id(&args[0], &subprocess_ctor, stdout_sym.as_ref())?;
                 let entry = subprocess_get(&id, stdout_sym.as_ref())?;
-                let bytes = entry.stdout.lock().expect("poisoned stdout").clone();
+                let bytes = lock_arc_mutex(&entry.stdout, "std.process.stdout buffer")?.clone();
                 Ok(bytes_to_array_u8(bytes))
             }
         },
@@ -516,7 +547,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 }
                 let id = subprocess_id(&args[0], &subprocess_ctor, stderr_sym.as_ref())?;
                 let entry = subprocess_get(&id, stderr_sym.as_ref())?;
-                let bytes = entry.stderr.lock().expect("poisoned stderr").clone();
+                let bytes = lock_arc_mutex(&entry.stderr, "std.process.stderr buffer")?.clone();
                 Ok(bytes_to_array_u8(bytes))
             }
         },
@@ -563,7 +594,11 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
     subprocess_registry()
         .procs
         .lock()
-        .expect("poisoned subprocess registry")
+        .map_err(|_| {
+            EngineError::Internal(format!(
+                "{name}: subprocess registry mutex poisoned (this is a bug)"
+            ))
+        })?
         .get(id)
         .cloned()
         .ok_or_else(|| EngineError::Internal(format!("{name}: unknown subprocess id {id}")))
@@ -591,7 +626,7 @@ mod tests {
             .name("cli-prelude-typecheck".into())
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
-                let mut engine = Engine::with_prelude();
+                let mut engine = Engine::with_prelude().unwrap();
                 inject_cli_prelude_engine(&mut engine).unwrap();
                 engine.add_default_resolvers();
                 engine.eval_snippet(code).unwrap();
@@ -613,7 +648,7 @@ mod tests {
             .name("cli-subprocess-eval".into())
             .stack_size(16 * 1024 * 1024)
             .spawn(move || {
-                let mut engine = Engine::with_prelude();
+                let mut engine = Engine::with_prelude().unwrap();
                 inject_cli_prelude_engine(&mut engine).unwrap();
                 engine.add_default_resolvers();
                 let value = engine.eval_snippet(code).unwrap();

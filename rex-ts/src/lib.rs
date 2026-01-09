@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 //! Hindley-Milner type system with parametric polymorphism, type classes, and ADTs.
 //! The goal is to provide a reusable library for building typing environments for Rex.

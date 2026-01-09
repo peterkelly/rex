@@ -9,16 +9,21 @@ use rex_engine::{Engine, Value};
 use rex_lexer::Token;
 use rex_parser::Parser;
 
-let mut engine = Engine::with_prelude();
-engine.inject_fn2("(+)", |x: i32, y: i32| -> i32 { x + y });
-engine.inject_value("answer", 42i32);
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut engine = Engine::with_prelude()?;
+    engine.inject_fn2("(+)", |x: i32, y: i32| -> i32 { x + y })?;
+    engine.inject_value("answer", 42i32)?;
 
-let mut parser = Parser::new(Token::tokenize("answer + 1").unwrap());
-let program = parser.parse_program().unwrap();
-let expr = program.expr;
-let value = engine.eval(expr.as_ref()).unwrap();
+    let tokens = Token::tokenize("answer + 1")?;
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().map_err(|errs| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
+    })?;
+    let value = engine.eval(program.expr.as_ref())?;
 
-assert!(matches!(value, Value::I32(43)));
+    assert!(matches!(value, Value::I32(43)));
+    Ok(())
+}
 ```
 
 ## Injection API
@@ -34,7 +39,7 @@ Operator names can be injected with parentheses (e.g., `"(+)"`); the engine norm
 
 ## Prelude
 
-`Engine::with_prelude()` injects the standard runtime helpers:
+`Engine::with_prelude()?` injects the standard runtime helpers:
 
 - **Constructors**: `Empty`, `Cons`, `Some`, `None`, `Ok`, `Err`
 - **Arithmetic**: `+`, `-`, `*`, `/`, `negate`, `zero`, `one`
