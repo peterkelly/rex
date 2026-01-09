@@ -96,7 +96,7 @@ fn sha256_hex(input: &[u8]) -> String {
     let mut h7: u32 = 0x5be0cd19;
 
     let bit_len = (input.len() as u64) * 8;
-    let mut msg = Vec::with_capacity(((input.len() + 9 + 63) / 64) * 64);
+    let mut msg = Vec::with_capacity((input.len() + 9).div_ceil(64) * 64);
     msg.extend_from_slice(input);
     msg.push(0x80);
     while (msg.len() % 64) != 56 {
@@ -594,18 +594,17 @@ fn rewrite_program_import_projections(
     Program { decls, expr }
 }
 
+type PreparedProgram = (
+    Program,
+    TypeSystem,
+    HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    Vec<Diagnostic>,
+);
+
 fn prepare_program_with_imports(
     uri: &Url,
     program: &Program,
-) -> std::result::Result<
-    (
-        Program,
-        TypeSystem,
-        HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
-        Vec<Diagnostic>,
-    ),
-    String,
-> {
+) -> std::result::Result<PreparedProgram, String> {
     let mut ts = TypeSystem::with_prelude();
     let mut diagnostics = Vec::new();
 
@@ -816,9 +815,11 @@ fn prepare_program_with_imports(
                         },
                         params,
                         ret,
-                        constraints: keep_constraints
-                            .then(|| fd.constraints.clone())
-                            .unwrap_or_default(),
+                        constraints: if keep_constraints {
+                            fd.constraints.clone()
+                        } else {
+                            Default::default()
+                        },
                     };
                     let _ = ts.inject_declare_fn_decl(&decl);
                 }
@@ -842,9 +843,11 @@ fn prepare_program_with_imports(
                         },
                         params,
                         ret,
-                        constraints: keep_constraints
-                            .then(|| df.constraints.clone())
-                            .unwrap_or_default(),
+                        constraints: if keep_constraints {
+                            df.constraints.clone()
+                        } else {
+                            Default::default()
+                        },
                     };
                     let _ = ts.inject_declare_fn_decl(&decl);
                 }
@@ -1160,12 +1163,12 @@ impl LanguageServer for RexServer {
             });
 
         let target_span = value_def
-            .or_else(|| instance_method_def)
-            .or_else(|| index.class_method_defs.get(&ident).copied())
-            .or_else(|| index.fn_defs.get(&ident).copied())
-            .or_else(|| index.ctor_defs.get(&ident).copied())
-            .or_else(|| index.type_defs.get(&ident).copied())
-            .or_else(|| index.class_defs.get(&ident).copied());
+            .or(instance_method_def)
+            .or(index.class_method_defs.get(&ident).copied())
+            .or(index.fn_defs.get(&ident).copied())
+            .or(index.ctor_defs.get(&ident).copied())
+            .or(index.type_defs.get(&ident).copied())
+            .or(index.class_defs.get(&ident).copied());
 
         let Some(target_span) = target_span else {
             return Ok(None);
@@ -1446,17 +1449,16 @@ fn hover_type_in_expr(
         }
     }
 
-    fn visit(
-        ts: &mut TypeSystem,
-        expr: &Expr,
-        typed: &TypedExpr,
+    struct VisitCtx<'a> {
         pos: RexPosition,
-        name: &str,
+        name: &'a str,
         name_span: Span,
         name_is_ident: bool,
-        best: &mut Option<HoverType>,
-    ) {
-        if !span_contains_pos(*expr.span(), pos) {
+        best: &'a mut Option<HoverType>,
+    }
+
+    fn visit(ts: &mut TypeSystem, expr: &Expr, typed: &TypedExpr, ctx: &mut VisitCtx<'_>) {
+        if !span_contains_pos(*expr.span(), ctx.pos) {
             return;
         }
 
@@ -1470,7 +1472,7 @@ fn hover_type_in_expr(
         };
 
         // 1) Pattern-bound variables (match arms).
-        if name_is_ident {
+        if ctx.name_is_ident {
             if let (
                 Expr::Match(_span, _scrutinee, arms),
                 TypedExprKind::Match {
@@ -1479,21 +1481,21 @@ fn hover_type_in_expr(
                 },
             ) = (&expr, &typed.kind)
             {
-                if span_contains_span(*expr.span(), name_span) {
+                if span_contains_span(*expr.span(), ctx.name_span) {
                     for ((_pat, _arm_body), (typed_pat, _typed_arm_body)) in
                         arms.iter().zip(typed_arms.iter())
                     {
                         // The `Pattern` is cloned into the typed tree; use either.
                         let pat_span = *typed_pat.span();
-                        if span_contains_span(pat_span, name_span) {
+                        if span_contains_span(pat_span, ctx.name_span) {
                             let mut bindings: HashMap<String, Type> = HashMap::new();
                             add_bindings_from_pattern(ts, &scrutinee.typ, typed_pat, &mut bindings);
-                            if let Some(ty) = bindings.get(name) {
+                            if let Some(ty) = bindings.get(ctx.name) {
                                 consider(
-                                    best,
+                                    ctx.best,
                                     HoverType {
-                                        span: name_span,
-                                        label: name.to_string(),
+                                        span: ctx.name_span,
+                                        label: ctx.name.to_string(),
                                         typ: ty.to_string(),
                                         overloads: Vec::new(),
                                     },
@@ -1516,9 +1518,9 @@ fn hover_type_in_expr(
                     ..
                 },
             ) => {
-                if span_contains_pos(binding.span, pos) {
+                if span_contains_pos(binding.span, ctx.pos) {
                     consider(
-                        best,
+                        ctx.best,
                         HoverType {
                             span: binding.span,
                             label: binding.name.as_ref().to_string(),
@@ -1527,38 +1529,20 @@ fn hover_type_in_expr(
                         },
                     );
                 }
-                visit(
-                    ts,
-                    def.as_ref(),
-                    tdef.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
-                visit(
-                    ts,
-                    body.as_ref(),
-                    tbody.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, def.as_ref(), tdef.as_ref(), ctx);
+                visit(ts, body.as_ref(), tbody.as_ref(), ctx);
             }
             (
                 Expr::Lam(_span, _scope, param, _ann, _constraints, body),
                 TypedExprKind::Lam { body: tbody, .. },
             ) => {
-                if span_contains_pos(param.span, pos) {
+                if span_contains_pos(param.span, ctx.pos) {
                     let param_ty = match typed.typ.as_ref() {
                         TypeKind::Fun(a, _b) => a.to_string(),
                         _ => "<unknown>".to_string(),
                     };
                     consider(
-                        best,
+                        ctx.best,
                         HoverType {
                             span: param.span,
                             label: param.name.as_ref().to_string(),
@@ -1567,21 +1551,12 @@ fn hover_type_in_expr(
                         },
                     );
                 }
-                visit(
-                    ts,
-                    body.as_ref(),
-                    tbody.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, body.as_ref(), tbody.as_ref(), ctx);
             }
             (Expr::Var(v), TypedExprKind::Var { overloads, .. }) => {
-                if span_contains_pos(v.span, pos) {
+                if span_contains_pos(v.span, ctx.pos) {
                     consider(
-                        best,
+                        ctx.best,
                         HoverType {
                             span: v.span,
                             label: v.name.as_ref().to_string(),
@@ -1592,40 +1567,22 @@ fn hover_type_in_expr(
                 }
             }
             (Expr::Ann(_span, inner, _ann), _) => {
-                visit(
-                    ts,
-                    inner.as_ref(),
-                    typed,
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, inner.as_ref(), typed, ctx);
             }
             (Expr::Tuple(_span, elems), TypedExprKind::Tuple(telems)) => {
                 for (e, t) in elems.iter().zip(telems.iter()) {
-                    visit(ts, e.as_ref(), t, pos, name, name_span, name_is_ident, best);
+                    visit(ts, e.as_ref(), t, ctx);
                 }
             }
             (Expr::List(_span, elems), TypedExprKind::List(telems)) => {
                 for (e, t) in elems.iter().zip(telems.iter()) {
-                    visit(ts, e.as_ref(), t, pos, name, name_span, name_is_ident, best);
+                    visit(ts, e.as_ref(), t, ctx);
                 }
             }
             (Expr::Dict(_span, kvs), TypedExprKind::Dict(tkvs)) => {
                 for (k, v) in kvs {
                     if let Some(tv) = tkvs.get(k) {
-                        visit(
-                            ts,
-                            v.as_ref(),
-                            tv,
-                            pos,
-                            name,
-                            name_span,
-                            name_is_ident,
-                            best,
-                        );
+                        visit(ts, v.as_ref(), tv, ctx);
                     }
                 }
             }
@@ -1636,64 +1593,19 @@ fn hover_type_in_expr(
                     updates: tupdates,
                 },
             ) => {
-                visit(
-                    ts,
-                    base.as_ref(),
-                    tbase.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, base.as_ref(), tbase.as_ref(), ctx);
                 for (k, v) in updates {
                     if let Some(tv) = tupdates.get(k) {
-                        visit(
-                            ts,
-                            v.as_ref(),
-                            tv,
-                            pos,
-                            name,
-                            name_span,
-                            name_is_ident,
-                            best,
-                        );
+                        visit(ts, v.as_ref(), tv, ctx);
                     }
                 }
             }
             (Expr::App(_span, f, x), TypedExprKind::App(tf, tx)) => {
-                visit(
-                    ts,
-                    f.as_ref(),
-                    tf.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
-                visit(
-                    ts,
-                    x.as_ref(),
-                    tx.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, f.as_ref(), tf.as_ref(), ctx);
+                visit(ts, x.as_ref(), tx.as_ref(), ctx);
             }
             (Expr::Project(_span, e, _field), TypedExprKind::Project { expr: te, .. }) => {
-                visit(
-                    ts,
-                    e.as_ref(),
-                    te.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, e.as_ref(), te.as_ref(), ctx);
             }
             (
                 Expr::Ite(_span, c, t, e),
@@ -1703,36 +1615,9 @@ fn hover_type_in_expr(
                     else_expr,
                 },
             ) => {
-                visit(
-                    ts,
-                    c.as_ref(),
-                    cond.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
-                visit(
-                    ts,
-                    t.as_ref(),
-                    then_expr.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
-                visit(
-                    ts,
-                    e.as_ref(),
-                    else_expr.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, c.as_ref(), cond.as_ref(), ctx);
+                visit(ts, t.as_ref(), then_expr.as_ref(), ctx);
+                visit(ts, e.as_ref(), else_expr.as_ref(), ctx);
             }
             (
                 Expr::Match(_span, scrutinee, arms),
@@ -1741,27 +1626,9 @@ fn hover_type_in_expr(
                     arms: tarms,
                 },
             ) => {
-                visit(
-                    ts,
-                    scrutinee.as_ref(),
-                    tscrut.as_ref(),
-                    pos,
-                    name,
-                    name_span,
-                    name_is_ident,
-                    best,
-                );
+                visit(ts, scrutinee.as_ref(), tscrut.as_ref(), ctx);
                 for ((_pat, arm_body), (_tpat, tarm_body)) in arms.iter().zip(tarms.iter()) {
-                    visit(
-                        ts,
-                        arm_body.as_ref(),
-                        tarm_body,
-                        pos,
-                        name,
-                        name_span,
-                        name_is_ident,
-                        best,
-                    );
+                    visit(ts, arm_body.as_ref(), tarm_body, ctx);
                 }
             }
             _ => {}
@@ -1769,16 +1636,14 @@ fn hover_type_in_expr(
     }
 
     let mut best = None;
-    visit(
-        ts,
-        expr,
-        typed,
+    let mut ctx = VisitCtx {
         pos,
         name,
         name_span,
         name_is_ident,
-        &mut best,
-    );
+        best: &mut best,
+    };
+    visit(ts, expr, typed, &mut ctx);
     best
 }
 
@@ -2750,7 +2615,7 @@ fn fields_for_expr(
     }
 }
 
-fn project_base_at_position<'a>(expr: &'a Expr, position: RexPosition) -> Option<&'a Expr> {
+fn project_base_at_position(expr: &Expr, position: RexPosition) -> Option<&Expr> {
     if !position_in_span(position, *expr.span()) {
         return None;
     }

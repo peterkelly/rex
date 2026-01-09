@@ -209,13 +209,15 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         .spawn(move || {
             run_source(
                 &source,
-                file_for_modules,
-                include,
-                emit_ast,
-                emit_type,
-                gas,
-                no_gas,
-                parser_limits,
+                RunSourceOpts {
+                    file: file_for_modules,
+                    include,
+                    emit_ast,
+                    emit_type,
+                    gas,
+                    no_gas,
+                    parser_limits,
+                },
             )
         })
         .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
@@ -375,8 +377,7 @@ fn is_imports_only(buffer: &str) -> bool {
     saw_import
 }
 
-fn run_source(
-    source: &str,
+struct RunSourceOpts {
     file: Option<String>,
     include: Vec<String>,
     emit_ast: bool,
@@ -384,7 +385,18 @@ fn run_source(
     gas: u64,
     no_gas: bool,
     parser_limits: ParserLimits,
-) -> Result<(), String> {
+}
+
+fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
+    let RunSourceOpts {
+        file,
+        include,
+        emit_ast,
+        emit_type,
+        gas,
+        no_gas,
+        parser_limits,
+    } = opts;
     let costs = GasCosts::sensible_defaults();
     let mut gas = if no_gas {
         GasMeter::unlimited(costs)

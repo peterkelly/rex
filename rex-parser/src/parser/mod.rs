@@ -75,7 +75,6 @@ impl Parser {
     fn parse_value_name(&mut self) -> Result<(Symbol, Span), ParserErr> {
         match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let span = span;
                 self.next_token();
                 Ok((intern(&name), span))
             }
@@ -461,29 +460,19 @@ impl Parser {
                 Arc::new(call_arg_expr),
             );
         }
-        loop {
-            match self.current_token() {
-                Token::Is(..) => {
-                    self.next_token();
-                    let ann = self.parse_type_expr()?;
-                    let span = Span::from_begin_end(call_base_expr.span().begin, ann.span().end);
-                    call_base_expr = Expr::Ann(span, Arc::new(call_base_expr), ann);
-                }
-                _ => break,
-            }
+        while let Token::Is(..) = self.current_token() {
+            self.next_token();
+            let ann = self.parse_type_expr()?;
+            let span = Span::from_begin_end(call_base_expr.span().begin, ann.span().end);
+            call_base_expr = Expr::Ann(span, Arc::new(call_base_expr), ann);
         }
         Ok(call_base_expr)
     }
 
     fn parse_postfix_expr(&mut self) -> Result<Expr, ParserErr> {
         let mut base = self.parse_atom_expr()?;
-        loop {
-            match self.current_token() {
-                Token::Dot(..) | Token::Colon(..) => {
-                    self.next_token();
-                }
-                _ => break,
-            }
+        while let Token::Dot(..) | Token::Colon(..) = self.current_token() {
+            self.next_token();
 
             let (field, end) = match self.current_token() {
                 Token::Ident(name, span, ..) => {
@@ -954,14 +943,9 @@ impl Parser {
 
         // Parse the params.
         let mut params = VecDeque::new();
-        loop {
-            match self.current_token() {
-                Token::Ident(..) | Token::ParenL(..) => {
-                    let (var, ann, span) = self.parse_lambda_param()?;
-                    params.push_back((span, var, ann));
-                }
-                _ => break,
-            }
+        while let Token::Ident(..) | Token::ParenL(..) = self.current_token() {
+            let (var, ann, span) = self.parse_lambda_param()?;
+            params.push_back((span, var, ann));
         }
 
         let mut constraints = Vec::new();
@@ -1027,7 +1011,6 @@ impl Parser {
                 self.next_token();
                 let (name, name_span) = match self.current_token() {
                     Token::Ident(name, span, ..) => {
-                        let span = span;
                         self.next_token();
                         (name, span)
                     }
@@ -1423,7 +1406,6 @@ impl Parser {
 
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let span = span;
                 self.next_token_raw();
                 (intern(&name), span)
             }
@@ -1498,9 +1480,8 @@ impl Parser {
             let token_span = *token.span();
             let next = self.peek_token(1);
             token_span.begin.column > class_indent
-                && ((matches!(token, Token::Ident(..)) && matches!(next, Token::Colon(..)))
-                    || (Self::operator_token_name(&token).is_some()
-                        && matches!(next, Token::Colon(..))))
+                && matches!(next, Token::Colon(..))
+                && (matches!(token, Token::Ident(..)) || Self::operator_token_name(&token).is_some())
         };
         let has_method_block = saw_where || implicit_method_start;
         let block_indent = if has_method_block {
@@ -1536,8 +1517,8 @@ impl Parser {
 
             let start_idx = self.token_cursor;
             let end_idx = find_layout_expr_end(&self.tokens, start_idx, block_indent, |t, next| {
-                matches!(t, Token::Ident(..)) && matches!(next, Token::Colon(..))
-                    || Self::operator_token_name(t).is_some() && matches!(next, Token::Colon(..))
+                matches!(next, Token::Colon(..))
+                    && (matches!(t, Token::Ident(..)) || Self::operator_token_name(t).is_some())
             });
             let typ = self.parse_type_expr_slice(&self.tokens[start_idx..end_idx])?;
             self.token_cursor = end_idx;
@@ -1577,7 +1558,6 @@ impl Parser {
 
         let (class, class_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let span = span;
                 self.next_token_raw();
                 (intern(&name), span)
             }
@@ -1649,9 +1629,8 @@ impl Parser {
             let token_span = *token.span();
             let next = self.peek_token(1);
             token_span.begin.column > instance_indent
-                && ((matches!(token, Token::Ident(..)) && matches!(next, Token::Assign(..)))
-                    || (Self::operator_token_name(&token).is_some()
-                        && matches!(next, Token::Assign(..))))
+                && matches!(next, Token::Assign(..))
+                && (matches!(token, Token::Ident(..)) || Self::operator_token_name(&token).is_some())
         };
 
         let block_indent = if has_method_block {
@@ -1688,8 +1667,8 @@ impl Parser {
 
             let start_idx = self.token_cursor;
             let end_idx = find_layout_expr_end(&self.tokens, start_idx, block_indent, |t, next| {
-                matches!(t, Token::Ident(..)) && matches!(next, Token::Assign(..))
-                    || Self::operator_token_name(t).is_some() && matches!(next, Token::Assign(..))
+                matches!(next, Token::Assign(..))
+                    && (matches!(t, Token::Ident(..)) || Self::operator_token_name(t).is_some())
             });
             let body = self.parse_expr_slice(&self.tokens[start_idx..end_idx])?;
             self.token_cursor = end_idx;
@@ -1733,7 +1712,6 @@ impl Parser {
 
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let span = span;
                 self.next_token();
                 (name, span)
             }
@@ -1882,7 +1860,6 @@ impl Parser {
                 let params: Vec<(Var, TypeExpr)> = lam_params
                     .into_iter()
                     .zip(param_tys)
-                    .map(|(v, ann)| (v, ann))
                     .collect();
                 (params, cur)
             } else {
@@ -1965,7 +1942,6 @@ impl Parser {
                     loop {
                         let (param_name, param_span) = match self.current_token() {
                             Token::Ident(name, span, ..) => {
-                                let span = span;
                                 self.next_token();
                                 (name, span)
                             }
@@ -2070,7 +2046,6 @@ impl Parser {
                     self.next_token(); // `(`
                     let (param_name, param_span) = match self.current_token() {
                         Token::Ident(name, span, ..) => {
-                            let span = span;
                             self.next_token();
                             (name, span)
                         }
@@ -2131,7 +2106,6 @@ impl Parser {
                     // x: a -> y: b -> i32
                     let (param_name, param_span) = match self.current_token() {
                         Token::Ident(name, span, ..) => {
-                            let span = span;
                             self.next_token();
                             (name, span)
                         }
@@ -2393,7 +2367,6 @@ impl Parser {
 
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let span = span;
                 self.next_token();
                 (name, span)
             }
@@ -2567,7 +2540,6 @@ impl Parser {
                     loop {
                         let (param_name, param_span) = match self.current_token() {
                             Token::Ident(name, span, ..) => {
-                                let span = span;
                                 self.next_token();
                                 (name, span)
                             }
@@ -2672,7 +2644,6 @@ impl Parser {
                     self.next_token(); // `(`
                     let (param_name, param_span) = match self.current_token() {
                         Token::Ident(name, span, ..) => {
-                            let span = span;
                             self.next_token();
                             (name, span)
                         }
@@ -2733,7 +2704,6 @@ impl Parser {
                     // x: a -> y: b -> i32
                     let (param_name, param_span) = match self.current_token() {
                         Token::Ident(name, span, ..) => {
-                            let span = span;
                             self.next_token();
                             (name, span)
                         }
@@ -2884,7 +2854,6 @@ impl Parser {
 
         let (path, mut span_end, default_alias) = match self.current_token() {
             Token::HttpsUrl(url, span, ..) => {
-                let span = span;
                 let url = url.clone();
                 self.next_token();
                 let (base_url, sha) = match url.split_once('#') {
@@ -2942,13 +2911,11 @@ impl Parser {
                     self.next_token();
                     match self.current_token() {
                         Token::Ident(s, span, ..) => {
-                            let span = span;
                             self.next_token();
                             end = end.max(span.end);
                             Some(s.clone())
                         }
                         Token::Int(n, span, ..) => {
-                            let span = span;
                             self.next_token();
                             end = end.max(span.end);
                             Some(n.to_string())
@@ -2985,7 +2952,6 @@ impl Parser {
             self.next_token();
             match self.current_token() {
                 Token::Ident(name, span, ..) => {
-                    let span = span;
                     self.next_token();
                     span_end = span_end.max(span.end);
                     intern(&name)
@@ -3032,7 +2998,6 @@ impl Parser {
         let (name, _name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
                 let name = intern(&name);
-                let span = span;
                 self.next_token();
                 (name, span)
             }
@@ -3067,17 +3032,11 @@ impl Parser {
         let (first, first_span) = self.parse_type_variant()?;
         let mut variants = vec![first];
         let mut span_end = first_span.end;
-        loop {
-            match self.current_token() {
-                Token::Pipe(..) => {
-                    self.next_token();
-                    let (variant, vspan) = self.parse_type_variant()?;
-                    span_end = vspan.end;
-                    variants.push(variant);
-                    continue;
-                }
-                _ => break,
-            }
+        while let Token::Pipe(..) = self.current_token() {
+            self.next_token();
+            let (variant, vspan) = self.parse_type_variant()?;
+            span_end = vspan.end;
+            variants.push(variant);
         }
 
         Ok(TypeDecl {
@@ -3093,7 +3052,6 @@ impl Parser {
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
                 let name = intern(&name);
-                let span = span;
                 self.next_token();
                 (name, span)
             }
@@ -3107,15 +3065,10 @@ impl Parser {
 
         let mut args = Vec::new();
         let mut span_end = name_span.end;
-        loop {
-            match self.current_token() {
-                Token::Ident(..) | Token::ParenL(..) | Token::BraceL(..) => {
-                    let arg = self.parse_type_atom()?;
-                    span_end = arg.span().end;
-                    args.push(arg);
-                }
-                _ => break,
-            }
+        while let Token::Ident(..) | Token::ParenL(..) | Token::BraceL(..) = self.current_token() {
+            let arg = self.parse_type_atom()?;
+            span_end = arg.span().end;
+            args.push(arg);
         }
 
         Ok((
@@ -3143,15 +3096,10 @@ impl Parser {
 
     fn parse_type_app(&mut self) -> Result<TypeExpr, ParserErr> {
         let mut lhs = self.parse_type_atom()?;
-        loop {
-            match self.current_token() {
-                Token::Ident(..) | Token::ParenL(..) | Token::BraceL(..) => {
-                    let rhs = self.parse_type_atom()?;
-                    let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
-                    lhs = TypeExpr::App(span, Box::new(lhs), Box::new(rhs));
-                }
-                _ => break,
-            }
+        while let Token::Ident(..) | Token::ParenL(..) | Token::BraceL(..) = self.current_token() {
+            let rhs = self.parse_type_atom()?;
+            let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
+            lhs = TypeExpr::App(span, Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
     }
@@ -3160,7 +3108,6 @@ impl Parser {
         match self.current_token() {
             Token::Ident(name, span, ..) => {
                 let name = intern(&name);
-                let span = span;
                 self.next_token();
                 Ok(TypeExpr::Name(span, name))
             }
@@ -3270,7 +3217,6 @@ impl Parser {
                 let (name, _span) = match this.current_token() {
                     Token::Ident(name, span, ..) => {
                         let name = intern(&name);
-                        let span = span;
                         this.next_token();
                         (name, span)
                     }
@@ -3325,17 +3271,11 @@ impl Parser {
 
     fn parse_pattern_cons(&mut self) -> Result<Pattern, ParserErr> {
         let mut lhs = self.parse_pattern_app()?;
-        loop {
-            match self.current_token() {
-                Token::Colon(span_colon, ..) => {
-                    self.next_token();
-                    let rhs = self.parse_pattern_cons()?;
-                    let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
-                    lhs = Pattern::Cons(span, Box::new(lhs), Box::new(rhs));
-                    let _ = span_colon;
-                }
-                _ => break,
-            }
+        while let Token::Colon(..) = self.current_token() {
+            self.next_token();
+            let rhs = self.parse_pattern_cons()?;
+            let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
+            lhs = Pattern::Cons(span, Box::new(lhs), Box::new(rhs));
         }
         Ok(lhs)
     }
@@ -3343,14 +3283,11 @@ impl Parser {
     fn parse_pattern_app(&mut self) -> Result<Pattern, ParserErr> {
         let head = self.parse_pattern_atom()?;
         let mut args = Vec::new();
-        loop {
-            match self.current_token() {
-                Token::Ident(..) | Token::BracketL(..) | Token::BraceL(..) | Token::ParenL(..) => {
-                    let arg = self.parse_pattern_atom()?;
-                    args.push(arg);
-                }
-                _ => break,
-            }
+        while let Token::Ident(..) | Token::BracketL(..) | Token::BraceL(..) | Token::ParenL(..) =
+            self.current_token()
+        {
+            let arg = self.parse_pattern_atom()?;
+            args.push(arg);
         }
 
         if args.is_empty() {
@@ -3484,7 +3421,6 @@ impl Parser {
                 match this.current_token() {
                     Token::Ident(name, key_span, ..) => {
                         let key_name = name;
-                        let key_span = key_span;
                         let key = intern(&key_name);
                         this.next_token();
 
@@ -3911,7 +3847,7 @@ mod tests {
             )
         );
 
-        let mut parser = Parser::new(Token::tokenize("(6.9 + 3.14)").unwrap());
+        let mut parser = Parser::new(Token::tokenize("(6.9 + 3.17)").unwrap());
         let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
@@ -3922,7 +3858,7 @@ mod tests {
                     v!(span!(1:6 - 1:7); "+"),
                     f!(span!(1:2 - 1:5); 6.9)
                 ),
-                f!(span!(1:8 - 1:12); 3.14)
+                f!(span!(1:8 - 1:12); 3.17)
             )
         );
 
@@ -4320,7 +4256,7 @@ mod tests {
             )
         );
 
-        let mut parser = Parser::new(Token::tokenize("(6.9 - 3.14)").unwrap());
+        let mut parser = Parser::new(Token::tokenize("(6.9 - 3.17)").unwrap());
         let expr = parser.parse_program().unwrap().expr;
         assert_expr_eq!(
             expr,
@@ -4331,7 +4267,7 @@ mod tests {
                     v!(span!(1:6 - 1:7); "-"),
                     f!(span!(1:2 - 1:5); 6.9)
                 ),
-                f!(span!(1:8 - 1:12); 3.14)
+                f!(span!(1:8 - 1:12); 3.17)
             )
         );
 

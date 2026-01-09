@@ -1104,6 +1104,12 @@ pub struct Engine {
     cancel: CancellationToken,
 }
 
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Engine {
     pub fn new() -> Self {
         Self {
@@ -1988,15 +1994,14 @@ impl Engine {
                             }
                             return Err(EngineError::UnknownVar(name.clone()));
                         }
-                        if !overloads.is_empty() {
-                            if expr.typ.ftv().is_empty()
-                                && !overloads.iter().any(|t| unify(t, &expr.typ).is_ok())
-                            {
-                                return Err(EngineError::MissingImpl {
-                                    name: name.clone(),
-                                    typ: expr.typ.to_string(),
-                                });
-                            }
+                        if !overloads.is_empty()
+                            && expr.typ.ftv().is_empty()
+                            && !overloads.iter().any(|t| unify(t, &expr.typ).is_ok())
+                        {
+                            return Err(EngineError::MissingImpl {
+                                name: name.clone(),
+                                typ: expr.typ.to_string(),
+                            });
                         }
                         if expr.typ.ftv().is_empty() && !self.has_impl(name, &expr.typ) {
                             return Err(EngineError::MissingImpl {
@@ -2123,11 +2128,9 @@ impl Engine {
             .preds
             .iter()
             .find(|p| p.class == info.class)
-            .ok_or_else(|| {
-                EngineError::Type(TypeError::UnsupportedExpr(
-                    "method scheme missing class predicate",
-                ))
-            })?;
+            .ok_or(EngineError::Type(TypeError::UnsupportedExpr(
+                "method scheme missing class predicate",
+            )))?;
         let param_type = class_pred.typ.apply(&s_method);
         if type_head_is_var(&param_type) {
             return Err(EngineError::AmbiguousOverload { name: name.clone() });
@@ -2137,12 +2140,11 @@ impl Engine {
     }
 
     fn resolve_class_method_value(&self, name: &Symbol, typ: &Type) -> Result<Value, EngineError> {
-        if typ.ftv().is_empty() {
-            if let Ok(cache) = self.typeclass_cache.lock() {
-                if let Some(value) = cache.get(&(name.clone(), typ.clone())) {
-                    return Ok(value.clone());
-                }
-            }
+        if typ.ftv().is_empty()
+            && let Ok(cache) = self.typeclass_cache.lock()
+            && let Some(value) = cache.get(&(name.clone(), typ.clone()))
+        {
+            return Ok(value.clone());
         }
 
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
@@ -2158,10 +2160,8 @@ impl Engine {
         let specialized = typed.as_ref().apply(&s);
         let value = eval_typed_expr(self, &def_env, &specialized)?;
 
-        if typ.ftv().is_empty() {
-            if let Ok(mut cache) = self.typeclass_cache.lock() {
-                cache.insert((name.clone(), typ.clone()), value.clone());
-            }
+        if typ.ftv().is_empty() && let Ok(mut cache) = self.typeclass_cache.lock() {
+            cache.insert((name.clone(), typ.clone()), value.clone());
         }
         Ok(value)
     }
@@ -2401,12 +2401,11 @@ fn defaultable_class(class: &Symbol) -> bool {
 fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
     let mut stack: Vec<&TypedExpr> = vec![expr];
     while let Some(expr) = stack.pop() {
-        if expr.typ.ftv().is_empty() {
-            if let TypeKind::Con(tc) = expr.typ.as_ref() {
-                if tc.arity == 0 {
-                    push_unique_type(out, expr.typ.clone());
-                }
-            }
+        if expr.typ.ftv().is_empty()
+            && let TypeKind::Con(tc) = expr.typ.as_ref()
+            && tc.arity == 0
+        {
+            push_unique_type(out, expr.typ.clone());
         }
 
         match &expr.kind {
@@ -2648,7 +2647,7 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
         }
         Value::Array(elems) => {
             let first = elems
-                .get(0)
+                .first()
                 .ok_or_else(|| EngineError::UnknownType(sym("array")))?;
             let elem_ty = value_type(first)?;
             for elem in elems.iter().skip(1) {
@@ -2695,9 +2694,7 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
             if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 =>
         {
             let elems = list_to_vec(value, "list")?;
-            let first = elems
-                .get(0)
-                .ok_or_else(|| EngineError::UnknownType(sym("list")))?;
+            let first = elems.first().ok_or_else(|| EngineError::UnknownType(sym("list")))?;
             let elem_ty = value_type(first)?;
             for elem in elems.iter().skip(1) {
                 let ty = value_type(elem)?;
@@ -5354,7 +5351,7 @@ fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
                 let (arg_tys, _res_ty) = split_fun_chain("prim_or_else", call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let result_ty = arg_tys[1].clone();
-                if matches!(result_value(&args[1])?, Err(_)) {
+                if result_value(&args[1])?.is_err() {
                     apply(
                         engine,
                         args[0].clone(),

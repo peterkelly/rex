@@ -46,3 +46,9 @@ impl Env {
         None
     }
 }
+
+impl Default for Env {
+    fn default() -> Self {
+        Self::new()
+    }
+}

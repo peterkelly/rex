@@ -95,10 +95,6 @@ impl Type {
         Type::new(TypeKind::Record(fields))
     }
 
-    pub fn as_ref(&self) -> &TypeKind {
-        &self.0
-    }
-
     fn apply_with_change(&self, s: &Subst) -> (Type, bool) {
         match self.as_ref() {
             TypeKind::Var(tv) => match s.get(&tv.id) {
@@ -170,6 +166,12 @@ impl Type {
     }
 }
 
+impl AsRef<TypeKind> for Type {
+    fn as_ref(&self) -> &TypeKind {
+        self.0.as_ref()
+    }
+}
+
 impl std::ops::Deref for Type {
     type Target = TypeKind;
 
@@ -192,13 +194,13 @@ impl Display for Type {
                 //
                 // User-facing syntax is `Result ok err` (Rust-style), so render the fully
                 // applied form with swapped arguments.
-                if let TypeKind::App(head, err) = l.as_ref() {
-                    if matches!(
+                if let TypeKind::App(head, err) = l.as_ref()
+                    && matches!(
                         head.as_ref(),
                         TypeKind::Con(c) if c.name.as_ref() == "Result" && c.arity == 2
-                    ) {
-                        return write!(f, "(Result {} {})", r, err);
-                    }
+                    )
+                {
+                    return write!(f, "(Result {} {})", r, err);
                 }
                 write!(f, "({} {})", l, r)
             }
@@ -787,10 +789,8 @@ fn max_head_app_arity_for_var(ty: &Type, var_id: TypeVarId) -> usize {
                     args += 1;
                     head = left;
                 }
-                if let TypeKind::Var(tv) = head.as_ref() {
-                    if tv.id == var_id {
-                        max_arity = max_arity.max(args);
-                    }
+                if let TypeKind::Var(tv) = head.as_ref() && tv.id == var_id {
+                    max_arity = max_arity.max(args);
                 }
                 stack.push(l);
                 stack.push(r);
@@ -833,8 +833,8 @@ impl<'g> Unifier<'g> {
         let Some(gas) = self.gas.as_mut() else {
             return Ok(());
         };
-        let cost = (**gas).costs.infer_node;
-        (**gas).charge(cost)?;
+        let cost = gas.costs.infer_node;
+        gas.charge(cost)?;
         Ok(())
     }
 
@@ -842,8 +842,8 @@ impl<'g> Unifier<'g> {
         let Some(gas) = self.gas.as_mut() else {
             return Ok(());
         };
-        let cost = (**gas).costs.unify_step;
-        (**gas).charge(cost)?;
+        let cost = gas.costs.unify_step;
+        gas.charge(cost)?;
         Ok(())
     }
 
@@ -997,10 +997,8 @@ fn record_elem_type_unifier(
 }
 
 fn bind(tv: &TypeVar, t: &Type) -> Result<Subst, TypeError> {
-    if let TypeKind::Var(var) = t.as_ref() {
-        if var.id == tv.id {
-            return Ok(Subst::new_sync());
-        }
+    if let TypeKind::Var(var) = t.as_ref() && var.id == tv.id {
+        return Ok(Subst::new_sync());
     }
     if t.ftv().contains(&tv.id) {
         Err(TypeError::Occurs(tv.id, t.to_string()))
@@ -1801,6 +1799,49 @@ impl TypeSystem {
             let preds = preds.apply(&s);
             let inferred = inferred.apply(&s);
             let declared_preds = declared_preds.apply(&s);
+            let expected = expected.apply(&s);
+
+            // Validate that declared constraints are well-formed, even if the body doesn't
+            // end up using them. This catches typos (`Defualt`) and obvious kind mismatches
+            // (`Default t` where `t` is used as a type constructor).
+            let var_arities: HashMap<TypeVarId, usize> = ann_vars
+                .values()
+                .map(|tv| (tv.id, max_head_app_arity_for_var(&expected, tv.id)))
+                .collect();
+            for pred in &declared_preds {
+                let _ = entails(&self.classes, &[], pred)?;
+                let Some(expected_arities) = self.expected_class_param_arities(&pred.class) else {
+                    continue;
+                };
+                let args: Vec<Type> = if expected_arities.len() == 1 {
+                    vec![pred.typ.clone()]
+                } else if let TypeKind::Tuple(parts) = pred.typ.as_ref() {
+                    if parts.len() != expected_arities.len() {
+                        continue;
+                    }
+                    parts.clone()
+                } else {
+                    continue;
+                };
+
+                for (arg, expected_arity) in args.iter().zip(expected_arities.iter().copied()) {
+                    let got = type_term_remaining_arity(arg).or_else(|| match arg.as_ref() {
+                        TypeKind::Var(tv) => var_arities.get(&tv.id).copied(),
+                        _ => None,
+                    });
+                    let Some(got) = got else {
+                        continue;
+                    };
+                    if got != expected_arity {
+                        return Err(TypeError::KindMismatch {
+                            class: pred.class.clone(),
+                            expected: expected_arity,
+                            got,
+                            typ: arg.to_string(),
+                        });
+                    }
+                }
+            }
 
             // Rex `fn` declarations carry an explicit signature. Extra *non-ground*
             // constraints inferred from the body must be listed in the signature's
@@ -1898,9 +1939,12 @@ impl TypeSystem {
             })?;
 
         let (preds, typ) = instantiate(scheme, &mut self.supply);
-        let class_pred = preds.iter().find(|p| &p.class == class).ok_or_else(|| {
-            TypeError::UnsupportedExpr("class method scheme missing class predicate")
-        })?;
+        let class_pred = preds
+            .iter()
+            .find(|p| &p.class == class)
+            .ok_or(TypeError::UnsupportedExpr(
+                "class method scheme missing class predicate",
+            ))?;
         let s = unify(&class_pred.typ, head)?;
         Ok(typ.apply(&s))
     }
@@ -2443,39 +2487,34 @@ fn type_app_with_result_syntax(fun: Type, arg: Type) -> Type {
     // Support Rust-style `Result ok err` syntax while keeping the internal
     // representation as `Result err ok` (so `Result err` remains the 1-argument
     // type constructor used for HKTs).
-    if let TypeKind::App(head, ok) = fun.as_ref() {
-        if matches!(
+    if let TypeKind::App(head, ok) = fun.as_ref()
+        && matches!(
             head.as_ref(),
             TypeKind::Con(c) if c.name.as_ref() == "Result" && c.arity == 2
-        ) {
-            return Type::app(Type::app(head.clone(), arg), ok.clone());
-        }
+        )
+    {
+        return Type::app(Type::app(head.clone(), arg), ok.clone());
     }
     Type::app(fun, arg)
 }
 
-fn collect_lambda_chain(
-    expr: &Expr,
-) -> (Vec<(Symbol, Option<TypeExpr>)>, Vec<TypeConstraint>, &Expr) {
+type LambdaChain<'a> = (Vec<(Symbol, Option<TypeExpr>)>, Vec<TypeConstraint>, &'a Expr);
+
+fn collect_lambda_chain<'a>(expr: &'a Expr) -> LambdaChain<'a> {
     let mut params = Vec::new();
     let mut constraints = Vec::new();
     let mut cur = expr;
     let mut seen_constraints = false;
-    loop {
-        match cur {
-            Expr::Lam(_, _scope, param, ann, lam_constraints, body) => {
-                if !lam_constraints.is_empty() {
-                    if seen_constraints {
-                        break;
-                    }
-                    constraints = lam_constraints.clone();
-                    seen_constraints = true;
-                }
-                params.push((param.name.clone(), ann.clone()));
-                cur = body.as_ref();
+    while let Expr::Lam(_, _scope, param, ann, lam_constraints, body) = cur {
+        if !lam_constraints.is_empty() {
+            if seen_constraints {
+                break;
             }
-            _ => break,
+            constraints = lam_constraints.clone();
+            seen_constraints = true;
         }
+        params.push((param.name.clone(), ann.clone()));
+        cur = body.as_ref();
     }
     (params, constraints, cur)
 }
@@ -2494,7 +2533,7 @@ fn predicates_from_constraints(
     Ok(out)
 }
 
-fn collect_app_chain<'a>(expr: &'a Expr) -> (&'a Expr, Vec<&'a Expr>) {
+fn collect_app_chain(expr: &Expr) -> (&Expr, Vec<&Expr>) {
     let mut args = Vec::new();
     let mut cur = expr;
     while let Expr::App(_, f, x) = cur {
@@ -2738,14 +2777,9 @@ fn infer_expr_type(
             Expr::Let(..) => {
                 let mut bindings = Vec::new();
                 let mut cur = expr;
-                loop {
-                    match cur {
-                        Expr::Let(_, v, ann, d, b) => {
-                            bindings.push((v.clone(), ann.clone(), d.clone()));
-                            cur = b.as_ref();
-                        }
-                        _ => break,
-                    }
+                while let Expr::Let(_, v, ann, d, b) = cur {
+                    bindings.push((v.clone(), ann.clone(), d.clone()));
+                    cur = b.as_ref();
                 }
 
                 let mut env_cur = env.clone();
@@ -2821,7 +2855,7 @@ fn infer_expr_type(
             Expr::Dict(_, kvs) => {
                 let elem_tv = Type::var(supply.fresh(Some("v".into())));
                 let mut preds = Vec::new();
-                for (_k, v) in kvs {
+                for v in kvs.values() {
                     let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
                     unifier.unify(&t1, &elem_tv)?;
                     preds.extend(p1);
@@ -3120,14 +3154,9 @@ fn infer_expr(
             Expr::Let(..) => {
                 let mut bindings = Vec::new();
                 let mut cur = expr;
-                loop {
-                    match cur {
-                        Expr::Let(_, v, ann, d, b) => {
-                            bindings.push((v.clone(), ann.clone(), d.clone()));
-                            cur = b.as_ref();
-                        }
-                        _ => break,
-                    }
+                while let Expr::Let(_, v, ann, d, b) = cur {
+                    bindings.push((v.clone(), ann.clone(), d.clone()));
+                    cur = b.as_ref();
                 }
 
                 let mut env_cur = env.clone();
@@ -3377,9 +3406,7 @@ fn known_variant_from_expr(
         _ => return None,
     };
     let (adt, variant) = ctor_lookup(adts, &ctor)?;
-    if record_fields(variant).is_none() {
-        return None;
-    }
+    record_fields(variant)?;
     Some(KnownVariant {
         adt: adt.name.clone(),
         variant: variant.name.clone(),
@@ -3544,19 +3571,19 @@ fn resolve_projection(
         }
     } else if matches!(base_ty.as_ref(), TypeKind::Var(_)) {
         let mut candidates = Vec::new();
-        for adt in adts.values() {
-            if adt.variants.len() != 1 {
-                continue;
-            }
-            let variant = &adt.variants[0];
-            if let Some(fields) = record_fields(variant) {
-                if fields.iter().any(|(name, _)| name == field) {
+            for adt in adts.values() {
+                if adt.variants.len() != 1 {
+                    continue;
+                }
+                let variant = &adt.variants[0];
+                if let Some(fields) = record_fields(variant)
+                    && fields.iter().any(|(name, _)| name == field)
+                {
                     candidates.push((adt, variant));
                 }
             }
-        }
-        if candidates.len() == 1 {
-            candidates.remove(0)
+            if candidates.len() == 1 {
+                candidates.remove(0)
         } else if candidates.is_empty() {
             return Err(TypeError::UnknownField {
                 field: field.clone(),
@@ -3609,13 +3636,15 @@ fn decompose_fun(typ: &Type, arity: usize) -> Option<(Vec<Type>, Type)> {
     Some((args, cur))
 }
 
+type InferPatternResult = (Vec<Predicate>, Vec<(Symbol, Type)>);
+
 fn infer_pattern(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
     pat: &Pattern,
     scrutinee_ty: &Type,
-) -> Result<(Vec<Predicate>, Vec<(Symbol, Type)>), TypeError> {
+) -> Result<InferPatternResult, TypeError> {
     let span = *pat.span();
     let res = (|| {
         unifier.charge_infer_node()?;
@@ -4405,13 +4434,11 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "AdditiveMonoid");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() {
-            if let TypeKind::Fun(b, c) = rest.as_ref() {
-                assert_eq!(a.as_ref(), b.as_ref());
-                assert_eq!(b.as_ref(), c.as_ref());
-                assert_eq!(preds[0].typ, a.clone());
-                return;
-            }
+        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+            assert_eq!(a.as_ref(), b.as_ref());
+            assert_eq!(b.as_ref(), c.as_ref());
+            assert_eq!(preds[0].typ, a.clone());
+            return;
         }
         panic!("expected a -> a -> a");
     }
@@ -4424,13 +4451,11 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "MultiplicativeMonoid");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() {
-            if let TypeKind::Fun(b, c) = rest.as_ref() {
-                assert_eq!(a.as_ref(), b.as_ref());
-                assert_eq!(b.as_ref(), c.as_ref());
-                assert_eq!(preds[0].typ, a.clone());
-                return;
-            }
+        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+            assert_eq!(a.as_ref(), b.as_ref());
+            assert_eq!(b.as_ref(), c.as_ref());
+            assert_eq!(preds[0].typ, a.clone());
+            return;
         }
         panic!("expected a -> a -> a");
     }
@@ -4443,13 +4468,11 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "AdditiveGroup");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() {
-            if let TypeKind::Fun(b, c) = rest.as_ref() {
-                assert_eq!(a.as_ref(), b.as_ref());
-                assert_eq!(b.as_ref(), c.as_ref());
-                assert_eq!(preds[0].typ, a.clone());
-                return;
-            }
+        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+            assert_eq!(a.as_ref(), b.as_ref());
+            assert_eq!(b.as_ref(), c.as_ref());
+            assert_eq!(preds[0].typ, a.clone());
+            return;
         }
         panic!("expected a -> a -> a");
     }
@@ -4462,13 +4485,11 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "Integral");
 
-        if let TypeKind::Fun(a, rest) = ty.as_ref() {
-            if let TypeKind::Fun(b, c) = rest.as_ref() {
-                assert_eq!(a.as_ref(), b.as_ref());
-                assert_eq!(b.as_ref(), c.as_ref());
-                assert_eq!(preds[0].typ, a.clone());
-                return;
-            }
+        if let TypeKind::Fun(a, rest) = ty.as_ref() && let TypeKind::Fun(b, c) = rest.as_ref() {
+            assert_eq!(a.as_ref(), b.as_ref());
+            assert_eq!(b.as_ref(), c.as_ref());
+            assert_eq!(preds[0].typ, a.clone());
+            return;
         }
         panic!("expected a -> a -> a");
     }

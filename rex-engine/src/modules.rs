@@ -122,7 +122,7 @@ fn sha256_hex(input: &[u8]) -> String {
     let mut h7: u32 = 0x5be0cd19;
 
     let bit_len = (input.len() as u64) * 8;
-    let mut msg = Vec::with_capacity(((input.len() + 9 + 63) / 64) * 64);
+    let mut msg = Vec::with_capacity((input.len() + 9).div_ceil(64) * 64);
     msg.extend_from_slice(input);
     msg.push(0x80);
     while (msg.len() % 64) != 56 {
@@ -898,17 +898,15 @@ fn rewrite_import_uses_expr(
         Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
         Expr::DateTime(span, v) => Expr::DateTime(*span, *v),
         Expr::Project(span, base, field) => {
-            if let Expr::Var(v) = base.as_ref() {
-                if !bound.contains(&v.name) {
-                    if let Some(exports) = aliases.get(&v.name) {
-                        if let Some(internal) = exports.values.get(field) {
-                            return Expr::Var(Var {
-                                span: *span,
-                                name: internal.clone(),
-                            });
-                        }
-                    }
-                }
+            if let Expr::Var(v) = base.as_ref()
+                && !bound.contains(&v.name)
+                && let Some(exports) = aliases.get(&v.name)
+                && let Some(internal) = exports.values.get(field)
+            {
+                return Expr::Var(Var {
+                    span: *span,
+                    name: internal.clone(),
+                });
             }
             Expr::Project(
                 *span,
@@ -1080,17 +1078,15 @@ fn validate_import_uses_expr(
 ) -> Result<(), EngineError> {
     match expr {
         Expr::Project(_, base, field) => {
-            if let Expr::Var(v) = base.as_ref() {
-                if !bound.contains(&v.name) {
-                    if let Some(exports) = aliases.get(&v.name) {
-                        if !exports.values.contains_key(field) {
-                            return Err(EngineError::Module(format!(
-                                "module `{}` does not export `{}`",
-                                v.name, field
-                            )));
-                        }
-                    }
-                }
+            if let Expr::Var(v) = base.as_ref()
+                && !bound.contains(&v.name)
+                && let Some(exports) = aliases.get(&v.name)
+                && !exports.values.contains_key(field)
+            {
+                return Err(EngineError::Module(format!(
+                    "module `{}` does not export `{}`",
+                    v.name, field
+                )));
             }
             validate_import_uses_expr(base, bound, aliases)
         }
@@ -1223,17 +1219,16 @@ fn rewrite_import_uses_expr_repl(
         Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
         Expr::DateTime(span, v) => Expr::DateTime(*span, *v),
         Expr::Project(span, base, field) => {
-            if let Expr::Var(v) = base.as_ref() {
-                if !bound.contains(&v.name) && !shadowed_values.contains(&v.name) {
-                    if let Some(exports) = aliases.get(&v.name) {
-                        if let Some(internal) = exports.values.get(field) {
-                            return Expr::Var(Var {
-                                span: *span,
-                                name: internal.clone(),
-                            });
-                        }
-                    }
-                }
+            if let Expr::Var(v) = base.as_ref()
+                && !bound.contains(&v.name)
+                && !shadowed_values.contains(&v.name)
+                && let Some(exports) = aliases.get(&v.name)
+                && let Some(internal) = exports.values.get(field)
+            {
+                return Expr::Var(Var {
+                    span: *span,
+                    name: internal.clone(),
+                });
             }
             Expr::Project(
                 *span,
@@ -1502,17 +1497,16 @@ fn validate_import_uses_expr_repl(
 ) -> Result<(), EngineError> {
     match expr {
         Expr::Project(_, base, field) => {
-            if let Expr::Var(v) = base.as_ref() {
-                if !bound.contains(&v.name) && !shadowed_values.contains(&v.name) {
-                    if let Some(exports) = aliases.get(&v.name) {
-                        if !exports.values.contains_key(field) {
-                            return Err(EngineError::Module(format!(
-                                "module `{}` does not export `{}`",
-                                v.name, field
-                            )));
-                        }
-                    }
-                }
+            if let Expr::Var(v) = base.as_ref()
+                && !bound.contains(&v.name)
+                && !shadowed_values.contains(&v.name)
+                && let Some(exports) = aliases.get(&v.name)
+                && !exports.values.contains_key(field)
+            {
+                return Err(EngineError::Module(format!(
+                    "module `{}` does not export `{}`",
+                    v.name, field
+                )));
             }
             validate_import_uses_expr_repl(base, bound, aliases, shadowed_values)
         }

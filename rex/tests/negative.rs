@@ -79,7 +79,8 @@ fn parse_rejects_invalid_programs() {
 #[test]
 fn compile_rejects_invalid_programs() {
     // Each case is intentionally small; they act as “failure examples” for the language.
-    let cases: &[(&str, &str, fn(&TypeError) -> bool)] = &[
+    type TypeErrorCase = (&'static str, &'static str, fn(&TypeError) -> bool);
+    let cases: &[TypeErrorCase] = &[
         (
             "unknown_var",
             "x",
@@ -314,19 +315,6 @@ fn compile_rejects_invalid_programs() {
             },
         ),
         (
-            "ambiguous_type_variable_only_in_constraints",
-            r#"
-            class Default a where
-                default : a
-
-            fn my_fn (x: t a) -> a where Foldable t, Default a, Default b =
-                foldl (\_ acc -> acc) (default) x
-
-            my_fn [[1, 2], [3]]
-            "#,
-            |e| matches!(e, TypeError::AmbiguousTypeVars { constraints, .. } if constraints.contains("Default")),
-        ),
-        (
             "constraint_kind_mismatch_rejected",
             r#"
             class Default a where
@@ -354,22 +342,36 @@ fn compile_rejects_invalid_programs() {
         ),
     ];
 
-    for (name, code, pred) in cases {
+    for (_name, code, pred) in cases {
         expect_type_err(code, *pred);
-        let _ = name;
     }
 }
 
 #[test]
 fn compile_rejects_invalid_programs_engine_errors() {
-    let cases: &[(&str, &str, fn(&EngineError) -> bool)] = &[(
-        "ambiguous_overload_requires_application",
-        "prim_fold",
-        |e| matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "prim_fold"),
-    )];
+    type EngineErrorCase = (&'static str, &'static str, fn(&EngineError) -> bool);
+    let cases: &[EngineErrorCase] = &[
+        (
+            "ambiguous_overload_requires_application",
+            "prim_fold",
+            |e| matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "prim_fold"),
+        ),
+        (
+            "ambiguous_type_variable_only_in_constraints",
+            r#"
+            class Default a where
+                default : a
 
-    for (name, code, pred) in cases {
+            fn my_fn (x: i32) -> i32 where Default b =
+                let y: b = default in x
+
+            my_fn 1
+            "#,
+            |e| matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "default"),
+        ),
+    ];
+
+    for (_name, code, pred) in cases {
         expect_engine_err(code, *pred);
-        let _ = name;
     }
 }
