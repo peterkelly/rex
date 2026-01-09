@@ -1,15 +1,12 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use futures::FutureExt;
-use futures::future::BoxFuture;
-
-use crate::EngineError;
+use crate::{EngineError, ModuleError};
 
 use super::types::{ModuleId, ModuleInstance, ResolveRequest, ResolvedModule};
 
-pub type ResolverFuture = BoxFuture<'static, Result<Option<ResolvedModule>, EngineError>>;
-pub type ResolverFn = Arc<dyn Fn(ResolveRequest) -> ResolverFuture + Send + Sync>;
+pub type ResolverFn =
+    Arc<dyn Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError> + Send + Sync>;
 
 #[derive(Clone)]
 struct ResolverEntry {
@@ -40,55 +37,49 @@ impl ModuleSystem {
     pub(crate) fn resolve(&self, req: ResolveRequest) -> Result<ResolvedModule, EngineError> {
         for entry in &self.resolvers {
             tracing::trace!(resolver = %entry.name, module = %req.module_name, "trying module resolver");
-            let fut = (entry.resolver)(ResolveRequest {
+            let resolved = (entry.resolver)(ResolveRequest {
                 module_name: req.module_name.clone(),
                 importer: req.importer.clone(),
             });
-            match futures::executor::block_on(fut)? {
+            match resolved? {
                 Some(resolved) => return Ok(resolved),
                 None => continue,
             }
         }
-        Err(EngineError::Module(format!(
-            "module not found: {}",
-            req.module_name
-        )))
+        Err(ModuleError::NotFound {
+            module_name: req.module_name,
+        }
+        .into())
     }
 
-    pub(crate) fn cached(&self, id: &ModuleId) -> Option<ModuleInstance> {
-        self.state.lock().ok()?.loaded.get(id).cloned()
+    pub(crate) fn cached(&self, id: &ModuleId) -> Result<Option<ModuleInstance>, EngineError> {
+        let state = self.state.lock().map_err(|_| ModuleError::StatePoisoned)?;
+        Ok(state.loaded.get(id).cloned())
     }
 
     pub(crate) fn mark_loading(&self, id: &ModuleId) -> Result<(), EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::Internal("module state poisoned".into()))?;
+        let mut state = self.state.lock().map_err(|_| ModuleError::StatePoisoned)?;
         if state.loaded.contains_key(id) {
             return Ok(());
         }
         if state.loading.contains(id) {
-            return Err(EngineError::Module(format!("cyclic module import: {id}")));
+            return Err(ModuleError::CyclicImport { id: id.clone() }.into());
         }
         state.loading.insert(id.clone());
         Ok(())
     }
 
     pub(crate) fn store_loaded(&self, inst: ModuleInstance) -> Result<(), EngineError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::Internal("module state poisoned".into()))?;
+        let mut state = self.state.lock().map_err(|_| ModuleError::StatePoisoned)?;
         state.loading.remove(&inst.id);
         state.loaded.insert(inst.id.clone(), inst);
         Ok(())
     }
 }
 
-pub(crate) fn wrap_resolver<F, Fut>(f: F) -> ResolverFn
+pub(crate) fn wrap_resolver<F>(f: F) -> ResolverFn
 where
-    F: Fn(ResolveRequest) -> Fut + Send + Sync + 'static,
-    Fut: std::future::Future<Output = Result<Option<ResolvedModule>, EngineError>> + Send + 'static,
+    F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError> + Send + Sync + 'static,
 {
-    Arc::new(move |req| f(req).boxed())
+    Arc::new(f)
 }

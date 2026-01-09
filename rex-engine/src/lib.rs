@@ -13,7 +13,7 @@ mod stack;
 pub use cancel::CancellationToken;
 pub use engine::{Engine, FromValue, IntoValue, NativeFn, OverloadedFn, RexType, Value};
 pub use env::Env;
-pub use error::EngineError;
+pub use error::{EngineError, ModuleError};
 pub use modules::virtual_export_name;
 pub use modules::{
     ModuleExports, ModuleId, ModuleInstance, ReplState, ResolveRequest, ResolvedModule,

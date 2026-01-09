@@ -3,8 +3,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
@@ -47,12 +48,63 @@ enum TokenizeOrParseError {
     Parse(Vec<ParserErr>),
 }
 
+#[derive(Clone)]
+struct CachedParse {
+    hash: u64,
+    tokens: Tokens,
+    program: Program,
+}
+
+fn text_hash(text: &str) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn parse_cache() -> &'static Mutex<HashMap<Url, CachedParse>> {
+    static CACHE: OnceLock<Mutex<HashMap<Url, CachedParse>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn clear_parse_cache(uri: &Url) {
+    let Ok(mut cache) = parse_cache().lock() else {
+        return;
+    };
+    cache.remove(uri);
+}
+
 fn tokenize_and_parse(text: &str) -> std::result::Result<(Tokens, Program), TokenizeOrParseError> {
     let tokens = Token::tokenize(text).map_err(TokenizeOrParseError::Lex)?;
     let mut parser = Parser::new(tokens.clone());
     let program = parser
         .parse_program()
         .map_err(TokenizeOrParseError::Parse)?;
+    Ok((tokens, program))
+}
+
+fn tokenize_and_parse_cached(
+    uri: &Url,
+    text: &str,
+) -> std::result::Result<(Tokens, Program), TokenizeOrParseError> {
+    let hash = text_hash(text);
+    if let Ok(cache) = parse_cache().lock()
+        && let Some(cached) = cache.get(uri)
+        && cached.hash == hash
+    {
+        return Ok((cached.tokens.clone(), cached.program.clone()));
+    }
+
+    let (tokens, program) = tokenize_and_parse(text)?;
+    if let Ok(mut cache) = parse_cache().lock() {
+        cache.insert(
+            uri.clone(),
+            CachedParse {
+                hash,
+                tokens: tokens.clone(),
+                program: program.clone(),
+            },
+        );
+    }
     Ok((tokens, program))
 }
 
@@ -892,7 +944,24 @@ impl RexServer {
     }
 
     async fn publish_diagnostics(&self, uri: Url, text: &str) {
-        let diagnostics = diagnostics_from_text(&uri, text);
+        let uri_for_job = uri.clone();
+        let text_for_job = text.to_string();
+        let diagnostics = match tokio::task::spawn_blocking(move || {
+            diagnostics_from_text(&uri_for_job, &text_for_job)
+        })
+        .await
+        {
+            Ok(diags) => diags,
+            Err(err) => {
+                self.client
+                    .log_message(
+                        MessageType::ERROR,
+                        format!("failed to compute diagnostics: {err}"),
+                    )
+                    .await;
+                Vec::new()
+            }
+        };
         self.client
             .publish_diagnostics(uri, diagnostics, None)
             .await;
@@ -940,6 +1009,7 @@ impl LanguageServer for RexServer {
             .write()
             .await
             .insert(uri.clone(), text.clone());
+        clear_parse_cache(&uri);
         self.publish_diagnostics(uri, &text).await;
     }
 
@@ -956,6 +1026,7 @@ impl LanguageServer for RexServer {
                 .write()
                 .await
                 .insert(uri.clone(), text.clone());
+            clear_parse_cache(&uri);
             self.publish_diagnostics(uri, &text).await;
         }
     }
@@ -963,6 +1034,7 @@ impl LanguageServer for RexServer {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.documents.write().await.remove(&uri);
+        clear_parse_cache(&uri);
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
     }
 
@@ -975,7 +1047,23 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
-        let contents = hover_type_contents(&uri, &text, position).or_else(|| {
+        let uri_for_job = uri.clone();
+        let text_for_job = text.clone();
+        let type_contents = match tokio::task::spawn_blocking(move || {
+            hover_type_contents(&uri_for_job, &text_for_job, position)
+        })
+        .await
+        {
+            Ok(contents) => contents,
+            Err(err) => {
+                self.client
+                    .log_message(MessageType::ERROR, format!("hover failed: {err}"))
+                    .await;
+                None
+            }
+        };
+
+        let contents = type_contents.or_else(|| {
             let word = word_at_position(&text, position)?;
             hover_contents(&word)
         });
@@ -995,7 +1083,21 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
-        let items = completion_items(&uri, &text, position);
+        let uri_for_job = uri.clone();
+        let text_for_job = text;
+        let items = match tokio::task::spawn_blocking(move || {
+            completion_items(&uri_for_job, &text_for_job, position)
+        })
+        .await
+        {
+            Ok(items) => items,
+            Err(err) => {
+                self.client
+                    .log_message(MessageType::ERROR, format!("completion failed: {err}"))
+                    .await;
+                Vec::new()
+            }
+        };
         Ok(Some(CompletionResponse::Array(items)))
     }
 
@@ -1011,95 +1113,110 @@ impl LanguageServer for RexServer {
             return Ok(None);
         };
 
-        // Parse on-demand. This keeps steady-state typing latency low; “go to
-        // definition” is an explicit user action where a little work is fine.
-        let Ok((tokens, program)) = tokenize_and_parse(&text) else {
-            return Ok(None);
-        };
-
-        let imported_projection = imported_projection_at_position(&tokens, position);
-
-        let Some((ident, _token_span)) = ident_token_at_position(&tokens, position) else {
-            return Ok(None);
-        };
-
-        // If the cursor is on `alias.field` and `alias` is a local import, jump
-        // to the exported declaration in the imported module.
-        if let Some((alias, field)) = imported_projection
-            && let Ok((_rewritten, _ts, imports, _diags)) =
-                prepare_program_with_imports(&uri, &program)
+        let uri_for_job = uri.clone();
+        let text_for_job = text;
+        let response = match tokio::task::spawn_blocking(move || {
+            goto_definition_response(&uri_for_job, &text_for_job, position)
+        })
+        .await
         {
-            let alias_sym = intern(&alias);
-            if let Some(info) = imports.get(&alias_sym)
-                && let Some(span) = info.export_defs.get(&field)
-                && let Some(path) = info.path.as_ref()
-                && let Ok(module_uri) = Url::from_file_path(path)
-            {
-                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
-                    uri: module_uri,
-                    range: span_to_range(*span),
-                })));
+            Ok(resp) => resp,
+            Err(err) => {
+                self.client
+                    .log_message(MessageType::ERROR, format!("goto definition failed: {err}"))
+                    .await;
+                None
             }
-        }
-
-        let index = index_decl_spans(&program, &tokens);
-        let pos = lsp_to_rex_position(position);
-
-        // Pick the expression tree that actually contains the cursor. Top-level
-        // instance method bodies are not part of `expr_with_fns()`, so we have
-        // to handle them explicitly.
-        let expr_with_fns = program.expr_with_fns();
-        let mut root_expr: &Expr = expr_with_fns.as_ref();
-        for decl in &program.decls {
-            let Decl::Instance(inst) = decl else {
-                continue;
-            };
-            for method in &inst.methods {
-                if position_in_span(pos, *method.body.span()) {
-                    root_expr = method.body.as_ref();
-                    break;
-                }
-            }
-        }
-
-        let value_def =
-            definition_span_for_value_ident(root_expr, pos, &ident, &mut Vec::new(), &tokens);
-
-        let instance_method_def = index
-            .instance_method_defs
-            .iter()
-            .find_map(|(span, methods)| {
-                if position_in_span(pos, *span) {
-                    methods.get(&ident).copied()
-                } else {
-                    None
-                }
-            });
-
-        let target_span = value_def
-            .or(instance_method_def)
-            .or(index.class_method_defs.get(&ident).copied())
-            .or(index.fn_defs.get(&ident).copied())
-            .or(index.ctor_defs.get(&ident).copied())
-            .or(index.type_defs.get(&ident).copied())
-            .or(index.class_defs.get(&ident).copied());
-
-        let Some(target_span) = target_span else {
-            return Ok(None);
         };
-
-        let location = Location {
-            uri,
-            range: span_to_range(target_span),
-        };
-        Ok(Some(GotoDefinitionResponse::Scalar(location)))
+        Ok(response)
     }
+}
+
+fn goto_definition_response(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Option<GotoDefinitionResponse> {
+    // Parse on-demand. This keeps steady-state typing latency low; “go to
+    // definition” is an explicit user action where a little work is fine.
+    let Ok((tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return None;
+    };
+
+    let imported_projection = imported_projection_at_position(&tokens, position);
+
+    let (ident, _token_span) = ident_token_at_position(&tokens, position)?;
+
+    // If the cursor is on `alias.field` and `alias` is a local import, jump
+    // to the exported declaration in the imported module.
+    if let Some((alias, field)) = imported_projection
+        && let Ok((_rewritten, _ts, imports, _diags)) = prepare_program_with_imports(uri, &program)
+    {
+        let alias_sym = intern(&alias);
+        if let Some(info) = imports.get(&alias_sym)
+            && let Some(span) = info.export_defs.get(&field)
+            && let Some(path) = info.path.as_ref()
+            && let Ok(module_uri) = Url::from_file_path(path)
+        {
+            return Some(GotoDefinitionResponse::Scalar(Location {
+                uri: module_uri,
+                range: span_to_range(*span),
+            }));
+        }
+    }
+
+    let index = index_decl_spans(&program, &tokens);
+    let pos = lsp_to_rex_position(position);
+
+    // Pick the expression tree that actually contains the cursor. Top-level
+    // instance method bodies are not part of `expr_with_fns()`, so we have
+    // to handle them explicitly.
+    let expr_with_fns = program.expr_with_fns();
+    let mut root_expr: &Expr = expr_with_fns.as_ref();
+    for decl in &program.decls {
+        let Decl::Instance(inst) = decl else {
+            continue;
+        };
+        for method in &inst.methods {
+            if position_in_span(pos, *method.body.span()) {
+                root_expr = method.body.as_ref();
+                break;
+            }
+        }
+    }
+
+    let value_def =
+        definition_span_for_value_ident(root_expr, pos, &ident, &mut Vec::new(), &tokens);
+
+    let instance_method_def = index
+        .instance_method_defs
+        .iter()
+        .find_map(|(span, methods)| {
+            if position_in_span(pos, *span) {
+                methods.get(&ident).copied()
+            } else {
+                None
+            }
+        });
+
+    let target_span = value_def
+        .or(instance_method_def)
+        .or(index.class_method_defs.get(&ident).copied())
+        .or(index.fn_defs.get(&ident).copied())
+        .or(index.ctor_defs.get(&ident).copied())
+        .or(index.type_defs.get(&ident).copied())
+        .or(index.class_defs.get(&ident).copied())?;
+
+    Some(GotoDefinitionResponse::Scalar(Location {
+        uri: uri.clone(),
+        range: span_to_range(target_span),
+    }))
 }
 
 fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    match tokenize_and_parse(text) {
+    match tokenize_and_parse_cached(uri, text) {
         Ok((tokens, program)) => {
             push_comment_diagnostics(&tokens, &mut diagnostics);
             if diagnostics.len() < MAX_DIAGNOSTICS {
@@ -1143,7 +1260,7 @@ struct HoverType {
 }
 
 fn hover_type_contents(uri: &Url, text: &str, position: Position) -> Option<HoverContents> {
-    let (tokens, program) = tokenize_and_parse(text).ok()?;
+    let (tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
     let (name, name_span, name_is_ident) = name_token_at_position(&tokens, position)?;
     let (program, mut ts, _imports, _import_diags) =
         prepare_program_with_imports(uri, &program).ok()?;
@@ -1808,7 +1925,7 @@ fn completion_items(uri: &Url, text: &str, position: Position) -> Vec<Completion
     } else {
         None
     };
-    if let Ok((_tokens, program)) = tokenize_and_parse(text) {
+    if let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) {
         return completion_items_from_program(
             &program,
             position,

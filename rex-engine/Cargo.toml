@@ -3,6 +3,11 @@ name = "rex-engine"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Enables importing `.rex` modules from GitHub via `curl`.
+# This is intentionally off by default for production builds.
+github-imports = []
+
 [dependencies]
 rex-ast = { workspace = true }
 thiserror = { workspace = true }

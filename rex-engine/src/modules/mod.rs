@@ -21,9 +21,9 @@ mod resolvers;
 mod system;
 mod types;
 
-pub use resolvers::{
-    default_github_resolver, default_local_resolver, default_stdlib_resolver, include_resolver,
-};
+#[cfg(feature = "github-imports")]
+pub use resolvers::default_github_resolver;
+pub use resolvers::{default_local_resolver, default_stdlib_resolver, include_resolver};
 pub use system::ResolverFn;
 pub use types::virtual_export_name;
 pub use types::{
@@ -892,10 +892,11 @@ fn validate_import_uses_expr(
                 && let Some(exports) = aliases.get(&v.name)
                 && !exports.values.contains_key(field)
             {
-                return Err(EngineError::Module(format!(
-                    "module `{}` does not export `{}`",
-                    v.name, field
-                )));
+                return Err(crate::ModuleError::MissingExport {
+                    module: v.name.clone(),
+                    export: field.clone(),
+                }
+                .into());
             }
             validate_import_uses_expr(base, bound, aliases, shadowed_values)
         }
@@ -1075,33 +1076,33 @@ fn parse_program_from_source(
     gas: Option<&mut GasMeter>,
 ) -> Result<Program, EngineError> {
     let tokens = Token::tokenize(source).map_err(|e| match context {
-        Some(id) => EngineError::Module(format!("lex error in module {id}: {e}")),
-        None => EngineError::Module(format!("lex error: {e}")),
+        Some(id) => EngineError::from(crate::ModuleError::LexInModule {
+            module: id.clone(),
+            source: e,
+        }),
+        None => EngineError::from(crate::ModuleError::Lex { source: e }),
     })?;
     let mut parser = RexParser::new(tokens);
     let program = match gas {
         Some(gas) => parser.parse_program_with_gas(gas),
         None => parser.parse_program(),
     }
-    .map_err(|errs| {
-        let mut out = match context {
-            Some(id) => format!("parse error in module {id}:"),
-            None => String::from("parse error:"),
-        };
-        for err in errs {
-            out.push_str(&format!("\n  {err}"));
-        }
-        EngineError::Module(out)
+    .map_err(|errs| match context {
+        Some(id) => EngineError::from(crate::ModuleError::ParseInModule {
+            module: id.clone(),
+            errors: errs,
+        }),
+        None => EngineError::from(crate::ModuleError::Parse { errors: errs }),
     })?;
     Ok(program)
 }
 
 impl Engine {
-    pub fn add_resolver<F, Fut>(&mut self, name: impl Into<String>, f: F)
+    pub fn add_resolver<F>(&mut self, name: impl Into<String>, f: F)
     where
-        F: Fn(ResolveRequest) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<Option<ResolvedModule>, EngineError>>
+        F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError>
             + Send
+            + Sync
             + 'static,
     {
         self.modules.add_resolver(name, wrap_resolver(f));
@@ -1111,15 +1112,21 @@ impl Engine {
         self.modules
             .add_resolver("stdlib", default_stdlib_resolver());
         self.modules.add_resolver("local", default_local_resolver());
-        self.modules
-            .add_resolver("remote", default_github_resolver());
+        #[cfg(feature = "github-imports")]
+        {
+            self.modules
+                .add_resolver("remote", default_github_resolver());
+        }
     }
 
     pub fn add_include_resolver(&mut self, root: impl AsRef<Path>) -> Result<(), EngineError> {
-        let canon = root
-            .as_ref()
-            .canonicalize()
-            .map_err(|e| EngineError::Module(format!("invalid include root: {e}")))?;
+        let canon =
+            root.as_ref()
+                .canonicalize()
+                .map_err(|e| crate::ModuleError::InvalidIncludeRoot {
+                    path: root.as_ref().to_path_buf(),
+                    source: e,
+                })?;
         self.modules.add_resolver(
             format!("include:{}", canon.display()),
             include_resolver(canon),
@@ -1173,7 +1180,7 @@ impl Engine {
         resolved: ResolvedModule,
         mut gas: Option<&mut GasMeter>,
     ) -> Result<ModuleInstance, EngineError> {
-        if let Some(inst) = self.modules.cached(&resolved.id) {
+        if let Some(inst) = self.modules.cached(&resolved.id)? {
             return Ok(inst);
         }
 
@@ -1238,10 +1245,10 @@ impl Engine {
         }
 
         if loading.contains(&resolved.id) {
-            return Err(EngineError::Module(format!(
-                "cyclic module import detected at {}",
-                resolved.id
-            )));
+            return Err(crate::ModuleError::CyclicImport {
+                id: resolved.id.clone(),
+            }
+            .into());
         }
         loading.insert(resolved.id.clone());
 
@@ -1297,16 +1304,39 @@ impl Engine {
     fn read_local_module_bytes(&self, path: &Path) -> Result<(ModuleId, Vec<u8>), EngineError> {
         let canon = path
             .canonicalize()
-            .map_err(|e| EngineError::Module(format!("invalid module path: {e}")))?;
-        let bytes = std::fs::read(&canon)
-            .map_err(|e| EngineError::Module(format!("failed to read module: {e}")))?;
+            .map_err(|e| crate::ModuleError::InvalidModulePath {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
+        let bytes = std::fs::read(&canon).map_err(|e| crate::ModuleError::ReadFailed {
+            path: canon.clone(),
+            source: e,
+        })?;
         let hash = sha256_hex(&bytes);
         Ok((ModuleId::Local { path: canon, hash }, bytes))
     }
 
-    fn decode_local_module_source(&self, bytes: Vec<u8>) -> Result<String, EngineError> {
-        String::from_utf8(bytes)
-            .map_err(|e| EngineError::Module(format!("local module was not utf-8: {e}")))
+    fn decode_local_module_source(
+        &self,
+        id: &ModuleId,
+        bytes: Vec<u8>,
+    ) -> Result<String, EngineError> {
+        let path = match id {
+            ModuleId::Local { path, .. } => path.clone(),
+            other => {
+                return Err(EngineError::Internal(format!(
+                    "decode_local_module_source called with non-local module id {other}"
+                )));
+            }
+        };
+        String::from_utf8(bytes).map_err(|e| {
+            crate::ModuleError::NotUtf8 {
+                kind: "local",
+                path,
+                source: e,
+            }
+            .into()
+        })
     }
 
     pub fn infer_module_file_with_gas(
@@ -1315,7 +1345,7 @@ impl Engine {
         gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
-        let source = self.decode_local_module_source(bytes)?;
+        let source = self.decode_local_module_source(&id, bytes)?;
         self.infer_module_source_with_gas(ResolvedModule { id, source }, gas)
     }
 
@@ -1417,10 +1447,10 @@ impl Engine {
         gas: Option<&mut GasMeter>,
     ) -> Result<Value, EngineError> {
         let (id, bytes) = self.read_local_module_bytes(path)?;
-        if let Some(inst) = self.modules.cached(&id) {
+        if let Some(inst) = self.modules.cached(&id)? {
             return Ok(inst.init_value);
         }
-        let source = self.decode_local_module_source(bytes)?;
+        let source = self.decode_local_module_source(&id, bytes)?;
         let inst = self.load_module_from_resolved_impl(ResolvedModule { id, source }, gas)?;
         Ok(inst.init_value)
     }
@@ -1445,7 +1475,7 @@ impl Engine {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
         let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-        if let Some(inst) = self.modules.cached(&id) {
+        if let Some(inst) = self.modules.cached(&id)? {
             return Ok(inst.init_value);
         }
         let inst = self.load_module_from_resolved_impl(

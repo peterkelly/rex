@@ -218,7 +218,7 @@ let handle = std::thread::spawn(move || block_on(engine.eval_async(expr.as_ref()
 token.cancel();
 let res = handle
     .join()
-    .map_err(|_| EngineError::Module("evaluation thread panicked".into()))?;
+    .map_err(|_| EngineError::Internal("evaluation thread panicked".into()))?;
 assert!(matches!(res, Err(EngineError::Cancelled)));
 ```
 
