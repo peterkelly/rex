@@ -9,20 +9,17 @@ Learn how to pull elements out of common containers with a single API:
 
 - lists
 - arrays
-- small tuples
 
 Example uses:
 
 ```rex
-( get 0 [10, 20, 30]
-, get 2 (1, 2, 3)
-)
+( get 0 [10, 20, 30] , get 2 ["a", "b", "c"] ) -- returns (10, "c")
 ```
 
 ## How it works
 
 - Lists and arrays have `Indexable (List a, a)` / `Indexable (Array a, a)` instances.
-- Some tuples also have `Indexable` instances (see `rex-ts/src/prelude_typeclasses.rex`).
+- Tuples use numeric projection like `.0` and `.1` instead of `get`.
 
 ## A more guided example
 
@@ -31,8 +28,8 @@ let
   xs = [10, 20, 30],
   first = get 0 xs,
   third = get 2 xs,
-  tup = (1, 2, 3),
-  last = get 2 tup
+  ys = [1, 2, 3],
+  last = get 2 ys
 in
   (first, third, last)
 ```
@@ -46,5 +43,4 @@ your container type (e.g. `[]` vs `x:xs` for lists).
 ## Exercises
 
 1. Write `head : List a -> Option a` using `match` (`[]` vs `x:xs`).
-2. Use `get` to read elements out of a tuple `(100, 200, 300, 400)` (if your prelude provides that
-   arity; check `rex-ts/src/prelude_typeclasses.rex`).
+2. Use `get` to read elements out of a list `[100, 200, 300, 400]`.

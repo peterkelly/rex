@@ -42,6 +42,8 @@ These are available by default:
 - `Sequence f` (`take`, `skip`, `zip`, `unzip`)
 - `Indexable t a` (`get`)
 
+For tuples, use numeric projection like `.0` and `.1` instead of `get`.
+
 ## A few useful helper functions
 
 The prelude also exposes some generic helpers (type-class-based):

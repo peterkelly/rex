@@ -10,17 +10,13 @@ Tuples group fixed-position values:
 (1, "hi", true)
 ```
 
-Rex supports tuple patterns in `match` and `let`. For indexing, use prelude helpers like `get`
-from `Indexable` (see the examples in Section 3).
+Rex supports tuple patterns in `match` and `let`. For indexing, use numeric projection
+like `.0` and `.1`.
 
-### Indexing tuples with `get`
-
-`Indexable` supports tuple types like `(a, a)` and `(a, a, a)`:
+### Indexing tuples with `.`
 
 ```rex
-( get 0 (10, 20, 30)
-, get 2 (10, 20, 30)
-)
+let t = (1, "hi", true) in t.1 -- returns "hi"
 ```
 
 ## Lists

@@ -290,7 +290,7 @@ Rex ships a prelude that provides common abstractions and instances. Highlights:
 - `Eq` / `Ord`
 - `Functor` / `Applicative` / `Monad` for `List`, `Array`, `Option`, `Result`
 - `Foldable`, `Filterable`, `Sequence`
-- multi-parameter `Indexable t a` with instances for lists/arrays/tuples
+- multi-parameter `Indexable t a` with instances for lists/arrays
 
 Example: `Functor` across different container types:
 
@@ -304,9 +304,7 @@ Example: `Functor` across different container types:
 Example: `Indexable`:
 
 ```rex
-( get 0 [10, 20, 30]
-, get 2 (1, 2, 3)
-)
+get 0 [10, 20, 30]
 ```
 
 ## Defaulting (Ambiguous Types)

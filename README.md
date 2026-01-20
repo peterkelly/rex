@@ -222,13 +222,13 @@ We create tuples using parentheses:
 ("this is a tuple", 420, true)
 ```
 
-We can also use the `get` function to get specific elements from the tuple. For example:
+We can also use numeric projection to get specific elements from the tuple. For example:
 
 ```rex
 let
     tuple = ("this is a ", 420, true)
 in
-    (get 0 tuple) ++ "tuple"
+    tuple.0 ++ "tuple"
 ```
 
 will result in the value `"this is a tuple"` (we are using the `++` concatentation operator, which works on strings and lists).
@@ -247,7 +247,7 @@ Lists can also be constructed explicitly using the prelude constructors:
 Cons "this" (Cons "is" (Cons "a" Empty))
 ```
 
-Similar to tuples, we can use the `get` function to get specific elements from the list:
+For lists, we can use the `get` function to get specific elements:
 
 ```rex
 let
