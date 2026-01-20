@@ -1,0 +1,67 @@
+{
+  "name": "rex-lang",
+  "displayName": "Rex Language Support",
+  "description": "Syntax highlighting and language server for Rex.",
+  "version": "0.0.1",
+  "publisher": "rex-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:rex"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "rex",
+        "aliases": [
+          "Rex",
+          "rex"
+        ],
+        "extensions": [
+          ".rex"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rex",
+        "scopeName": "source.rex",
+        "path": "./syntaxes/rex.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Rex",
+      "properties": {
+        "rex.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the rex-lsp executable. Leave empty to use ../target/debug/rex-lsp or rex-lsp from PATH."
+        }
+      }
+    }
+  },
+  "files": [
+    "src",
+    "server",
+    "node_modules",
+    "syntaxes",
+    "language-configuration.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.7.1"
+  }
+}

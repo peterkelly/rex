@@ -1,5 +1,11 @@
+#![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
+//! Lexical analysis for Rex.
+
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
+use std::sync::OnceLock;
 
 use span::{Span, Spanned};
 
@@ -27,17 +33,29 @@ impl Precedence {
     }
 }
 
-/// A Token represents a lexical token in the Arvo programming language. It
+/// A Token represents a lexical token in the Rex programming language. It
 /// includes the values of literals, identifiers, and comments.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Token {
     // Reserved keywords
     As(Span),
+    Class(Span),
+    Declare(Span),
     Else(Span),
+    Fn(Span),
     For(Span),
     If(Span),
+    Import(Span),
+    Is(Span),
+    Instance(Span),
+    Match(Span),
+    Pub(Span),
+    Type(Span),
+    When(Span),
     Then(Span),
+    With(Span),
+    Where(Span),
 
     // Operators
     Add(Span),
@@ -90,6 +108,7 @@ pub enum Token {
     String(String, Span),
 
     // Idents
+    HttpsUrl(String, Span),
     Ident(String, Span),
 
     // Eof
@@ -100,6 +119,15 @@ pub enum Token {
 pub enum LexicalError {
     #[error("Unexpected token {0}")]
     UnexpectedToken(Span),
+    #[error("invalid {kind} literal `{text}`: {error}")]
+    InvalidLiteral {
+        kind: &'static str,
+        text: String,
+        error: String,
+        span: Span,
+    },
+    #[error("internal lexer error: {0}")]
+    Internal(String),
 }
 
 impl Token {
@@ -108,31 +136,66 @@ impl Token {
         let mut column = 1;
         let mut tokens = Vec::new();
 
-        for capture in Token::regex().captures_iter(input) {
+        let re = Token::regex()?;
+        for capture in re.captures_iter(input) {
+            let Some(lexeme) = capture.get(0).map(|m| m.as_str()) else {
+                return Err(LexicalError::Internal(
+                    "regex capture missing group 0".into(),
+                ));
+            };
             let begin_line = line;
             let begin_column = column;
-            column += capture[0].to_string().chars().count();
+            column += lexeme.chars().count();
             let span = Span::new(begin_line, begin_column, line, column);
-            if &capture[0] == "\n" {
+            if lexeme == "\n" {
                 line += 1;
                 column = 1;
             }
 
-            // be careful of the ordering of these groups
+            // Be careful of the ordering of these groups.
+            //
+            // This lexer uses a single alternation regex. When multiple token
+            // kinds could match at the same position, the *earlier* named group
+            // wins. That means `==` must be checked before `=`, `::` before `:`,
+            // etc. Keep the match chain and the regex in sync.
             let token =
                 // Reserved keywords
                 if capture.name("As").is_some() {
                     Token::As(span)
+                } else if capture.name("Class").is_some() {
+                    Token::Class(span)
+                } else if capture.name("Declare").is_some() {
+                    Token::Declare(span)
                 } else if capture.name("Else").is_some() {
                     Token::Else(span)
+                } else if capture.name("Fn").is_some() {
+                    Token::Fn(span)
                 } else if capture.name("For").is_some() {
                     Token::For(span)
                 } else if capture.name("If").is_some() {
                     Token::If(span)
+                } else if capture.name("Import").is_some() {
+                    Token::Import(span)
+                } else if capture.name("Is").is_some() {
+                    Token::Is(span)
+                } else if capture.name("Instance").is_some() {
+                    Token::Instance(span)
+                } else if capture.name("Match").is_some() {
+                    Token::Match(span)
+                } else if capture.name("Pub").is_some() {
+                    Token::Pub(span)
+                } else if capture.name("Type").is_some() {
+                    Token::Type(span)
+                } else if capture.name("When").is_some() {
+                    Token::When(span)
                 } else if capture.name("In").is_some() {
                     Token::In(span)
                 } else if capture.name("Then").is_some() {
                     Token::Then(span)
+                } else if capture.name("With").is_some() {
+                    Token::With(span)
+                } else if capture.name("Where").is_some() {
+                    Token::Where(span)
                 }
 
                 // Symbols
@@ -191,7 +254,7 @@ impl Token {
                     Token::Add(span)
                 } else if capture.name("And").is_some() {
                     Token::And(span)
-                }else if capture.name("Div").is_some() {
+                } else if capture.name("Div").is_some() {
                     Token::Div(span)
                 } else if capture.name("Dot").is_some() {
                     Token::Dot(span)
@@ -220,23 +283,47 @@ impl Token {
                 }
 
                 // Literals
-                else if capture.name("Bool").is_some() {
-                    Token::Bool(bool::from_str(capture.name("Bool").unwrap().as_str()).unwrap(), span)
-                } else if capture.name("Float").is_some() {
-                    Token::Float(f64::from_str(capture.name("Float").unwrap().as_str()).unwrap(), span)
-                } else if capture.name("Int").is_some() {
-                    Token::Int(u64::from_str(capture.name("Int").unwrap().as_str()).unwrap(), span)
+                else if let Some(m) = capture.name("Bool") {
+                    let text = m.as_str();
+                    let v = bool::from_str(text).map_err(|e| LexicalError::InvalidLiteral {
+                        kind: "bool",
+                        text: text.to_string(),
+                        error: e.to_string(),
+                        span,
+                    })?;
+                    Token::Bool(v, span)
+                } else if let Some(m) = capture.name("Float") {
+                    let text = m.as_str();
+                    let v = f64::from_str(text).map_err(|e| LexicalError::InvalidLiteral {
+                        kind: "float",
+                        text: text.to_string(),
+                        error: e.to_string(),
+                        span,
+                    })?;
+                    Token::Float(v, span)
+                } else if let Some(m) = capture.name("Int") {
+                    let text = m.as_str();
+                    let v = u64::from_str(text).map_err(|e| LexicalError::InvalidLiteral {
+                        kind: "int",
+                        text: text.to_string(),
+                        error: e.to_string(),
+                        span,
+                    })?;
+                    Token::Int(v, span)
                 } else if capture.name("Null").is_some() {
                     Token::Null(span)
-                } else if capture.name("DoubleString").is_some() {
-                    Token::String(capture.name("DoubleString").unwrap().as_str().to_string(), span)
-                } else if capture.name("SingleString").is_some() {
-                    Token::String(capture.name("SingleString").unwrap().as_str().to_string(), span)
+                } else if let Some(m) = capture.name("DoubleString") {
+                    Token::String(m.as_str().to_string(), span)
+                } else if let Some(m) = capture.name("SingleString") {
+                    Token::String(m.as_str().to_string(), span)
                 }
 
                 // Idents
-                else if capture.name("Ident").is_some() {
-                    Token::Ident(capture.name("Ident").unwrap().as_str().to_string(), span)
+                else if let Some(m) = capture.name("HttpsUrl") {
+                    Token::HttpsUrl(m.as_str().to_string(), span)
+                }
+                else if let Some(m) = capture.name("Ident") {
+                    Token::Ident(m.as_str().to_string(), span)
                 }
 
                 // Other
@@ -261,69 +348,92 @@ impl Token {
     ///
     /// # Return
     /// An unwrapped Regex object.
-    pub fn regex() -> regex::Regex {
-        regex::Regex::from_str(concat!(
-            // Reserved keywords (with word boundaries)
-            r"(?P<As>\bas\b)|",
-            r"(?P<Else>\belse\b)|",
-            r"(?P<For>\bfor\b)|",
-            r"(?P<If>\bif\b)|",
-            r"(?P<Then>\bthen\b)|",
-            // Symbols
-            r"(?P<ArrowL><-|←)|",
-            r"(?P<ArrowR>->|→)|",
-            r"(?P<BackSlash>\\|λ)|",
-            r"(?P<CommentL>\{-)|",
-            r"(?P<CommentR>-\})|",
-            r"(?P<BraceL>\{)|",
-            r"(?P<BraceR>\})|",
-            r"(?P<BracketL>\[)|",
-            r"(?P<BracketR>\])|",
-            r"(?P<ColonColon>::)|", // Must go before :
-            r"(?P<Colon>:)|",
-            r"(?P<Comma>,)|",
-            r"(?P<DotDot>\.\.)|",
-            r"(?P<HashTag>\#)|",
-            r"(?P<In>\bin\b)|",   // Added word boundaries
-            r"(?P<Let>\blet\b)|", // Added word boundaries
-            r"(?P<LambdaR>->)|",
-            r"(?P<ParenL>\()|",
-            r"(?P<ParenR>\))|",
-            // r"(?P<Pipe>\|)|",
-            r"(?P<Question>\?)|",
-            r"(?P<SemiColon>;)|",
-            r"(?P<Whitespace>( |\t))|",
-            r"(?P<WhitespaceNewline>(\n|\r))|",
-            // Operators
-            r"(?P<Concat>\+\+)|",
-            r"(?P<Add>\+)|",
-            r"(?P<And>&&)|",
-            r"(?P<Div>/)|",
-            r"(?P<Dot>\.)|",
-            r"(?P<Equal>==)|",
-            r"(?P<Assign>=)|", // Must come after `==`
-            r"(?P<NotEqual>!=)|",
-            r"(?P<LessThanEq><=)|",
-            r"(?P<LessThan><)|",
-            r"(?P<GreaterThanEq>>=)|",
-            r"(?P<GreaterThan>>)|",
-            r"(?P<Mod>%)|",
-            r"(?P<Mul>\*)|",
-            r"(?P<Or>\|\|)|",
-            r"(?P<Sub>-)|",
-            // Literals (with word boundaries for bool and null)
-            r"(?P<Bool>\b(true|false)\b)|",
-            r"(?P<Float>[0-9]+\.[0-9]+)|",
-            r"(?P<Int>[0-9]+)|",
-            r"(?P<Null>\bnull\b)|",
-            r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
-            r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
-            // Idents
-            r"(?P<Ident>[_a-zA-Z]([:_a-zA-Z]|[0-9])*)|",
-            // Unexpected
-            r"(.)",
-        ))
-        .unwrap()
+    pub fn regex() -> Result<&'static regex::Regex, LexicalError> {
+        static TOKEN_REGEX: OnceLock<Result<regex::Regex, String>> = OnceLock::new();
+        let compiled = TOKEN_REGEX.get_or_init(|| {
+            regex::Regex::from_str(concat!(
+                // Reserved keywords (with word boundaries)
+                r"(?P<As>\bas\b)|",
+                r"(?P<Class>\bclass\b)|",
+                r"(?P<Declare>\bdeclare\b)|",
+                r"(?P<Else>\belse\b)|",
+                r"(?P<Fn>\bfn\b)|",
+                r"(?P<For>\bfor\b)|",
+                r"(?P<If>\bif\b)|",
+                r"(?P<Import>\bimport\b)|",
+                r"(?P<Is>\bis\b)|",
+                r"(?P<Instance>\binstance\b)|",
+                r"(?P<Match>\bmatch\b)|",
+                r"(?P<Pub>\bpub\b)|",
+                r"(?P<Type>\btype\b)|",
+                r"(?P<When>\bwhen\b)|",
+                r"(?P<Then>\bthen\b)|",
+                r"(?P<With>\bwith\b)|",
+                r"(?P<Where>\bwhere\b)|",
+                // Symbols
+                r"(?P<ArrowL><-|←)|",
+                r"(?P<ArrowR>->|→)|",
+                r"(?P<BackSlash>\\|λ)|",
+                r"(?P<CommentL>\{-)|",
+                r"(?P<CommentR>-\})|",
+                r"(?P<BraceL>\{)|",
+                r"(?P<BraceR>\})|",
+                r"(?P<BracketL>\[)|",
+                r"(?P<BracketR>\])|",
+                r"(?P<ColonColon>::)|", // Must go before :
+                r"(?P<Colon>:)|",
+                r"(?P<Comma>,)|",
+                r"(?P<DotDot>\.\.)|",
+                r"(?P<HashTag>\#)|",
+                r"(?P<In>\bin\b)|",   // Added word boundaries
+                r"(?P<Let>\blet\b)|", // Added word boundaries
+                r"(?P<LambdaR>->)|",
+                r"(?P<ParenL>\()|",
+                r"(?P<ParenR>\))|",
+                r"(?P<Question>\?)|",
+                r"(?P<SemiColon>;)|",
+                r"(?P<Whitespace>( |\t))|",
+                r"(?P<WhitespaceNewline>(\n|\r))|",
+                // Operators
+                r"(?P<Concat>\+\+)|",
+                r"(?P<Add>\+)|",
+                r"(?P<And>&&)|",
+                r"(?P<Div>/)|",
+                r"(?P<Dot>\.)|",
+                r"(?P<Equal>==)|",
+                r"(?P<Assign>=)|", // Must come after `==`
+                r"(?P<NotEqual>!=)|",
+                r"(?P<LessThanEq><=)|",
+                r"(?P<LessThan><)|",
+                r"(?P<GreaterThanEq>>=)|",
+                r"(?P<GreaterThan>>)|",
+                r"(?P<Mod>%)|",
+                r"(?P<Mul>\*)|",
+                r"(?P<Or>\|\|)|",
+                r"(?P<Pipe>\|)|",
+                r"(?P<Sub>-)|",
+                // Literals (with word boundaries for bool and null)
+                r"(?P<Bool>\b(true|false)\b)|",
+                r"(?P<Float>[0-9]+\.[0-9]+)|",
+                r"(?P<Int>[0-9]+)|",
+                r"(?P<Null>\bnull\b)|",
+                r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
+                r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
+                // URL-ish bare tokens (used by module imports)
+                r"(?P<HttpsUrl>https://[^\s]+)|",
+                // Idents
+                r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
+                // Unexpected
+                r"(.)",
+            ))
+            .map_err(|e| e.to_string())
+        });
+        match compiled {
+            Ok(re) => Ok(re),
+            Err(msg) => Err(LexicalError::Internal(format!(
+                "failed to compile token regex: {msg}"
+            ))),
+        }
     }
 
     pub fn precedence(&self) -> Precedence {
@@ -335,8 +445,7 @@ impl Token {
             Eq(..) | Ne(..) | Lt(..) | Le(..) | Gt(..) | Ge(..) => Precedence(3),
             Add(..) | Sub(..) | Concat(..) => Precedence(4),
             Mul(..) | Div(..) | Mod(..) => Precedence(5),
-            Dot(..) => Precedence(6),
-            Ident(..) => Precedence::highest(),
+            Ident(..) | HttpsUrl(..) => Precedence::highest(),
             _ => Precedence::lowest(),
         }
     }
@@ -353,10 +462,22 @@ impl Spanned for Token {
         match self {
             // Reserved keywords
             As(span, ..) => span,
+            Class(span, ..) => span,
+            Declare(span, ..) => span,
             Else(span, ..) => span,
+            Fn(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Import(span, ..) => span,
+            Is(span, ..) => span,
+            Instance(span, ..) => span,
+            Match(span, ..) => span,
+            Pub(span, ..) => span,
+            Type(span, ..) => span,
+            When(span, ..) => span,
             Then(span, ..) => span,
+            With(span, ..) => span,
+            Where(span, ..) => span,
 
             // Symbols
             ArrowL(span, ..) => span,
@@ -409,6 +530,7 @@ impl Spanned for Token {
             String(_, span, ..) => span,
 
             // Idents
+            HttpsUrl(_, span, ..) => span,
             Ident(_, span, ..) => span,
 
             // Eof
@@ -422,10 +544,22 @@ impl Spanned for Token {
         match self {
             // Reserved keywords
             As(span, ..) => span,
+            Class(span, ..) => span,
+            Declare(span, ..) => span,
             Else(span, ..) => span,
+            Fn(span, ..) => span,
             For(span, ..) => span,
             If(span, ..) => span,
+            Import(span, ..) => span,
+            Is(span, ..) => span,
+            Instance(span, ..) => span,
+            Match(span, ..) => span,
+            Pub(span, ..) => span,
+            Type(span, ..) => span,
+            When(span, ..) => span,
             Then(span, ..) => span,
+            With(span, ..) => span,
+            Where(span, ..) => span,
 
             // Symbols
             ArrowL(span, ..) => span,
@@ -478,6 +612,7 @@ impl Spanned for Token {
             String(_, span, ..) => span,
 
             // Idents
+            HttpsUrl(_, span, ..) => span,
             Ident(_, span, ..) => span,
 
             // Eof
@@ -493,10 +628,22 @@ impl Display for Token {
         match self {
             // Reserved keywords
             As(..) => write!(f, "as"),
+            Class(..) => write!(f, "class"),
+            Declare(..) => write!(f, "declare"),
             Else(..) => write!(f, "else"),
+            Fn(..) => write!(f, "fn"),
             For(..) => write!(f, "for"),
             If(..) => write!(f, "if"),
+            Import(..) => write!(f, "import"),
+            Is(..) => write!(f, "is"),
+            Instance(..) => write!(f, "instance"),
+            Match(..) => write!(f, "match"),
+            Pub(..) => write!(f, "pub"),
+            Type(..) => write!(f, "type"),
+            When(..) => write!(f, "when"),
             Then(..) => write!(f, "then"),
+            With(..) => write!(f, "with"),
+            Where(..) => write!(f, "where"),
 
             // Symbols
             ArrowL(..) => write!(f, "<-"),
@@ -549,6 +696,7 @@ impl Display for Token {
             String(x, ..) => write!(f, "{}", x),
 
             // Idents
+            HttpsUrl(url, ..) => write!(f, "{}", url),
             Ident(ident, ..) => write!(f, "{}", ident),
 
             // Eof
@@ -557,6 +705,7 @@ impl Display for Token {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Tokens {
     pub items: Vec<Token>,
     pub eof: Span,

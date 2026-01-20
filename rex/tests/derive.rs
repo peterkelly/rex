@@ -1,388 +1,303 @@
-use rex_ast::{assert_expr_eq, f, n, tup};
-use rex_engine::{engine::Builder, ftable::Namespace, program::Program};
+use std::collections::HashMap;
+
+use rex_engine::{Engine, FromValue, RexType};
+use rex_lexer::Token;
+use rex_parser::Parser;
 use rex_proc_macro::Rex;
-use rex_type_system::{
-    adt, tuple,
-    types::{ADTVariant, ToType, ADT},
-};
-use std::sync::Arc;
 
-#[allow(dead_code)]
-#[test]
-pub fn derive_struct() {
-    use rex_type_system::{
-        adt, adt_variant, bool, float, int, list, string, tuple,
-        types::{ToType, Type},
-    };
+fn eval(code: &str) -> Result<rex_engine::Value, String> {
+    let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
+    let mut parser = Parser::new(tokens);
+    let program = parser
+        .parse_program()
+        .map_err(|errs| format!("parse error: {errs:?}"))?;
 
-    #[derive(Rex, serde::Deserialize, serde::Serialize)]
-    struct MyInnerStruct {
-        x: bool,
-        y: i64,
-        z: f64,
-        w: Vec<String>,
-        #[serde(rename = "renamed")]
-        t: (bool, i64, f64, Vec<String>),
-    }
+    let mut engine = Engine::with_prelude().unwrap();
+    MyInnerStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
+    MyStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
+    Boxed::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
+    Maybe::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
+    Shape::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
 
-    assert_eq!(
-        MyInnerStruct::to_type(),
-        Type::ADT(adt!(
-            MyInnerStruct = MyInnerStruct {
-                x: bool!(),
-                y: int!(),
-                z: float!(),
-                w: list![string!()],
-                renamed: tuple!(bool!(), int!(), float!(), list![string!()])
-            }
-        ))
-    );
-
-    #[derive(Rex)]
-    struct MyStruct {
-        x: bool,
-        y: i64,
-        z: f64,
-        w: Vec<String>,
-        t: (bool, i64, f64, Vec<String>),
-        u: MyInnerStruct,
-        v: Vec<MyInnerStruct>,
-    }
-
-    assert_eq!(
-        MyStruct::to_type(),
-        Type::ADT(adt!(
-            MyStruct = MyStruct {
-                x: bool!(),
-                y: int!(),
-                z: float!(),
-                w: list![string!()],
-                t: tuple!(bool!(), int!(), float!(), list![string!()]),
-                u: Arc::new(MyInnerStruct::to_type()),
-                v: list![Arc::new(MyInnerStruct::to_type())]
-            }
-        ))
-    );
-
-    #[derive(Rex)]
-    struct MyTupleStruct(
-        bool,
-        i64,
-        f64,
-        Vec<String>,
-        (bool, i64, f64, Vec<String>),
-        MyInnerStruct,
-        Vec<MyInnerStruct>,
-    );
-
-    assert_eq!(
-        MyTupleStruct::to_type(),
-        Type::ADT(ADT {
-            name: String::from("MyTupleStruct"),
-            variants: vec![ADTVariant {
-                name: String::from("MyTupleStruct"),
-                t: Some(tuple!(
-                    bool!(),
-                    int!(),
-                    float!(),
-                    list![string!()],
-                    tuple!(bool!(), int!(), float!(), list![string!()]),
-                    Arc::new(MyInnerStruct::to_type()),
-                    list![Arc::new(MyInnerStruct::to_type())]
-                )),
-                docs: None,
-                t_docs: None,
-                discriminant: None,
-            }],
-            docs: None,
-        })
-    );
-
-    #[derive(Rex)]
-    struct MyEmptyStruct {}
-
-    assert_eq!(
-        MyEmptyStruct::to_type(),
-        Type::ADT(ADT {
-            name: String::from("MyEmptyStruct"),
-            variants: vec![ADTVariant {
-                name: String::from("MyEmptyStruct"),
-                t: None,
-                docs: None,
-                t_docs: None,
-                discriminant: None,
-            }],
-            docs: None,
-        })
-    );
-
-    #[derive(Rex)]
-    struct MyEmptyTupleStruct();
-
-    assert_eq!(
-        MyEmptyTupleStruct::to_type(),
-        Type::ADT(ADT {
-            name: String::from("MyEmptyTupleStruct"),
-            variants: vec![ADTVariant {
-                name: String::from("MyEmptyTupleStruct"),
-                t: None,
-                docs: None,
-                t_docs: None,
-                discriminant: None,
-            }],
-            docs: None,
-        })
-    );
-
-    #[derive(Rex)]
-    struct MyUnitStruct;
-
-    assert_eq!(
-        MyUnitStruct::to_type(),
-        Type::ADT(ADT {
-            name: String::from("MyUnitStruct"),
-            variants: vec![],
-            docs: None,
-        })
-    );
+    engine
+        .inject_decls(&program.decls)
+        .map_err(|e| format!("{e}"))?;
+    engine
+        .eval(program.expr.as_ref())
+        .map_err(|e| format!("{e}"))
 }
 
-#[allow(dead_code)]
-#[test]
-pub fn derive_enum() {
-    use rex_type_system::{
-        adt, adt_variant, bool, dict, float, int, list, string, tuple,
-        types::{ToType, Type},
-    };
-
-    #[derive(Rex, serde::Deserialize, serde::Serialize)]
-    struct MyInnerStruct {
-        x: bool,
-        y: i64,
-        z: f64,
-        w: Vec<String>,
-        t: (bool, i64, f64, Vec<String>),
-    }
-
-    assert_eq!(
-        MyInnerStruct::to_type(),
-        Type::ADT(adt!(
-            MyInnerStruct = MyInnerStruct {
-                x: bool!(),
-                y: int!(),
-                z: float!(),
-                w: list![string!()],
-                t: tuple!(bool!(), int!(), float!(), list![string!()])
-            }
-        ))
-    );
-
-    /// MyEnum has been documented.
-    ///
-    /// ```rust
-    /// MyEnum::X
-    /// MyEnum::Y()
-    /// MyEnum::Z{}
-    /// ```
-    ///
-    /// These commentsn will appear in the type definition.
-    #[derive(Rex, serde::Deserialize, serde::Serialize)]
-    enum MyEnum {
-        X,
-        Y(),
-
-        /// Z has been documented.
-        ///
-        /// ```rust
-        /// MyEnum::Z{}
-        /// ```
-        Z {},
-        W(bool),
-        T(i64, f64, Vec<String>),
-        U {
-            x: bool,
-            y: i64,
-            z: f64,
-            /// This field has been documented.
-            w: Vec<String>,
-            /// This renamed field has been documented.
-            #[serde(rename = "renamed")]
-            t: (bool, i64, f64, Vec<String>),
-        },
-        #[serde(rename = "Renamed")]
-        V(MyInnerStruct),
-    }
-
-    assert_eq!(
-        MyEnum::to_type(),
-        Type::ADT(ADT {
-            docs: Some(
-                r#"MyEnum has been documented.
-
-```rust
-MyEnum::X
-MyEnum::Y()
-MyEnum::Z{}
-```
-
-These commentsn will appear in the type definition."#
-                    .to_string()
-            ),
-            name: "MyEnum".to_string(),
-            variants: vec![
-                ADTVariant {
-                    name: "X".to_string(),
-                    t: None,
-                    docs: None,
-                    t_docs: None,
-                    discriminant: None,
-                },
-                ADTVariant {
-                    name: "Y".to_string(),
-                    t: None,
-                    docs: None,
-                    t_docs: None,
-                    discriminant: None,
-                },
-                ADTVariant {
-                    docs: Some(
-                        r#"Z has been documented.
-
-```rust
-MyEnum::Z{}
-```"#
-                            .to_string()
-                    ),
-                    name: "Z".to_string(),
-                    t: None,
-                    t_docs: None,
-                    discriminant: None,
-                },
-                ADTVariant {
-                    name: "W".to_string(),
-                    t: Some(bool!()),
-                    docs: None,
-                    t_docs: None,
-                    discriminant: None,
-                },
-                ADTVariant {
-                    name: "T".to_string(),
-                    t: Some(tuple!(int!(), float!(), list![string!()])),
-                    docs: None,
-                    t_docs: None,
-                    discriminant: None,
-                },
-                ADTVariant {
-                    name: "U".to_string(),
-                    t: Some(dict! {
-                        x: bool!(),
-                        y: int!(),
-                        z: float!(),
-                        w: list![string!()],
-                        renamed: tuple!(bool!(), int!(), float!(), list![string!()]),
-                    }),
-                    docs: None,
-                    t_docs: Some(
-                        [
-                            (
-                                "w".to_string(),
-                                "This field has been documented.".to_string()
-                            ),
-                            (
-                                "renamed".to_string(),
-                                "This renamed field has been documented.".to_string()
-                            )
-                        ]
-                        .into_iter()
-                        .collect()
-                    ),
-                    discriminant: None,
-                },
-                ADTVariant {
-                    name: "Renamed".to_string(),
-                    t: Some(Arc::new(MyInnerStruct::to_type())),
-                    docs: None,
-                    t_docs: None,
-                    discriminant: None,
-                }
-            ]
-        })
-    );
-
-    #[derive(Rex)]
-    enum DiscriminatedEnum {
-        Zero = 0,
-        Positive = 12345,
-        Negative = -44556,
-        None,
-    }
-
-    assert_eq!(
-        DiscriminatedEnum::to_type(),
-        Type::ADT(ADT {
-            docs: None,
-            name: "DiscriminatedEnum".to_string(),
-            variants: vec![
-                ADTVariant {
-                    name: "Zero".to_string(),
-                    t: None,
-                    docs: None,
-                    t_docs: None,
-                    discriminant: Some(0),
-                },
-                ADTVariant {
-                    name: "Positive".to_string(),
-                    t: None,
-                    docs: None,
-                    t_docs: None,
-                    discriminant: Some(12345),
-                },
-                ADTVariant {
-                    name: "Negative".to_string(),
-                    t: None,
-                    docs: None,
-                    t_docs: None,
-                    discriminant: Some(-44556),
-                },
-                ADTVariant {
-                    name: "None".to_string(),
-                    t: None,
-                    docs: None,
-                    t_docs: None,
-                    discriminant: None,
-                },
-            ],
-        })
-    );
+#[derive(Rex, Debug, PartialEq)]
+struct MyInnerStruct {
+    x: bool,
+    y: i32,
 }
 
-#[tokio::test]
-async fn adt_curry() {
-    #![allow(dead_code)]
-    #[derive(Rex)]
-    pub enum Shape {
-        Rectangle(f64, f64),
-        Circle(f64),
-    }
+#[derive(Rex, Debug, PartialEq)]
+struct MyStruct {
+    x: bool,
+    y: i32,
+    tags: Vec<String>,
+    props: HashMap<String, i32>,
+    inner: MyInnerStruct,
+    pair: (i32, String, bool),
+    #[serde(rename = "renamed")]
+    renamed_field: i32,
+}
 
-    let mut builder: Builder<()> = Builder::with_prelude().unwrap();
-    builder
-        .register_adt(&Namespace::rex(), &Arc::new(Shape::to_type()), None, None)
-        .unwrap();
-    let program = Program::compile(
-        builder,
-        r#"let partial = Shape::Rectangle (2.0 * 3.0) in (partial (3.0 * 4.0), partial (2.0 * 4.0))"#,
+#[derive(Rex, Debug, PartialEq)]
+struct Boxed<T> {
+    value: T,
+}
+
+#[derive(Rex, Debug, PartialEq)]
+enum Maybe<T> {
+    Just(T),
+    Nothing,
+}
+
+#[test]
+fn derive_struct_roundtrip_value() {
+    let v = eval(
+        r#"
+        MyStruct {
+            x = true,
+            y = 42,
+            tags = ["a", "b", "c"],
+            props = { a = 1, b = 2 },
+            inner = MyInnerStruct { x = false, y = 7 },
+            pair = (1, "hi", true),
+            renamed = 9
+        }
+        "#,
     )
     .unwrap();
+
+    let decoded = MyStruct::from_value(&v, "test").unwrap();
     assert_eq!(
-        program.res_type,
-        tuple!(Arc::new(Shape::to_type()), Arc::new(Shape::to_type()))
+        decoded,
+        MyStruct {
+            x: true,
+            y: 42,
+            tags: vec!["a".into(), "b".into(), "c".into()],
+            props: HashMap::from([("a".into(), 1), ("b".into(), 2)]),
+            inner: MyInnerStruct { x: false, y: 7 },
+            pair: (1, "hi".into(), true),
+            renamed_field: 9,
+        }
     );
-    let res = program.run(()).await.unwrap();
-    assert_expr_eq!(
-        res,
-        tup!(
-            n!("Rectangle", Some(tup!(f!(6.0), f!(12.0)))),
-            n!("Rectangle", Some(tup!(f!(6.0), f!(8.0)))));
-        ignore span);
+}
+
+#[test]
+fn derive_generic_struct_roundtrip_value() {
+    let v = eval("Boxed { value = 123 }").unwrap();
+    let decoded = Boxed::<i32>::from_value(&v, "boxed").unwrap();
+    assert_eq!(decoded, Boxed { value: 123 });
+}
+
+#[test]
+fn derive_generic_worked_example_polymorphic_adt() {
+    // Worked example: `Maybe<T>` is injected into Rex once, but constructors stay polymorphic.
+    //
+    // The proc-macro generates *both*:
+    // - `RexType` for Rust values (e.g. `Maybe<i32>` -> `Maybe i32`)
+    // - an `AdtDecl` with a type parameter `T` (so `Just` has scheme `a -> Maybe a`)
+    let mut engine = Engine::with_prelude().unwrap();
+
+    // Build the ADT surface (params + variants) and sanity-check that it really uses a type var.
+    let adt = Maybe::<i32>::rex_adt_decl(&mut engine).unwrap();
+    assert_eq!(adt.name.as_ref(), "Maybe");
+    assert_eq!(adt.params.len(), 1);
+
+    let t = adt
+        .param_type(&rex_ast::expr::intern("T"))
+        .expect("expected `T` param type");
+
+    let just = adt
+        .variants
+        .iter()
+        .find(|v| v.name.as_ref() == "Just")
+        .expect("expected `Just` variant");
+    assert_eq!(just.args, vec![t.clone()]);
+
+    let nothing = adt
+        .variants
+        .iter()
+        .find(|v| v.name.as_ref() == "Nothing")
+        .expect("expected `Nothing` variant");
+    assert!(nothing.args.is_empty());
+
+    // Inject the ADT once: constructor *schemes* are registered in the type system, and runtime
+    // constructor *functions* are registered in the evaluator.
+    engine.inject_adt(adt).unwrap();
+
+    // On the Rust side, `RexType` is the nominal head applied to the Rust generic arguments.
+    assert_eq!(
+        Maybe::<i32>::rex_type(),
+        rex_ts::Type::app(rex_ts::Type::con("Maybe", 1), <i32 as RexType>::rex_type())
+    );
+    assert_eq!(
+        Maybe::<bool>::rex_type(),
+        rex_ts::Type::app(rex_ts::Type::con("Maybe", 1), <bool as RexType>::rex_type())
+    );
+
+    // On the Rex side, `Just` stays polymorphic because the injected `AdtDecl` used a type var `T`
+    // in the argument type. That lets the same constructor be used at multiple instantiations.
+    let tokens = Token::tokenize(
+        r#"
+        let id = \x -> Just x in
+            (id 1, id true)
+        "#,
+    )
+    .map_err(|e| format!("lex error: {e}"))
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser
+        .parse_program()
+        .map_err(|errs| format!("parse error: {errs:?}"))
+        .unwrap();
+
+    engine.inject_decls(&program.decls).unwrap();
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+
+    let rex_engine::Value::Tuple(items) = v else {
+        panic!("expected tuple, got {v}");
+    };
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        Maybe::<i32>::from_value(&items[0], "a").unwrap(),
+        Maybe::Just(1)
+    );
+    assert_eq!(
+        Maybe::<bool>::from_value(&items[1], "b").unwrap(),
+        Maybe::Just(true)
+    );
+}
+
+#[derive(Rex, Debug, PartialEq)]
+enum Shape {
+    Rectangle(i32, i32),
+    Circle(i32),
+}
+
+#[test]
+fn derive_can_be_used_in_injected_native_functions() {
+    let tokens = Token::tokenize(
+        r#"
+        bump_y (MyStruct {
+            x = true,
+            y = 42,
+            tags = ["a", "b", "c"],
+            props = { a = 1, b = 2 },
+            inner = MyInnerStruct { x = false, y = 7 },
+            pair = (1, "hi", true),
+            renamed = 9
+        })
+        "#,
+    )
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    let mut engine = Engine::with_prelude().unwrap();
+    MyInnerStruct::inject_rex(&mut engine).unwrap();
+    MyStruct::inject_rex(&mut engine).unwrap();
+
+    engine
+        .inject_fn1("bump_y", |mut s: MyStruct| {
+            s.y += 1;
+            s
+        })
+        .unwrap();
+
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let bumped = MyStruct::from_value(&v, "bumped").unwrap();
+    assert_eq!(bumped.y, 43);
+
+    engine
+        .inject_value(
+            "const_struct",
+            MyStruct {
+                x: false,
+                y: 100,
+                tags: vec![],
+                props: HashMap::new(),
+                inner: MyInnerStruct { x: true, y: 1 },
+                pair: (2, "ok".into(), false),
+                renamed_field: 0,
+            },
+        )
+        .unwrap();
+    let tokens = Token::tokenize("const_struct.y").unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    assert!(matches!(v, rex_engine::Value::I32(100)));
+}
+
+#[test]
+fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
+    let mut engine = Engine::with_prelude().unwrap();
+    Shape::inject_rex(&mut engine).unwrap();
+
+    engine
+        .inject_value("shape", Shape::Rectangle(3, 4))
+        .unwrap();
+
+    let tokens = Token::tokenize(
+        r#"
+        match shape
+            when Rectangle w h -> w * h
+            when Circle r -> r
+        "#,
+    )
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    assert!(matches!(v, rex_engine::Value::I32(12)));
+}
+
+#[test]
+fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
+    let mut engine = Engine::with_prelude().unwrap();
+    Maybe::<i32>::inject_rex(&mut engine).unwrap();
+
+    engine
+        .inject_fn1("unwrap_or_zero", |m: Maybe<i32>| match m {
+            Maybe::Just(v) => v,
+            Maybe::Nothing => 0,
+        })
+        .unwrap();
+
+    let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let rex_engine::Value::Tuple(items) = v else {
+        panic!("expected tuple, got {v}");
+    };
+    assert!(matches!(items[0], rex_engine::Value::I32(5)));
+    assert!(matches!(items[1], rex_engine::Value::I32(0)));
+}
+
+#[test]
+fn derive_enum_constructor_currying() {
+    let v = eval(
+        r#"
+        let partial = Rectangle (2 * 3) in
+            (partial (3 * 4), partial (2 * 4))
+        "#,
+    )
+    .unwrap();
+
+    let rex_engine::Value::Tuple(items) = v else {
+        panic!("expected tuple, got {v}");
+    };
+    assert_eq!(items.len(), 2);
+    let a = Shape::from_value(&items[0], "a").unwrap();
+    let b = Shape::from_value(&items[1], "b").unwrap();
+    assert_eq!(a, Shape::Rectangle(6, 12));
+    assert_eq!(b, Shape::Rectangle(6, 8));
 }

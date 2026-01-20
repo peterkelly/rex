@@ -1,800 +1,952 @@
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
 use proc_macro::TokenStream;
-use proc_macro2::{Span, TokenTree};
-use quote::quote;
+
+use proc_macro2::{Span, TokenStream as TokenStream2};
+use quote::{format_ident, quote};
+use std::collections::HashMap;
 use syn::{
-    parse_str, spanned::Spanned, Attribute, Data, DeriveInput, Error, Expr, ExprLit, ExprUnary,
-    Fields, FieldsNamed, FieldsUnnamed, Ident, Lit, Meta, Type, UnOp, Variant,
+    Attribute, Data, DeriveInput, Error, Fields, GenericArgument, Generics, Ident, LitStr,
+    PathArguments, Type, parse_quote, spanned::Spanned,
 };
 
-#[derive(Debug)]
+#[proc_macro_derive(Rex, attributes(rex, serde))]
+pub fn derive_rex(input: TokenStream) -> TokenStream {
+    let ast: DeriveInput = match syn::parse(input) {
+        Ok(ast) => ast,
+        Err(e) => return e.to_compile_error().into(),
+    };
+    match expand(&ast) {
+        Ok(ts) => ts.into(),
+        Err(e) => e.to_compile_error().into(),
+    }
+}
+
 struct DeriveOptions {
     name: String,
 }
 
-impl DeriveOptions {
-    fn from_derive_input(ast: &DeriveInput) -> Result<DeriveOptions, Error> {
-        for attr in ast.attrs.iter() {
-            let Meta::List(meta_list) = &attr.meta else {
-                continue;
-            };
-            if !meta_list.path.is_ident("rex") {
-                continue;
+fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
+    if ast.generics.lifetimes().next().is_some() || ast.generics.const_params().next().is_some() {
+        return Err(Error::new(
+            ast.generics.span(),
+            "`#[derive(Rex)]` only supports type parameters (no lifetimes or const generics)",
+        ));
+    }
+
+    let opts = DeriveOptions {
+        name: rex_name_from_attrs(&ast.attrs)?.unwrap_or_else(|| ast.ident.to_string()),
+    };
+
+    let rust_ident = &ast.ident;
+    let type_name = opts.name;
+    let type_param_idents: Vec<Ident> = ast
+        .generics
+        .type_params()
+        .map(|p| p.ident.clone())
+        .collect();
+    let type_param_count = type_param_idents.len();
+
+    let mut rex_type_generics = ast.generics.clone();
+    add_bound_to_type_params(&mut rex_type_generics, parse_quote!(::rex_engine::RexType));
+    let (rex_type_impl_generics, rex_type_ty_generics, rex_type_where_clause) =
+        rex_type_generics.split_for_impl();
+    let rex_type_params = type_param_idents.iter().map(|ident| {
+        quote! { <#ident as ::rex_engine::RexType>::rex_type() }
+    });
+    let rex_type_impl = quote! {
+        impl #rex_type_impl_generics ::rex_engine::RexType for #rust_ident #rex_type_ty_generics #rex_type_where_clause {
+            fn rex_type() -> ::rex_ts::Type {
+                let mut ty = ::rex_ts::Type::con(#type_name, #type_param_count);
+                #( ty = ::rex_ts::Type::app(ty, #rex_type_params); )*
+                ty
             }
-
-            let mut token_iter = meta_list.tokens.clone().into_iter();
-            match token_iter.next() {
-                Some(TokenTree::Ident(ident)) if ident == "name" => (),
-                Some(t) => return Err(Error::new(t.span(), "Expected \"name\"")),
-                None => return Err(Error::new(meta_list.span(), "Expected \"name\"")),
-            }
-
-            match token_iter.next() {
-                Some(TokenTree::Punct(punct)) if punct.as_char() == '=' => (),
-                Some(t) => return Err(Error::new(t.span(), "Expected '='")),
-                None => return Err(Error::new(meta_list.span(), "Expected '='")),
-            }
-
-            let name: String = match token_iter.next() {
-                Some(TokenTree::Literal(literal)) => {
-                    match parse_str::<Lit>(&literal.to_string())? {
-                        Lit::Str(lit_str) => lit_str.value(),
-                        _ => return Err(Error::new(literal.span(), "Expected a string")),
-                    }
-                }
-                Some(t) => return Err(Error::new(t.span(), "Expected a string")),
-                None => return Err(Error::new(meta_list.span(), "Expected a string")),
-            };
-
-            return Ok(DeriveOptions { name });
         }
+    };
 
-        Ok(DeriveOptions {
-            name: ast.ident.to_string(),
-        })
+    let adt_decl_fn = adt_decl_fn(ast, &type_name, &type_param_idents)?;
+    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let inject_fn = quote! {
+        impl #impl_generics #rust_ident #ty_generics #where_clause {
+            pub fn inject_rex(engine: &mut ::rex_engine::Engine) -> Result<(), ::rex_engine::EngineError> {
+                let adt = Self::rex_adt_decl(engine)?;
+                engine.inject_adt(adt)
+            }
+
+            pub fn rex_adt_decl(engine: &mut ::rex_engine::Engine) -> Result<::rex_ts::AdtDecl, ::rex_engine::EngineError> {
+                #adt_decl_fn
+            }
+        }
+    };
+
+    let into_value_impl = into_value_impl(ast, &type_name)?;
+    let from_value_impl = from_value_impl(ast, &type_name)?;
+
+    Ok(quote! {
+        #rex_type_impl
+        #inject_fn
+        #into_value_impl
+        #from_value_impl
+    })
+}
+
+fn rex_name_from_attrs(attrs: &[Attribute]) -> Result<Option<String>, Error> {
+    for attr in attrs {
+        if !attr.path().is_ident("rex") {
+            continue;
+        }
+        let mut name: Option<String> = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("name") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                name = Some(lit.value());
+            }
+            Ok(())
+        })?;
+        return Ok(name);
+    }
+    Ok(None)
+}
+
+fn serde_rename_from_attrs(attrs: &[Attribute]) -> Result<Option<String>, Error> {
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let mut rename: Option<String> = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                rename = Some(lit.value());
+            }
+            Ok(())
+        })?;
+        if rename.is_some() {
+            return Ok(rename);
+        }
+    }
+    Ok(None)
+}
+
+fn adt_decl_fn(
+    ast: &DeriveInput,
+    type_name: &str,
+    type_params: &[Ident],
+) -> Result<TokenStream2, Error> {
+    let param_names: Vec<LitStr> = type_params
+        .iter()
+        .map(|p| LitStr::new(&p.to_string(), Span::call_site()))
+        .collect();
+    let adt_decl = if param_names.is_empty() {
+        quote!(let mut adt = engine.adt_decl(#type_name, &[]);)
+    } else {
+        quote!(let mut adt = engine.adt_decl(#type_name, &[#(#param_names,)*]);)
+    };
+
+    let mut param_bindings = Vec::new();
+    let mut param_map: HashMap<String, TokenStream2> = HashMap::new();
+    for p in type_params {
+        let p_name = p.to_string();
+        let p_lit = LitStr::new(&p_name, Span::call_site());
+        let p_ident = format_ident!("__rex_param_{p_name}", span = Span::call_site());
+        param_bindings.push(quote! {
+            let #p_ident = adt
+                .param_type(&::rex_ast::expr::intern(#p_lit))
+                .ok_or_else(|| ::rex_engine::EngineError::UnknownType(::rex_ast::expr::intern(#type_name)))?;
+        });
+        param_map.insert(p_name, quote!(#p_ident.clone()));
+    }
+
+    match &ast.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => {
+                let ctor = type_name;
+                let mut field_inits = Vec::new();
+                for field in &fields.named {
+                    let field_ident = field
+                        .ident
+                        .as_ref()
+                        .ok_or_else(|| Error::new(field.span(), "expected named field"))?;
+                    let mut field_name = field_ident.to_string();
+                    if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
+                        field_name = rename;
+                    }
+                    let field_ty = rex_type_expr(&field.ty, &param_map)?;
+                    field_inits.push(quote! {
+                        ( ::rex_ast::expr::intern(#field_name), #field_ty )
+                    });
+                }
+                Ok(quote! {{
+                    #adt_decl
+                    #(#param_bindings)*
+                    let record = ::rex_ts::Type::record(::std::vec![#(#field_inits,)*]);
+                    adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![record]);
+                    Ok(adt)
+                }})
+            }
+            Fields::Unnamed(fields) => {
+                let ctor = type_name;
+                let mut args = Vec::new();
+                for field in &fields.unnamed {
+                    let ty = rex_type_expr(&field.ty, &param_map)?;
+                    args.push(ty);
+                }
+                Ok(quote! {{
+                    #adt_decl
+                    #(#param_bindings)*
+                    adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![#(#args,)*]);
+                    Ok(adt)
+                }})
+            }
+            Fields::Unit => Ok(quote! {{
+                #adt_decl
+                #(#param_bindings)*
+                adt.add_variant(::rex_ast::expr::intern(#type_name), ::std::vec![]);
+                Ok(adt)
+            }}),
+        },
+        Data::Enum(data) => {
+            let mut variants = Vec::new();
+            for variant in &data.variants {
+                let mut variant_name = variant.ident.to_string();
+                if let Some(rename) = serde_rename_from_attrs(&variant.attrs)? {
+                    variant_name = rename;
+                }
+                let args = match &variant.fields {
+                    Fields::Unit => Vec::new(),
+                    Fields::Unnamed(fields) => {
+                        let mut out = Vec::new();
+                        for field in &fields.unnamed {
+                            out.push(rex_type_expr(&field.ty, &param_map)?);
+                        }
+                        out
+                    }
+                    Fields::Named(fields) => {
+                        let mut field_inits = Vec::new();
+                        for field in &fields.named {
+                            let field_ident = field
+                                .ident
+                                .as_ref()
+                                .ok_or_else(|| Error::new(field.span(), "expected named field"))?;
+                            let mut field_name = field_ident.to_string();
+                            if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
+                                field_name = rename;
+                            }
+                            let field_ty = rex_type_expr(&field.ty, &param_map)?;
+                            field_inits.push(quote! {
+                                ( ::rex_ast::expr::intern(#field_name), #field_ty )
+                            });
+                        }
+                        let record = quote! {
+                            ::rex_ts::Type::record(::std::vec![#(#field_inits,)*])
+                        };
+                        vec![record]
+                    }
+                };
+                variants.push(quote! {
+                    adt.add_variant(::rex_ast::expr::intern(#variant_name), ::std::vec![#(#args,)*]);
+                });
+            }
+            Ok(quote! {{
+                #adt_decl
+                #(#param_bindings)*
+                #(#variants)*
+                Ok(adt)
+            }})
+        }
+        Data::Union(_) => Err(Error::new(
+            ast.span(),
+            "`#[derive(Rex)]` only supports structs and enums",
+        )),
     }
 }
 
-#[proc_macro_derive(Rex, attributes(rex))]
-pub fn derive_rex(input: TokenStream) -> TokenStream {
-    let ast: DeriveInput = syn::parse(input).unwrap();
+fn rex_type_expr(
+    ty: &Type,
+    adt_params: &HashMap<String, TokenStream2>,
+) -> Result<TokenStream2, Error> {
+    match ty {
+        Type::Tuple(tuple) => {
+            let elems = tuple
+                .elems
+                .iter()
+                .map(|t| rex_type_expr(t, adt_params))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(quote! { ::rex_ts::Type::tuple(::std::vec![#(#elems,)*]) })
+        }
+        Type::Path(type_path) => {
+            if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
+                let seg = type_path
+                    .path
+                    .segments
+                    .last()
+                    .ok_or_else(|| Error::new(type_path.span(), "unsupported type path"))?;
+                let ident = seg.ident.to_string();
+                if let Some(param_ty) = adt_params.get(&ident) {
+                    return Ok(param_ty.clone());
+                }
+            }
 
-    let options = match DeriveOptions::from_derive_input(&ast) {
-        Ok(a) => a,
-        Err(e) => return e.into_compile_error().into(),
-    };
+            let seg = type_path
+                .path
+                .segments
+                .last()
+                .ok_or_else(|| Error::new(type_path.span(), "unsupported type path"))?;
+            let ident = seg.ident.to_string();
+            let args = match &seg.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArgument::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
 
-    let mut expanded = TokenStream::new();
-    expanded.extend(impl_to_type(&ast, &options));
-    expanded.extend(impl_encode(&ast, &options));
-    expanded.extend(impl_decode(&ast, &options));
-    expanded
+            match ident.as_str() {
+                "Vec" => {
+                    let [inner] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Vec<T>`"));
+                    };
+                    let inner = rex_type_expr(inner, adt_params)?;
+                    Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("List", 1), #inner) })
+                }
+                "HashMap" | "BTreeMap" => {
+                    let [k, v] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `HashMap<K, V>`"));
+                    };
+                    if !is_string_type(k) {
+                        return Err(Error::new(
+                            k.span(),
+                            "only `HashMap<String, V>` is supported for Rex dictionaries",
+                        ));
+                    }
+                    let v = rex_type_expr(v, adt_params)?;
+                    Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("Dict", 1), #v) })
+                }
+                "Option" => {
+                    let [inner] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Option<T>`"));
+                    };
+                    let inner = rex_type_expr(inner, adt_params)?;
+                    Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("Option", 1), #inner) })
+                }
+                "Result" => {
+                    let [ok, err] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Result<T, E>`"));
+                    };
+                    let ok = rex_type_expr(ok, adt_params)?;
+                    let err = rex_type_expr(err, adt_params)?;
+                    Ok(quote! {
+                        ::rex_ts::Type::app(
+                            ::rex_ts::Type::app(::rex_ts::Type::con("Result", 2), #err),
+                            #ok
+                        )
+                    })
+                }
+                _ => Ok(quote! { <#type_path as ::rex_engine::RexType>::rex_type() }),
+            }
+        }
+        other => Err(Error::new(
+            other.span(),
+            "unsupported field type for Rex mapping",
+        )),
+    }
 }
 
-fn impl_to_type(ast: &DeriveInput, options: &DeriveOptions) -> TokenStream {
-    let rust_ident = &ast.ident;
-    let given_name = &options.name;
-    let docs = docs_from_attrs(&ast.attrs);
+fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error> {
+    match ty {
+        Type::Tuple(tuple) => {
+            let vars: Vec<Ident> = (0..tuple.elems.len())
+                .map(|i| format_ident!("__rex_t{i}", span = Span::call_site()))
+                .collect();
+            let encs = vars
+                .iter()
+                .zip(tuple.elems.iter())
+                .map(|(v, t)| into_value_expr(quote!(#v), t))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(quote! {{
+                let (#(#vars,)*) = #expr;
+                ::rex_engine::Value::Tuple(::std::vec![#(#encs,)*])
+            }})
+        }
+        Type::Path(type_path) => {
+            let seg = type_path
+                .path
+                .segments
+                .last()
+                .ok_or_else(|| Error::new(type_path.span(), "unsupported type path"))?;
+            let ident = seg.ident.to_string();
+            let args = match &seg.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArgument::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
 
-    let r#impl = match &ast.data {
+            match ident.as_str() {
+                "Vec" => {
+                    let [inner] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Vec<T>`"));
+                    };
+                    let inner_encode = into_value_expr(quote!(item), inner)?;
+                    Ok(quote! {{
+                        let mut out = ::rex_engine::Value::Adt(::rex_ast::expr::intern("Empty"), ::std::vec::Vec::new());
+                        for item in #expr.into_iter().rev() {
+                            out = ::rex_engine::Value::Adt(
+                                ::rex_ast::expr::intern("Cons"),
+                                ::std::vec![#inner_encode, out],
+                            );
+                        }
+                        out
+                    }})
+                }
+                "HashMap" | "BTreeMap" => {
+                    let [k, v] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `HashMap<K, V>`"));
+                    };
+                    if !is_string_type(k) {
+                        return Err(Error::new(
+                            k.span(),
+                            "only `HashMap<String, V>` is supported for Rex dictionaries",
+                        ));
+                    }
+                    let v_encode = into_value_expr(quote!(v), v)?;
+                    Ok(quote! {{
+                        let mut out = ::std::collections::BTreeMap::new();
+                        for (k, v) in #expr {
+                            out.insert(::rex_ast::expr::intern(&k), #v_encode);
+                        }
+                        ::rex_engine::Value::Dict(out)
+                    }})
+                }
+                "Option" => {
+                    let [inner] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Option<T>`"));
+                    };
+                    let inner_encode = into_value_expr(quote!(v), inner)?;
+                    Ok(quote! {{
+                        match #expr {
+                            Some(v) => ::rex_engine::Value::Adt(::rex_ast::expr::intern("Some"), ::std::vec![#inner_encode]),
+                            None => ::rex_engine::Value::Adt(::rex_ast::expr::intern("None"), ::std::vec::Vec::new()),
+                        }
+                    }})
+                }
+                "Result" => {
+                    let [ok_ty, err_ty] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Result<T, E>`"));
+                    };
+                    let ok_encode = into_value_expr(quote!(v), ok_ty)?;
+                    let err_encode = into_value_expr(quote!(e), err_ty)?;
+                    Ok(quote! {{
+                        match #expr {
+                            Ok(v) => ::rex_engine::Value::Adt(::rex_ast::expr::intern("Ok"), ::std::vec![#ok_encode]),
+                            Err(e) => ::rex_engine::Value::Adt(::rex_ast::expr::intern("Err"), ::std::vec![#err_encode]),
+                        }
+                    }})
+                }
+                _ => Ok(quote! { ::rex_engine::IntoValue::into_value(#expr) }),
+            }
+        }
+        other => Err(Error::new(
+            other.span(),
+            "unsupported field type for Rex encoding",
+        )),
+    }
+}
+
+fn from_value_expr(
+    value_expr: TokenStream2,
+    ty: &Type,
+    name_expr: TokenStream2,
+) -> Result<TokenStream2, Error> {
+    match ty {
+        Type::Tuple(tuple) => {
+            let elem_tys = tuple.elems.iter().collect::<Vec<_>>();
+            let indices: Vec<usize> = (0..elem_tys.len()).collect();
+            let decs = elem_tys
+                .iter()
+                .zip(indices.iter())
+                .map(|(t, i)| from_value_expr(quote!(&items[#i]), t, name_expr.clone()))
+                .collect::<Result<Vec<_>, _>>()?;
+            let len = elem_tys.len();
+            Ok(quote! {{
+                match #value_expr {
+                    ::rex_engine::Value::Tuple(items) if items.len() == #len => {
+                        Ok((#(#decs?,)*))
+                    }
+                    other => Err(::rex_engine::EngineError::NativeType {
+                        name: ::rex_ast::expr::intern(#name_expr),
+                        expected: "tuple".into(),
+                        got: format!("{other}"),
+                    }),
+                }
+            }})
+        }
+        Type::Path(type_path) => {
+            let seg = type_path
+                .path
+                .segments
+                .last()
+                .ok_or_else(|| Error::new(type_path.span(), "unsupported type path"))?;
+            let ident = seg.ident.to_string();
+            let args = match &seg.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArgument::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+
+            match ident.as_str() {
+                "Vec" => {
+                    let [inner] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Vec<T>`"));
+                    };
+                    let inner_decode = from_value_expr(quote!(&args[0]), inner, name_expr.clone())?;
+                    Ok(quote! {{
+                        let mut out = ::std::vec::Vec::new();
+                        let mut cur = #value_expr;
+                        loop {
+                            match cur {
+                                ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
+                                    break Ok(out);
+                                }
+                                ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
+                                    let v = #inner_decode?;
+                                    out.push(v);
+                                    cur = &args[1];
+                                }
+                                other => {
+                                    break Err(::rex_engine::EngineError::NativeType {
+                                        name: ::rex_ast::expr::intern(#name_expr),
+                                        expected: "list".into(),
+                                        got: format!("{other}"),
+                                    });
+                                }
+                            }
+                        }
+                    }})
+                }
+                "HashMap" | "BTreeMap" => {
+                    let [k, v] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `HashMap<K, V>`"));
+                    };
+                    if !is_string_type(k) {
+                        return Err(Error::new(
+                            k.span(),
+                            "only `HashMap<String, V>` is supported for Rex dictionaries",
+                        ));
+                    }
+                    let v_decode = from_value_expr(quote!(v), v, name_expr.clone())?;
+                    Ok(quote! {{
+                        match #value_expr {
+                            ::rex_engine::Value::Dict(map) => {
+                                let mut out = ::std::collections::HashMap::new();
+                                for (k, v) in map {
+                                    let decoded = #v_decode?;
+                                    out.insert(k.as_ref().to_string(), decoded);
+                                }
+                                Ok(out)
+                            }
+                            other => Err(::rex_engine::EngineError::NativeType {
+                                name: ::rex_ast::expr::intern(#name_expr),
+                                expected: "dict".into(),
+                                got: format!("{other}"),
+                            }),
+                        }
+                    }})
+                }
+                "Option" => {
+                    let [inner] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Option<T>`"));
+                    };
+                    let inner_decode = from_value_expr(quote!(&args[0]), inner, name_expr.clone())?;
+                    Ok(quote! {{
+                        match #value_expr {
+                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => Ok(None),
+                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => Ok(Some(#inner_decode?)),
+                            other => Err(::rex_engine::EngineError::NativeType {
+                                name: ::rex_ast::expr::intern(#name_expr),
+                                expected: "option".into(),
+                                got: format!("{other}"),
+                            }),
+                        }
+                    }})
+                }
+                "Result" => {
+                    let [ok_ty, err_ty] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Result<T, E>`"));
+                    };
+                    let ok_decode = from_value_expr(quote!(&args[0]), ok_ty, name_expr.clone())?;
+                    let err_decode = from_value_expr(quote!(&args[0]), err_ty, name_expr.clone())?;
+                    Ok(quote! {{
+                        match #value_expr {
+                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Ok" && args.len() == 1 => Ok(Ok(#ok_decode?)),
+                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Err" && args.len() == 1 => Ok(Err(#err_decode?)),
+                            other => Err(::rex_engine::EngineError::NativeType {
+                                name: ::rex_ast::expr::intern(#name_expr),
+                                expected: "result".into(),
+                                got: format!("{other}"),
+                            }),
+                        }
+                    }})
+                }
+                _ => Ok(
+                    quote! { <#type_path as ::rex_engine::FromValue>::from_value(#value_expr, #name_expr) },
+                ),
+            }
+        }
+        other => Err(Error::new(
+            other.span(),
+            "unsupported field type for Rex decoding",
+        )),
+    }
+}
+
+fn is_string_type(ty: &Type) -> bool {
+    match ty {
+        Type::Path(p) => p
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident == "String")
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn add_bound_to_type_params(generics: &mut Generics, bound: syn::TypeParamBound) {
+    for param in generics.type_params_mut() {
+        param.bounds.push(bound.clone());
+    }
+}
+
+fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error> {
+    let rust_ident = &ast.ident;
+    let ctor = type_name;
+
+    let body = match &ast.data {
         Data::Struct(data) => match &data.fields {
-            // Turns into an ADT with one dictionary variant
-            Fields::Named(named) => {
-                let adt_variant = fields_named_to_adt_variant(&docs, given_name, named);
-                quote!(
-                    ::rex::type_system::types::Type::ADT(::rex::type_system::types::ADT {
-                        name: String::from(#given_name),
-                        variants: vec![#adt_variant],
-                        docs: #docs,
-                    })
-                )
+            Fields::Named(fields) => {
+                let mut inserts = Vec::new();
+                for field in &fields.named {
+                    let ident = field
+                        .ident
+                        .as_ref()
+                        .ok_or_else(|| Error::new(field.span(), "expected named field"))?;
+                    let mut name = ident.to_string();
+                    if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
+                        name = rename;
+                    }
+                    let enc = into_value_expr(quote!(self.#ident), &field.ty)?;
+                    inserts.push(quote! {
+                        map.insert(::rex_ast::expr::intern(#name), #enc);
+                    });
+                }
+                quote! {{
+                    let mut map = ::std::collections::BTreeMap::new();
+                    #(#inserts)*
+                    ::rex_engine::Value::Adt(::rex_ast::expr::intern(#ctor), ::std::vec![::rex_engine::Value::Dict(map)])
+                }}
             }
-            // Turns into an ADT with one tuple variant (we drop the tuple if it
-            // only has one element)
-            Fields::Unnamed(unnamed) => {
-                let adt_variant = fields_unnamed_to_adt_variant(&docs, given_name, unnamed);
-                quote!(
-                    ::rex::type_system::types::Type::ADT(::rex::type_system::types::ADT {
-                        name: String::from(#given_name),
-                        variants: vec![#adt_variant],
-                        docs: #docs,
-                    })
-                )
+            Fields::Unnamed(fields) => {
+                let mut args = Vec::new();
+                let mut bindings = Vec::new();
+                for (idx, field) in fields.unnamed.iter().enumerate() {
+                    let v = format_ident!("__rex_f{idx}", span = Span::call_site());
+                    bindings.push(v.clone());
+                    args.push(into_value_expr(quote!(#v), &field.ty)?);
+                }
+                quote! {{
+                    let Self(#(#bindings,)*) = self;
+                    ::rex_engine::Value::Adt(::rex_ast::expr::intern(#ctor), ::std::vec![#(#args,)*])
+                }}
             }
-            _ => quote! {
-                ::rex::type_system::types::Type::ADT(::rex::type_system::types::ADT {
-                    name: String::from(#given_name),
-                    variants: vec![],
-                    docs: #docs,
-                })
+            Fields::Unit => quote! {
+                ::rex_engine::Value::Adt(::rex_ast::expr::intern(#ctor), ::std::vec::Vec::new())
             },
         },
         Data::Enum(data) => {
-            let variants = data.variants.iter().map(|variant| {
-                let variant_docs = docs_from_attrs(&variant.attrs);
-                let mut variant_name = format!("{}", variant.ident.clone());
-                rename_variant(&mut variant_name, variant);
-                let discriminant = match parse_int_discriminant(variant) {
-                    Some(value) => {
-                        quote!(Some(#value))
+            let mut arms = Vec::new();
+            for variant in &data.variants {
+                let variant_ident = &variant.ident;
+                let mut variant_name = variant_ident.to_string();
+                if let Some(rename) = serde_rename_from_attrs(&variant.attrs)? {
+                    variant_name = rename;
+                }
+                let arm = match &variant.fields {
+                    Fields::Unit => quote! {
+                        Self::#variant_ident => ::rex_engine::Value::Adt(::rex_ast::expr::intern(#variant_name), ::std::vec::Vec::new())
+                    },
+                    Fields::Unnamed(fields) => {
+                        let vars: Vec<Ident> = (0..fields.unnamed.len())
+                            .map(|i| format_ident!("__rex_v{i}", span = Span::call_site()))
+                            .collect();
+                        let encs = vars
+                            .iter()
+                            .zip(fields.unnamed.iter())
+                            .map(|(v, f)| into_value_expr(quote!(#v), &f.ty))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        quote! {
+                            Self::#variant_ident(#(#vars,)*) => ::rex_engine::Value::Adt(::rex_ast::expr::intern(#variant_name), ::std::vec![#(#encs,)*])
+                        }
                     }
-                    None => {
-                        quote!(None)
+                    Fields::Named(fields) => {
+                        let mut vars = Vec::new();
+                        let mut inserts = Vec::new();
+                        for field in &fields.named {
+                            let ident = field
+                                .ident
+                                .as_ref()
+                                .ok_or_else(|| Error::new(field.span(), "expected named field"))?;
+                            vars.push(ident.clone());
+                            let mut name = ident.to_string();
+                            if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
+                                name = rename;
+                            }
+                            let enc = into_value_expr(quote!(#ident), &field.ty)?;
+                            inserts.push(quote! {
+                                map.insert(::rex_ast::expr::intern(#name), #enc);
+                            });
+                        }
+                        quote! {
+                            Self::#variant_ident { #(#vars,)* } => {
+                                let mut map = ::std::collections::BTreeMap::new();
+                                #(#inserts)*
+                                ::rex_engine::Value::Adt(::rex_ast::expr::intern(#variant_name), ::std::vec![::rex_engine::Value::Dict(map)])
+                            }
+                        }
                     }
                 };
-
-                match &variant.fields {
-                    Fields::Unnamed(unnamed) => {
-                        fields_unnamed_to_adt_variant(&variant_docs, &variant_name, unnamed)
-                    }
-                    Fields::Named(named) => {
-                        fields_named_to_adt_variant(&variant_docs, &variant_name, named)
-                    }
-                    Fields::Unit => quote! {
-                        ::rex::type_system::types::ADTVariant {
-                            name: String::from(#variant_name),
-                            t: None,
-                            docs: #variant_docs,
-                            t_docs: None,
-                            discriminant: #discriminant,
-                        }
-                    },
-                }
-            });
-            quote! {
-                ::rex::type_system::types::Type::ADT(::rex::type_system::types::ADT {
-                    name: String::from(#given_name),
-                    variants: vec![#(#variants,)*],
-                    docs: #docs,
-                })
+                arms.push(arm);
             }
-        }
-        _ => panic!("Rex can only be derived for structs and enums"),
-    };
-
-    let generics = &ast.generics;
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-
-    let expanded = quote! {
-        impl #impl_generics ::rex::type_system::types::ToType for #rust_ident #ty_generics #where_clause {
-            fn to_type() -> ::rex::type_system::types::Type {
-                #r#impl
-            }
-        }
-    };
-
-    TokenStream::from(expanded)
-}
-
-fn fields_unnamed_to_adt_variant(
-    variant_docs: &proc_macro2::TokenStream,
-    variant_name: &str,
-    fields: &FieldsUnnamed,
-) -> proc_macro2::TokenStream {
-    let ts = fields
-        .unnamed
-        .iter()
-        .map(|field| {
-            let t = to_type(&field.ty);
-            quote! {
-                ::std::sync::Arc::new(#t)
-            }
-        })
-        .collect::<Vec<_>>();
-    if ts.is_empty() {
-        quote!(
-            ::rex::type_system::types::ADTVariant {
-                name: String::from(#variant_name),
-                t: None,
-                docs: #variant_docs,
-                t_docs: None,
-                discriminant: None,
-            }
-        )
-    } else if ts.len() == 1 {
-        let t = &ts[0];
-        quote!(
-            ::rex::type_system::types::ADTVariant {
-                name: String::from(#variant_name),
-                t: Some(#t),
-                docs: #variant_docs,
-                t_docs: None,
-                discriminant: None,
-            }
-        )
-    } else {
-        quote!({
-            let mut elems = ::std::vec::Vec::new();
-            #(elems.push(#ts);)*
-            ::rex::type_system::types::ADTVariant {
-                name: String::from(#variant_name),
-                t: Some(::std::sync::Arc::new(::rex::type_system::types::Type::Tuple(elems))),
-                docs: #variant_docs,
-                t_docs: None,
-                discriminant: None,
-            }
-        })
-    }
-}
-
-fn fields_named_to_adt_variant(
-    variant_docs: &proc_macro2::TokenStream,
-    variant_name: &str,
-    fields: &FieldsNamed,
-) -> proc_macro2::TokenStream {
-    let docs_and_fields = fields
-        .named
-        .iter()
-        .map(|field| {
-            let docs = docs_from_attrs(&field.attrs);
-            let mut name = format!("{}", field.ident.as_ref().unwrap());
-            let t = to_type(&field.ty);
-            rename_field(&mut name, field);
-            quote! {
-                if let Some(d) = #docs {
-                    docs.insert(String::from(#name), d);
-                }
-                fields.insert(String::from(#name), ::std::sync::Arc::new(#t));
-            }
-        })
-        .collect::<Vec<_>>();
-    if docs_and_fields.is_empty() {
-        quote!(
-            ::rex::type_system::types::ADTVariant {
-                name: String::from(#variant_name),
-                t: None,
-                docs: #variant_docs,
-                t_docs: None,
-                discriminant: None,
-            }
-        )
-    } else {
-        quote!({
-            let mut docs = ::std::collections::BTreeMap::new();
-            let mut fields = ::std::collections::BTreeMap::new();
-            #(#docs_and_fields;)*
-            ::rex::type_system::types::ADTVariant {
-                name: String::from(#variant_name),
-                t: Some(::std::sync::Arc::new(::rex::type_system::types::Type::Dict(fields))),
-                docs: #variant_docs,
-                t_docs: if docs.len() > 0 { Some(docs) } else { None },
-                discriminant: None,
-            }
-        })
-    }
-}
-
-fn docs_from_attrs(attrs: &[Attribute]) -> proc_macro2::TokenStream {
-    let docs = attrs
-        .iter()
-        .filter_map(|attr| {
-            if attr.path().is_ident("doc") {
-                Some(attr.meta.clone())
-            } else {
-                None
-            }
-        })
-        .filter_map(|meta| {
-            if let syn::Meta::NameValue(value) = meta {
-                if let syn::Expr::Lit(syn::ExprLit {
-                    lit: syn::Lit::Str(lit_str),
-                    ..
-                }) = value.value
-                {
-                    let doc_str = lit_str.token().to_string();
-                    if doc_str.starts_with("\" ") && doc_str.ends_with('\"') {
-                        Some(doc_str[2..doc_str.len() - 1].to_string())
-                    } else if doc_str.starts_with('\"') && doc_str.ends_with('\"') {
-                        Some(doc_str[1..doc_str.len() - 1].to_string())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    if docs.is_empty() {
-        quote! { None }
-    } else {
-        quote! { Some(String::from(#docs)) }
-    }
-}
-
-fn rename_variant(variant_name: &mut String, variant: &syn::Variant) {
-    for attr in &variant.attrs {
-        let maybe_meta_tokens_iter = attr.meta.require_list().ok().and_then(|meta_list| {
-            meta_list
-                .path
-                .segments
-                .first()
-                .filter(|serde_ident| serde_ident.ident == "serde")
-                .map(|_| meta_list.tokens.clone().into_iter())
-        });
-        if let Some(mut meta_tokens_iter) = maybe_meta_tokens_iter {
-            match (
-                meta_tokens_iter.next().map(|t| t.to_string()).as_deref(),
-                meta_tokens_iter.next().map(|t| t.to_string()).as_deref(),
-                meta_tokens_iter.next().map(|t| t.to_string()),
-            ) {
-                (Some("rename"), Some("="), Some(variant_name_lit))
-                    if variant_name_lit.starts_with('\"') && variant_name_lit.ends_with('\"') =>
-                {
-                    *variant_name = variant_name_lit[1..variant_name_lit.len() - 1].to_owned();
-                    break;
-                }
-                _ => {}
-            }
-        };
-    }
-}
-
-fn rename_field(field_name: &mut String, field: &syn::Field) {
-    for attr in &field.attrs {
-        let maybe_meta_tokens_iter = attr.meta.require_list().ok().and_then(|meta_list| {
-            meta_list
-                .path
-                .segments
-                .first()
-                .filter(|serde_ident| serde_ident.ident == "serde")
-                .map(|_| meta_list.tokens.clone().into_iter())
-        });
-        if let Some(mut meta_tokens_iter) = maybe_meta_tokens_iter {
-            match (
-                meta_tokens_iter.next().map(|t| t.to_string()).as_deref(),
-                meta_tokens_iter.next().map(|t| t.to_string()).as_deref(),
-                meta_tokens_iter.next().map(|t| t.to_string()),
-            ) {
-                (Some("rename"), Some("="), Some(field_name_lit))
-                    if field_name_lit.starts_with('\"') && field_name_lit.ends_with('\"') =>
-                {
-                    *field_name = field_name_lit[1..field_name_lit.len() - 1].to_owned();
-                    break;
-                }
-                _ => {}
-            }
-        };
-    }
-}
-
-fn to_type(ty: &Type) -> proc_macro2::TokenStream {
-    match ty {
-        Type::Path(type_path) => {
-            quote!(<#type_path as ::rex::type_system::types::ToType>::to_type())
-        }
-        Type::Tuple(tuple) => {
-            let inner_types = tuple.elems.iter().map(to_type);
-            quote!(::rex::type_system::types::Type::Tuple(
-                vec![#(#inner_types,)*]
-                    .into_iter()
-                    .map(::std::sync::Arc::new)
-                    .collect()
-            ))
-        }
-        _ => panic!("Unsupported type"),
-    }
-}
-
-fn impl_encode(ast: &DeriveInput, options: &DeriveOptions) -> TokenStream {
-    let rust_ident = &ast.ident;
-    let given_name = &options.name;
-    let r#impl: proc_macro2::TokenStream = match &ast.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => {
-                let items = named.named.iter().map(|field| {
-                    let identifier = &field.ident.as_ref().unwrap();
-                    quote!(
-                        (
-                            String::from(stringify!(#identifier)),
-                            ::rex::engine::codec::Encode::try_encode(self.#identifier, span)?,
-                        )
-                    )
-                });
-                quote!(Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                    ::rex::lexer::span::Span::default(),
-                    #given_name.to_string(),
-                    Some(::std::sync::Arc::new(::rex::ast::expr::Expr::Dict(
-                        ::rex::lexer::span::Span::default(),
-                        ::std::collections::BTreeMap::from_iter(vec![#(#items,)*].into_iter())
-                    )))
-                ))))
-            }
-            Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                quote!(Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                    ::rex::lexer::span::Span::default(),
-                    #given_name.to_string(),
-                    Some(::rex::engine::codec::Encode::try_encode(self.0, span)?)
-                ))))
-            }
-            Fields::Unnamed(unnamed) => {
-                let items = unnamed.unnamed.iter().enumerate().map(|(i, _)| {
-                    let identifier = syn::Index::from(i);
-                    quote!(::rex::engine::codec::Encode::try_encode(self.#identifier, span)?)
-                });
-                quote!(Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                    ::rex::lexer::span::Span::default(),
-                    #given_name.to_string(),
-                    Some(::std::sync::Arc::new(::rex::ast::expr::Expr::Tuple(
-                        ::rex::lexer::span::Span::default(),
-                        vec![#(#items,)*]
-                    )))
-                ))))
-            }
-            Fields::Unit => {
-                quote!(Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                    ::rex::lexer::span::Span::default(),
-                    #given_name.to_string(),
-                    None
-                ))))
-            }
-        },
-        Data::Enum(data) => {
-            let variants = data.variants.iter().map(|variant| {
-                let mut variant_name = format!("{}", variant.ident.clone());
-                rename_variant(&mut variant_name, variant);
-                let variant_ident = &variant.ident;
-                match &variant.fields {
-                    Fields::Named(named) => {
-                        let mut field_idents: Vec<proc_macro2::TokenStream> = Vec::new();
-                        let mut field_exprs: Vec<proc_macro2::TokenStream> = Vec::new();
-                        for field in named.named.iter() {
-                            let identifier = &field.ident.as_ref().unwrap();
-                            field_idents.push(quote!( #identifier ));
-                            field_exprs.push(quote!((
-                                String::from(stringify!(#identifier)),
-                                ::rex::engine::codec::Encode::try_encode(#identifier, span)?,
-                            )));
-                        }
-                        quote!(
-                            Self::#variant_ident { #(#field_idents,)* } => {
-                                Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                                    ::rex::lexer::span::Span::default(),
-                                    String::from(#variant_name),
-                                    Some(::std::sync::Arc::new(::rex::ast::expr::Expr::Dict(
-                                        ::rex::lexer::span::Span::default(),
-                                        ::std::collections::BTreeMap::from_iter(vec![
-                                            #(#field_exprs,)*
-                                            ].into_iter())
-                                    )))
-                                )))
-                            }
-                        )
-                    }
-                    Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                        let identifier = Ident::new(&format!("x{}", 0), Span::call_site());
-                        let field_ident = quote!( #identifier );
-                        let field_expr = quote!(
-                            ::rex::engine::codec::Encode::try_encode(#identifier, span)?);
-                        quote!(
-                            Self::#variant_ident ( #field_ident ) =>
-                                Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                                    ::rex::lexer::span::Span::default(),
-                                    String::from(#variant_name),
-                                    Some(#field_expr)
-                                )))
-                        )
-                    }
-                    Fields::Unnamed(unnamed) => {
-                        let mut field_idents: Vec<proc_macro2::TokenStream> = Vec::new();
-                        let mut field_exprs: Vec<proc_macro2::TokenStream> = Vec::new();
-                        for i in 0..unnamed.unnamed.len() {
-                            let identifier = Ident::new(&format!("x{}", i), Span::call_site());
-                            field_idents.push(quote!( #identifier ));
-                            field_exprs.push(quote!(
-                                ::rex::engine::codec::Encode::try_encode(#identifier, span)?));
-                        }
-
-                        quote!(
-                            Self::#variant_ident ( #(#field_idents,)* ) =>
-                                Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                                    ::rex::lexer::span::Span::default(),
-                                    String::from(#variant_name),
-                                    Some(::std::sync::Arc::new(::rex::ast::expr::Expr::Tuple(
-                                        ::rex::lexer::span::Span::default(),
-                                        vec![#(#field_exprs,)*]
-                                    )))
-                                )))
-                        )
-                    }
-                    Fields::Unit => {
-                        quote!(
-                            Self::#variant_ident =>
-                                Ok(::std::sync::Arc::new(::rex::ast::expr::Expr::Named(
-                                    ::rex::lexer::span::Span::default(),
-                                    String::from(#variant_name),
-                                    None
-                                )))
-                        )
-                    }
-                }
-            });
-            quote! {
+            quote! {{
                 match self {
-                    #(#variants,)*
+                    #(#arms,)*
                 }
-            }
+            }}
         }
         Data::Union(_) => {
-            panic!("Rex can only be derived for structs and enums")
+            return Err(Error::new(
+                ast.span(),
+                "`#[derive(Rex)]` only supports structs and enums",
+            ));
         }
     };
 
-    let generics = &ast.generics;
+    let mut generics = ast.generics.clone();
+    add_bound_to_type_params(&mut generics, parse_quote!(::rex_engine::IntoValue));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let expanded = quote! {
-        impl #impl_generics ::rex::engine::codec::Encode for #rust_ident #ty_generics #where_clause {
-            fn try_encode(
-                self,
-                span: ::rex::lexer::span::Span,
-            ) -> Result<::std::sync::Arc<::rex::ast::expr::Expr>, ::rex::engine::error::Error> {
-                #r#impl
+    Ok(quote! {
+        impl #impl_generics ::rex_engine::IntoValue for #rust_ident #ty_generics #where_clause {
+            fn into_value(self) -> ::rex_engine::Value {
+                #body
             }
         }
-    };
-
-    TokenStream::from(expanded)
+    })
 }
 
-fn impl_decode(ast: &DeriveInput, options: &DeriveOptions) -> TokenStream {
+fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, Error> {
     let rust_ident = &ast.ident;
-    let given_name = &options.name;
-    let r#impl: proc_macro2::TokenStream = match &ast.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(named) => {
-                let fields = named.named.iter().map(|field| {
-                    let field_ident = &field.ident.as_ref().unwrap();
-                    quote!( #field_ident: ::rex::engine::codec::Decode::try_decode(
-                            entries.get(stringify!(#field_ident))
-                                .ok_or_else(||
-                                    ::rex::engine::error::Error::ExpectedTypeGotValue {
-                                        expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                        got: v.clone(),
-                                        trace: ::std::default::Default::default(),
-                                    })?
-                            )? )
-                });
-                quote!(
-                    match &**v {
-                        ::rex::ast::expr::Expr::Named(_, n, Some(inner)) if n == #given_name => {
-                            match &**inner {
-                                ::rex::ast::expr::Expr::Dict(_, entries) => {
-                                    Ok(#rust_ident {
-                                        #(#fields,)*
-                                    })
-                                }
-                                _ => {
-                                    Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                        expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                        got: v.clone(),
-                                        trace: ::std::default::Default::default(),
-                                    })
-                                }
-                            }
-                        }
-                        _ => {
-                            Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                got: v.clone(),
-                                trace: ::std::default::Default::default(),
-                            })
-                        }
-                    }
-                )
-            }
-            Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                quote!(
-                    match &**v {
-                        ::rex::ast::expr::Expr::Named(_, n, Some(inner)) if n == #given_name => {
-                            Ok(#rust_ident (::rex::engine::codec::Decode::try_decode(inner)?))
-                        },
-                        _ => {
-                            Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                got: v.clone(),
-                                trace: ::std::default::Default::default(),
-                            })
-                        }
-                    }
-                )
-            }
-            Fields::Unnamed(unnamed) => {
-                let items_len = unnamed.unnamed.len();
-                let fields = (0..items_len)
-                    .map(|i| quote!( ::rex::engine::codec::Decode::try_decode(&items[#i])?));
+    let name_expr = quote!(name);
 
-                quote!(
-                    match &**v {
-                        ::rex::ast::expr::Expr::Named(_, n, Some(inner)) if n == #given_name => {
-                            match &**inner {
-                                ::rex::ast::expr::Expr::Tuple(_, items) if items.len() == #items_len => {
-                                    Ok(#rust_ident (
-                                        #(#fields,)*
-                                    ))
+    let body = match &ast.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => {
+                let mut field_decodes = Vec::new();
+                let mut field_idents = Vec::new();
+                for field in &fields.named {
+                    let ident = field
+                        .ident
+                        .as_ref()
+                        .ok_or_else(|| Error::new(field.span(), "expected named field"))?;
+                    field_idents.push(ident.clone());
+                    let mut name = ident.to_string();
+                    if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
+                        name = rename;
+                    }
+                    let key = quote!(::rex_ast::expr::intern(#name));
+                    let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
+                    field_decodes.push(quote! {
+                        let v = map.get(&#key).ok_or_else(|| ::rex_engine::EngineError::NativeType {
+                            name: ::rex_ast::expr::intern(name),
+                            expected: format!("missing field `{}`", #name),
+                            got: "dict".into(),
+                        })?;
+                        let #ident = #decode?;
+                    });
+                }
+                Ok(quote! {{
+                    match value {
+                        ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == 1 => {
+                            match &args[0] {
+                                ::rex_engine::Value::Dict(map) => {
+                                    #(#field_decodes)*
+                                    Ok(Self { #(#field_idents,)* })
                                 }
-                                _ => {
-                                    Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                        expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                        got: v.clone(),
-                                        trace: ::std::default::Default::default(),
-                                    })
-                                }
+                                other => Err(::rex_engine::EngineError::NativeType {
+                                    name: ::rex_ast::expr::intern(name),
+                                    expected: "dict".into(),
+                                    got: format!("{other}"),
+                                }),
                             }
-                        },
-                        _ => {
-                            Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                got: v.clone(),
-                                trace: ::std::default::Default::default(),
-                            })
                         }
+                        other => Err(::rex_engine::EngineError::NativeType {
+                            name: ::rex_ast::expr::intern(name),
+                            expected: #type_name.into(),
+                            got: format!("{other}"),
+                        }),
                     }
-                )
+                }})
             }
-            Fields::Unit => {
-                quote!(
-                    match &**v {
-                        ::rex::ast::expr::Expr::Named(_, n, None) if n == #given_name => {
-                            Ok(#rust_ident)
+            Fields::Unnamed(fields) => {
+                let mut decs = Vec::new();
+                for (idx, field) in fields.unnamed.iter().enumerate() {
+                    let decode =
+                        from_value_expr(quote!(&args[#idx]), &field.ty, name_expr.clone())?;
+                    decs.push(quote!(#decode?));
+                }
+                let len = fields.unnamed.len();
+                Ok(quote! {{
+                    match value {
+                        ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == #len => {
+                            Ok(Self(#(#decs,)*))
                         }
-                        _ => {
-                            Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                got: v.clone(),
-                                trace: ::std::default::Default::default(),
-                            })
-                        }
+                        other => Err(::rex_engine::EngineError::NativeType {
+                            name: ::rex_ast::expr::intern(name),
+                            expected: #type_name.into(),
+                            got: format!("{other}"),
+                        }),
                     }
-                )
+                }})
             }
+            Fields::Unit => Ok(quote! {{
+                match value {
+                    ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.is_empty() => Ok(Self),
+                    other => Err(::rex_engine::EngineError::NativeType {
+                        name: ::rex_ast::expr::intern(name),
+                        expected: #type_name.into(),
+                        got: format!("{other}"),
+                    }),
+                }
+            }}),
         },
         Data::Enum(data) => {
-            let variants = data.variants.iter().map(|variant| {
-                let mut variant_name = format!("{}", variant.ident.clone());
-                rename_variant(&mut variant_name, variant);
+            let mut arms = Vec::new();
+            for variant in &data.variants {
                 let variant_ident = &variant.ident;
-                match &variant.fields {
-                    Fields::Named(named) => {
-                        let fields = named.named.iter().map(|field| {
-                            let field_ident = &field.ident.as_ref().unwrap();
-                            quote!( #field_ident: ::rex::engine::codec::Decode::try_decode(
-                                entries.get(stringify!(#field_ident))
-                                    .ok_or_else(||
-                                        ::rex::engine::error::Error::ExpectedTypeGotValue {
-                                            expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                            got: v.clone(),
-                                            trace: ::std::default::Default::default(),
-                                        })?
-                                )? )
-                        });
-
-                        quote!(
-                            ::rex::ast::expr::Expr::Named(_, n, Some(inner))
-                            if n == #variant_name => {
-                                match &**inner {
-                                    ::rex::ast::expr::Expr::Dict(_, entries) => {
-                                        Ok(Self::#variant_ident { #(#fields,)* })
+                let mut variant_name = variant_ident.to_string();
+                if let Some(rename) = serde_rename_from_attrs(&variant.attrs)? {
+                    variant_name = rename;
+                }
+                let arm = match &variant.fields {
+                    Fields::Unit => quote! {
+                        ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.is_empty() => Ok(Self::#variant_ident)
+                    },
+                    Fields::Unnamed(fields) => {
+                        let len = fields.unnamed.len();
+                        let vals = fields
+                            .unnamed
+                            .iter()
+                            .enumerate()
+                            .map(|(i, f)| {
+                                from_value_expr(quote!(&args[#i]), &f.ty, name_expr.clone())
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                            .into_iter()
+                            .map(|d| quote!(#d?))
+                            .collect::<Vec<_>>();
+                        quote! {
+                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == #len => {
+                                Ok(Self::#variant_ident(#(#vals,)*))
+                            }
+                        }
+                    }
+                    Fields::Named(fields) => {
+                        let mut field_decodes = Vec::new();
+                        let mut fields_init = Vec::new();
+                        for field in &fields.named {
+                            let ident = field
+                                .ident
+                                .as_ref()
+                                .ok_or_else(|| Error::new(field.span(), "expected named field"))?;
+                            fields_init.push(ident.clone());
+                            let mut name = ident.to_string();
+                            if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
+                                name = rename;
+                            }
+                            let key = quote!(::rex_ast::expr::intern(#name));
+                            let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
+                            field_decodes.push(quote! {
+                                let v = map.get(&#key).ok_or_else(|| ::rex_engine::EngineError::NativeType {
+                                    name: ::rex_ast::expr::intern(name),
+                                    expected: format!("missing field `{}`", #name),
+                                    got: "dict".into(),
+                                })?;
+                                let #ident = #decode?;
+                            });
+                        }
+                        quote! {
+                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == 1 => {
+                                match &args[0] {
+                                    ::rex_engine::Value::Dict(map) => {
+                                        #(#field_decodes)*
+                                        Ok(Self::#variant_ident { #(#fields_init,)* })
                                     }
-                                    _ => {
-                                        Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                            expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                            got: v.clone(),
-                                            trace: ::std::default::Default::default(),
-                                        })
-                                    }
+                                    other => Err(::rex_engine::EngineError::NativeType {
+                                        name: ::rex_ast::expr::intern(name),
+                                        expected: "dict".into(),
+                                        got: format!("{other}"),
+                                    }),
                                 }
                             }
-                        )
+                        }
                     }
-                    Fields::Unnamed(unnamed) if unnamed.unnamed.len() == 1 => {
-                        quote!(
-                            ::rex::ast::expr::Expr::Named(_, n, Some(inner))
-                            if n == #variant_name => {
-                                Ok(Self::#variant_ident (
-                                    ::rex::engine::codec::Decode::try_decode(inner)?
-                                ))
-                            }
-                        )
-                    }
-                    Fields::Unnamed(unnamed) => {
-                        let items_len = unnamed.unnamed.len();
-                        let fields = (0..items_len).map(
-                            |i| quote!( ::rex::engine::codec::Decode::try_decode(&items[#i])?),
-                        );
-
-                        quote!(
-                            ::rex::ast::expr::Expr::Named(_, n, Some(inner))
-                            if n == #variant_name => {
-                                match &**inner {
-                                    ::rex::ast::expr::Expr::Tuple(_, items)
-                                    if items.len() == #items_len => {
-                                        Ok(Self::#variant_ident (
-                                            #(#fields,)*
-                                        ))
-                                    }
-                                    _ => {
-                                        Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                                            expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                                            got: v.clone(),
-                                            trace: ::std::default::Default::default(),
-                                        })
-                                    }
-                                }
-                            }
-                        )
-                    }
-                    Fields::Unit => {
-                        quote!(
-                            ::rex::ast::expr::Expr::Named(_, n, None)
-                            if n == #variant_name => {
-                                Ok(Self::#variant_ident)
-                            }
-                        )
-                    }
-                }
-            });
-            quote! {
-                match &**v {
-                    #(#variants,)*
-                    _ => {
-                        Err(::rex::engine::error::Error::ExpectedTypeGotValue {
-                            expected: ::std::sync::Arc::new(<Self as ::rex::type_system::types::ToType>::to_type()),
-                            got: v.clone(),
-                            trace: ::std::default::Default::default(),
-                        })
-                    }
-                }
+                };
+                arms.push(arm);
             }
-        }
-        Data::Union(_) => {
-            panic!("Rex can only be derived for structs and enums")
-        }
-    };
 
-    let generics = &ast.generics;
+            Ok(quote! {{
+                match value {
+                    #(#arms,)*
+                    other => Err(::rex_engine::EngineError::NativeType {
+                        name: ::rex_ast::expr::intern(name),
+                        expected: #type_name.into(),
+                        got: format!("{other}"),
+                    }),
+                }
+            }})
+        }
+        Data::Union(_) => Err(Error::new(
+            ast.span(),
+            "`#[derive(Rex)]` only supports structs and enums",
+        )),
+    }?;
+
+    let mut generics = ast.generics.clone();
+    add_bound_to_type_params(&mut generics, parse_quote!(::rex_engine::FromValue));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
-    let expanded = quote! {
-        impl #impl_generics ::rex::engine::codec::Decode for #rust_ident #ty_generics #where_clause {
-            fn try_decode(
-                v: &::std::sync::Arc<::rex::ast::expr::Expr>,
-            ) -> Result<Self, ::rex::engine::error::Error> {
-                #r#impl
+    Ok(quote! {
+        impl #impl_generics ::rex_engine::FromValue for #rust_ident #ty_generics #where_clause {
+            fn from_value(value: &::rex_engine::Value, name: &str) -> Result<Self, ::rex_engine::EngineError> {
+                #body
             }
         }
-    };
-
-    TokenStream::from(expanded)
-}
-
-fn parse_int_discriminant(variant: &Variant) -> Option<i64> {
-    match variant.discriminant {
-        Some((_, ref expr)) => parse_int_literal(expr),
-        None => None,
-    }
-}
-
-fn parse_int_literal(expr: &Expr) -> Option<i64> {
-    match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Int(ref i),
-            ..
-        }) => i.base10_parse::<i64>().ok(),
-        Expr::Unary(ExprUnary {
-            op: UnOp::Neg(_),
-            ref expr,
-            ..
-        }) => match &**expr {
-            Expr::Lit(ExprLit {
-                lit: Lit::Int(ref i),
-                ..
-            }) => i.base10_parse::<i64>().ok().map(|v| -v),
-            _ => None,
-        },
-        _ => None,
-    }
+    })
 }

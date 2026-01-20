@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rex", "rex-ast", "rex-engine", "rex-type-system", "rex-lexer", "rex-parser", "rex-proc-macro"]
+members = ["rex", "rex-ast", "rex-engine", "rex-fuzz", "rex-lexer", "rex-lsp", "rex-parser", "rex-proc-macro", "rex-ts", "rex-util"]
 
 [workspace.dependencies]
 # External dependencies
@@ -20,6 +20,7 @@ serde_json = "1"
 syn = { version = "2", features = ["full"] }
 thiserror = "1"
 tokio = "1"
+tower-lsp = "0.20"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4"] }
@@ -30,7 +31,8 @@ rex-engine = { path = "rex-engine" }
 rex-lexer = { path = "rex-lexer" }
 rex-parser = { path = "rex-parser" }
 rex-proc-macro = { path = "rex-proc-macro" }
-rex-type-system = { path = "rex-type-system" }
+rex-ts = { path = "rex-ts" }
+rex-util = { path = "rex-util" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"

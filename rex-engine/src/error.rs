@@ -1,279 +1,257 @@
-use crate::eval::Stack;
-use rex_ast::expr::{Expr, Var};
-use rex_lexer::span::Span;
+use std::path::PathBuf;
+use std::process::ExitStatus;
+
+use rex_ast::expr::Symbol;
+use rex_lexer::LexicalError;
 use rex_parser::error::ParserErr;
-use rex_type_system::{
-    error::TypeError,
-    types::{Type, TypeScheme, ADT},
-};
-use serde_json::Value;
-use std::{fmt, sync::Arc};
+use rex_ts::TypeError;
+use rex_util::OutOfGas;
 
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
-pub enum Error {
-    #[error("{msg}", msg = overlap_error_msg(.overlap))]
-    OverlappingFunctions {
-        overlap: Arc<OverlappingFunctions>,
-        trace: Trace,
+use crate::modules::ModuleId;
+
+#[derive(Debug)]
+pub enum ModuleError {
+    NotFound {
+        module_name: String,
     },
-    #[error("unexpected token {span}{trace}")]
-    UnexpectedToken { span: Span, trace: Trace },
-    #[error("{msg}", msg = parse_error_msg(.errors))]
-    Parser {
+    NoBaseDirectory,
+    ImportEscapesRoot,
+    EmptyModulePath,
+    StatePoisoned,
+    CyclicImport {
+        id: ModuleId,
+    },
+    InvalidIncludeRoot {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    InvalidModulePath {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    ReadFailed {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    NotUtf8 {
+        kind: &'static str,
+        path: PathBuf,
+        source: std::string::FromUtf8Error,
+    },
+    NotUtf8Remote {
+        url: String,
+        source: std::string::FromUtf8Error,
+    },
+    ShaMismatchStdlib {
+        module: String,
+        expected: String,
+        actual: String,
+    },
+    ShaMismatchPath {
+        kind: &'static str,
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+    MissingExport {
+        module: Symbol,
+        export: Symbol,
+    },
+    Lex {
+        source: LexicalError,
+    },
+    LexInModule {
+        module: ModuleId,
+        source: LexicalError,
+    },
+    Parse {
         errors: Vec<ParserErr>,
-        trace: Trace,
     },
-    #[error("{msg}{trace}", msg=type_error_msg(.errors))]
-    TypeInference {
-        errors: Vec<TypeError>,
-        trace: Trace,
+    ParseInModule {
+        module: ModuleId,
+        errors: Vec<ParserErr>,
     },
-    #[error("variable not found {var}{trace}")]
-    VarNotFound { var: Var, trace: Trace },
-    #[error("expected {expected}, got {got}{trace}")]
-    ExpectedTypeGotValue {
-        expected: Arc<Type>,
-        got: Arc<Expr>,
-        trace: Trace,
+    InvalidGithubImport {
+        url: String,
     },
-    #[error("expected {expected}, got {got}{trace}")]
-    ExpectedTypeGotJSON {
-        expected: Arc<Type>,
-        got: Value,
-        trace: Trace,
+    UnpinnedGithubImport {
+        url: String,
     },
-    #[error("missing argument {argument}{trace}")]
-    MissingArgument { argument: usize, trace: Trace },
-    #[error("{error}{trace}")]
-    ParseIntError {
-        error: std::num::ParseIntError,
-        trace: Trace,
+    CurlFailed {
+        source: std::io::Error,
     },
-    #[error("{error}{trace}")]
-    ParseFloatError {
-        error: std::num::ParseFloatError,
-        trace: Trace,
+    CurlNonZeroExit {
+        url: String,
+        status: ExitStatus,
     },
-    #[error("{error}{trace}")]
-    RegexCompilationError { error: regex::Error, trace: Trace },
-    #[error("Different ADTs found with same name {name:?}: new {new}, existing {existing}{trace}")]
-    ADTNameConflict {
-        name: String,
-        new: Arc<ADT>,
-        existing: Arc<ADT>,
-        trace: Trace,
-    },
-    #[error("Overloaded function {name:?} has {new} params; existing has {existing}{trace}")]
-    OverloadParamCountMismatch {
-        name: String,
-        new: usize,
-        existing: usize,
-        trace: Trace,
-    },
-    #[error("Evaluation suspended")]
-    Suspended { reason: String, trace: Trace },
-    #[error("{error}{trace}")]
-    Custom { error: String, trace: Trace },
 }
 
-impl Error {
-    pub fn with_extra_trace(self, stack: Option<&Stack<'_>>) -> Error {
+impl std::fmt::Display for ModuleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::OverlappingFunctions { overlap, trace } => Self::OverlappingFunctions {
-                overlap: overlap.clone(),
-                trace: trace.extend(stack),
-            },
-            Self::UnexpectedToken { span, trace } => Self::UnexpectedToken {
-                span,
-                trace: trace.extend(stack),
-            },
-            Self::Parser { errors, trace } => Self::Parser {
-                errors,
-                trace: trace.extend(stack),
-            },
-            Self::TypeInference { errors, trace } => Self::TypeInference {
-                errors,
-                trace: trace.extend(stack),
-            },
-            Self::VarNotFound { var, trace } => Self::VarNotFound {
-                var,
-                trace: trace.extend(stack),
-            },
-            Self::ExpectedTypeGotValue {
+            ModuleError::NotFound { module_name } => write!(f, "module not found: {module_name}"),
+            ModuleError::NoBaseDirectory => {
+                write!(f, "cannot resolve local import without a base directory")
+            }
+            ModuleError::ImportEscapesRoot => write!(f, "import path escapes filesystem root"),
+            ModuleError::EmptyModulePath => write!(f, "empty module path"),
+            ModuleError::StatePoisoned => write!(f, "module state poisoned"),
+            ModuleError::CyclicImport { id } => write!(f, "cyclic module import: {id}"),
+            ModuleError::InvalidIncludeRoot { path, source } => {
+                write!(f, "invalid include root `{}`: {source}", path.display())
+            }
+            ModuleError::InvalidModulePath { path, source } => {
+                write!(f, "invalid module path `{}`: {source}", path.display())
+            }
+            ModuleError::ReadFailed { path, source } => {
+                write!(f, "failed to read module `{}`: {source}", path.display())
+            }
+            ModuleError::NotUtf8 { kind, path, source } => {
+                write!(
+                    f,
+                    "{kind} module `{}` was not utf-8: {source}",
+                    path.display()
+                )
+            }
+            ModuleError::NotUtf8Remote { url, source } => {
+                write!(f, "remote module `{url}` was not utf-8: {source}")
+            }
+            ModuleError::ShaMismatchStdlib {
+                module,
                 expected,
-                got,
-                trace,
-            } => Self::ExpectedTypeGotValue {
+                actual,
+            } => write!(
+                f,
+                "sha mismatch for `{module}`: expected #{expected}, got #{actual}"
+            ),
+            ModuleError::ShaMismatchPath {
+                kind,
+                path,
                 expected,
-                got,
-                trace: trace.extend(stack),
-            },
-            Self::ExpectedTypeGotJSON {
-                expected,
-                got,
-                trace,
-            } => Self::ExpectedTypeGotJSON {
-                expected,
-                got,
-                trace: trace.extend(stack),
-            },
-            Self::MissingArgument { argument, trace } => Self::MissingArgument {
-                argument,
-                trace: trace.extend(stack),
-            },
-            Self::ParseIntError { error, trace } => Self::ParseIntError {
-                error,
-                trace: trace.extend(stack),
-            },
-            Self::ParseFloatError { error, trace } => Self::ParseFloatError {
-                error,
-                trace: trace.extend(stack),
-            },
-            Self::RegexCompilationError { error, trace } => Self::RegexCompilationError {
-                error,
-                trace: trace.extend(stack),
-            },
-            Self::ADTNameConflict {
-                name,
-                new,
-                existing,
-                trace,
-            } => Self::ADTNameConflict {
-                name,
-                new,
-                existing,
-                trace: trace.extend(stack),
-            },
-            Self::OverloadParamCountMismatch {
-                name,
-                new,
-                existing,
-                trace,
-            } => Self::OverloadParamCountMismatch {
-                name,
-                new,
-                existing,
-                trace: trace.extend(stack),
-            },
-            Self::Suspended { reason, trace } => Self::Suspended {
-                reason,
-                trace: trace.extend(stack),
-            },
-            Self::Custom { error, trace } => Self::Custom {
-                error,
-                trace: trace.extend(stack),
-            },
+                actual,
+            } => write!(
+                f,
+                "{kind} import sha mismatch for {}: expected #{expected}, got #{actual}",
+                path.display()
+            ),
+            ModuleError::MissingExport { module, export } => {
+                write!(f, "module `{module}` does not export `{export}`")
+            }
+            ModuleError::Lex { source } => write!(f, "lex error: {source}"),
+            ModuleError::LexInModule { module, source } => {
+                write!(f, "lex error in module {module}: {source}")
+            }
+            ModuleError::Parse { errors } => {
+                write!(f, "parse error:")?;
+                for err in errors {
+                    write!(f, "\n  {err}")?;
+                }
+                Ok(())
+            }
+            ModuleError::ParseInModule { module, errors } => {
+                write!(f, "parse error in module {module}:")?;
+                for err in errors {
+                    write!(f, "\n  {err}")?;
+                }
+                Ok(())
+            }
+            ModuleError::InvalidGithubImport { url } => write!(
+                f,
+                "github import must be `https://github.com/<owner>/<repo>/<path>.rex#<sha>` (got {url})"
+            ),
+            ModuleError::UnpinnedGithubImport { url } => {
+                write!(f, "github import must be pinned: add `#<sha>` (got {url})")
+            }
+            ModuleError::CurlFailed { source } => write!(f, "failed to run curl: {source}"),
+            ModuleError::CurlNonZeroExit { url, status } => {
+                write!(f, "failed to fetch {url} (curl exit {status})")
+            }
         }
     }
 }
 
-impl From<std::num::ParseIntError> for Error {
-    fn from(e: std::num::ParseIntError) -> Self {
-        Error::ParseIntError {
-            error: e,
-            trace: Trace::default(),
+impl std::error::Error for ModuleError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ModuleError::InvalidIncludeRoot { source, .. } => Some(source),
+            ModuleError::InvalidModulePath { source, .. } => Some(source),
+            ModuleError::ReadFailed { source, .. } => Some(source),
+            ModuleError::NotUtf8 { source, .. } => Some(source),
+            ModuleError::NotUtf8Remote { source, .. } => Some(source),
+            ModuleError::Lex { source } => Some(source),
+            ModuleError::LexInModule { source, .. } => Some(source),
+            ModuleError::CurlFailed { source } => Some(source),
+            _ => None,
         }
     }
 }
 
-impl From<std::num::ParseFloatError> for Error {
-    fn from(e: std::num::ParseFloatError) -> Self {
-        Error::ParseFloatError {
-            error: e,
-            trace: Default::default(),
-        }
-    }
+#[derive(Debug, thiserror::Error)]
+pub enum EngineError {
+    #[error("unknown variable `{0}`")]
+    UnknownVar(Symbol),
+    #[error("value is not callable: {0}")]
+    NotCallable(String),
+    #[error("native `{name}` expected {expected} args, got {got}")]
+    NativeArity {
+        name: Symbol,
+        expected: usize,
+        got: usize,
+    },
+    #[error("native `{name}` expected {expected}, got {got}")]
+    NativeType {
+        name: Symbol,
+        expected: String,
+        got: String,
+    },
+    #[error("pattern match failure")]
+    MatchFailure,
+    #[error("expected boolean, got {0}")]
+    ExpectedBool(String),
+    #[error("type error: {0}")]
+    Type(#[from] TypeError),
+    #[error("ambiguous overload for `{name}`")]
+    AmbiguousOverload { name: Symbol },
+    #[error("no native implementation for `{name}` with type {typ}")]
+    MissingImpl { name: Symbol, typ: String },
+    #[error("ambiguous native implementation for `{name}` with type {typ}")]
+    AmbiguousImpl { name: Symbol, typ: String },
+    #[error("duplicate native implementation for `{name}` with type {typ}")]
+    DuplicateImpl { name: Symbol, typ: String },
+    #[error("no type class instance for `{class}` with type {typ}")]
+    MissingTypeclassImpl { class: Symbol, typ: String },
+    #[error("ambiguous type class instance for `{class}` with type {typ}")]
+    AmbiguousTypeclassImpl { class: Symbol, typ: String },
+    #[error("duplicate type class instance for `{class}` with type {typ}")]
+    DuplicateTypeclassImpl { class: Symbol, typ: String },
+    #[error("injected `{name}` has incompatible type {typ}")]
+    InvalidInjection { name: Symbol, typ: String },
+    #[error("unknown type for value in `{0}`")]
+    UnknownType(Symbol),
+    #[error("unknown field `{field}` on {value}")]
+    UnknownField { field: Symbol, value: String },
+    #[error("unsupported expression")]
+    UnsupportedExpr,
+    #[error("empty sequence")]
+    EmptySequence,
+    #[error("index {index} out of bounds in `{name}` (len {len})")]
+    IndexOutOfBounds {
+        name: Symbol,
+        index: i32,
+        len: usize,
+    },
+    #[error("internal error: {0}")]
+    Internal(String),
+    #[error(transparent)]
+    Module(#[from] Box<ModuleError>),
+    #[error("cancelled")]
+    Cancelled,
+    #[error("{0}")]
+    OutOfGas(#[from] OutOfGas),
 }
 
-impl From<regex::Error> for Error {
-    fn from(e: regex::Error) -> Self {
-        Error::RegexCompilationError {
-            error: e,
-            trace: Default::default(),
-        }
-    }
-}
-
-impl From<&str> for Error {
-    fn from(msg: &str) -> Self {
-        Error::Custom {
-            error: msg.to_string(),
-            trace: Default::default(),
-        }
-    }
-}
-
-impl From<String> for Error {
-    fn from(msg: String) -> Self {
-        Error::Custom {
-            error: msg,
-            trace: Default::default(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct OverlappingFunctions {
-    pub name: String,
-    pub t1: TypeScheme,
-    pub t2: TypeScheme,
-    pub name1: String,
-    pub name2: String,
-}
-
-fn overlap_error_msg(overlap: &Arc<OverlappingFunctions>) -> String {
-    format!("ambiguous overload of function types {} and {} may overlap; definition 1: {}, definition 2: {}",
-        overlap.t1,
-        overlap.t2,
-        overlap.name1,
-        overlap.name2
-    )
-}
-
-fn parse_error_msg(errors: &[ParserErr]) -> String {
-    let mut res = String::new();
-    for (i, e) in errors.iter().enumerate() {
-        if i > 0 {
-            res.push('\n');
-        }
-        res.push_str(&e.to_string());
-    }
-    res
-}
-
-fn type_error_msg(errors: &[TypeError]) -> String {
-    let mut res = String::new();
-    for (i, e) in errors.iter().enumerate() {
-        if i > 0 {
-            res.push('\n');
-        }
-        res.push_str(&e.to_string());
-    }
-    res
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Default)]
-pub struct Trace(pub Vec<Span>);
-
-impl From<Option<&Stack<'_>>> for Trace {
-    fn from(stack: Option<&Stack<'_>>) -> Self {
-        Trace(Stack::to_vec(stack))
-    }
-}
-
-impl Trace {
-    pub fn extend(self, stack: Option<&Stack<'_>>) -> Trace {
-        let mut spans = self.0;
-        spans.extend(Stack::to_vec(stack));
-        Trace(spans)
-    }
-}
-
-impl fmt::Display for Trace {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
-        for span in &self.0 {
-            write!(f, "\n{}", span)?;
-        }
-        Ok(())
+impl From<ModuleError> for EngineError {
+    fn from(err: ModuleError) -> Self {
+        EngineError::Module(Box::new(err))
     }
 }

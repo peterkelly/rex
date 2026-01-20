@@ -1,0 +1,79 @@
+{
+  "scopeName": "source.rex",
+  "name": "Rex",
+  "fileTypes": ["rex"],
+  "patterns": [
+    {"include": "#comments"},
+    {"include": "#strings"},
+    {"include": "#numbers"},
+    {"include": "#keywords"},
+    {"include": "#constants"},
+    {"include": "#types"},
+    {"include": "#constructors"},
+    {"include": "#operators"}
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-dash.rex",
+          "match": "--.*$"
+        },
+        {
+          "name": "comment.block.rex",
+          "begin": "\\{-",
+          "end": "-\\}",
+          "patterns": [
+            {"include": "#comments"}
+          ]
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.rex",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {"name": "constant.character.escape.rex", "match": "\\\\."}
+          ]
+        },
+        {
+          "name": "string.quoted.single.rex",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {"name": "constant.character.escape.rex", "match": "\\\\."}
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {"name": "constant.numeric.float.rex", "match": "\\b[0-9]+\\.[0-9]+\\b"},
+        {"name": "constant.numeric.integer.rex", "match": "\\b[0-9]+\\b"}
+      ]
+    },
+    "keywords": {
+      "name": "keyword.control.rex",
+      "match": "\\b(as|class|declare|else|fn|for|if|import|in|instance|is|let|match|pub|then|type|when|where|with)\\b"
+    },
+    "constants": {
+      "name": "constant.language.rex",
+      "match": "\\b(true|false|null)\\b"
+    },
+    "types": {
+      "name": "support.type.rex",
+      "match": "\\b(u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|bool|string|uuid|datetime|Dict|List|Array|Option|Result)\\b"
+    },
+    "constructors": {
+      "name": "entity.name.type.rex",
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+    },
+    "operators": {
+      "name": "keyword.operator.rex",
+      "match": "(\\+\\+|->|<-|\\u2192|\\u2190|\\u03bb|\\\\|\\|\\||&&|==|!=|<=|>=|\\+|-|\\*|/|%|<|>|=|::|\\.|,|\\||:|\\?|#)"
+    }
+  }
+}

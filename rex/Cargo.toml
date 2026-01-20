@@ -1,31 +1,23 @@
 [package]
 name = "rex"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+
+[dependencies]
+clap = { workspace = true }
+rex-ast = { workspace = true }
+rex-lexer = { workspace = true }
+rex-parser = { workspace = true }
+rex-engine = { workspace = true }
+rex-ts = { workspace = true }
+rex-util = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+rex-proc-macro = { workspace = true }
 
 [lints]
 workspace = true
-
-[dependencies]
-anyhow = { workspace = true }
-chrono = { workspace = true }
-clap = { workspace = true }
-rex-ast = { workspace = true }
-rex-engine = { workspace = true }
-rex-lexer = { workspace = true }
-rex-parser = { workspace = true }
-rex-proc-macro = { workspace = true }
-rex-type-system = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio = { workspace = true, features = [
-    "fs",
-    "io-util",
-    "macros",
-    "rt",
-    "rt-multi-thread",
-    "time",
-] }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }

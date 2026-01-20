@@ -1,76 +1,584 @@
-use std::{env, io, path::PathBuf};
+#![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use anyhow::Context as _;
-use clap::Parser as CmdLnArgsParser;
-use rex::engine::{engine::Builder, program::Program};
-use tokio::{fs::File, io::AsyncReadExt};
-use tracing_subscriber::{fmt, layer::SubscriberExt as _, util::SubscriberInitExt as _, EnvFilter};
+use std::fs;
+use std::io::IsTerminal;
+use std::io::{self, BufRead, Read, Write};
+use std::thread;
 
-/// The Rex interpreter.
-#[derive(CmdLnArgsParser, Debug)]
-#[clap(author, version, about, long_about = None)]
-struct CmdLnArgs {
+use clap::{Args, Parser, Subcommand};
+use rex_engine::{Engine, ReplState};
+use rex_lexer::Token;
+use rex_parser::{Parser as RexParser, ParserLimits};
+use rex_util::{GasCosts, GasMeter};
+use serde_json::json;
+
+mod cli_prelude;
+
+#[derive(Parser)]
+#[command(name = "rex")]
+#[command(about = "Rex (Rush Expressions) CLI")]
+#[command(arg_required_else_help = true)]
+struct Cli {
     #[command(subcommand)]
-    pub cmd: Cmd,
+    command: Command,
 }
 
-#[derive(CmdLnArgsParser, Debug)]
-enum Cmd {
-    /// Run a Rex file
-    #[command(about = "Run Rex code")]
-    Run {
-        /// Rex input file
-        #[clap(short, long)]
-        input: PathBuf,
-    },
-    #[command(about = "Generate markdown documentation for built-in functions")]
-    Docs,
+#[derive(Subcommand)]
+enum Command {
+    Run(RunArgs),
+    Repl(ReplArgs),
 }
 
-#[tokio::main]
-pub async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(EnvFilter::new(
-            env::var("TRACE").unwrap_or("WARN".to_string()),
-        ))
-        .with(fmt::layer().with_writer(io::stderr))
-        .init();
+#[derive(Args)]
+#[command(arg_required_else_help = true)]
+struct RunArgs {
+    /// Path to a `.rex` file to run.
+    #[arg(
+        value_name = "FILE",
+        required_unless_present_any = ["code", "stdin"],
+        conflicts_with_all = ["code", "stdin"]
+    )]
+    file: Option<String>,
 
-    let cmd_ln_args = CmdLnArgs::parse();
+    /// Inline Rex source code to run.
+    #[arg(
+        short = 'c',
+        long = "code",
+        value_name = "CODE",
+        required_unless_present_any = ["file", "stdin"],
+        conflicts_with_all = ["file", "stdin"]
+    )]
+    code: Option<String>,
 
-    match cmd_ln_args.cmd {
-        Cmd::Run { input } => {
-            let mut input = File::open(input).await.context("opening input file")?;
-            let mut input_content = String::new();
-            input
-                .read_to_string(&mut input_content)
-                .await
-                .context("reading input file")?;
+    /// Read Rex source code from stdin.
+    #[arg(long = "stdin", required_unless_present_any = ["file", "code"])]
+    stdin: bool,
 
-            let builder = Builder::with_prelude().unwrap();
-            let program = match Program::compile(builder, &input_content) {
-                Ok(program) => program,
-                Err(e) => {
-                    eprintln!("{}", e);
-                    std::process::exit(1);
-                }
-            };
-            let res = program.run(()).await;
+    /// Print the parsed AST as JSON and exit.
+    #[arg(long = "emit-ast")]
+    emit_ast: bool,
 
-            match res {
-                Ok(val) => println!("{}", val),
-                Err(e) => {
-                    eprintln!("Error:\n  evaluating\n\nCaused by:\n  {}", e,);
-                    std::process::exit(1);
-                }
+    /// Print the inferred type as JSON and exit.
+    #[arg(long = "emit-type", alias = "type")]
+    emit_type: bool,
+
+    /// Additional module include roots (searched after local-relative imports).
+    #[arg(long = "include", value_name = "DIR")]
+    include: Vec<String>,
+
+    /// Stack size (in MiB) used for parsing/type inference/evaluation.
+    #[arg(long = "stack-size-mb", default_value_t = 16)]
+    stack_size_mb: usize,
+
+    /// Maximum nesting depth allowed during parsing (defaults to a safe limit).
+    #[arg(
+        long = "max-nesting",
+        value_name = "N",
+        conflicts_with = "no_max_nesting"
+    )]
+    max_nesting: Option<usize>,
+
+    /// Disable the parsing nesting-depth limit.
+    #[arg(long = "no-max-nesting")]
+    no_max_nesting: bool,
+
+    /// Gas budget (in abstract units) for parsing + type inference + evaluation.
+    #[arg(long = "gas", default_value_t = 10_000_000)]
+    gas: u64,
+
+    /// Disable gas metering.
+    #[arg(long = "no-gas")]
+    no_gas: bool,
+}
+
+#[derive(Args)]
+struct ReplArgs {
+    /// Additional module include roots (searched after local-relative imports).
+    #[arg(long = "include", value_name = "DIR")]
+    include: Vec<String>,
+
+    /// Stack size (in MiB) used for parsing/type inference/evaluation.
+    #[arg(long = "stack-size-mb", default_value_t = 16)]
+    stack_size_mb: usize,
+
+    /// Maximum nesting depth allowed during parsing (defaults to a safe limit).
+    #[arg(
+        long = "max-nesting",
+        value_name = "N",
+        conflicts_with = "no_max_nesting"
+    )]
+    max_nesting: Option<usize>,
+
+    /// Disable the parsing nesting-depth limit.
+    #[arg(long = "no-max-nesting")]
+    no_max_nesting: bool,
+
+    /// Gas budget (in abstract units) for parsing + type inference + evaluation (per input).
+    #[arg(long = "gas", default_value_t = 10_000_000)]
+    gas: u64,
+
+    /// Disable gas metering.
+    #[arg(long = "no-gas")]
+    no_gas: bool,
+}
+
+fn main() {
+    init_tracing();
+    let cli = Cli::parse();
+    if let Err(err) = run(cli) {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+}
+
+fn init_tracing() {
+    use tracing_subscriber::EnvFilter;
+
+    let filter = EnvFilter::try_from_env("REX_LOG")
+        .or_else(|_| EnvFilter::try_from_default_env())
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    let ansi = std::io::stderr().is_terminal();
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(ansi)
+        .with_target(true)
+        .with_level(true)
+        .with_thread_names(true)
+        .with_thread_ids(true)
+        .compact()
+        .try_init();
+}
+
+fn run(cli: Cli) -> Result<(), String> {
+    match cli.command {
+        Command::Run(args) => run_cmd(args),
+        Command::Repl(args) => repl_cmd(args),
+    }
+}
+
+fn run_cmd(args: RunArgs) -> Result<(), String> {
+    let RunArgs {
+        file,
+        code,
+        stdin,
+        emit_ast,
+        emit_type,
+        include,
+        stack_size_mb,
+        max_nesting,
+        no_max_nesting,
+        gas,
+        no_gas,
+    } = args;
+
+    let file_for_modules = file.clone();
+    let source = if let Some(code) = code {
+        code
+    } else if stdin {
+        let mut buf = String::new();
+        io::stdin()
+            .read_to_string(&mut buf)
+            .map_err(|e| format!("failed to read stdin: {e}"))?;
+        buf
+    } else if let Some(path) = &file {
+        fs::read_to_string(path).map_err(|e| format!("failed to read `{path}`: {e}"))?
+    } else {
+        return Err("missing input (file or `-c/--code`)".into());
+    };
+
+    // Rex programs can be deeply nested (especially after desugaring). Run on a
+    // slightly larger stack to reduce overflow risk in parser/type inference/eval.
+    let stack_size = stack_size_mb
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| "stack size overflow".to_string())?;
+
+    let parser_limits = if no_max_nesting {
+        ParserLimits::unlimited()
+    } else if let Some(max_nesting) = max_nesting {
+        ParserLimits {
+            max_nesting: Some(max_nesting),
+        }
+    } else {
+        ParserLimits::safe_defaults()
+    };
+
+    let handle = thread::Builder::new()
+        .name("rex-run".to_string())
+        .stack_size(stack_size)
+        .spawn(move || {
+            run_source(
+                &source,
+                RunSourceOpts {
+                    file: file_for_modules,
+                    include,
+                    emit_ast,
+                    emit_type,
+                    gas,
+                    no_gas,
+                    parser_limits,
+                },
+            )
+        })
+        .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
+
+    match handle.join() {
+        Ok(res) => res,
+        Err(_) => Err("runner thread panicked".into()),
+    }
+}
+
+fn repl_cmd(args: ReplArgs) -> Result<(), String> {
+    let ReplArgs {
+        include,
+        stack_size_mb,
+        max_nesting,
+        no_max_nesting,
+        gas,
+        no_gas,
+    } = args;
+
+    let stack_size = stack_size_mb
+        .checked_mul(1024 * 1024)
+        .ok_or_else(|| "stack size overflow".to_string())?;
+
+    let parser_limits = if no_max_nesting {
+        ParserLimits::unlimited()
+    } else if let Some(max_nesting) = max_nesting {
+        ParserLimits {
+            max_nesting: Some(max_nesting),
+        }
+    } else {
+        ParserLimits::safe_defaults()
+    };
+
+    let handle = thread::Builder::new()
+        .name("rex-repl".to_string())
+        .stack_size(stack_size)
+        .spawn(move || repl_loop(include, gas, no_gas, parser_limits))
+        .map_err(|e| format!("failed to spawn repl thread: {e}"))?;
+
+    match handle.join() {
+        Ok(res) => res,
+        Err(_) => Err("repl thread panicked".into()),
+    }
+}
+
+fn repl_loop(
+    include: Vec<String>,
+    gas_budget: u64,
+    no_gas: bool,
+    parser_limits: ParserLimits,
+) -> Result<(), String> {
+    let mut engine =
+        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
+    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
+    engine.add_default_resolvers();
+    for root in include {
+        engine
+            .add_include_resolver(&root)
+            .map_err(|e| format!("{e}"))?;
+    }
+
+    let mut state = ReplState::new();
+
+    let interactive = io::stdin().is_terminal();
+    let mut stdin = io::stdin().lock();
+    let mut stderr = io::stderr().lock();
+
+    let mut buffer = String::new();
+    loop {
+        if interactive {
+            if buffer.is_empty() {
+                write!(stderr, "rex> ").ok();
+            } else {
+                write!(stderr, "...> ").ok();
             }
+            stderr.flush().ok();
         }
-        Cmd::Docs => {
-            let builder: Builder<()> = Builder::with_prelude().unwrap();
-            let docs = builder.docs().to_markdown();
-            println!("{}", docs);
+
+        let mut line = String::new();
+        let n = stdin
+            .read_line(&mut line)
+            .map_err(|e| format!("failed to read input: {e}"))?;
+        if n == 0 {
+            if interactive {
+                writeln!(stderr).ok();
+            }
+            break;
         }
+
+        if buffer.is_empty() && line.trim().is_empty() {
+            continue;
+        }
+
+        buffer.push_str(&line);
+        let parse_source = if is_imports_only(&buffer) {
+            format!("{buffer}\n()")
+        } else {
+            buffer.clone()
+        };
+
+        let costs = GasCosts::sensible_defaults();
+        let mut gas = if no_gas {
+            GasMeter::unlimited(costs)
+        } else {
+            GasMeter::new(Some(gas_budget), costs)
+        };
+
+        let tokens = match Token::tokenize(&parse_source) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("error: lex error: {e}");
+                buffer.clear();
+                continue;
+            }
+        };
+        let mut parser = RexParser::new(tokens);
+        parser.set_limits(parser_limits);
+        let program = match parser.parse_program_with_gas(&mut gas) {
+            Ok(p) => p,
+            Err(errs) => {
+                let incomplete =
+                    !errs.is_empty() && errs.iter().all(|e| e.message.trim() == "unexpected EOF");
+                if incomplete {
+                    continue;
+                }
+                eprintln!("{}", format_parse_errors(&errs));
+                buffer.clear();
+                continue;
+            }
+        };
+
+        match engine.eval_repl_program_with_gas(&program, &mut state, &mut gas) {
+            Ok(v) => println!("{v}"),
+            Err(e) => eprintln!("error: {e}"),
+        }
+        buffer.clear();
     }
 
     Ok(())
+}
+
+fn is_imports_only(buffer: &str) -> bool {
+    let mut saw_import = false;
+    for line in buffer.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("import ") || trimmed.starts_with("pub import ") {
+            saw_import = true;
+            continue;
+        }
+        return false;
+    }
+    saw_import
+}
+
+struct RunSourceOpts {
+    file: Option<String>,
+    include: Vec<String>,
+    emit_ast: bool,
+    emit_type: bool,
+    gas: u64,
+    no_gas: bool,
+    parser_limits: ParserLimits,
+}
+
+fn init_engine(include: &[String]) -> Result<Engine, String> {
+    let mut engine =
+        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
+    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| e.to_string())?;
+    engine.add_default_resolvers();
+    for root in include {
+        engine
+            .add_include_resolver(root)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(engine)
+}
+
+fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
+    let RunSourceOpts {
+        file,
+        include,
+        emit_ast,
+        emit_type,
+        gas,
+        no_gas,
+        parser_limits,
+    } = opts;
+    let costs = GasCosts::sensible_defaults();
+    let mut gas = if no_gas {
+        GasMeter::unlimited(costs)
+    } else {
+        GasMeter::new(Some(gas), costs)
+    };
+
+    let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
+    let mut parser = RexParser::new(tokens);
+    parser.set_limits(parser_limits);
+    let program = parser
+        .parse_program_with_gas(&mut gas)
+        .map_err(|errs| format_parse_errors(&errs))?;
+
+    if emit_ast || emit_type {
+        let type_json = if emit_type {
+            Some(infer_type_json(
+                source,
+                file.as_deref(),
+                &include,
+                &mut gas,
+            )?)
+        } else {
+            None
+        };
+        let out = emit_json(&program, emit_ast, type_json)?;
+        println!("{out}");
+        return Ok(());
+    }
+
+    let mut engine = init_engine(&include)?;
+
+    let value = if let Some(path) = file {
+        engine
+            .eval_module_file_with_gas(&path, &mut gas)
+            .map_err(|e| format!("{e}"))?
+    } else {
+        engine
+            .eval_snippet_with_gas(source, &mut gas)
+            .map_err(|e| format!("{e}"))?
+    };
+    println!("{value}");
+    Ok(())
+}
+
+fn emit_json(
+    program: &rex_ast::expr::Program,
+    emit_ast: bool,
+    type_json: Option<serde_json::Value>,
+) -> Result<String, String> {
+    match (emit_ast, type_json) {
+        (true, None) => serde_json::to_string_pretty(program)
+            .map_err(|e| format!("failed to serialize AST to JSON: {e}")),
+        (false, Some(type_json)) => serde_json::to_string_pretty(&type_json)
+            .map_err(|e| format!("failed to serialize type to JSON: {e}")),
+        (true, Some(type_json)) => serde_json::to_string_pretty(&json!({
+            "ast": program,
+            "type": type_json,
+        }))
+        .map_err(|e| format!("failed to serialize outputs to JSON: {e}")),
+        (false, None) => Err("internal error: emit_json called with no outputs".into()),
+    }
+}
+
+fn infer_type_json(
+    source: &str,
+    file: Option<&str>,
+    include: &[String],
+    gas: &mut GasMeter,
+) -> Result<serde_json::Value, String> {
+    let mut engine = init_engine(include)?;
+
+    let (preds, ty) = if let Some(path) = file {
+        engine
+            .infer_module_file_with_gas(path, gas)
+            .map_err(|e| format!("{e}"))?
+    } else {
+        engine
+            .infer_snippet_with_gas(source, gas)
+            .map_err(|e| format!("{e}"))?
+    };
+
+    let constraints = preds
+        .iter()
+        .map(|p| {
+            json!({
+                "class": p.class.to_string(),
+                "type": p.typ.to_string(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "type": ty.to_string(),
+        "constraints": constraints,
+    }))
+}
+
+fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
+    let mut out = String::from("parse error:");
+    for err in errs {
+        out.push_str(&format!("\n  {err}"));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn cli_shape_is_stable() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn emit_ast_and_type_are_json() {
+        let source = "1 + 2";
+        let tokens = Token::tokenize(source).expect("lex");
+        let mut parser = RexParser::new(tokens);
+        parser.set_limits(ParserLimits::safe_defaults());
+
+        let costs = GasCosts::sensible_defaults();
+        let mut gas = GasMeter::unlimited(costs);
+        let program = parser.parse_program_with_gas(&mut gas).expect("parse");
+
+        let ty_json = infer_type_json(source, None, &[], &mut gas).expect("infer");
+        let ast_out = emit_json(&program, true, None).expect("emit ast");
+        let type_out = emit_json(&program, false, Some(ty_json.clone())).expect("emit type");
+        let both_out = emit_json(&program, true, Some(ty_json)).expect("emit both");
+
+        serde_json::from_str::<serde_json::Value>(&ast_out).expect("ast json");
+        serde_json::from_str::<serde_json::Value>(&type_out).expect("type json");
+        serde_json::from_str::<serde_json::Value>(&both_out).expect("both json");
+    }
+
+    #[test]
+    fn emit_type_resolves_imports() {
+        let costs = GasCosts::sensible_defaults();
+        let mut gas = GasMeter::unlimited(costs);
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("rex-import-test-{nonce}"));
+        std::fs::create_dir_all(root.join("foo")).expect("create temp module dir");
+
+        std::fs::write(
+            root.join("foo/bar.rex"),
+            r#"
+                pub fn add : i32 -> i32 -> i32 = \x y -> x + y
+                pub fn triple : i32 -> i32 = \x -> x * 3
+            "#,
+        )
+        .expect("write bar.rex");
+        let main_path = root.join("main.rex");
+        std::fs::write(
+            &main_path,
+            r#"
+                import foo.bar
+
+                bar.add (bar.triple 10) 2
+            "#,
+        )
+        .expect("write main.rex");
+
+        let json = infer_type_json("", main_path.to_str(), &[], &mut gas).expect("infer");
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
+    }
 }

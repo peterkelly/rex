@@ -1,7 +1,7 @@
 [package]
 name = "rex-parser"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lints]
 workspace = true
@@ -11,3 +11,4 @@ regex = { workspace = true }
 rex-ast = { workspace = true }
 rex-lexer = { workspace = true }
 thiserror = { workspace = true }
+rex-util = { workspace = true }

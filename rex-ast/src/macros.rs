@@ -143,7 +143,7 @@ macro_rules! d {
     ($($k:ident = $v:expr),* $(,)?) => {
         ::std::sync::Arc::new($crate::expr::Expr::Dict(::rex_lexer::span::Span::default(), {
             let mut map = ::std::collections::BTreeMap::new();
-            $(map.insert(stringify!($k).to_string(), $v);)*
+            $(map.insert($crate::expr::intern(stringify!($k)), $v);)*
             map
         }))
     };
@@ -151,7 +151,7 @@ macro_rules! d {
     ($span:expr; $($k:ident = $v:expr),* $(,)?) => {
         ::std::sync::Arc::new($crate::expr::Expr::Dict(($span).into(), {
             let mut map = ::std::collections::BTreeMap::new();
-            $(map.insert(stringify!($k).to_string(), $v);)*
+            $(map.insert($crate::expr::intern(stringify!($k)), $v);)*
             map
         }))
     };
@@ -159,35 +159,9 @@ macro_rules! d {
     ($id:expr, $span:expr; $($k:ident = $v:expr),* $(,)?) => {
         ::std::sync::Arc::new($crate::expr::Expr::Dict(($id).into(), ($span).into(), {
             let mut map = ::std::collections::BTreeMap::new();
-            $(map.insert(stringify!($k).to_string(), $v);)*
+            $(map.insert($crate::expr::intern(stringify!($k)), $v);)*
             map
         }))
-    };
-}
-
-#[macro_export]
-macro_rules! n {
-    ($n: expr, $x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Named(
-            ::rex_lexer::span::Span::default(),
-            ($n).to_string(),
-            ($x).map(|x| x),
-        ))
-    };
-    ($span:expr; $n: expr, $x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Named(
-            ($span).into(),
-            ($n).to_string(),
-            ($x),
-        ))
-    };
-    ($id:expr, $span:expr; $n: expr, $x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Named(
-            ($id).into(),
-            ($span).into(),
-            ($n).to_string(),
-            ($x),
-        ))
     };
 }
 
@@ -196,14 +170,14 @@ macro_rules! v {
     ($x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {
             span: ::rex_lexer::span::Span::default(),
-            name: ($x).to_string(),
+            name: $crate::expr::intern(&($x).to_string()),
         }))
     };
 
     ($span:expr; $x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {
             span: ($span).into(),
-            name: ($x).to_string(),
+            name: $crate::expr::intern(&($x).to_string()),
         }))
     };
 
@@ -211,7 +185,7 @@ macro_rules! v {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {
             id: ($id).into(),
             span: ($span).into(),
-            name: ($x).to_string(),
+            name: $crate::expr::intern(&($x).to_string()),
         }))
     };
 }
@@ -250,7 +224,9 @@ macro_rules! lam {
         ::std::sync::Arc::new($crate::expr::Expr::Lam(
             ::rex_lexer::span::Span::default(),
             $crate::expr::Scope::new_sync(),
-            ($x).into(),
+            $crate::expr::Var::new(stringify!($x)),
+            None,
+            Vec::new(),
             ($e).into(),
         ))
     };
@@ -259,7 +235,9 @@ macro_rules! lam {
         ::std::sync::Arc::new($crate::expr::Expr::Lam(
             ($span).into(),
             $crate::expr::Scope::new_sync(),
-            ($x).into(),
+            $crate::expr::Var::new(stringify!($x)),
+            None,
+            Vec::new(),
             ($e).into(),
         ))
     };
@@ -269,7 +247,9 @@ macro_rules! lam {
             ($id).into(),
             ($span).into(),
             $crate::expr::Scope::new_sync(),
-            ($x).into(),
+            $crate::expr::Var::new(stringify!($x)),
+            None,
+            Vec::new(),
             ($e).into(),
         ))
     };
@@ -280,7 +260,8 @@ macro_rules! let_in {
     (let $x:ident = ($e1:expr) in $e2:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Let(
             ::rex_lexer::span::Span::default(),
-            ($x).into(),
+            $crate::expr::Var::new(stringify!($x)),
+            None,
             ($e1).into(),
             ($e2).into(),
         ))
@@ -289,7 +270,8 @@ macro_rules! let_in {
     ($span:expr; let $x:ident = ($e1:expr) in $e2:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Let(
             ($span).into(),
-            ($x).into(),
+            $crate::expr::Var::new(stringify!($x)),
+            None,
             ($e1).into(),
             ($e2).into(),
         ))
@@ -299,7 +281,8 @@ macro_rules! let_in {
         ::std::sync::Arc::new($crate::expr::Expr::Let(
             ($id).into(),
             ($span).into(),
-            ($x).into(),
+            $crate::expr::Var::new(stringify!($x)),
+            None,
             ($e1).into(),
             ($e2).into(),
         ))

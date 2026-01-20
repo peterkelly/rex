@@ -1,3 +1,6 @@
 /target
 /.direnv/
 /.idea
+**/node_modules/
+.DS_Store
+docs/_build/

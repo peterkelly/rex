@@ -1,25 +1,28 @@
 [package]
 name = "rex-engine"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+
+[features]
+# Enables importing `.rex` modules from GitHub via `curl`.
+# This is intentionally off by default for production builds.
+github-imports = []
+
+[dependencies]
+rex-ast = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rex-ts = { workspace = true }
+async-recursion = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+rex-lexer = { workspace = true }
+rex-parser = { workspace = true }
+serde_json = { workspace = true }
+rex-util = { workspace = true }
 
 [lints]
 workspace = true
 
-[dependencies]
-async-recursion = { workspace = true }
-async-trait = { workspace = true }
-futures = { workspace = true }
-rand = { workspace = true }
-rex-ast = { workspace = true }
-rex-lexer = { workspace = true }
-rex-parser = { workspace = true }
-rex-type-system = { workspace = true }
-rpds = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync"] }
-serde = { workspace = true }
-serde_json = { workspace = true }
-chrono = { workspace = true }
-uuid = { workspace = true, features = ["serde", "v4"] }
-regex = { workspace = true }
+[dev-dependencies]
