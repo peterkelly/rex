@@ -1306,20 +1306,36 @@ impl Parser {
 
         // Parse the variable declarations.
         let mut decls = VecDeque::new();
-        // Variable name
-        while let Token::Ident(val, span, ..) = self.current_token() {
-            self.next_token();
-            let var = (span, val);
-            let mut ann = None;
-            if let Token::Colon(..) = self.current_token() {
-                self.next_token();
-                ann = Some(self.parse_type_expr()?);
-            }
+        let is_pattern_start = |token: Token| {
+            matches!(
+                token,
+                Token::Ident(..) | Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..)
+            )
+        };
+        while is_pattern_start(self.current_token()) {
+            let (pat, ann) = match (self.current_token(), self.peek_token(1)) {
+                (Token::Ident(val, span, ..), Token::Colon(..)) => {
+                    self.next_token();
+                    self.next_token();
+                    let var = Var::with_span(span, val);
+                    let ann = Some(self.parse_type_expr()?);
+                    (Pattern::Var(var), ann)
+                }
+                _ => {
+                    let pat = self.parse_pattern()?;
+                    let mut ann = None;
+                    if let Token::Colon(..) = self.current_token() {
+                        self.next_token();
+                        ann = Some(self.parse_type_expr()?);
+                    }
+                    (pat, ann)
+                }
+            };
 
             // =
             self.expect_assign()?;
             // Parse the variable definition
-            decls.push_back((var, ann, self.parse_expr()?));
+            decls.push_back((pat, ann, self.parse_expr()?));
             // Parse `,` or `in`
             match self.current_token() {
                 Token::Comma(_span, ..) => {
@@ -1353,14 +1369,32 @@ impl Parser {
         // Parse the body
         let mut body = self.parse_expr()?;
         let mut body_span_end = body.span().end;
-        while let Some(((var_span, var), ann, def)) = decls.pop_back() {
-            body = Expr::Let(
-                Span::from_begin_end(var_span.begin, body_span_end),
-                Var::with_span(var_span, var),
-                ann,
-                Arc::new(def),
-                Arc::new(body),
-            );
+        while let Some((pat, ann, def)) = decls.pop_back() {
+            match pat {
+                Pattern::Var(var) => {
+                    body = Expr::Let(
+                        Span::from_begin_end(var.span.begin, body_span_end),
+                        var,
+                        ann,
+                        Arc::new(def),
+                        Arc::new(body),
+                    );
+                }
+                pat => {
+                    let def_expr = match ann {
+                        Some(ann) => {
+                            let span = Span::from_begin_end(def.span().begin, ann.span().end);
+                            Expr::Ann(span, Arc::new(def), ann)
+                        }
+                        None => def,
+                    };
+                    body = Expr::Match(
+                        Span::from_begin_end(pat.span().begin, body_span_end),
+                        Arc::new(def_expr),
+                        vec![(pat, Arc::new(body))],
+                    );
+                }
+            }
             body_span_end = body.span().end;
         }
         // Adjust the outer most let-in expression to include the initial let
@@ -4114,6 +4148,23 @@ mod tests {
             None,
             inc,
             Arc::new(Expr::Let(Span::default(), Var::new("dbl"), None, dbl, body)),
+        ));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_let_tuple_destructuring() {
+        let expr = parse("let (x, y) = (1, 2) in x");
+
+        let pat = Pattern::Tuple(
+            Span::default(),
+            vec![Pattern::Var(Var::new("x")), Pattern::Var(Var::new("y"))],
+        );
+        let expected = Arc::new(Expr::Match(
+            Span::default(),
+            tup!(u!(1), u!(2)),
+            vec![(pat, v!("x"))],
         ));
 
         assert_expr_eq!(expr, expected; ignore span);

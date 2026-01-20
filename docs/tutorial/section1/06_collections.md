@@ -10,8 +10,8 @@ Tuples group fixed-position values:
 (1, "hi", true)
 ```
 
-Rex pattern matching does not destructure tuples directly. Instead, use prelude helpers like
-`get` from `Indexable` (see the examples in Section 3).
+Rex supports tuple patterns in `match` and `let`. For indexing, use prelude helpers like `get`
+from `Indexable` (see the examples in Section 3).
 
 ### Indexing tuples with `get`
 
