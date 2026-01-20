@@ -5823,12 +5823,15 @@ fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError>
 fn project_value(field: &Symbol, value: Value) -> Result<Value, EngineError> {
     if let Ok(index) = field.as_ref().parse::<usize>() {
         return match value {
-            Value::Tuple(items) => items.get(index).cloned().ok_or_else(|| {
-                EngineError::UnknownField {
-                    field: field.clone(),
-                    value: "tuple".into(),
-                }
-            }),
+            Value::Tuple(items) => {
+                items
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| EngineError::UnknownField {
+                        field: field.clone(),
+                        value: "tuple".into(),
+                    })
+            }
             other => Err(EngineError::UnknownField {
                 field: field.clone(),
                 value: other.type_name().into(),
@@ -5837,12 +5840,13 @@ fn project_value(field: &Symbol, value: Value) -> Result<Value, EngineError> {
     }
     match value {
         Value::Adt(_, args) if args.len() == 1 => match &args[0] {
-            Value::Dict(map) => map.get(field).cloned().ok_or_else(|| {
-                EngineError::UnknownField {
+            Value::Dict(map) => map
+                .get(field)
+                .cloned()
+                .ok_or_else(|| EngineError::UnknownField {
                     field: field.clone(),
                     value: "record".into(),
-                }
-            }),
+                }),
             other => Err(EngineError::UnknownField {
                 field: field.clone(),
                 value: other.type_name().into(),

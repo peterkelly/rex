@@ -3593,12 +3593,15 @@ fn resolve_projection(
 ) -> Result<Type, TypeError> {
     if let Ok(index) = field.as_ref().parse::<usize>() {
         let elem_ty = match base_ty.as_ref() {
-            TypeKind::Tuple(elems) => elems.get(index).cloned().ok_or_else(|| {
-                TypeError::UnknownField {
-                    field: field.clone(),
-                    typ: base_ty.to_string(),
-                }
-            })?,
+            TypeKind::Tuple(elems) => {
+                elems
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| TypeError::UnknownField {
+                        field: field.clone(),
+                        typ: base_ty.to_string(),
+                    })?
+            }
             TypeKind::Var(_) => {
                 let mut elems = Vec::with_capacity(index + 1);
                 for _ in 0..=index {
@@ -3612,7 +3615,7 @@ fn resolve_projection(
                 return Err(TypeError::UnknownField {
                     field: field.clone(),
                     typ: base_ty.to_string(),
-                })
+                });
             }
         };
         return Ok(unifier.apply_type(&elem_ty));
