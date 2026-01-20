@@ -154,3 +154,30 @@ fn test_match_tuple_destructuring() {
     let ty = type_of("let t = (1, \"Hello\", true) in match t when (x, y, z) -> z").unwrap();
     assert_eq!(ty, Type::con("bool", 0));
 }
+
+#[test]
+fn test_tuple_projection() {
+    let v = eval("let t = (4, \"Hello\", true) in t.0").unwrap();
+    match v {
+        Value::I32(n) => assert_eq!(n, 4),
+        other => panic!("expected i32, got {other}"),
+    }
+    let ty = type_of("let t = (4, \"Hello\", true) in t.0").unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
+
+    let v = eval("let t = (4, \"Hello\", true) in t.1").unwrap();
+    match v {
+        Value::String(s) => assert_eq!(s, "Hello"),
+        other => panic!("expected string, got {other}"),
+    }
+    let ty = type_of("let t = (4, \"Hello\", true) in t.1").unwrap();
+    assert_eq!(ty, Type::con("string", 0));
+
+    let v = eval("let t = (4, \"Hello\", true) in t.2").unwrap();
+    match v {
+        Value::Bool(b) => assert!(b),
+        other => panic!("expected bool, got {other}"),
+    }
+    let ty = type_of("let t = (4, \"Hello\", true) in t.2").unwrap();
+    assert_eq!(ty, Type::con("bool", 0));
+}

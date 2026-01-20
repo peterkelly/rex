@@ -712,6 +712,12 @@ impl Parser {
                     self.next_token();
                     (name, end)
                 }
+                Token::Int(value, span) => {
+                    let name = intern(&value.to_string());
+                    let end = span.end;
+                    self.next_token();
+                    (name, end)
+                }
                 token => {
                     return Err(ParserErr::new(
                         *token.span(),
@@ -4042,6 +4048,14 @@ mod tests {
     fn test_projection_expr() {
         let expr = parse("x.field");
         let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("field")));
+
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_projection_tuple_index_expr() {
+        let expr = parse("x.0");
+        let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("0")));
 
         assert_expr_eq!(expr, expected; ignore span);
     }

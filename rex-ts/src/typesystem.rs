@@ -3591,6 +3591,33 @@ fn resolve_projection(
     known_variant: Option<KnownVariant>,
     field: &Symbol,
 ) -> Result<Type, TypeError> {
+    if let Ok(index) = field.as_ref().parse::<usize>() {
+        let elem_ty = match base_ty.as_ref() {
+            TypeKind::Tuple(elems) => elems.get(index).cloned().ok_or_else(|| {
+                TypeError::UnknownField {
+                    field: field.clone(),
+                    typ: base_ty.to_string(),
+                }
+            })?,
+            TypeKind::Var(_) => {
+                let mut elems = Vec::with_capacity(index + 1);
+                for _ in 0..=index {
+                    elems.push(Type::var(supply.fresh(Some(sym("t")))));
+                }
+                let tuple_ty = Type::tuple(elems.clone());
+                unifier.unify(base_ty, &tuple_ty)?;
+                elems[index].clone()
+            }
+            _ => {
+                return Err(TypeError::UnknownField {
+                    field: field.clone(),
+                    typ: base_ty.to_string(),
+                })
+            }
+        };
+        return Ok(unifier.apply_type(&elem_ty));
+    }
+
     let (adt, variant) = select_record_variant(adts, base_ty, known_variant, field, |fields| {
         fields.iter().any(|(name, _)| name == field)
     })?;

@@ -5918,6 +5918,41 @@ fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError>
     Ok(())
 }
 
+fn project_value(field: &Symbol, value: Value) -> Result<Value, EngineError> {
+    if let Ok(index) = field.as_ref().parse::<usize>() {
+        return match value {
+            Value::Tuple(items) => items.get(index).cloned().ok_or_else(|| {
+                EngineError::UnknownField {
+                    field: field.clone(),
+                    value: "tuple".into(),
+                }
+            }),
+            other => Err(EngineError::UnknownField {
+                field: field.clone(),
+                value: other.type_name().into(),
+            }),
+        };
+    }
+    match value {
+        Value::Adt(_, args) if args.len() == 1 => match &args[0] {
+            Value::Dict(map) => map.get(field).cloned().ok_or_else(|| {
+                EngineError::UnknownField {
+                    field: field.clone(),
+                    value: "record".into(),
+                }
+            }),
+            other => Err(EngineError::UnknownField {
+                field: field.clone(),
+                value: other.type_name().into(),
+            }),
+        },
+        other => Err(EngineError::UnknownField {
+            field: field.clone(),
+            value: other.type_name().into(),
+        }),
+    }
+}
+
 fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value, EngineError> {
     check_cancelled(engine)?;
     let mut env = env.clone();
@@ -6033,26 +6068,7 @@ fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Value
         }
         TypedExprKind::Project { expr, field } => {
             let value = eval_typed_expr(engine, &env, expr)?;
-            match value {
-                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
-                    Value::Dict(map) => {
-                        map.get(field)
-                            .cloned()
-                            .ok_or_else(|| EngineError::UnknownField {
-                                field: field.clone(),
-                                value: "record".into(),
-                            })
-                    }
-                    other => Err(EngineError::UnknownField {
-                        field: field.clone(),
-                        value: other.type_name().into(),
-                    }),
-                },
-                other => Err(EngineError::UnknownField {
-                    field: field.clone(),
-                    value: other.type_name().into(),
-                }),
-            }
+            project_value(field, value)
         }
         TypedExprKind::Lam { param, body } => Ok(Value::Closure {
             env: env.clone(),
@@ -6564,26 +6580,7 @@ fn eval_typed_expr_with_gas(
         }
         TypedExprKind::Project { expr, field } => {
             let value = eval_typed_expr_with_gas(engine, &env, expr, gas)?;
-            match value {
-                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
-                    Value::Dict(map) => {
-                        map.get(field)
-                            .cloned()
-                            .ok_or_else(|| EngineError::UnknownField {
-                                field: field.clone(),
-                                value: "record".into(),
-                            })
-                    }
-                    other => Err(EngineError::UnknownField {
-                        field: field.clone(),
-                        value: other.type_name().into(),
-                    }),
-                },
-                other => Err(EngineError::UnknownField {
-                    field: field.clone(),
-                    value: other.type_name().into(),
-                }),
-            }
+            project_value(field, value)
         }
         TypedExprKind::Lam { param, body } => Ok(Value::Closure {
             env: env.clone(),
@@ -6789,26 +6786,7 @@ async fn eval_typed_expr_async(
         }
         TypedExprKind::Project { expr, field } => {
             let value = eval_typed_expr_async(engine, &env, expr).await?;
-            match value {
-                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
-                    Value::Dict(map) => {
-                        map.get(field)
-                            .cloned()
-                            .ok_or_else(|| EngineError::UnknownField {
-                                field: field.clone(),
-                                value: "record".into(),
-                            })
-                    }
-                    other => Err(EngineError::UnknownField {
-                        field: field.clone(),
-                        value: other.type_name().into(),
-                    }),
-                },
-                other => Err(EngineError::UnknownField {
-                    field: field.clone(),
-                    value: other.type_name().into(),
-                }),
-            }
+            project_value(field, value)
         }
         TypedExprKind::Lam { param, body } => Ok(Value::Closure {
             env: env.clone(),
@@ -6989,26 +6967,7 @@ async fn eval_typed_expr_async_with_gas(
         }
         TypedExprKind::Project { expr, field } => {
             let value = eval_typed_expr_async_with_gas(engine, &env, expr, gas).await?;
-            match value {
-                Value::Adt(_, args) if args.len() == 1 => match &args[0] {
-                    Value::Dict(map) => {
-                        map.get(field)
-                            .cloned()
-                            .ok_or_else(|| EngineError::UnknownField {
-                                field: field.clone(),
-                                value: "record".into(),
-                            })
-                    }
-                    other => Err(EngineError::UnknownField {
-                        field: field.clone(),
-                        value: other.type_name().into(),
-                    }),
-                },
-                other => Err(EngineError::UnknownField {
-                    field: field.clone(),
-                    value: other.type_name().into(),
-                }),
-            }
+            project_value(field, value)
         }
         TypedExprKind::Lam { param, body } => Ok(Value::Closure {
             env: env.clone(),
