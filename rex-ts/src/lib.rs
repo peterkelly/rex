@@ -17,5 +17,3 @@ mod typesystem;
 pub use prelude::prelude_typeclasses_program;
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
 pub use typesystem::*;
-
-pub(crate) use typesystem::sym;

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
-    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern,
+    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, intern, sym,
 };
 use rex_lexer::span::Span;
 use rex_util::{GasMeter, OutOfGas};
@@ -17,10 +17,6 @@ use uuid::Uuid;
 use crate::prelude;
 
 pub type TypeVarId = usize;
-
-pub(crate) fn sym(name: &str) -> Symbol {
-    intern(name)
-}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct TypeVar {
@@ -93,6 +89,26 @@ impl Type {
         // same ordering”. (This is a correctness invariant, not a nicety.)
         fields.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
         Type::new(TypeKind::Record(fields))
+    }
+
+    pub fn list(elem: Type) -> Type {
+        Type::app(Type::con("List", 1), elem)
+    }
+
+    pub fn array(elem: Type) -> Type {
+        Type::app(Type::con("Array", 1), elem)
+    }
+
+    pub fn dict(elem: Type) -> Type {
+        Type::app(Type::con("Dict", 1), elem)
+    }
+
+    pub fn option(elem: Type) -> Type {
+        Type::app(Type::con("Option", 1), elem)
+    }
+
+    pub fn result(ok: Type, err: Type) -> Type {
+        Type::app(Type::app(Type::con("Result", 2), err), ok)
     }
 
     fn apply_with_change(&self, s: &Subst) -> (Type, bool) {

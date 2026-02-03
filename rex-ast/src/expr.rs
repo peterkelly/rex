@@ -38,6 +38,14 @@ pub fn intern(name: &str) -> Symbol {
     sym
 }
 
+pub fn sym(name: &str) -> Symbol {
+    intern(name)
+}
+
+pub fn sym_eq(name: &Symbol, expected: &str) -> bool {
+    name.as_ref() == expected
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub struct Var {

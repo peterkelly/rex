@@ -5,14 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use rex_ast::expr::{Symbol, intern};
+use rex_ast::expr::{Symbol, sym};
 use rex_engine::{Engine, EngineError, Value, virtual_export_name};
 use rex_ts::{Scheme, Type};
 use uuid::Uuid;
-
-fn sym(name: &str) -> Symbol {
-    intern(name)
-}
 
 fn lock_mutex<'a, T>(
     m: &'a Mutex<T>,

@@ -4,7 +4,8 @@ use rex_ast::expr::{Decl, Program};
 use rex_lexer::Token;
 use rex_parser::Parser;
 
-use crate::{AdtDecl, Predicate, Scheme, Type, TypeError, TypeSystem, sym};
+use crate::{AdtDecl, Predicate, Scheme, Type, TypeError, TypeSystem};
+use rex_ast::expr::sym;
 
 fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeError> {
     let program = prelude_typeclasses_program()?;
