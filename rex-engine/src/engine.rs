@@ -7151,7 +7151,7 @@ mod tests {
         let value = engine.eval(expr.as_ref()).unwrap();
         assert!(matches!(value, Value::I32(2)));
 
-        let expr = parse("get 2 (1, 2, 3)");
+        let expr = parse("(1, 2, 3).2");
         let value = engine.eval(expr.as_ref()).unwrap();
         assert!(matches!(value, Value::I32(3)));
     }

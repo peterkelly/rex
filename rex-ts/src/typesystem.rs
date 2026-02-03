@@ -4546,13 +4546,23 @@ mod tests {
 
     #[test]
     fn infer_get_tuple_type() {
-        let expr = parse_expr("get 1 (1, 2, 3)");
+        let expr = parse_expr("(1, 'Hello', true).0");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
-        assert_eq!(preds.len(), 1);
-        assert_eq!(preds[0].class.as_ref(), "Indexable");
-        assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+        assert_eq!(preds.len(), 0);
+
+        let expr = parse_expr("(1, 'Hello', true).1");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("string", 0));
+        assert_eq!(preds.len(), 0);
+
+        let expr = parse_expr("(1, 'Hello', true).2");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("bool", 0));
+        assert_eq!(preds.len(), 0);
     }
 
     #[test]
