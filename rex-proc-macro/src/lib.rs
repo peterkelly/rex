@@ -48,17 +48,17 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     let type_param_count = type_param_idents.len();
 
     let mut rex_type_generics = ast.generics.clone();
-    add_bound_to_type_params(&mut rex_type_generics, parse_quote!(::rex_engine::RexType));
+    add_bound_to_type_params(&mut rex_type_generics, parse_quote!(::rex::RexType));
     let (rex_type_impl_generics, rex_type_ty_generics, rex_type_where_clause) =
         rex_type_generics.split_for_impl();
     let rex_type_params = type_param_idents.iter().map(|ident| {
-        quote! { <#ident as ::rex_engine::RexType>::rex_type() }
+        quote! { <#ident as ::rex::RexType>::rex_type() }
     });
     let rex_type_impl = quote! {
-        impl #rex_type_impl_generics ::rex_engine::RexType for #rust_ident #rex_type_ty_generics #rex_type_where_clause {
-            fn rex_type() -> ::rex_ts::Type {
-                let mut ty = ::rex_ts::Type::con(#type_name, #type_param_count);
-                #( ty = ::rex_ts::Type::app(ty, #rex_type_params); )*
+        impl #rex_type_impl_generics ::rex::RexType for #rust_ident #rex_type_ty_generics #rex_type_where_clause {
+            fn rex_type() -> ::rex::Type {
+                let mut ty = ::rex::Type::con(#type_name, #type_param_count);
+                #( ty = ::rex::Type::app(ty, #rex_type_params); )*
                 ty
             }
         }
@@ -68,12 +68,12 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
     let inject_fn = quote! {
         impl #impl_generics #rust_ident #ty_generics #where_clause {
-            pub fn inject_rex(engine: &mut ::rex_engine::Engine) -> Result<(), ::rex_engine::EngineError> {
+            pub fn inject_rex(engine: &mut ::rex::Engine) -> Result<(), ::rex::EngineError> {
                 let adt = Self::rex_adt_decl(engine)?;
                 engine.inject_adt(adt)
             }
 
-            pub fn rex_adt_decl(engine: &mut ::rex_engine::Engine) -> Result<::rex_ts::AdtDecl, ::rex_engine::EngineError> {
+            pub fn rex_adt_decl(engine: &mut ::rex::Engine) -> Result<::rex::AdtDecl, ::rex::EngineError> {
                 #adt_decl_fn
             }
         }
@@ -153,8 +153,8 @@ fn adt_decl_fn(
         let p_ident = format_ident!("__rex_param_{p_name}", span = Span::call_site());
         param_bindings.push(quote! {
             let #p_ident = adt
-                .param_type(&::rex_ast::expr::intern(#p_lit))
-                .ok_or_else(|| ::rex_engine::EngineError::UnknownType(::rex_ast::expr::intern(#type_name)))?;
+                .param_type(&::rex::intern(#p_lit))
+                .ok_or_else(|| ::rex::EngineError::UnknownType(::rex::intern(#type_name)))?;
         });
         param_map.insert(p_name, quote!(#p_ident.clone()));
     }
@@ -175,14 +175,14 @@ fn adt_decl_fn(
                     }
                     let field_ty = rex_type_expr(&field.ty, &param_map)?;
                     field_inits.push(quote! {
-                        ( ::rex_ast::expr::intern(#field_name), #field_ty )
+                        ( ::rex::intern(#field_name), #field_ty )
                     });
                 }
                 Ok(quote! {{
                     #adt_decl
                     #(#param_bindings)*
-                    let record = ::rex_ts::Type::record(::std::vec![#(#field_inits,)*]);
-                    adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![record]);
+                    let record = ::rex::Type::record(::std::vec![#(#field_inits,)*]);
+                    adt.add_variant(::rex::intern(#ctor), ::std::vec![record]);
                     Ok(adt)
                 }})
             }
@@ -196,14 +196,14 @@ fn adt_decl_fn(
                 Ok(quote! {{
                     #adt_decl
                     #(#param_bindings)*
-                    adt.add_variant(::rex_ast::expr::intern(#ctor), ::std::vec![#(#args,)*]);
+                    adt.add_variant(::rex::intern(#ctor), ::std::vec![#(#args,)*]);
                     Ok(adt)
                 }})
             }
             Fields::Unit => Ok(quote! {{
                 #adt_decl
                 #(#param_bindings)*
-                adt.add_variant(::rex_ast::expr::intern(#type_name), ::std::vec![]);
+                adt.add_variant(::rex::intern(#type_name), ::std::vec![]);
                 Ok(adt)
             }}),
         },
@@ -236,17 +236,17 @@ fn adt_decl_fn(
                             }
                             let field_ty = rex_type_expr(&field.ty, &param_map)?;
                             field_inits.push(quote! {
-                                ( ::rex_ast::expr::intern(#field_name), #field_ty )
+                                ( ::rex::intern(#field_name), #field_ty )
                             });
                         }
                         let record = quote! {
-                            ::rex_ts::Type::record(::std::vec![#(#field_inits,)*])
+                            ::rex::Type::record(::std::vec![#(#field_inits,)*])
                         };
                         vec![record]
                     }
                 };
                 variants.push(quote! {
-                    adt.add_variant(::rex_ast::expr::intern(#variant_name), ::std::vec![#(#args,)*]);
+                    adt.add_variant(::rex::intern(#variant_name), ::std::vec![#(#args,)*]);
                 });
             }
             Ok(quote! {{
@@ -274,7 +274,7 @@ fn rex_type_expr(
                 .iter()
                 .map(|t| rex_type_expr(t, adt_params))
                 .collect::<Result<Vec<_>, _>>()?;
-            Ok(quote! { ::rex_ts::Type::tuple(::std::vec![#(#elems,)*]) })
+            Ok(quote! { ::rex::Type::tuple(::std::vec![#(#elems,)*]) })
         }
         Type::Path(type_path) => {
             if type_path.qself.is_none() && type_path.path.segments.len() == 1 {
@@ -313,7 +313,7 @@ fn rex_type_expr(
                         return Err(Error::new(seg.span(), "expected `Vec<T>`"));
                     };
                     let inner = rex_type_expr(inner, adt_params)?;
-                    Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("List", 1), #inner) })
+                    Ok(quote! { ::rex::Type::app(::rex::Type::con("List", 1), #inner) })
                 }
                 "HashMap" | "BTreeMap" => {
                     let [k, v] = args.as_slice() else {
@@ -326,14 +326,14 @@ fn rex_type_expr(
                         ));
                     }
                     let v = rex_type_expr(v, adt_params)?;
-                    Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("Dict", 1), #v) })
+                    Ok(quote! { ::rex::Type::app(::rex::Type::con("Dict", 1), #v) })
                 }
                 "Option" => {
                     let [inner] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Option<T>`"));
                     };
                     let inner = rex_type_expr(inner, adt_params)?;
-                    Ok(quote! { ::rex_ts::Type::app(::rex_ts::Type::con("Option", 1), #inner) })
+                    Ok(quote! { ::rex::Type::app(::rex::Type::con("Option", 1), #inner) })
                 }
                 "Result" => {
                     let [ok, err] = args.as_slice() else {
@@ -342,13 +342,13 @@ fn rex_type_expr(
                     let ok = rex_type_expr(ok, adt_params)?;
                     let err = rex_type_expr(err, adt_params)?;
                     Ok(quote! {
-                        ::rex_ts::Type::app(
-                            ::rex_ts::Type::app(::rex_ts::Type::con("Result", 2), #err),
+                        ::rex::Type::app(
+                            ::rex::Type::app(::rex::Type::con("Result", 2), #err),
                             #ok
                         )
                     })
                 }
-                _ => Ok(quote! { <#type_path as ::rex_engine::RexType>::rex_type() }),
+                _ => Ok(quote! { <#type_path as ::rex::RexType>::rex_type() }),
             }
         }
         other => Err(Error::new(
@@ -371,7 +371,7 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(quote! {{
                 let (#(#vars,)*) = #expr;
-                ::rex_engine::Value::Tuple(::std::vec![#(#encs,)*])
+                ::rex::Value::Tuple(::std::vec![#(#encs,)*])
             }})
         }
         Type::Path(type_path) => {
@@ -400,10 +400,10 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     };
                     let inner_encode = into_value_expr(quote!(item), inner)?;
                     Ok(quote! {{
-                        let mut out = ::rex_engine::Value::Adt(::rex_ast::expr::intern("Empty"), ::std::vec::Vec::new());
+                        let mut out = ::rex::Value::Adt(::rex::intern("Empty"), ::std::vec::Vec::new());
                         for item in #expr.into_iter().rev() {
-                            out = ::rex_engine::Value::Adt(
-                                ::rex_ast::expr::intern("Cons"),
+                            out = ::rex::Value::Adt(
+                                ::rex::intern("Cons"),
                                 ::std::vec![#inner_encode, out],
                             );
                         }
@@ -424,9 +424,9 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     Ok(quote! {{
                         let mut out = ::std::collections::BTreeMap::new();
                         for (k, v) in #expr {
-                            out.insert(::rex_ast::expr::intern(&k), #v_encode);
+                            out.insert(::rex::intern(&k), #v_encode);
                         }
-                        ::rex_engine::Value::Dict(out)
+                        ::rex::Value::Dict(out)
                     }})
                 }
                 "Option" => {
@@ -436,8 +436,8 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     let inner_encode = into_value_expr(quote!(v), inner)?;
                     Ok(quote! {{
                         match #expr {
-                            Some(v) => ::rex_engine::Value::Adt(::rex_ast::expr::intern("Some"), ::std::vec![#inner_encode]),
-                            None => ::rex_engine::Value::Adt(::rex_ast::expr::intern("None"), ::std::vec::Vec::new()),
+                            Some(v) => ::rex::Value::Adt(::rex::intern("Some"), ::std::vec![#inner_encode]),
+                            None => ::rex::Value::Adt(::rex::intern("None"), ::std::vec::Vec::new()),
                         }
                     }})
                 }
@@ -449,12 +449,12 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     let err_encode = into_value_expr(quote!(e), err_ty)?;
                     Ok(quote! {{
                         match #expr {
-                            Ok(v) => ::rex_engine::Value::Adt(::rex_ast::expr::intern("Ok"), ::std::vec![#ok_encode]),
-                            Err(e) => ::rex_engine::Value::Adt(::rex_ast::expr::intern("Err"), ::std::vec![#err_encode]),
+                            Ok(v) => ::rex::Value::Adt(::rex::intern("Ok"), ::std::vec![#ok_encode]),
+                            Err(e) => ::rex::Value::Adt(::rex::intern("Err"), ::std::vec![#err_encode]),
                         }
                     }})
                 }
-                _ => Ok(quote! { ::rex_engine::IntoValue::into_value(#expr) }),
+                _ => Ok(quote! { ::rex::IntoValue::into_value(#expr) }),
             }
         }
         other => Err(Error::new(
@@ -481,11 +481,11 @@ fn from_value_expr(
             let len = elem_tys.len();
             Ok(quote! {{
                 match #value_expr {
-                    ::rex_engine::Value::Tuple(items) if items.len() == #len => {
+                    ::rex::Value::Tuple(items) if items.len() == #len => {
                         Ok((#(#decs?,)*))
                     }
-                    other => Err(::rex_engine::EngineError::NativeType {
-                        name: ::rex_ast::expr::intern(#name_expr),
+                    other => Err(::rex::EngineError::NativeType {
+                        name: ::rex::intern(#name_expr),
                         expected: "tuple".into(),
                         got: format!("{other}"),
                     }),
@@ -522,17 +522,17 @@ fn from_value_expr(
                         let mut cur = #value_expr;
                         loop {
                             match cur {
-                                ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
+                                ::rex::Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
                                     break Ok(out);
                                 }
-                                ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
+                                ::rex::Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
                                     let v = #inner_decode?;
                                     out.push(v);
                                     cur = &args[1];
                                 }
                                 other => {
-                                    break Err(::rex_engine::EngineError::NativeType {
-                                        name: ::rex_ast::expr::intern(#name_expr),
+                                    break Err(::rex::EngineError::NativeType {
+                                        name: ::rex::intern(#name_expr),
                                         expected: "list".into(),
                                         got: format!("{other}"),
                                     });
@@ -554,7 +554,7 @@ fn from_value_expr(
                     let v_decode = from_value_expr(quote!(v), v, name_expr.clone())?;
                     Ok(quote! {{
                         match #value_expr {
-                            ::rex_engine::Value::Dict(map) => {
+                            ::rex::Value::Dict(map) => {
                                 let mut out = ::std::collections::HashMap::new();
                                 for (k, v) in map {
                                     let decoded = #v_decode?;
@@ -562,8 +562,8 @@ fn from_value_expr(
                                 }
                                 Ok(out)
                             }
-                            other => Err(::rex_engine::EngineError::NativeType {
-                                name: ::rex_ast::expr::intern(#name_expr),
+                            other => Err(::rex::EngineError::NativeType {
+                                name: ::rex::intern(#name_expr),
                                 expected: "dict".into(),
                                 got: format!("{other}"),
                             }),
@@ -577,10 +577,10 @@ fn from_value_expr(
                     let inner_decode = from_value_expr(quote!(&args[0]), inner, name_expr.clone())?;
                     Ok(quote! {{
                         match #value_expr {
-                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => Ok(None),
-                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => Ok(Some(#inner_decode?)),
-                            other => Err(::rex_engine::EngineError::NativeType {
-                                name: ::rex_ast::expr::intern(#name_expr),
+                            ::rex::Value::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => Ok(None),
+                            ::rex::Value::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => Ok(Some(#inner_decode?)),
+                            other => Err(::rex::EngineError::NativeType {
+                                name: ::rex::intern(#name_expr),
                                 expected: "option".into(),
                                 got: format!("{other}"),
                             }),
@@ -595,10 +595,10 @@ fn from_value_expr(
                     let err_decode = from_value_expr(quote!(&args[0]), err_ty, name_expr.clone())?;
                     Ok(quote! {{
                         match #value_expr {
-                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Ok" && args.len() == 1 => Ok(Ok(#ok_decode?)),
-                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == "Err" && args.len() == 1 => Ok(Err(#err_decode?)),
-                            other => Err(::rex_engine::EngineError::NativeType {
-                                name: ::rex_ast::expr::intern(#name_expr),
+                            ::rex::Value::Adt(tag, args) if tag.as_ref() == "Ok" && args.len() == 1 => Ok(Ok(#ok_decode?)),
+                            ::rex::Value::Adt(tag, args) if tag.as_ref() == "Err" && args.len() == 1 => Ok(Err(#err_decode?)),
+                            other => Err(::rex::EngineError::NativeType {
+                                name: ::rex::intern(#name_expr),
                                 expected: "result".into(),
                                 got: format!("{other}"),
                             }),
@@ -606,7 +606,7 @@ fn from_value_expr(
                     }})
                 }
                 _ => Ok(
-                    quote! { <#type_path as ::rex_engine::FromValue>::from_value(#value_expr, #name_expr) },
+                    quote! { <#type_path as ::rex::FromValue>::from_value(#value_expr, #name_expr) },
                 ),
             }
         }
@@ -654,13 +654,13 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                     }
                     let enc = into_value_expr(quote!(self.#ident), &field.ty)?;
                     inserts.push(quote! {
-                        map.insert(::rex_ast::expr::intern(#name), #enc);
+                        map.insert(::rex::intern(#name), #enc);
                     });
                 }
                 quote! {{
                     let mut map = ::std::collections::BTreeMap::new();
                     #(#inserts)*
-                    ::rex_engine::Value::Adt(::rex_ast::expr::intern(#ctor), ::std::vec![::rex_engine::Value::Dict(map)])
+                    ::rex::Value::Adt(::rex::intern(#ctor), ::std::vec![::rex::Value::Dict(map)])
                 }}
             }
             Fields::Unnamed(fields) => {
@@ -673,11 +673,11 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
                 quote! {{
                     let Self(#(#bindings,)*) = self;
-                    ::rex_engine::Value::Adt(::rex_ast::expr::intern(#ctor), ::std::vec![#(#args,)*])
+                    ::rex::Value::Adt(::rex::intern(#ctor), ::std::vec![#(#args,)*])
                 }}
             }
             Fields::Unit => quote! {
-                ::rex_engine::Value::Adt(::rex_ast::expr::intern(#ctor), ::std::vec::Vec::new())
+                ::rex::Value::Adt(::rex::intern(#ctor), ::std::vec::Vec::new())
             },
         },
         Data::Enum(data) => {
@@ -690,7 +690,7 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
                 let arm = match &variant.fields {
                     Fields::Unit => quote! {
-                        Self::#variant_ident => ::rex_engine::Value::Adt(::rex_ast::expr::intern(#variant_name), ::std::vec::Vec::new())
+                        Self::#variant_ident => ::rex::Value::Adt(::rex::intern(#variant_name), ::std::vec::Vec::new())
                     },
                     Fields::Unnamed(fields) => {
                         let vars: Vec<Ident> = (0..fields.unnamed.len())
@@ -702,7 +702,7 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             .map(|(v, f)| into_value_expr(quote!(#v), &f.ty))
                             .collect::<Result<Vec<_>, _>>()?;
                         quote! {
-                            Self::#variant_ident(#(#vars,)*) => ::rex_engine::Value::Adt(::rex_ast::expr::intern(#variant_name), ::std::vec![#(#encs,)*])
+                            Self::#variant_ident(#(#vars,)*) => ::rex::Value::Adt(::rex::intern(#variant_name), ::std::vec![#(#encs,)*])
                         }
                     }
                     Fields::Named(fields) => {
@@ -720,14 +720,14 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             }
                             let enc = into_value_expr(quote!(#ident), &field.ty)?;
                             inserts.push(quote! {
-                                map.insert(::rex_ast::expr::intern(#name), #enc);
+                                map.insert(::rex::intern(#name), #enc);
                             });
                         }
                         quote! {
                             Self::#variant_ident { #(#vars,)* } => {
                                 let mut map = ::std::collections::BTreeMap::new();
                                 #(#inserts)*
-                                ::rex_engine::Value::Adt(::rex_ast::expr::intern(#variant_name), ::std::vec![::rex_engine::Value::Dict(map)])
+                                ::rex::Value::Adt(::rex::intern(#variant_name), ::std::vec![::rex::Value::Dict(map)])
                             }
                         }
                     }
@@ -749,12 +749,12 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
     };
 
     let mut generics = ast.generics.clone();
-    add_bound_to_type_params(&mut generics, parse_quote!(::rex_engine::IntoValue));
+    add_bound_to_type_params(&mut generics, parse_quote!(::rex::IntoValue));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics ::rex_engine::IntoValue for #rust_ident #ty_generics #where_clause {
-            fn into_value(self) -> ::rex_engine::Value {
+        impl #impl_generics ::rex::IntoValue for #rust_ident #ty_generics #where_clause {
+            fn into_value(self) -> ::rex::Value {
                 #body
             }
         }
@@ -780,11 +780,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                     if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
                         name = rename;
                     }
-                    let key = quote!(::rex_ast::expr::intern(#name));
+                    let key = quote!(::rex::intern(#name));
                     let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
                     field_decodes.push(quote! {
-                        let v = map.get(&#key).ok_or_else(|| ::rex_engine::EngineError::NativeType {
-                            name: ::rex_ast::expr::intern(name),
+                        let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType {
+                            name: ::rex::intern(name),
                             expected: format!("missing field `{}`", #name),
                             got: "dict".into(),
                         })?;
@@ -793,21 +793,21 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
                 Ok(quote! {{
                     match value {
-                        ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == 1 => {
+                        ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == 1 => {
                             match &args[0] {
-                                ::rex_engine::Value::Dict(map) => {
+                                ::rex::Value::Dict(map) => {
                                     #(#field_decodes)*
                                     Ok(Self { #(#field_idents,)* })
                                 }
-                                other => Err(::rex_engine::EngineError::NativeType {
-                                    name: ::rex_ast::expr::intern(name),
+                                other => Err(::rex::EngineError::NativeType {
+                                    name: ::rex::intern(name),
                                     expected: "dict".into(),
                                     got: format!("{other}"),
                                 }),
                             }
                         }
-                        other => Err(::rex_engine::EngineError::NativeType {
-                            name: ::rex_ast::expr::intern(name),
+                        other => Err(::rex::EngineError::NativeType {
+                            name: ::rex::intern(name),
                             expected: #type_name.into(),
                             got: format!("{other}"),
                         }),
@@ -824,11 +824,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 let len = fields.unnamed.len();
                 Ok(quote! {{
                     match value {
-                        ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == #len => {
+                        ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == #len => {
                             Ok(Self(#(#decs,)*))
                         }
-                        other => Err(::rex_engine::EngineError::NativeType {
-                            name: ::rex_ast::expr::intern(name),
+                        other => Err(::rex::EngineError::NativeType {
+                            name: ::rex::intern(name),
                             expected: #type_name.into(),
                             got: format!("{other}"),
                         }),
@@ -837,9 +837,9 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             }
             Fields::Unit => Ok(quote! {{
                 match value {
-                    ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.is_empty() => Ok(Self),
-                    other => Err(::rex_engine::EngineError::NativeType {
-                        name: ::rex_ast::expr::intern(name),
+                    ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.is_empty() => Ok(Self),
+                    other => Err(::rex::EngineError::NativeType {
+                        name: ::rex::intern(name),
                         expected: #type_name.into(),
                         got: format!("{other}"),
                     }),
@@ -856,7 +856,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
                 let arm = match &variant.fields {
                     Fields::Unit => quote! {
-                        ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.is_empty() => Ok(Self::#variant_ident)
+                        ::rex::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.is_empty() => Ok(Self::#variant_ident)
                     },
                     Fields::Unnamed(fields) => {
                         let len = fields.unnamed.len();
@@ -872,7 +872,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             .map(|d| quote!(#d?))
                             .collect::<Vec<_>>();
                         quote! {
-                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == #len => {
+                            ::rex::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == #len => {
                                 Ok(Self::#variant_ident(#(#vals,)*))
                             }
                         }
@@ -890,11 +890,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             if let Some(rename) = serde_rename_from_attrs(&field.attrs)? {
                                 name = rename;
                             }
-                            let key = quote!(::rex_ast::expr::intern(#name));
+                            let key = quote!(::rex::intern(#name));
                             let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
                             field_decodes.push(quote! {
-                                let v = map.get(&#key).ok_or_else(|| ::rex_engine::EngineError::NativeType {
-                                    name: ::rex_ast::expr::intern(name),
+                                let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType {
+                                    name: ::rex::intern(name),
                                     expected: format!("missing field `{}`", #name),
                                     got: "dict".into(),
                                 })?;
@@ -902,14 +902,14 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             });
                         }
                         quote! {
-                            ::rex_engine::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == 1 => {
+                            ::rex::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == 1 => {
                                 match &args[0] {
-                                    ::rex_engine::Value::Dict(map) => {
+                                    ::rex::Value::Dict(map) => {
                                         #(#field_decodes)*
                                         Ok(Self::#variant_ident { #(#fields_init,)* })
                                     }
-                                    other => Err(::rex_engine::EngineError::NativeType {
-                                        name: ::rex_ast::expr::intern(name),
+                                    other => Err(::rex::EngineError::NativeType {
+                                        name: ::rex::intern(name),
                                         expected: "dict".into(),
                                         got: format!("{other}"),
                                     }),
@@ -924,8 +924,8 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             Ok(quote! {{
                 match value {
                     #(#arms,)*
-                    other => Err(::rex_engine::EngineError::NativeType {
-                        name: ::rex_ast::expr::intern(name),
+                    other => Err(::rex::EngineError::NativeType {
+                        name: ::rex::intern(name),
                         expected: #type_name.into(),
                         got: format!("{other}"),
                     }),
@@ -939,12 +939,12 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
     }?;
 
     let mut generics = ast.generics.clone();
-    add_bound_to_type_params(&mut generics, parse_quote!(::rex_engine::FromValue));
+    add_bound_to_type_params(&mut generics, parse_quote!(::rex::FromValue));
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics ::rex_engine::FromValue for #rust_ident #ty_generics #where_clause {
-            fn from_value(value: &::rex_engine::Value, name: &str) -> Result<Self, ::rex_engine::EngineError> {
+        impl #impl_generics ::rex::FromValue for #rust_ident #ty_generics #where_clause {
+            fn from_value(value: &::rex::Value, name: &str) -> Result<Self, ::rex::EngineError> {
                 #body
             }
         }

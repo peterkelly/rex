@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-//! Rex CLI crate.
-//!
-//! This library is intentionally empty today: the primary entry point is the
-//! binary in `rex/src/main.rs`. Keeping `lib.rs` around makes it easy to grow a
-//! reusable API later without reorganizing the crate layout.
+pub use rex_ast::expr::{Program, intern, sym};
+pub use rex_engine::{Engine, EngineError, FromValue, IntoValue, RexType, Value};
+pub use rex_proc_macro::Rex;
+pub use rex_ts::{AdtDecl, Type};
