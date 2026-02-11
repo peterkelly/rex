@@ -294,6 +294,15 @@ impl<T: IntoValue> IntoValue for Vec<T> {
     }
 }
 
+impl<T: IntoValue> IntoValue for Option<T> {
+    fn into_value(self) -> Value {
+        match self {
+            Some(v) => Value::Adt(sym("Some"), vec![v.into_value()]),
+            None => Value::Adt(sym("None"), vec![]),
+        }
+    }
+}
+
 impl IntoValue for Uuid {
     fn into_value(self) -> Value {
         Value::Uuid(self)
@@ -402,6 +411,12 @@ impl<T: RexType> RexType for Vec<T> {
     }
 }
 
+impl<T: RexType> RexType for Option<T> {
+    fn rex_type() -> Type {
+        Type::app(Type::con("Option", 1), T::rex_type())
+    }
+}
+
 impl FromValue for bool {
     fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
         match value {
@@ -485,6 +500,47 @@ impl FromValue for DateTime<Utc> {
 impl FromValue for Value {
     fn from_value(value: &Value, _name: &str) -> Result<Self, EngineError> {
         Ok(value.clone())
+    }
+}
+
+impl<T> FromValue for Vec<T>
+where
+    T: FromValue,
+{
+    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+        match value {
+            Value::Array(xs) => {
+                let mut ys = Vec::with_capacity(xs.len());
+                for x in xs {
+                    ys.push(T::from_value(x, name)?);
+                }
+                Ok(ys)
+            }
+            _ => Err(EngineError::NativeType {
+                name: sym(name),
+                expected: "vec".into(),
+                got: value.type_name().into(),
+            }),
+        }
+    }
+}
+
+impl<T> FromValue for Option<T>
+where
+    T: FromValue,
+{
+    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+        match value {
+            Value::Adt(n, xs) if sym_eq(n, "Some") && xs.len() == 1 => {
+                Ok(Some(T::from_value(&xs[0], name)?))
+            }
+            Value::Adt(n, xs) if sym_eq(n, "None") && xs.is_empty() => Ok(None),
+            _ => Err(EngineError::NativeType {
+                name: sym(name),
+                expected: "vec".into(),
+                got: value.type_name().into(),
+            }),
+        }
     }
 }
 
