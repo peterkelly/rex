@@ -13,7 +13,7 @@ use crate::EngineError;
 use crate::Env;
 use crate::engine::{NativeFn, OverloadedFn};
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Closure {
     pub env: Env,
     pub param: Symbol,
@@ -22,7 +22,7 @@ pub struct Closure {
     pub body: Arc<TypedExpr>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     Bool(bool),
     U8(u8),

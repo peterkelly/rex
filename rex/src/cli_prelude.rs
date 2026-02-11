@@ -651,7 +651,7 @@ mod tests {
                 let Value::Tuple(xs) = value else {
                     panic!("expected tuple");
                 };
-                assert!(matches!(xs[0], Value::I32(0)));
+                assert_eq!(xs[0], Value::I32(0));
 
                 let Value::Array(out) = &xs[1] else {
                     panic!("expected stdout bytes");

@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 
-use rex_engine::{Engine, FromValue, RexType};
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_proc_macro::Rex;
+use rex::{Engine, FromValue, Parser, Rex, RexType, Token, Value};
 
-fn eval(code: &str) -> Result<rex_engine::Value, String> {
+fn eval(code: &str) -> Result<Value, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     let program = parser
@@ -160,7 +157,7 @@ fn derive_generic_worked_example_polymorphic_adt() {
     engine.inject_decls(&program.decls).unwrap();
     let v = engine.eval(program.expr.as_ref()).unwrap();
 
-    let rex_engine::Value::Tuple(items) = v else {
+    let Value::Tuple(items) = v else {
         panic!("expected tuple, got {v}");
     };
     assert_eq!(items.len(), 2);
@@ -232,7 +229,7 @@ fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let v = engine.eval(program.expr.as_ref()).unwrap();
-    assert!(matches!(v, rex_engine::Value::I32(100)));
+    assert_eq!(v, Value::I32(100));
 }
 
 #[test]
@@ -256,7 +253,7 @@ fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let program = parser.parse_program().unwrap();
 
     let v = engine.eval(program.expr.as_ref()).unwrap();
-    assert!(matches!(v, rex_engine::Value::I32(12)));
+    assert_eq!(v, Value::I32(12));
 }
 
 #[test]
@@ -275,11 +272,11 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let v = engine.eval(program.expr.as_ref()).unwrap();
-    let rex_engine::Value::Tuple(items) = v else {
+    let Value::Tuple(items) = v else {
         panic!("expected tuple, got {v}");
     };
-    assert!(matches!(items[0], rex_engine::Value::I32(5)));
-    assert!(matches!(items[1], rex_engine::Value::I32(0)));
+    assert_eq!(items[0], Value::I32(5));
+    assert_eq!(items[1], Value::I32(0));
 }
 
 #[test]
@@ -292,7 +289,7 @@ fn derive_enum_constructor_currying() {
     )
     .unwrap();
 
-    let rex_engine::Value::Tuple(items) = v else {
+    let Value::Tuple(items) = v else {
         panic!("expected tuple, got {v}");
     };
     assert_eq!(items.len(), 2);

@@ -57,8 +57,8 @@ fn eval_let_lambda() {
     match value {
         Value::Tuple(xs) => {
             assert_eq!(xs.len(), 2);
-            assert!(matches!(xs[0], Value::I32(1)));
-            assert!(matches!(xs[1], Value::I32(2)));
+            assert_eq!(xs[0], Value::I32(1));
+            assert_eq!(xs[1], Value::I32(2));
         }
         _ => panic!("expected tuple"),
     }
@@ -72,10 +72,10 @@ fn eval_async_native_injection() {
         .unwrap();
 
     let v_async = block_on(engine.eval_async(expr.as_ref())).unwrap();
-    assert!(matches!(v_async, Value::I32(2)));
+    assert_eq!(v_async, Value::I32(2));
 
     let v_sync = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(v_sync, Value::I32(2)));
+    assert_eq!(v_sync, Value::I32(2));
 }
 #[test]
 fn eval_async_can_be_cancelled() {
@@ -150,22 +150,22 @@ fn eval_deep_list_does_not_overflow() {
         .unwrap();
     let xs = list_values(&value);
     assert_eq!(xs.len(), N);
-    assert!(matches!(xs.first(), Some(Value::I32(0))));
-    assert!(matches!(xs.last(), Some(Value::I32(0))));
+    assert_eq!(xs.first(), Some(&Value::I32(0)));
+    assert_eq!(xs.last(), Some(&Value::I32(0)));
 }
 #[test]
 fn eval_type_annotation_let() {
     let expr = parse("let x: i32 = 42 in x");
     let mut engine = engine_with_arith();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(42)));
+    assert_eq!(value, Value::I32(42));
 }
 #[test]
 fn eval_type_annotation_is() {
     let expr = parse("\"hi\" is str");
     let mut engine = engine_with_arith();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::String(ref s) if s == "hi"));
+    assert_eq!(value, Value::String("hi".into()));
 }
 #[test]
 fn eval_type_annotation_lambda_param() {
@@ -189,7 +189,7 @@ fn eval_record_update_single_variant_adt() {
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
     let value = engine.eval(program.expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(6)));
+    assert_eq!(value, Value::I32(6));
 }
 #[test]
 fn eval_record_update_refined_by_match() {
@@ -207,7 +207,7 @@ fn eval_record_update_refined_by_match() {
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
     let value = engine.eval(program.expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(2)));
+    assert_eq!(value, Value::I32(2));
 }
 #[test]
 fn eval_record_update_plain_record_type() {
@@ -222,7 +222,7 @@ fn eval_record_update_plain_record_type() {
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
     let value = engine.eval(program.expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(9)));
+    assert_eq!(value, Value::I32(9));
 }
 #[test]
 fn eval_type_annotation_mismatch() {
@@ -248,11 +248,11 @@ fn eval_native_injection() {
 
     let expr = parse("one + one");
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::U32(2)));
+    assert_eq!(value, Value::U32(2));
 
     let expr = parse("zero");
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::U32(0)));
+    assert_eq!(value, Value::U32(0));
 }
 #[test]
 fn eval_match_list() {
@@ -266,21 +266,21 @@ fn eval_match_list() {
         "#,
     );
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(1)));
+    assert_eq!(value, Value::I32(1));
 }
 #[test]
 fn eval_simple_addition() {
     let expr = parse("420 + 69");
     let mut engine = engine_with_arith();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(489)));
+    assert_eq!(value, Value::I32(489));
 }
 #[test]
 fn eval_simple_mod() {
     let expr = parse("10 % 3");
     let mut engine = engine_with_arith();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(1)));
+    assert_eq!(value, Value::I32(1));
 }
 #[test]
 fn eval_get_list_and_tuple() {
@@ -288,11 +288,11 @@ fn eval_get_list_and_tuple() {
 
     let expr = parse("get 1 [1, 2, 3]");
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(2)));
+    assert_eq!(value, Value::I32(2));
 
     let expr = parse("(1, 2, 3).2");
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(3)));
+    assert_eq!(value, Value::I32(3));
 }
 #[test]
 fn eval_simple_multiplication_float() {
@@ -316,7 +316,7 @@ fn eval_let_id_nested() {
     );
     let mut engine = engine_with_arith();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(489)));
+    assert_eq!(value, Value::I32(489));
 }
 #[test]
 fn eval_higher_order_add() {
@@ -330,7 +330,7 @@ fn eval_higher_order_add() {
     );
     let mut engine = engine_with_arith();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(42)));
+    assert_eq!(value, Value::I32(42));
 }
 #[test]
 fn eval_match_dict_and_tuple() {
@@ -348,8 +348,8 @@ fn eval_match_dict_and_tuple() {
     match value {
         Value::Tuple(xs) => {
             assert_eq!(xs.len(), 2);
-            assert!(matches!(xs[0], Value::I32(2)));
-            assert!(matches!(xs[1], Value::I32(3)));
+            assert_eq!(xs[0], Value::I32(2));
+            assert_eq!(xs[1], Value::I32(3));
         }
         _ => panic!("expected tuple result"),
     }
@@ -394,7 +394,7 @@ fn eval_nested_match_list_sum() {
     );
     let mut engine = engine_with_arith();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(3)));
+    assert_eq!(value, Value::I32(3));
 }
 #[test]
 fn eval_safe_div_pipeline() {
@@ -453,7 +453,7 @@ fn eval_user_adt_declaration() {
         }
     }
     let value = engine.eval(program.expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(42)));
+    assert_eq!(value, Value::I32(42));
 }
 #[test]
 fn eval_fn_decl_simple() {
@@ -471,7 +471,7 @@ fn eval_fn_decl_simple() {
     }
     let expr = program.expr_with_fns();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(3)));
+    assert_eq!(value, Value::I32(3));
 }
 #[test]
 fn eval_fn_decl_with_where_constraints() {
@@ -489,7 +489,7 @@ fn eval_fn_decl_with_where_constraints() {
     }
     let expr = program.expr_with_fns();
     let value = engine.eval(expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(3)));
+    assert_eq!(value, Value::I32(3));
 }
 #[test]
 fn eval_adt_record_projection_single_variant() {
@@ -511,7 +511,7 @@ fn eval_adt_record_projection_single_variant() {
     let value = engine.eval(program.expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
-            assert!(matches!(xs[0], Value::I32(1)));
+            assert_eq!(xs[0], Value::I32(1));
             match xs[1] {
                 Value::F32(v) => assert!((v - 2.0).abs() < 1e-3),
                 _ => panic!("expected f32 field"),
@@ -540,7 +540,7 @@ fn eval_adt_record_projection_match_arm() {
         }
     }
     let value = engine.eval(program.expr.as_ref()).unwrap();
-    assert!(matches!(value, Value::I32(1)));
+    assert_eq!(value, Value::I32(1));
 }
 #[test]
 fn eval_list_map_fold_filter() {
@@ -562,13 +562,13 @@ fn eval_list_map_fold_filter() {
             assert_eq!(xs.len(), 3);
             let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 3);
-            assert!(matches!(vals[0], Value::I32(2)));
-            assert!(matches!(vals[1], Value::I32(3)));
-            assert!(matches!(vals[2], Value::I32(4)));
+            assert_eq!(vals[0], Value::I32(2));
+            assert_eq!(vals[1], Value::I32(3));
+            assert_eq!(vals[2], Value::I32(4));
             let vals = list_values(&xs[1]);
             assert_eq!(vals.len(), 1);
-            assert!(matches!(vals[0], Value::I32(2)));
-            assert!(matches!(xs[2], Value::I32(6)));
+            assert_eq!(vals[0], Value::I32(2));
+            assert_eq!(xs[2], Value::I32(6));
         }
         _ => panic!("expected tuple result"),
     }
@@ -592,10 +592,10 @@ fn eval_list_flat_map_zip_unzip() {
             assert_eq!(xs.len(), 2);
             let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 4);
-            assert!(matches!(vals[0], Value::I32(1)));
-            assert!(matches!(vals[1], Value::I32(1)));
-            assert!(matches!(vals[2], Value::I32(2)));
-            assert!(matches!(vals[3], Value::I32(2)));
+            assert_eq!(vals[0], Value::I32(1));
+            assert_eq!(vals[1], Value::I32(1));
+            assert_eq!(vals[2], Value::I32(2));
+            assert_eq!(vals[3], Value::I32(2));
             match &xs[1] {
                 Value::Tuple(parts) => {
                     assert_eq!(parts.len(), 2);
@@ -626,13 +626,13 @@ fn eval_list_sum_mean_min_max() {
     match value {
         Value::Tuple(xs) => {
             assert_eq!(xs.len(), 4);
-            assert!(matches!(xs[0], Value::I32(6)));
+            assert_eq!(xs[0], Value::I32(6));
             match xs[1] {
                 Value::F32(v) => assert!((v - 2.0).abs() < 1e-3),
                 _ => panic!("expected mean f32"),
             }
-            assert!(matches!(xs[2], Value::I32(1)));
-            assert!(matches!(xs[3], Value::I32(3)));
+            assert_eq!(xs[2], Value::I32(1));
+            assert_eq!(xs[3], Value::I32(3));
         }
         _ => panic!("expected tuple result"),
     }
@@ -658,8 +658,8 @@ fn eval_option_result_helpers() {
             assert_eq!(xs.len(), 4);
             assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
             assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "Ok")));
-            assert!(matches!(xs[2], Value::Bool(true)));
-            assert!(matches!(xs[3], Value::Bool(true)));
+            assert_eq!(xs[2], Value::Bool(true));
+            assert_eq!(xs[3], Value::Bool(true));
         }
         _ => panic!("expected tuple result"),
     }
@@ -683,11 +683,11 @@ fn eval_order_ops() {
     match value {
         Value::Tuple(xs) => {
             assert_eq!(xs.len(), 5);
-            assert!(matches!(xs[0], Value::Bool(true)));
-            assert!(matches!(xs[1], Value::Bool(true)));
-            assert!(matches!(xs[2], Value::Bool(true)));
-            assert!(matches!(xs[3], Value::Bool(false)));
-            assert!(matches!(xs[4], Value::Bool(true)));
+            assert_eq!(xs[0], Value::Bool(true));
+            assert_eq!(xs[1], Value::Bool(true));
+            assert_eq!(xs[2], Value::Bool(true));
+            assert_eq!(xs[3], Value::Bool(false));
+            assert_eq!(xs[4], Value::Bool(true));
         }
         _ => panic!("expected tuple result"),
     }
@@ -736,8 +736,8 @@ fn eval_result_filter_pipeline() {
     match value {
         Value::Tuple(xs) => {
             assert_eq!(xs.len(), 2);
-            assert!(matches!(xs[0], Value::I32(3)));
-            assert!(matches!(xs[1], Value::I32(5)));
+            assert_eq!(xs[0], Value::I32(3));
+            assert_eq!(xs[1], Value::I32(5));
         }
         _ => panic!("expected tuple result"),
     }
@@ -766,26 +766,26 @@ fn eval_array_combinators() {
             match &xs[0] {
                 Value::Array(vals) => {
                     assert_eq!(vals.len(), 3);
-                    assert!(matches!(vals[0], Value::I32(2)));
-                    assert!(matches!(vals[1], Value::I32(3)));
-                    assert!(matches!(vals[2], Value::I32(4)));
+                    assert_eq!(vals[0], Value::I32(2));
+                    assert_eq!(vals[1], Value::I32(3));
+                    assert_eq!(vals[2], Value::I32(4));
                 }
                 _ => panic!("expected mapped array"),
             }
-            assert!(matches!(xs[1], Value::I32(6)));
+            assert_eq!(xs[1], Value::I32(6));
             match &xs[2] {
                 Value::Array(vals) => {
                     assert_eq!(vals.len(), 2);
-                    assert!(matches!(vals[0], Value::I32(1)));
-                    assert!(matches!(vals[1], Value::I32(2)));
+                    assert_eq!(vals[0], Value::I32(1));
+                    assert_eq!(vals[1], Value::I32(2));
                 }
                 _ => panic!("expected taken array"),
             }
             match &xs[3] {
                 Value::Array(vals) => {
                     assert_eq!(vals.len(), 2);
-                    assert!(matches!(vals[0], Value::I32(2)));
-                    assert!(matches!(vals[1], Value::I32(3)));
+                    assert_eq!(vals[0], Value::I32(2));
+                    assert_eq!(vals[1], Value::I32(3));
                 }
                 _ => panic!("expected skipped array"),
             }

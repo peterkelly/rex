@@ -54,6 +54,22 @@ enum NativeCallable {
     AsyncCancellable(AsyncNativeCallableCancellable),
 }
 
+impl PartialEq for NativeCallable {
+    fn eq(&self, _other: &NativeCallable) -> bool {
+        false
+    }
+}
+
+impl std::fmt::Debug for NativeCallable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            NativeCallable::Sync(_) => write!(f, "Sync"),
+            NativeCallable::Async(_) => write!(f, "Async"),
+            NativeCallable::AsyncCancellable(_) => write!(f, "AsyncCancellable"),
+        }
+    }
+}
+
 impl NativeCallable {
     fn call_sync(&self, engine: &Engine, typ: &Type, args: &[Value]) -> Result<Value, EngineError> {
         match self {
@@ -103,7 +119,7 @@ impl NativeCallable {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct NativeFn {
     name: Symbol,
     arity: usize,
@@ -190,7 +206,7 @@ impl NativeFn {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OverloadedFn {
     name: Symbol,
     typ: Type,
@@ -2995,13 +3011,13 @@ mod tests {
         let v1 = engine
             .eval_repl_program_with_gas(&program1, &mut state, &mut gas)
             .unwrap();
-        assert!(matches!(v1, Value::I32(2)));
+        assert_eq!(v1, Value::I32(2));
 
         let program2 = parse_program("inc 2");
         let v2 = engine
             .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
             .unwrap();
-        assert!(matches!(v2, Value::I32(3)));
+        assert_eq!(v2, Value::I32(3));
     }
 
     #[test]
@@ -3024,7 +3040,7 @@ mod tests {
         let v2 = engine
             .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
             .unwrap();
-        assert!(matches!(v2, Value::I32(30)));
+        assert_eq!(v2, Value::I32(30));
     }
 
     #[test]

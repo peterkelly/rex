@@ -5,10 +5,10 @@ use rex_ast::expr::Symbol;
 
 use crate::Value;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Env(Arc<EnvFrame>);
 
-#[derive(Default)]
+#[derive(Default, Debug, PartialEq)]
 struct EnvFrame {
     parent: Option<Env>,
     bindings: HashMap<Symbol, Value>,
