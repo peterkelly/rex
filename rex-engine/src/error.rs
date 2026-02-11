@@ -248,10 +248,24 @@ pub enum EngineError {
     Cancelled,
     #[error("{0}")]
     OutOfGas(#[from] OutOfGas),
+    #[error("{0}")]
+    Custom(String),
 }
 
 impl From<ModuleError> for EngineError {
     fn from(err: ModuleError) -> Self {
         EngineError::Module(Box::new(err))
+    }
+}
+
+impl From<&str> for EngineError {
+    fn from(msg: &str) -> Self {
+        EngineError::Custom(msg.to_string())
+    }
+}
+
+impl From<String> for EngineError {
+    fn from(msg: String) -> Self {
+        EngineError::Custom(msg)
     }
 }

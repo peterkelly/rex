@@ -8,9 +8,9 @@ use rex_ts::{Scheme, Type, TypeKind, Types, unify};
 use uuid::Uuid;
 
 use crate::engine::{apply, binary_arg_types, expect_bool, option_value};
+use crate::value::{list_from_vec, list_to_vec};
 use crate::virtual_export_name;
 use crate::{Engine, EngineError, FromValue, OverloadedFn, Value};
-use crate::value::{list_from_vec, list_to_vec};
 
 pub(crate) fn list_elem_type(typ: &Type, name: &str) -> Result<Type, EngineError> {
     match typ.as_ref() {
