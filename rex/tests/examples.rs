@@ -1,7 +1,4 @@
-use rex_engine::Engine;
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_ts::TypeSystem;
+use rex::{Engine, Parser, Token, TypeSystem};
 
 fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");

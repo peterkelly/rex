@@ -1,7 +1,4 @@
-use rex_engine::{Engine, EngineError, Value};
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_ts::{Type, TypeError, TypeSystem};
+use rex::{Engine, EngineError, Parser, Token, Type, TypeError, TypeSystem, Value};
 
 fn strip_type_span(mut err: TypeError) -> TypeError {
     while let TypeError::Spanned { error, .. } = err {

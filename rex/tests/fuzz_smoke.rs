@@ -1,10 +1,5 @@
+use rex::{Engine, GasCosts, GasMeter, Parser, ParserLimits, Token, TypeSystem};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-
-use rex_engine::Engine;
-use rex_lexer::Token;
-use rex_parser::{Parser, ParserLimits};
-use rex_ts::TypeSystem;
-use rex_util::{GasCosts, GasMeter};
 
 #[derive(Clone)]
 struct XorShift64 {

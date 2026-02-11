@@ -63,6 +63,7 @@ fn eval_let_lambda() {
         _ => panic!("expected tuple"),
     }
 }
+
 #[test]
 fn eval_async_native_injection() {
     let expr = parse("inc 1");
@@ -77,6 +78,7 @@ fn eval_async_native_injection() {
     let v_sync = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(v_sync, Value::I32(2));
 }
+
 #[test]
 fn eval_async_can_be_cancelled() {
     let expr = parse("stall");
@@ -106,6 +108,7 @@ fn eval_async_can_be_cancelled() {
     let res = handle.join().unwrap();
     assert!(matches!(res, Err(EngineError::Cancelled)));
 }
+
 #[test]
 fn eval_with_gas_rejects_out_of_budget() {
     let expr = parse("1");
@@ -123,6 +126,7 @@ fn eval_with_gas_rejects_out_of_budget() {
     };
     assert!(matches!(err, EngineError::OutOfGas(..)));
 }
+
 #[test]
 fn eval_deep_list_does_not_overflow() {
     // Regression test: deeply nested terms (right-nested arguments) can overflow the default
@@ -153,6 +157,7 @@ fn eval_deep_list_does_not_overflow() {
     assert_eq!(xs.first(), Some(&Value::I32(0)));
     assert_eq!(xs.last(), Some(&Value::I32(0)));
 }
+
 #[test]
 fn eval_type_annotation_let() {
     let expr = parse("let x: i32 = 42 in x");
@@ -160,6 +165,7 @@ fn eval_type_annotation_let() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(42));
 }
+
 #[test]
 fn eval_type_annotation_is() {
     let expr = parse("\"hi\" is str");
@@ -167,6 +173,7 @@ fn eval_type_annotation_is() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::String("hi".into()));
 }
+
 #[test]
 fn eval_type_annotation_lambda_param() {
     let expr = parse("let f = \\ (a : f32) -> a in f 1.5");
@@ -174,6 +181,7 @@ fn eval_type_annotation_lambda_param() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert!(matches!(value, Value::F32(v) if (v - 1.5).abs() < f32::EPSILON));
 }
+
 #[test]
 fn eval_record_update_single_variant_adt() {
     let program = parse_program(
@@ -191,6 +199,7 @@ fn eval_record_update_single_variant_adt() {
     let value = engine.eval(program.expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(6));
 }
+
 #[test]
 fn eval_record_update_refined_by_match() {
     let program = parse_program(
@@ -209,6 +218,7 @@ fn eval_record_update_refined_by_match() {
     let value = engine.eval(program.expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(2));
 }
+
 #[test]
 fn eval_record_update_plain_record_type() {
     let program = parse_program(
@@ -224,6 +234,7 @@ fn eval_record_update_plain_record_type() {
     let value = engine.eval(program.expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(9));
 }
+
 #[test]
 fn eval_type_annotation_mismatch() {
     let expr = parse("let x: i32 = 3.14 in x");
@@ -237,6 +248,7 @@ fn eval_type_annotation_mismatch() {
         Ok(_) => panic!("expected type error, got Ok"),
     }
 }
+
 #[test]
 fn eval_native_injection() {
     let mut engine = Engine::new();
@@ -254,6 +266,7 @@ fn eval_native_injection() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::U32(0));
 }
+
 #[test]
 fn eval_match_list() {
     let mut engine = engine_with_arith();
@@ -268,6 +281,7 @@ fn eval_match_list() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(1));
 }
+
 #[test]
 fn eval_simple_addition() {
     let expr = parse("420 + 69");
@@ -275,6 +289,7 @@ fn eval_simple_addition() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(489));
 }
+
 #[test]
 fn eval_simple_mod() {
     let expr = parse("10 % 3");
@@ -282,6 +297,7 @@ fn eval_simple_mod() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(1));
 }
+
 #[test]
 fn eval_get_list_and_tuple() {
     let mut engine = engine_with_arith();
@@ -294,6 +310,7 @@ fn eval_get_list_and_tuple() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(3));
 }
+
 #[test]
 fn eval_simple_multiplication_float() {
     let expr = parse("420.0 * 6.9");
@@ -304,6 +321,7 @@ fn eval_simple_multiplication_float() {
         _ => panic!("expected f32 result"),
     }
 }
+
 #[test]
 fn eval_let_id_nested() {
     let expr = parse(
@@ -318,6 +336,7 @@ fn eval_let_id_nested() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(489));
 }
+
 #[test]
 fn eval_higher_order_add() {
     let expr = parse(
@@ -332,6 +351,7 @@ fn eval_higher_order_add() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(42));
 }
+
 #[test]
 fn eval_match_dict_and_tuple() {
     let expr = parse(
@@ -354,6 +374,7 @@ fn eval_match_dict_and_tuple() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_match_missing_arm_errors() {
     let expr = parse("match (Err 1) when Ok x -> x");
@@ -367,6 +388,7 @@ fn eval_match_missing_arm_errors() {
         _ => panic!("expected non-exhaustive match type error"),
     }
 }
+
 #[test]
 fn eval_match_invalid_pattern_type_error() {
     let expr = parse("match (Ok 1) when [] -> 0 when x:xs -> 1");
@@ -380,6 +402,7 @@ fn eval_match_invalid_pattern_type_error() {
         _ => panic!("expected unification type error"),
     }
 }
+
 #[test]
 fn eval_nested_match_list_sum() {
     let expr = parse(
@@ -396,6 +419,7 @@ fn eval_nested_match_list_sum() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(3));
 }
+
 #[test]
 fn eval_safe_div_pipeline() {
     let expr = parse(
@@ -434,6 +458,7 @@ fn eval_safe_div_pipeline() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_user_adt_declaration() {
     let program = parse_program(
@@ -455,6 +480,7 @@ fn eval_user_adt_declaration() {
     let value = engine.eval(program.expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(42));
 }
+
 #[test]
 fn eval_fn_decl_simple() {
     let program = parse_program(
@@ -473,6 +499,7 @@ fn eval_fn_decl_simple() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(3));
 }
+
 #[test]
 fn eval_fn_decl_with_where_constraints() {
     let program = parse_program(
@@ -491,6 +518,7 @@ fn eval_fn_decl_with_where_constraints() {
     let value = engine.eval(expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(3));
 }
+
 #[test]
 fn eval_adt_record_projection_single_variant() {
     let program = parse_program(
@@ -520,6 +548,7 @@ fn eval_adt_record_projection_single_variant() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_adt_record_projection_match_arm() {
     let program = parse_program(
@@ -542,6 +571,7 @@ fn eval_adt_record_projection_match_arm() {
     let value = engine.eval(program.expr.as_ref()).unwrap();
     assert_eq!(value, Value::I32(1));
 }
+
 #[test]
 fn eval_list_map_fold_filter() {
     let expr = parse(
@@ -573,6 +603,7 @@ fn eval_list_map_fold_filter() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_list_flat_map_zip_unzip() {
     let expr = parse(
@@ -608,6 +639,7 @@ fn eval_list_flat_map_zip_unzip() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_list_sum_mean_min_max() {
     let expr = parse(
@@ -637,6 +669,7 @@ fn eval_list_sum_mean_min_max() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_option_result_helpers() {
     let expr = parse(
@@ -664,6 +697,7 @@ fn eval_option_result_helpers() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_order_ops() {
     let expr = parse(
@@ -692,6 +726,7 @@ fn eval_order_ops() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_option_and_then_or_else() {
     let expr = parse(
@@ -717,6 +752,7 @@ fn eval_option_and_then_or_else() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_result_filter_pipeline() {
     let expr = parse(
@@ -742,6 +778,7 @@ fn eval_result_filter_pipeline() {
         _ => panic!("expected tuple result"),
     }
 }
+
 #[test]
 fn eval_array_combinators() {
     let mut engine = Engine::with_prelude().unwrap();

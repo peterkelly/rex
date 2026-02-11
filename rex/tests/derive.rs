@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use rex::{Engine, FromValue, Parser, Rex, RexType, Token, Value};
+use std::collections::HashMap;
 
 fn eval(code: &str) -> Result<Value, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;

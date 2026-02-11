@@ -1,6 +1,4 @@
-use rex_engine::Engine;
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rex::{Engine, Parser, Token};
 
 fn eval_to_string(code: &str) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;

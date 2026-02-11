@@ -1,6 +1,4 @@
-use rex_engine::Engine;
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rex::{Engine, Parser, Token};
 
 #[test]
 fn record_update_end_to_end() {

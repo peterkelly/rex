@@ -1,7 +1,4 @@
-use rex_engine::{Engine, EngineError};
-use rex_lexer::Token;
-use rex_parser::{Parser, ParserLimits};
-use rex_ts::TypeError;
+use rex::{Engine, EngineError, Parser, ParserLimits, Token, TypeError};
 
 fn strip_span(mut err: TypeError) -> TypeError {
     while let TypeError::Spanned { error, .. } = err {
