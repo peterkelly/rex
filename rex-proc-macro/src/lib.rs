@@ -120,6 +120,14 @@ fn serde_rename_from_attrs(attrs: &[Attribute]) -> Result<Option<String>, Error>
                 let value = meta.value()?;
                 let lit: LitStr = value.parse()?;
                 rename = Some(lit.value());
+            } else if meta.path.is_ident("alias") {
+                // Consume and ignore aliases so serde meta parsing doesn't fail.
+                let value = meta.value()?;
+                let _lit: LitStr = value.parse()?;
+            } else if meta.path.is_ident("default") {
+                // Consume and ignore defaults (function path as string literal).
+                let value = meta.value()?;
+                let _lit: LitStr = value.parse()?;
             }
             Ok(())
         })?;

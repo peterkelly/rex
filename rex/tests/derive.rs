@@ -35,7 +35,9 @@ struct MyStruct {
     y: i32,
     tags: Vec<String>,
     props: HashMap<String, i32>,
+    #[serde(default = "xxx")] // should have no effect
     inner: MyInnerStruct,
+    #[serde(alias = "ignore")] // should have no effect
     pair: (i32, String, bool),
     #[serde(rename = "renamed")]
     renamed_field: i32,

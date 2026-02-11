@@ -48,7 +48,7 @@ pub enum Value {
 }
 
 impl Value {
-    pub(crate) fn type_name(&self) -> &'static str {
+    pub fn type_name(&self) -> &'static str {
         match self {
             Value::Bool(..) => "bool",
             Value::U8(..) => "u8",
