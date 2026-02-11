@@ -51,7 +51,7 @@ fn value_type_name(value: &Value) -> &'static str {
         Value::Dict(..) => "dict",
         Value::Adt(tag, ..) if tag.as_ref() == "Empty" || tag.as_ref() == "Cons" => "list",
         Value::Adt(..) => "adt",
-        Value::Closure { .. } => "closure",
+        Value::Closure(..) => "closure",
         Value::Native(..) => "native",
         Value::Overloaded(..) => "overloaded",
     }

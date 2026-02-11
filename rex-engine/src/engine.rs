@@ -21,7 +21,7 @@ use crate::prelude::{
     inject_numeric_ops, inject_option_result_builtins, inject_order_ops, inject_prelude_adts,
     inject_pretty_ops,
 };
-use crate::value::{Value, list_from_vec, list_to_vec};
+use crate::value::{Closure, Value, list_from_vec, list_to_vec};
 use crate::{CancellationToken, EngineError, Env, FromValue, IntoValue, RexType};
 
 fn check_cancelled(engine: &Engine) -> Result<(), EngineError> {
@@ -2161,7 +2161,7 @@ fn value_type(value: &Value) -> Result<Type, EngineError> {
             Ok(Type::app(Type::con("List", 1), elem_ty))
         }
         Value::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
-        Value::Closure { .. } => Err(EngineError::UnknownType(sym("closure"))),
+        Value::Closure(..) => Err(EngineError::UnknownType(sym("closure"))),
         Value::Native(..) => Err(EngineError::UnknownType(sym("native"))),
         Value::Overloaded(..) => Err(EngineError::UnknownType(sym("overloaded"))),
     }
@@ -2270,13 +2270,13 @@ pub(crate) fn apply(
     arg_type: Option<&Type>,
 ) -> Result<Value, EngineError> {
     match func {
-        Value::Closure {
+        Value::Closure(Closure {
             env,
             param,
             param_ty,
             typ,
             body,
-        } => {
+        }) => {
             let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
@@ -2565,7 +2565,7 @@ fn eval_typed_expr_with_gas(
             let value = eval_typed_expr_with_gas(engine, &env, expr, gas)?;
             project_value(field, value)
         }
-        TypedExprKind::Lam { param, body } => Ok(Value::Closure {
+        TypedExprKind::Lam { param, body } => Ok(Value::Closure(Closure {
             env: env.clone(),
             param: param.clone(),
             param_ty: split_fun(&expr.typ)
@@ -2573,7 +2573,7 @@ fn eval_typed_expr_with_gas(
                 .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?,
             typ: expr.typ.clone(),
             body: Arc::new(body.as_ref().clone()),
-        }),
+        })),
         TypedExprKind::Ite {
             cond,
             then_expr,
@@ -2613,13 +2613,13 @@ fn apply_with_gas(
     gas: &mut GasMeter,
 ) -> Result<Value, EngineError> {
     match func {
-        Value::Closure {
+        Value::Closure(Closure {
             env,
             param,
             param_ty,
             typ,
             body,
-        } => {
+        }) => {
             let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
@@ -2801,7 +2801,7 @@ async fn eval_typed_expr_async_with_gas(
             let value = eval_typed_expr_async_with_gas(engine, &env, expr, gas).await?;
             project_value(field, value)
         }
-        TypedExprKind::Lam { param, body } => Ok(Value::Closure {
+        TypedExprKind::Lam { param, body } => Ok(Value::Closure(Closure {
             env: env.clone(),
             param: param.clone(),
             param_ty: split_fun(&expr.typ)
@@ -2809,7 +2809,7 @@ async fn eval_typed_expr_async_with_gas(
                 .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?,
             typ: expr.typ.clone(),
             body: Arc::new(body.as_ref().clone()),
-        }),
+        })),
         TypedExprKind::Ite {
             cond,
             then_expr,
@@ -2854,13 +2854,13 @@ async fn apply_async_with_gas(
     gas: &mut GasMeter,
 ) -> Result<Value, EngineError> {
     match func {
-        Value::Closure {
+        Value::Closure(Closure {
             env,
             param,
             param_ty,
             typ,
             body,
-        } => {
+        }) => {
             let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {

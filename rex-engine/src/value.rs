@@ -14,6 +14,15 @@ use crate::Env;
 use crate::engine::{NativeFn, OverloadedFn};
 
 #[derive(Clone)]
+pub struct Closure {
+    pub env: Env,
+    pub param: Symbol,
+    pub param_ty: Type,
+    pub typ: Type,
+    pub body: Arc<TypedExpr>,
+}
+
+#[derive(Clone)]
 pub enum Value {
     Bool(bool),
     U8(u8),
@@ -33,13 +42,7 @@ pub enum Value {
     Array(Vec<Value>),
     Dict(BTreeMap<Symbol, Value>),
     Adt(Symbol, Vec<Value>),
-    Closure {
-        env: Env,
-        param: Symbol,
-        param_ty: Type,
-        typ: Type,
-        body: Arc<TypedExpr>,
-    },
+    Closure(Closure),
     Native(NativeFn),
     Overloaded(OverloadedFn),
 }
@@ -66,7 +69,7 @@ impl Value {
             Value::Dict(..) => "dict",
             Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
             Value::Adt(..) => "adt",
-            Value::Closure { .. } => "closure",
+            Value::Closure(..) => "closure",
             Value::Native(..) => "native",
             Value::Overloaded(..) => "overloaded",
         }
@@ -138,7 +141,7 @@ impl Display for Value {
                 }
                 Ok(())
             }
-            Value::Closure { .. } => write!(f, "<closure>"),
+            Value::Closure(..) => write!(f, "<closure>"),
             Value::Native(native) => write!(f, "<native:{}>", native.name()),
             Value::Overloaded(over) => write!(f, "<overloaded:{}>", over.name()),
         }
