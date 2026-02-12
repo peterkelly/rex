@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use rex_ast::expr::{Symbol, sym};
-use rex_engine::{Engine, EngineError, Value, virtual_export_name};
+use rex_engine::{Engine, EngineError, Heap, Value, virtual_export_name};
 use rex_ts::{Scheme, Type};
 use uuid::Uuid;
 
@@ -26,8 +26,8 @@ fn lock_arc_mutex<'a, T>(
         .map_err(|_| EngineError::Internal(format!("{context}: mutex poisoned (this is a bug)")))
 }
 
-fn unit_value() -> Value {
-    Value::Tuple(vec![])
+fn unit_value(heap: &Heap) -> Value {
+    heap.alloc_tuple(vec![])
 }
 
 fn value_type_name(value: &Value) -> &'static str {
@@ -110,8 +110,9 @@ fn array_u8_to_bytes(value: &Value, name: &str) -> Result<Vec<u8>, EngineError> 
     Ok(out)
 }
 
-fn bytes_to_array_u8(bytes: Vec<u8>) -> Value {
-    Value::Array(bytes.into_iter().map(Value::U8).collect())
+fn bytes_to_array_u8(heap: &Heap, bytes: Vec<u8>) -> Value {
+    let out = bytes.into_iter().map(|b| heap.alloc_u8(b)).collect();
+    heap.alloc_array(out)
 }
 
 #[derive(Default)]
@@ -181,7 +182,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         &read_all_name,
         Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), array_u8.clone())),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let read_all_sym = read_all_sym.clone();
             async move {
                 if args.len() != 1 {
@@ -209,7 +210,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 io::stdin()
                     .read_to_end(&mut buf)
                     .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
-                Ok(bytes_to_array_u8(buf))
+                Ok(bytes_to_array_u8(engine.heap(), buf))
             }
         },
     )?;
@@ -224,7 +225,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(i32_ty, Type::fun(array_u8, unit_type())),
         ),
         2,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let write_all_sym = write_all_sym.clone();
             async move {
                 if args.len() != 2 {
@@ -263,7 +264,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     }
                 }
 
-                Ok(unit_value())
+                Ok(unit_value(engine.heap()))
             }
         },
     )?;
@@ -290,7 +291,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         &spawn_name,
         Scheme::new(vec![], vec![], Type::fun(opts, subprocess.clone())),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let spawn_sym = spawn_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_spawn.clone();
             async move {
@@ -414,8 +415,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     .insert(id, entry);
 
                 let mut payload = BTreeMap::new();
-                payload.insert(sym("id"), Value::Uuid(id));
-                Ok(Value::Adt(subprocess_ctor, vec![Value::Dict(payload)]))
+                payload.insert(sym("id"), engine.heap().alloc_uuid(id));
+                Ok(engine
+                    .heap()
+                    .alloc_adt(subprocess_ctor, vec![engine.heap().alloc_dict(payload)]))
             }
         },
     )?;
@@ -427,7 +430,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         &wait_name,
         Scheme::new(vec![], vec![], Type::fun(subprocess.clone(), i32_ty)),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let wait_sym = wait_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_wait.clone();
             async move {
@@ -442,7 +445,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let entry = subprocess_get(&id, wait_sym.as_ref())?;
 
                 if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
-                    return Ok(Value::I32(code));
+                    return Ok(engine.heap().alloc_i32(code));
                 }
 
                 let status = {
@@ -484,7 +487,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     let _ = handle.join();
                 }
 
-                Ok(Value::I32(code))
+                Ok(engine.heap().alloc_i32(code))
             }
         },
     )?;
@@ -500,7 +503,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(subprocess.clone(), array_type(Type::con("u8", 0))),
         ),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let stdout_sym = stdout_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_stdout.clone();
             async move {
@@ -514,7 +517,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let id = subprocess_id(&args[0], &subprocess_ctor, stdout_sym.as_ref())?;
                 let entry = subprocess_get(&id, stdout_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stdout, "std.process.stdout buffer")?.clone();
-                Ok(bytes_to_array_u8(bytes))
+                Ok(bytes_to_array_u8(engine.heap(), bytes))
             }
         },
     )?;
@@ -530,7 +533,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(subprocess, array_type(Type::con("u8", 0))),
         ),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let stderr_sym = stderr_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_stderr.clone();
             async move {
@@ -544,7 +547,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let id = subprocess_id(&args[0], &subprocess_ctor, stderr_sym.as_ref())?;
                 let entry = subprocess_get(&id, stderr_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stderr, "std.process.stderr buffer")?.clone();
-                Ok(bytes_to_array_u8(bytes))
+                Ok(bytes_to_array_u8(engine.heap(), bytes))
             }
         },
     )?;
@@ -651,7 +654,7 @@ mod tests {
                 let Value::Tuple(xs) = value else {
                     panic!("expected tuple");
                 };
-                assert_eq!(xs[0], Value::I32(0));
+                assert_eq!(xs[0], engine.heap().alloc_i32(0));
 
                 let Value::Array(out) = &xs[1] else {
                     panic!("expected stdout bytes");

@@ -21,4 +21,4 @@ pub use modules::{
     ModuleExports, ModuleId, ModuleInstance, ReplState, ResolveRequest, ResolvedModule,
 };
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
-pub use value::{Closure, FromValue, IntoValue, RexType, Value};
+pub use value::{Closure, FromValue, Heap, IntoValue, RexType, Value};

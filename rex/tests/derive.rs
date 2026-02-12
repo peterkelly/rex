@@ -230,7 +230,8 @@ fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let v = engine.eval(program.expr.as_ref()).unwrap();
-    assert_eq!(v, Value::I32(100));
+    let heap = engine.heap();
+    assert_eq!(v, heap.alloc_i32(100));
 }
 
 #[test]
@@ -254,7 +255,8 @@ fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let program = parser.parse_program().unwrap();
 
     let v = engine.eval(program.expr.as_ref()).unwrap();
-    assert_eq!(v, Value::I32(12));
+    let heap = engine.heap();
+    assert_eq!(v, heap.alloc_i32(12));
 }
 
 #[test]
@@ -276,8 +278,9 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let Value::Tuple(items) = v else {
         panic!("expected tuple, got {v}");
     };
-    assert_eq!(items[0], Value::I32(5));
-    assert_eq!(items[1], Value::I32(0));
+    let heap = engine.heap();
+    assert_eq!(items[0], heap.alloc_i32(5));
+    assert_eq!(items[1], heap.alloc_i32(0));
 }
 
 #[test]

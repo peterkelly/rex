@@ -1,6 +1,8 @@
 use std::{
+    borrow::Borrow,
     collections::{BTreeMap, HashMap},
     fmt::{self, Display, Formatter},
+    ops::Deref,
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -10,13 +12,68 @@ use rpds::HashTrieMapSync;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-pub type Symbol = Arc<str>;
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize, serde::Serialize,
+)]
+#[serde(transparent)]
+pub struct Symbol(Arc<str>);
+
+impl Symbol {
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl Deref for Symbol {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<str> for Symbol {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl Borrow<str> for Symbol {
+    fn borrow(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl Display for Symbol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(value: &str) -> Self {
+        Symbol(Arc::from(value))
+    }
+}
+
+impl From<String> for Symbol {
+    fn from(value: String) -> Self {
+        Symbol(Arc::from(value))
+    }
+}
+
+impl From<Arc<str>> for Symbol {
+    fn from(value: Arc<str>) -> Self {
+        Symbol(value)
+    }
+}
+
 pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;
 
 // Global symbol interner.
 //
 // Design constraints:
-// - Symbols are `Arc<str>` so cloning them is cheap and comparisons are fast.
+// - Symbols wrap `Arc<str>` so cloning them is cheap and comparisons are fast.
 // - The table is process-global and monotonically grows; that's fine for a
 //   typical “compile a program, then exit” workflow.
 // - Locking makes the cost model explicit (and obvious in profiles). If this
@@ -33,7 +90,7 @@ pub fn intern(name: &str) -> Symbol {
     if let Some(existing) = table.get(name) {
         return existing.clone();
     }
-    let sym: Symbol = Arc::from(name);
+    let sym = Symbol(Arc::from(name));
     table.insert(name.to_string(), sym.clone());
     sym
 }
