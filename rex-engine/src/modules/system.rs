@@ -15,18 +15,18 @@ struct ResolverEntry {
 }
 
 #[derive(Default)]
-struct ModuleState {
-    loaded: HashMap<ModuleId, ModuleInstance>,
+struct ModuleState<'h> {
+    loaded: HashMap<ModuleId, ModuleInstance<'h>>,
     loading: HashSet<ModuleId>,
 }
 
 #[derive(Clone, Default)]
-pub(crate) struct ModuleSystem {
+pub(crate) struct ModuleSystem<'h> {
     resolvers: Vec<ResolverEntry>,
-    state: Arc<Mutex<ModuleState>>,
+    state: Arc<Mutex<ModuleState<'h>>>,
 }
 
-impl ModuleSystem {
+impl<'h> ModuleSystem<'h> {
     pub(crate) fn add_resolver(&mut self, name: impl Into<String>, resolver: ResolverFn) {
         self.resolvers.push(ResolverEntry {
             name: name.into(),
@@ -52,7 +52,7 @@ impl ModuleSystem {
         .into())
     }
 
-    pub(crate) fn cached(&self, id: &ModuleId) -> Result<Option<ModuleInstance>, EngineError> {
+    pub(crate) fn cached(&self, id: &ModuleId) -> Result<Option<ModuleInstance<'h>>, EngineError> {
         let state = self.state.lock().map_err(|_| ModuleError::StatePoisoned)?;
         Ok(state.loaded.get(id).cloned())
     }
@@ -69,7 +69,7 @@ impl ModuleSystem {
         Ok(())
     }
 
-    pub(crate) fn store_loaded(&self, inst: ModuleInstance) -> Result<(), EngineError> {
+    pub(crate) fn store_loaded(&self, inst: ModuleInstance<'h>) -> Result<(), EngineError> {
         let mut state = self.state.lock().map_err(|_| ModuleError::StatePoisoned)?;
         state.loading.remove(&inst.id);
         state.loaded.insert(inst.id.clone(), inst);

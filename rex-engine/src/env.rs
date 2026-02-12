@@ -3,23 +3,23 @@ use std::sync::Arc;
 
 use rex_ast::expr::Symbol;
 
-use crate::Value;
+use crate::value::Pointer;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Env(Arc<EnvFrame>);
+pub struct Env<'h>(Arc<EnvFrame<'h>>);
 
 #[derive(Default, Debug, PartialEq)]
-struct EnvFrame {
-    parent: Option<Env>,
-    bindings: HashMap<Symbol, Value>,
+struct EnvFrame<'h> {
+    parent: Option<Env<'h>>,
+    bindings: HashMap<Symbol, Pointer<'h>>,
 }
 
-impl Env {
+impl<'h> Env<'h> {
     pub fn new() -> Self {
         Env(Arc::new(EnvFrame::default()))
     }
 
-    pub fn extend(&self, name: Symbol, value: Value) -> Self {
+    pub fn extend(&self, name: Symbol, value: Pointer<'h>) -> Self {
         let mut bindings = HashMap::new();
         bindings.insert(name, value);
         Env(Arc::new(EnvFrame {
@@ -28,15 +28,15 @@ impl Env {
         }))
     }
 
-    pub fn extend_many(&self, bindings: HashMap<Symbol, Value>) -> Self {
+    pub fn extend_many(&self, bindings: HashMap<Symbol, Pointer<'h>>) -> Self {
         Env(Arc::new(EnvFrame {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
-    pub fn get(&self, name: &Symbol) -> Option<Value> {
-        let mut current: Option<&Env> = Some(self);
+    pub fn get(&self, name: &Symbol) -> Option<Pointer<'h>> {
+        let mut current: Option<&Env<'h>> = Some(self);
         while let Some(env) = current {
             if let Some(v) = env.0.bindings.get(name) {
                 return Some(v.clone());
@@ -47,7 +47,7 @@ impl Env {
     }
 }
 
-impl Default for Env {
+impl<'h> Default for Env<'h> {
     fn default() -> Self {
         Self::new()
     }

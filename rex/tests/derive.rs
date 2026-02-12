@@ -1,14 +1,14 @@
-use rex::{Engine, FromValue, Parser, Rex, RexType, Token, Value};
+use rex::{Engine, FromValue, Heap, Parser, Rex, RexType, Token, Value};
 use std::collections::HashMap;
 
-fn eval(code: &str) -> Result<Value, String> {
+fn eval<'h>(heap: &'h Heap, code: &str) -> Result<Value<'h>, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     let program = parser
         .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(heap).unwrap();
     MyInnerStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
     MyStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
     Boxed::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
@@ -56,7 +56,9 @@ enum Maybe<T> {
 
 #[test]
 fn derive_struct_roundtrip_value() {
+    let heap = Heap::new();
     let v = eval(
+        &heap,
         r#"
         MyStruct {
             x = true,
@@ -88,7 +90,8 @@ fn derive_struct_roundtrip_value() {
 
 #[test]
 fn derive_generic_struct_roundtrip_value() {
-    let v = eval("Boxed { value = 123 }").unwrap();
+    let heap = Heap::new();
+    let v = eval(&heap, "Boxed { value = 123 }").unwrap();
     let decoded = Boxed::<i32>::from_value(&v, "boxed").unwrap();
     assert_eq!(decoded, Boxed { value: 123 });
 }
@@ -100,7 +103,8 @@ fn derive_generic_worked_example_polymorphic_adt() {
     // The proc-macro generates *both*:
     // - `RexType` for Rust values (e.g. `Maybe<i32>` -> `Maybe i32`)
     // - an `AdtDecl` with a type parameter `T` (so `Just` has scheme `a -> Maybe a`)
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
 
     // Build the ADT surface (params + variants) and sanity-check that it really uses a type var.
     let adt = Maybe::<i32>::rex_adt_decl(&mut engine).unwrap();
@@ -161,6 +165,10 @@ fn derive_generic_worked_example_polymorphic_adt() {
     let Value::Tuple(items) = v else {
         panic!("expected tuple, got {v}");
     };
+    let items = items
+        .into_iter()
+        .map(|item| item.get_value(engine.heap()).unwrap())
+        .collect::<Vec<_>>();
     assert_eq!(items.len(), 2);
     assert_eq!(
         Maybe::<i32>::from_value(&items[0], "a").unwrap(),
@@ -197,7 +205,8 @@ fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
     MyStruct::inject_rex(&mut engine).unwrap();
 
@@ -236,7 +245,8 @@ fn derive_can_be_used_in_injected_native_functions() {
 
 #[test]
 fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     Shape::inject_rex(&mut engine).unwrap();
 
     engine
@@ -261,7 +271,8 @@ fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
 
 #[test]
 fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     Maybe::<i32>::inject_rex(&mut engine).unwrap();
 
     engine
@@ -278,6 +289,10 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let Value::Tuple(items) = v else {
         panic!("expected tuple, got {v}");
     };
+    let items = items
+        .into_iter()
+        .map(|item| item.get_value(engine.heap()).unwrap())
+        .collect::<Vec<_>>();
     let heap = engine.heap();
     assert_eq!(
         items[0],
@@ -291,7 +306,9 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
 
 #[test]
 fn derive_enum_constructor_currying() {
+    let heap = Heap::new();
     let v = eval(
+        &heap,
         r#"
         let partial = Rectangle (2 * 3) in
             (partial (3 * 4), partial (2 * 4))
@@ -302,6 +319,10 @@ fn derive_enum_constructor_currying() {
     let Value::Tuple(items) = v else {
         panic!("expected tuple, got {v}");
     };
+    let items = items
+        .into_iter()
+        .map(|item| item.get_value(&heap).unwrap())
+        .collect::<Vec<_>>();
     assert_eq!(items.len(), 2);
     let a = Shape::from_value(&items[0], "a").unwrap();
     let b = Shape::from_value(&items[1], "b").unwrap();

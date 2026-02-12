@@ -68,12 +68,12 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
     let inject_fn = quote! {
         impl #impl_generics #rust_ident #ty_generics #where_clause {
-            pub fn inject_rex(engine: &mut ::rex::Engine) -> Result<(), ::rex::EngineError> {
+            pub fn inject_rex<'h>(engine: &mut ::rex::Engine<'h>) -> Result<(), ::rex::EngineError> {
                 let adt = Self::rex_adt_decl(engine)?;
                 engine.inject_adt(adt)
             }
 
-            pub fn rex_adt_decl(engine: &mut ::rex::Engine) -> Result<::rex::AdtDecl, ::rex::EngineError> {
+            pub fn rex_adt_decl<'h>(engine: &mut ::rex::Engine<'h>) -> Result<::rex::AdtDecl, ::rex::EngineError> {
                 #adt_decl_fn
             }
         }
@@ -379,7 +379,7 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(quote! {{
                 let (#(#vars,)*) = #expr;
-                heap.alloc_tuple(::std::vec![#(#encs,)*])?.get_value(heap)?
+                heap.alloc_tuple(::std::vec![#(#encs,)*])?
             }})
         }
         Type::Path(type_path) => {
@@ -408,16 +408,14 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     };
                     let inner_encode = into_value_expr(quote!(item), inner)?;
                     Ok(quote! {{
-                        let mut out = heap
-                            .alloc_adt(::rex::intern("Empty"), ::std::vec::Vec::new())?
-                            .get_value(heap)?;
+                        let mut out =
+                            heap.alloc_adt(::rex::intern("Empty"), ::std::vec::Vec::new())?;
                         for item in #expr.into_iter().rev() {
                             out = heap
                                 .alloc_adt(
                                     ::rex::intern("Cons"),
                                     ::std::vec![#inner_encode, out],
-                                )?
-                                .get_value(heap)?;
+                                )?;
                         }
                         out
                     }})
@@ -438,7 +436,7 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                         for (k, v) in #expr {
                             out.insert(::rex::intern(&k), #v_encode);
                         }
-                        heap.alloc_dict(out)?.get_value(heap)?
+                        heap.alloc_dict(out)?
                     }})
                 }
                 "Option" => {
@@ -449,11 +447,9 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     Ok(quote! {{
                         match #expr {
                             Some(v) => heap
-                                .alloc_adt(::rex::intern("Some"), ::std::vec![#inner_encode])?
-                                .get_value(heap)?,
+                                .alloc_adt(::rex::intern("Some"), ::std::vec![#inner_encode])?,
                             None => heap
-                                .alloc_adt(::rex::intern("None"), ::std::vec::Vec::new())?
-                                .get_value(heap)?,
+                                .alloc_adt(::rex::intern("None"), ::std::vec::Vec::new())?,
                         }
                     }})
                 }
@@ -466,15 +462,13 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     Ok(quote! {{
                         match #expr {
                             Ok(v) => heap
-                                .alloc_adt(::rex::intern("Ok"), ::std::vec![#ok_encode])?
-                                .get_value(heap)?,
+                                .alloc_adt(::rex::intern("Ok"), ::std::vec![#ok_encode])?,
                             Err(e) => heap
-                                .alloc_adt(::rex::intern("Err"), ::std::vec![#err_encode])?
-                                .get_value(heap)?,
+                                .alloc_adt(::rex::intern("Err"), ::std::vec![#err_encode])?,
                         }
                     }})
                 }
-                _ => Ok(quote! { ::rex::IntoValue::into_value(#expr, heap)? }),
+                _ => Ok(quote! { heap.alloc_value(::rex::IntoValue::into_value(#expr, heap)?)? }),
             }
         }
         other => Err(Error::new(
@@ -496,7 +490,7 @@ fn from_value_expr(
             let decs = elem_tys
                 .iter()
                 .zip(indices.iter())
-                .map(|(t, i)| from_value_expr(quote!(&items[#i]), t, name_expr.clone()))
+                .map(|(t, i)| from_value_expr(quote!(items[#i].as_value()), t, name_expr.clone()))
                 .collect::<Result<Vec<_>, _>>()?;
             let len = elem_tys.len();
             Ok(quote! {{
@@ -536,7 +530,8 @@ fn from_value_expr(
                     let [inner] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Vec<T>`"));
                     };
-                    let inner_decode = from_value_expr(quote!(&args[0]), inner, name_expr.clone())?;
+                    let inner_decode =
+                        from_value_expr(quote!(args[0].as_value()), inner, name_expr.clone())?;
                     Ok(quote! {{
                         let mut out = ::std::vec::Vec::new();
                         let mut cur = #value_expr;
@@ -548,7 +543,7 @@ fn from_value_expr(
                                 ::rex::Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
                                     let v = #inner_decode?;
                                     out.push(v);
-                                    cur = &args[1];
+                                    cur = args[1].as_value();
                                 }
                                 other => {
                                     break Err(::rex::EngineError::NativeType {
@@ -571,7 +566,7 @@ fn from_value_expr(
                             "only `HashMap<String, V>` is supported for Rex dictionaries",
                         ));
                     }
-                    let v_decode = from_value_expr(quote!(v), v, name_expr.clone())?;
+                    let v_decode = from_value_expr(quote!(v.as_value()), v, name_expr.clone())?;
                     Ok(quote! {{
                         match #value_expr {
                             ::rex::Value::Dict(map) => {
@@ -594,7 +589,8 @@ fn from_value_expr(
                     let [inner] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Option<T>`"));
                     };
-                    let inner_decode = from_value_expr(quote!(&args[0]), inner, name_expr.clone())?;
+                    let inner_decode =
+                        from_value_expr(quote!(args[0].as_value()), inner, name_expr.clone())?;
                     Ok(quote! {{
                         match #value_expr {
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => Ok(None),
@@ -611,8 +607,10 @@ fn from_value_expr(
                     let [ok_ty, err_ty] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Result<T, E>`"));
                     };
-                    let ok_decode = from_value_expr(quote!(&args[0]), ok_ty, name_expr.clone())?;
-                    let err_decode = from_value_expr(quote!(&args[0]), err_ty, name_expr.clone())?;
+                    let ok_decode =
+                        from_value_expr(quote!(args[0].as_value()), ok_ty, name_expr.clone())?;
+                    let err_decode =
+                        from_value_expr(quote!(args[0].as_value()), err_ty, name_expr.clone())?;
                     Ok(quote! {{
                         match #value_expr {
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "Ok" && args.len() == 1 => Ok(Ok(#ok_decode?)),
@@ -680,9 +678,8 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 quote! {{
                     let mut map = ::std::collections::BTreeMap::new();
                     #(#inserts)*
-                    let dict = heap.alloc_dict(map)?.get_value(heap)?;
+                    let dict = heap.alloc_dict(map)?;
                     heap.alloc_adt(::rex::intern(#ctor), ::std::vec![dict])?
-                        .get_value(heap)?
                 }}
             }
             Fields::Unnamed(fields) => {
@@ -696,12 +693,10 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 quote! {{
                     let Self(#(#bindings,)*) = self;
                     heap.alloc_adt(::rex::intern(#ctor), ::std::vec![#(#args,)*])?
-                        .get_value(heap)?
                 }}
             }
             Fields::Unit => quote! {
                 heap.alloc_adt(::rex::intern(#ctor), ::std::vec::Vec::new())?
-                    .get_value(heap)?
             },
         },
         Data::Enum(data) => {
@@ -716,7 +711,6 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                     Fields::Unit => quote! {
                         Self::#variant_ident => heap
                             .alloc_adt(::rex::intern(#variant_name), ::std::vec::Vec::new())?
-                            .get_value(heap)?
                     },
                     Fields::Unnamed(fields) => {
                         let vars: Vec<Ident> = (0..fields.unnamed.len())
@@ -730,7 +724,6 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                         quote! {
                             Self::#variant_ident(#(#vars,)*) => heap
                                 .alloc_adt(::rex::intern(#variant_name), ::std::vec![#(#encs,)*])?
-                                .get_value(heap)?
                         }
                     }
                     Fields::Named(fields) => {
@@ -755,9 +748,8 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             Self::#variant_ident { #(#vars,)* } => {
                                 let mut map = ::std::collections::BTreeMap::new();
                                 #(#inserts)*
-                                let dict = heap.alloc_dict(map)?.get_value(heap)?;
+                                let dict = heap.alloc_dict(map)?;
                                 heap.alloc_adt(::rex::intern(#variant_name), ::std::vec![dict])?
-                                    .get_value(heap)?
                             }
                         }
                     }
@@ -779,16 +771,22 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
     };
 
     let mut generics = ast.generics.clone();
-    add_bound_to_type_params(&mut generics, parse_quote!(::rex::IntoValue));
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    add_bound_to_type_params(&mut generics, parse_quote!(for<'v> ::rex::IntoValue<'v>));
+    let mut impl_generics = generics.clone();
+    impl_generics.params.insert(0, parse_quote!('h));
+    let (impl_generics, _, where_clause) = impl_generics.split_for_impl();
+    let (_, ty_generics, _) = generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics ::rex::IntoValue for #rust_ident #ty_generics #where_clause {
+        impl #impl_generics ::rex::IntoValue<'h> for #rust_ident #ty_generics #where_clause {
             fn into_value(
                 self,
-                heap: &::rex::Heap,
-            ) -> ::std::result::Result<::rex::Value, ::rex::EngineError> {
-                Ok(#body)
+                heap: &'h ::rex::Heap,
+            ) -> ::std::result::Result<::rex::Value<'h>, ::rex::EngineError> {
+                Ok({
+                    let value = #body;
+                    value.get_value(heap)?
+                })
             }
         }
     })
@@ -814,7 +812,8 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                         name = rename;
                     }
                     let key = quote!(::rex::intern(#name));
-                    let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
+                    let decode =
+                        from_value_expr(quote!(v.as_value()), &field.ty, name_expr.clone())?;
                     field_decodes.push(quote! {
                         let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType {
                             name: ::rex::intern(name),
@@ -827,7 +826,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 Ok(quote! {{
                     match value {
                         ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == 1 => {
-                            match &args[0] {
+                            match args[0].as_value() {
                                 ::rex::Value::Dict(map) => {
                                     #(#field_decodes)*
                                     Ok(Self { #(#field_idents,)* })
@@ -850,8 +849,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             Fields::Unnamed(fields) => {
                 let mut decs = Vec::new();
                 for (idx, field) in fields.unnamed.iter().enumerate() {
-                    let decode =
-                        from_value_expr(quote!(&args[#idx]), &field.ty, name_expr.clone())?;
+                    let decode = from_value_expr(
+                        quote!(args[#idx].as_value()),
+                        &field.ty,
+                        name_expr.clone(),
+                    )?;
                     decs.push(quote!(#decode?));
                 }
                 let len = fields.unnamed.len();
@@ -898,7 +900,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             .iter()
                             .enumerate()
                             .map(|(i, f)| {
-                                from_value_expr(quote!(&args[#i]), &f.ty, name_expr.clone())
+                                from_value_expr(
+                                    quote!(args[#i].as_value()),
+                                    &f.ty,
+                                    name_expr.clone(),
+                                )
                             })
                             .collect::<Result<Vec<_>, _>>()?
                             .into_iter()
@@ -924,7 +930,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                                 name = rename;
                             }
                             let key = quote!(::rex::intern(#name));
-                            let decode = from_value_expr(quote!(v), &field.ty, name_expr.clone())?;
+                            let decode = from_value_expr(
+                                quote!(v.as_value()),
+                                &field.ty,
+                                name_expr.clone(),
+                            )?;
                             field_decodes.push(quote! {
                                 let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType {
                                     name: ::rex::intern(name),
@@ -936,7 +946,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                         }
                         quote! {
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == 1 => {
-                                match &args[0] {
+                                match args[0].as_value() {
                                     ::rex::Value::Dict(map) => {
                                         #(#field_decodes)*
                                         Ok(Self::#variant_ident { #(#fields_init,)* })
@@ -972,12 +982,15 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
     }?;
 
     let mut generics = ast.generics.clone();
-    add_bound_to_type_params(&mut generics, parse_quote!(::rex::FromValue));
-    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    add_bound_to_type_params(&mut generics, parse_quote!(for<'v> ::rex::FromValue<'v>));
+    let mut impl_generics = generics.clone();
+    impl_generics.params.insert(0, parse_quote!('h));
+    let (impl_generics, _, where_clause) = impl_generics.split_for_impl();
+    let (_, ty_generics, _) = generics.split_for_impl();
 
     Ok(quote! {
-        impl #impl_generics ::rex::FromValue for #rust_ident #ty_generics #where_clause {
-            fn from_value(value: &::rex::Value, name: &str) -> Result<Self, ::rex::EngineError> {
+        impl #impl_generics ::rex::FromValue<'h> for #rust_ident #ty_generics #where_clause {
+            fn from_value(value: &::rex::Value<'h>, name: &str) -> Result<Self, ::rex::EngineError> {
                 #body
             }
         }

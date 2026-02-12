@@ -7,7 +7,7 @@ use std::io::{self, BufRead, Read, Write};
 use std::thread;
 
 use clap::{Args, Parser, Subcommand};
-use rex_engine::{Engine, ReplState};
+use rex_engine::{Engine, Heap, ReplState};
 use rex_lexer::Token;
 use rex_parser::{Parser as RexParser, ParserLimits};
 use rex_util::{GasCosts, GasMeter};
@@ -271,8 +271,9 @@ fn repl_loop(
     no_gas: bool,
     parser_limits: ParserLimits,
 ) -> Result<(), String> {
+    let heap = Heap::new();
     let mut engine =
-        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
+        Engine::with_prelude(&heap).map_err(|e| format!("failed to initialize engine: {e}"))?;
     cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
     engine.add_default_resolvers();
     for root in include {
@@ -387,9 +388,9 @@ struct RunSourceOpts {
     parser_limits: ParserLimits,
 }
 
-fn init_engine(include: &[String]) -> Result<Engine, String> {
+fn init_engine<'h>(heap: &'h Heap, include: &[String]) -> Result<Engine<'h>, String> {
     let mut engine =
-        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
+        Engine::with_prelude(heap).map_err(|e| format!("failed to initialize engine: {e}"))?;
     cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| e.to_string())?;
     engine.add_default_resolvers();
     for root in include {
@@ -440,7 +441,8 @@ fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut engine = init_engine(&include)?;
+    let heap = Heap::new();
+    let mut engine = init_engine(&heap, &include)?;
 
     let value = if let Some(path) = file {
         engine
@@ -480,7 +482,8 @@ fn infer_type_json(
     include: &[String],
     gas: &mut GasMeter,
 ) -> Result<serde_json::Value, String> {
-    let mut engine = init_engine(include)?;
+    let heap = Heap::new();
+    let mut engine = init_engine(&heap, include)?;
 
     let (preds, ty) = if let Some(path) = file {
         engine

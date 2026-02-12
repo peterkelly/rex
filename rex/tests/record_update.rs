@@ -1,4 +1,4 @@
-use rex::{Engine, Parser, Token};
+use rex::{Engine, Heap, Parser, Token};
 
 #[test]
 fn record_update_end_to_end() {
@@ -20,13 +20,18 @@ fn record_update_end_to_end() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine.inject_decls(&program.decls).unwrap();
     let value = engine.eval(program.expr.as_ref()).unwrap();
 
     let rex_engine::Value::Tuple(items) = value else {
         panic!("expected tuple, got {value}");
     };
+    let items = items
+        .into_iter()
+        .map(|item| item.get_value(engine.heap()).unwrap())
+        .collect::<Vec<_>>();
     assert_eq!(items.len(), 2);
 
     let rex_engine::Value::I32(a) = items[0] else {

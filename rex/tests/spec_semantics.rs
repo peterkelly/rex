@@ -1,4 +1,4 @@
-use rex::{Engine, EngineError, Parser, Token, Type, TypeError, TypeSystem, Value};
+use rex::{Engine, EngineError, Heap, Parser, Token, Type, TypeError, TypeSystem, Value};
 
 fn strip_type_span(mut err: TypeError) -> TypeError {
     while let TypeError::Spanned { error, .. } = err {
@@ -7,11 +7,15 @@ fn strip_type_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn eval(code: &str) -> Result<Value, EngineError> {
+fn test_heap() -> &'static Heap {
+    Box::leak(Box::new(Heap::new()))
+}
+
+fn eval(code: &str) -> Result<Value<'static>, EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     engine.inject_decls(&program.decls)?;
     engine.eval(program.expr.as_ref())
 }

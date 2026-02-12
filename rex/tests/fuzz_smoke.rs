@@ -1,4 +1,4 @@
-use rex::{Engine, GasCosts, GasMeter, Parser, ParserLimits, Token, TypeSystem};
+use rex::{Engine, GasCosts, GasMeter, Heap, Parser, ParserLimits, Token, TypeSystem};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[derive(Clone)]
@@ -67,7 +67,8 @@ fn fuzz_smoke_pipeline_does_not_panic() {
             let _ = ts.inject_decls(&program.decls);
             let _ = ts.infer_with_gas(program.expr.as_ref(), &mut gas);
 
-            let mut engine = Engine::with_prelude().unwrap();
+            let heap = Heap::new();
+            let mut engine = Engine::with_prelude(&heap).unwrap();
             let _ = engine.inject_decls(&program.decls);
             let _ = engine.eval_with_gas(program.expr.as_ref(), &mut gas);
         }));

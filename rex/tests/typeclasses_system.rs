@@ -1,4 +1,4 @@
-use rex::{Engine, Parser, Token};
+use rex::{Engine, Heap, Parser, Token};
 
 fn eval_to_string(code: &str) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
@@ -7,7 +7,8 @@ fn eval_to_string(code: &str) -> Result<String, String> {
         .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;

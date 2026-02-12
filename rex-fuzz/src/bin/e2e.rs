@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use rex_engine::Engine;
+use rex_engine::{Engine, Heap};
 use rex_fuzz::{
     FuzzError, gas_meter_from_env, parser_limits_from_env, read_stdin_bytes, run_with_stack,
     stack_bytes_from_env, tokenize_fuzz_input,
@@ -32,7 +32,8 @@ fn run_one(input: &[u8]) {
         return;
     }
 
-    let Ok(mut engine) = Engine::with_prelude() else {
+    let heap = Heap::new();
+    let Ok(mut engine) = Engine::with_prelude(&heap) else {
         return;
     };
     if engine.inject_decls(&program.decls).is_err() {

@@ -1097,7 +1097,7 @@ fn parse_program_from_source(
     Ok(program)
 }
 
-impl Engine {
+impl<'h> Engine<'h> {
     pub fn add_resolver<F>(&mut self, name: impl Into<String>, f: F)
     where
         F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError>
@@ -1141,7 +1141,7 @@ impl Engine {
         mut load: F,
     ) -> Result<HashMap<Symbol, ModuleExports>, EngineError>
     where
-        F: FnMut(&mut Self, ResolvedModule) -> Result<ModuleInstance, EngineError>,
+        F: FnMut(&mut Self, ResolvedModule) -> Result<ModuleInstance<'h>, EngineError>,
     {
         let mut alias_exports = HashMap::new();
         for decl in decls {
@@ -1179,7 +1179,7 @@ impl Engine {
         &mut self,
         resolved: ResolvedModule,
         mut gas: Option<&mut GasMeter>,
-    ) -> Result<ModuleInstance, EngineError> {
+    ) -> Result<ModuleInstance<'h>, EngineError> {
         if let Some(inst) = self.modules.cached(&resolved.id)? {
             return Ok(inst);
         }
@@ -1221,7 +1221,7 @@ impl Engine {
     fn load_module_from_resolved(
         &mut self,
         resolved: ResolvedModule,
-    ) -> Result<ModuleInstance, EngineError> {
+    ) -> Result<ModuleInstance<'h>, EngineError> {
         self.load_module_from_resolved_impl(resolved, None)
     }
 
@@ -1229,7 +1229,7 @@ impl Engine {
         &mut self,
         resolved: ResolvedModule,
         gas: &mut GasMeter,
-    ) -> Result<ModuleInstance, EngineError> {
+    ) -> Result<ModuleInstance<'h>, EngineError> {
         self.load_module_from_resolved_impl(resolved, Some(gas))
     }
 
@@ -1429,7 +1429,7 @@ impl Engine {
         self.infer_type_with_gas(rewritten.expr.as_ref(), gas)
     }
 
-    pub fn eval_module_file(&mut self, path: impl AsRef<Path>) -> Result<Value, EngineError> {
+    pub fn eval_module_file(&mut self, path: impl AsRef<Path>) -> Result<Value<'h>, EngineError> {
         self.eval_module_file_impl(path.as_ref(), None)
     }
 
@@ -1437,7 +1437,7 @@ impl Engine {
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         self.eval_module_file_impl(path.as_ref(), Some(gas))
     }
 
@@ -1445,7 +1445,7 @@ impl Engine {
         &mut self,
         path: &Path,
         gas: Option<&mut GasMeter>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         let (id, bytes) = self.read_local_module_bytes(path)?;
         if let Some(inst) = self.modules.cached(&id)? {
             return Ok(inst.init_value);
@@ -1455,7 +1455,7 @@ impl Engine {
         Ok(inst.init_value)
     }
 
-    pub fn eval_module_source(&mut self, source: &str) -> Result<Value, EngineError> {
+    pub fn eval_module_source(&mut self, source: &str) -> Result<Value<'h>, EngineError> {
         self.eval_module_source_impl(source, None)
     }
 
@@ -1463,7 +1463,7 @@ impl Engine {
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         self.eval_module_source_impl(source, Some(gas))
     }
 
@@ -1471,7 +1471,7 @@ impl Engine {
         &mut self,
         source: &str,
         gas: Option<&mut GasMeter>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
         let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
@@ -1488,7 +1488,7 @@ impl Engine {
         Ok(inst.init_value)
     }
 
-    pub fn eval_snippet(&mut self, source: &str) -> Result<Value, EngineError> {
+    pub fn eval_snippet(&mut self, source: &str) -> Result<Value<'h>, EngineError> {
         self.eval_snippet_with_importer(source, None)
     }
 
@@ -1496,7 +1496,7 @@ impl Engine {
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         self.eval_snippet_with_gas_and_importer(source, gas, None)
     }
 
@@ -1505,7 +1505,7 @@ impl Engine {
         program: &Program,
         state: &mut ReplState,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         let importer = state.importer_path.as_ref().map(|p| ModuleId::Local {
             path: p.clone(),
             hash: "repl".into(),
@@ -1535,7 +1535,7 @@ impl Engine {
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         let path = importer_path.as_ref().to_path_buf();
         self.eval_snippet_with_importer(source, Some(path))
     }
@@ -1546,7 +1546,7 @@ impl Engine {
         source: &str,
         importer_path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         let path = importer_path.as_ref().to_path_buf();
         self.eval_snippet_with_gas_and_importer(source, gas, Some(path))
     }
@@ -1555,7 +1555,7 @@ impl Engine {
         &mut self,
         source: &str,
         importer_path: Option<PathBuf>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         let program = parse_program_from_source(source, None, None)?;
 
         let importer = importer_path.map(|p| ModuleId::Local {
@@ -1582,7 +1582,7 @@ impl Engine {
         source: &str,
         gas: &mut GasMeter,
         importer_path: Option<PathBuf>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Value<'h>, EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
         let importer = importer_path.map(|p| ModuleId::Local {

@@ -24,122 +24,129 @@ impl Heap {
 
     pub fn alloc_bool<'h>(&'h self, value: bool) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Bool(value),
+            value: Box::new(Value::Bool(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_u8<'h>(&'h self, value: u8) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::U8(value),
+            value: Box::new(Value::U8(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_u16<'h>(&'h self, value: u16) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::U16(value),
+            value: Box::new(Value::U16(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_u32<'h>(&'h self, value: u32) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::U32(value),
+            value: Box::new(Value::U32(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_u64<'h>(&'h self, value: u64) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::U64(value),
+            value: Box::new(Value::U64(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_i8<'h>(&'h self, value: i8) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::I8(value),
+            value: Box::new(Value::I8(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_i16<'h>(&'h self, value: i16) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::I16(value),
+            value: Box::new(Value::I16(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_i32<'h>(&'h self, value: i32) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::I32(value),
+            value: Box::new(Value::I32(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_i64<'h>(&'h self, value: i64) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::I64(value),
+            value: Box::new(Value::I64(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_f32<'h>(&'h self, value: f32) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::F32(value),
+            value: Box::new(Value::F32(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_f64<'h>(&'h self, value: f64) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::F64(value),
+            value: Box::new(Value::F64(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_string<'h>(&'h self, value: String) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::String(value),
+            value: Box::new(Value::String(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_uuid<'h>(&'h self, value: Uuid) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Uuid(value),
+            value: Box::new(Value::Uuid(value)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_datetime<'h>(&'h self, value: DateTime<Utc>) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::DateTime(value),
+            value: Box::new(Value::DateTime(value)),
             _heap: PhantomData,
         })
     }
 
-    pub fn alloc_tuple<'h>(&'h self, values: Vec<Value>) -> Result<Pointer<'h>, EngineError> {
+    pub fn alloc_value<'h>(&'h self, value: Value<'h>) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Tuple(values),
+            value: Box::new(value),
             _heap: PhantomData,
         })
     }
 
-    pub fn alloc_array<'h>(&'h self, values: Vec<Value>) -> Result<Pointer<'h>, EngineError> {
+    pub fn alloc_tuple<'h>(&'h self, values: Vec<Pointer<'h>>) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Array(values),
+            value: Box::new(Value::Tuple(values)),
+            _heap: PhantomData,
+        })
+    }
+
+    pub fn alloc_array<'h>(&'h self, values: Vec<Pointer<'h>>) -> Result<Pointer<'h>, EngineError> {
+        Ok(Pointer {
+            value: Box::new(Value::Array(values)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_dict<'h>(
         &'h self,
-        values: BTreeMap<Symbol, Value>,
+        values: BTreeMap<Symbol, Pointer<'h>>,
     ) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Dict(values),
+            value: Box::new(Value::Dict(values)),
             _heap: PhantomData,
         })
     }
@@ -147,30 +154,30 @@ impl Heap {
     pub fn alloc_adt<'h>(
         &'h self,
         name: Symbol,
-        args: Vec<Value>,
+        args: Vec<Pointer<'h>>,
     ) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Adt(name, args),
+            value: Box::new(Value::Adt(name, args)),
             _heap: PhantomData,
         })
     }
 
     pub fn alloc_closure<'h>(
         &'h self,
-        env: Env,
+        env: Env<'h>,
         param: Symbol,
         param_ty: Type,
         typ: Type,
         body: Arc<TypedExpr>,
     ) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Closure(Closure {
+            value: Box::new(Value::Closure(Closure {
                 env,
                 param,
                 param_ty,
                 typ,
                 body,
-            }),
+            })),
             _heap: PhantomData,
         })
     }
@@ -181,13 +188,13 @@ impl Heap {
         name: Symbol,
         arity: usize,
         typ: Type,
-        func: NativeCallable,
+        func: NativeCallable<'h>,
         gas_cost: u64,
-        applied: Vec<Value>,
+        applied: Vec<Pointer<'h>>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Native(NativeFn::from_parts(
+            value: Box::new(Value::Native(NativeFn::from_parts(
                 name,
                 arity,
                 typ,
@@ -195,7 +202,7 @@ impl Heap {
                 gas_cost,
                 applied,
                 applied_types,
-            )),
+            ))),
             _heap: PhantomData,
         })
     }
@@ -204,19 +211,24 @@ impl Heap {
         &'h self,
         name: Symbol,
         typ: Type,
-        applied: Vec<Value>,
+        applied: Vec<Pointer<'h>>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer<'h>, EngineError> {
         Ok(Pointer {
-            value: Value::Overloaded(OverloadedFn::from_parts(name, typ, applied, applied_types)),
+            value: Box::new(Value::Overloaded(OverloadedFn::from_parts(
+                name,
+                typ,
+                applied,
+                applied_types,
+            ))),
             _heap: PhantomData,
         })
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Closure {
-    pub env: Env,
+pub struct Closure<'h> {
+    pub env: Env<'h>,
     pub param: Symbol,
     pub param_ty: Type,
     pub typ: Type,
@@ -225,18 +237,22 @@ pub struct Closure {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pointer<'h> {
-    value: Value,
+    value: Box<Value<'h>>,
     _heap: PhantomData<&'h Heap>,
 }
 
 impl<'h> Pointer<'h> {
-    pub fn get_value(&self, _heap: &'h Heap) -> Result<Value, EngineError> {
-        Ok(self.value.clone())
+    pub fn get_value(&self, _heap: &'h Heap) -> Result<Value<'h>, EngineError> {
+        Ok(self.value.as_ref().clone())
+    }
+
+    pub fn as_value(&self) -> &Value<'h> {
+        self.value.as_ref()
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum Value {
+pub enum Value<'h> {
     Bool(bool),
     U8(u8),
     U16(u16),
@@ -251,16 +267,16 @@ pub enum Value {
     String(String),
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
-    Tuple(Vec<Value>),
-    Array(Vec<Value>),
-    Dict(BTreeMap<Symbol, Value>),
-    Adt(Symbol, Vec<Value>),
-    Closure(Closure),
-    Native(NativeFn),
-    Overloaded(OverloadedFn),
+    Tuple(Vec<Pointer<'h>>),
+    Array(Vec<Pointer<'h>>),
+    Dict(BTreeMap<Symbol, Pointer<'h>>),
+    Adt(Symbol, Vec<Pointer<'h>>),
+    Closure(Closure<'h>),
+    Native(NativeFn<'h>),
+    Overloaded(OverloadedFn<'h>),
 }
 
-impl Value {
+impl<'h> Value<'h> {
     pub fn type_name(&self) -> &'static str {
         match self {
             Value::Bool(..) => "bool",
@@ -289,7 +305,7 @@ impl Value {
     }
 }
 
-impl Display for Value {
+impl Display for Value<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Value::Bool(v) => write!(f, "{}", v),
@@ -309,7 +325,7 @@ impl Display for Value {
             Value::Tuple(xs) => {
                 write!(f, "(")?;
                 for (i, x) in xs.iter().enumerate() {
-                    write!(f, "{}", x)?;
+                    write!(f, "{}", x.as_value())?;
                     if i + 1 < xs.len() {
                         write!(f, ", ")?;
                     }
@@ -319,7 +335,7 @@ impl Display for Value {
             Value::Array(xs) => {
                 write!(f, "<array ")?;
                 for (i, x) in xs.iter().enumerate() {
-                    write!(f, "{}", x)?;
+                    write!(f, "{}", x.as_value())?;
                     if i + 1 < xs.len() {
                         write!(f, ", ")?;
                     }
@@ -329,7 +345,7 @@ impl Display for Value {
             Value::Dict(kvs) => {
                 write!(f, "{{")?;
                 for (i, (k, v)) in kvs.iter().enumerate() {
-                    write!(f, "{} = {}", k, v)?;
+                    write!(f, "{} = {}", k, v.as_value())?;
                     if i + 1 < kvs.len() {
                         write!(f, ", ")?;
                     }
@@ -340,7 +356,7 @@ impl Display for Value {
                 if let Some(list) = list_to_vec_opt(self) {
                     write!(f, "[")?;
                     for (i, x) in list.iter().enumerate() {
-                        write!(f, "{}", x)?;
+                        write!(f, "{}", x.as_value())?;
                         if i + 1 < list.len() {
                             write!(f, ", ")?;
                         }
@@ -350,7 +366,7 @@ impl Display for Value {
                 }
                 write!(f, "{}", name)?;
                 for arg in args {
-                    write!(f, " {}", arg)?;
+                    write!(f, " {}", arg.as_value())?;
                 }
                 Ok(())
             }
@@ -361,7 +377,7 @@ impl Display for Value {
     }
 }
 
-fn list_to_vec_opt(value: &Value) -> Option<Vec<Value>> {
+fn list_to_vec_opt<'h>(value: &Value<'h>) -> Option<Vec<Pointer<'h>>> {
     let mut out = Vec::new();
     let mut cur = value;
     loop {
@@ -369,14 +385,17 @@ fn list_to_vec_opt(value: &Value) -> Option<Vec<Value>> {
             Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Some(out),
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0].clone());
-                cur = &args[1];
+                cur = args[1].as_value();
             }
             _ => return None,
         }
     }
 }
 
-pub(crate) fn list_to_vec(value: &Value, name: &str) -> Result<Vec<Value>, EngineError> {
+pub(crate) fn list_to_vec<'h>(
+    value: &Value<'h>,
+    name: &str,
+) -> Result<Vec<Pointer<'h>>, EngineError> {
     let mut out = Vec::new();
     let mut cur = value;
     loop {
@@ -384,7 +403,7 @@ pub(crate) fn list_to_vec(value: &Value, name: &str) -> Result<Vec<Value>, Engin
             Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Ok(out),
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0].clone());
-                cur = &args[1];
+                cur = args[1].as_value();
             }
             _ => {
                 return Err(EngineError::NativeType {
@@ -397,141 +416,148 @@ pub(crate) fn list_to_vec(value: &Value, name: &str) -> Result<Vec<Value>, Engin
     }
 }
 
-pub(crate) fn list_from_vec(heap: &Heap, values: Vec<Value>) -> Result<Value, EngineError> {
-    let mut list = heap.alloc_adt(sym("Empty"), vec![])?.get_value(heap)?;
+pub(crate) fn list_from_vec<'h>(
+    heap: &'h Heap,
+    values: Vec<Pointer<'h>>,
+) -> Result<Value<'h>, EngineError> {
+    let mut list = heap.alloc_adt(sym("Empty"), vec![])?;
     for v in values.into_iter().rev() {
-        list = heap
-            .alloc_adt(sym("Cons"), vec![v, list])?
-            .get_value(heap)?;
+        list = heap.alloc_adt(sym("Cons"), vec![v, list])?;
     }
-    Ok(list)
+    list.get_value(heap)
 }
 
-pub trait IntoValue {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError>;
+pub trait IntoValue<'h> {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError>;
 }
 
-pub trait FromValue: Sized {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError>;
+pub trait FromValue<'h>: Sized {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError>;
 }
 
 pub trait RexType {
     fn rex_type() -> Type;
 }
 
-impl IntoValue for Value {
-    fn into_value(self, _heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for Value<'h> {
+    fn into_value(self, _heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         Ok(self)
     }
 }
 
-impl IntoValue for bool {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for bool {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_bool(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for u8 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for u8 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_u8(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for u16 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for u16 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_u16(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for u32 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for u32 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_u32(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for u64 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for u64 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_u64(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for i8 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for i8 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_i8(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for i16 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for i16 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_i16(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for i32 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for i32 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_i32(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for i64 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for i64 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_i64(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for f32 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for f32 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_f32(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for f64 {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for f64 {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_f64(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for String {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for String {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_string(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for &str {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for &str {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_string(self.to_string())?.get_value(heap)
     }
 }
 
-impl<T: IntoValue> IntoValue for Vec<T> {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h, T: IntoValue<'h>> IntoValue<'h> for Vec<T> {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         let values = self
             .into_iter()
             .map(|v| v.into_value(heap))
             .collect::<Result<Vec<_>, _>>()?;
-        heap.alloc_array(values)?.get_value(heap)
+        let ptrs = values
+            .into_iter()
+            .map(|v| heap.alloc_value(v))
+            .collect::<Result<Vec<_>, _>>()?;
+        heap.alloc_array(ptrs)?.get_value(heap)
     }
 }
 
-impl<T: IntoValue> IntoValue for Option<T> {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h, T: IntoValue<'h>> IntoValue<'h> for Option<T> {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         match self {
-            Some(v) => heap
-                .alloc_adt(sym("Some"), vec![v.into_value(heap)?])?
-                .get_value(heap),
+            Some(v) => {
+                let value = v.into_value(heap)?;
+                let ptr = heap.alloc_value(value)?;
+                heap.alloc_adt(sym("Some"), vec![ptr])?.get_value(heap)
+            }
             None => heap.alloc_adt(sym("None"), vec![])?.get_value(heap),
         }
     }
 }
 
-impl IntoValue for Uuid {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for Uuid {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_uuid(self)?.get_value(heap)
     }
 }
 
-impl IntoValue for DateTime<Utc> {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for DateTime<Utc> {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_datetime(self)?.get_value(heap)
     }
 }
@@ -638,8 +664,8 @@ impl<T: RexType> RexType for Option<T> {
     }
 }
 
-impl FromValue for bool {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+impl<'h> FromValue<'h> for bool {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
         match value {
             Value::Bool(v) => Ok(*v),
             _ => Err(EngineError::NativeType {
@@ -653,8 +679,8 @@ impl FromValue for bool {
 
 macro_rules! impl_from_value_num {
     ($t:ty, $variant:ident, $label:literal) => {
-        impl FromValue for $t {
-            fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+        impl<'h> FromValue<'h> for $t {
+            fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
                 match value {
                     Value::$variant(v) => Ok(*v as $t),
                     _ => Err(EngineError::NativeType {
@@ -679,8 +705,8 @@ impl_from_value_num!(i64, I64, "i64");
 impl_from_value_num!(f32, F32, "f32");
 impl_from_value_num!(f64, F64, "f64");
 
-impl FromValue for String {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+impl<'h> FromValue<'h> for String {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
         match value {
             Value::String(v) => Ok(v.clone()),
             _ => Err(EngineError::NativeType {
@@ -692,8 +718,8 @@ impl FromValue for String {
     }
 }
 
-impl FromValue for Uuid {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+impl<'h> FromValue<'h> for Uuid {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
         match value {
             Value::Uuid(v) => Ok(*v),
             _ => Err(EngineError::NativeType {
@@ -705,8 +731,8 @@ impl FromValue for Uuid {
     }
 }
 
-impl FromValue for DateTime<Utc> {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+impl<'h> FromValue<'h> for DateTime<Utc> {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
         match value {
             Value::DateTime(v) => Ok(*v),
             _ => Err(EngineError::NativeType {
@@ -718,22 +744,22 @@ impl FromValue for DateTime<Utc> {
     }
 }
 
-impl FromValue for Value {
-    fn from_value(value: &Value, _name: &str) -> Result<Self, EngineError> {
+impl<'h> FromValue<'h> for Value<'h> {
+    fn from_value(value: &Value<'h>, _name: &str) -> Result<Self, EngineError> {
         Ok(value.clone())
     }
 }
 
-impl<T> FromValue for Vec<T>
+impl<'h, T> FromValue<'h> for Vec<T>
 where
-    T: FromValue,
+    T: FromValue<'h>,
 {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
         match value {
             Value::Array(xs) => {
                 let mut ys = Vec::with_capacity(xs.len());
                 for x in xs {
-                    ys.push(T::from_value(x, name)?);
+                    ys.push(T::from_value(x.as_value(), name)?);
                 }
                 Ok(ys)
             }
@@ -746,14 +772,14 @@ where
     }
 }
 
-impl<T> FromValue for Option<T>
+impl<'h, T> FromValue<'h> for Option<T>
 where
-    T: FromValue,
+    T: FromValue<'h>,
 {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
         match value {
             Value::Adt(n, xs) if sym_eq(n, "Some") && xs.len() == 1 => {
-                Ok(Some(T::from_value(&xs[0], name)?))
+                Ok(Some(T::from_value(xs[0].as_value(), name)?))
             }
             Value::Adt(n, xs) if sym_eq(n, "None") && xs.is_empty() => Ok(None),
             _ => Err(EngineError::NativeType {
@@ -771,14 +797,14 @@ impl RexType for () {
     }
 }
 
-impl IntoValue for () {
-    fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+impl<'h> IntoValue<'h> for () {
+    fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
         heap.alloc_tuple(vec![])?.get_value(heap)
     }
 }
 
-impl FromValue for () {
-    fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+impl<'h> FromValue<'h> for () {
+    fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
         match value {
             Value::Tuple(items) if items.is_empty() => Ok(()),
             _ => Err(EngineError::NativeType {
@@ -798,22 +824,26 @@ macro_rules! impl_tuple_traits {
             }
         }
 
-        impl<$($name: IntoValue),+> IntoValue for ($($name,)+) {
+        impl<'h, $($name: IntoValue<'h>),+> IntoValue<'h> for ($($name,)+) {
             #[allow(non_snake_case)]
-            fn into_value(self, heap: &Heap) -> Result<Value, EngineError> {
+            fn into_value(self, heap: &'h Heap) -> Result<Value<'h>, EngineError> {
                 let ($($name,)+) = self;
                 let values = vec![$($name.into_value(heap)?),+];
-                heap.alloc_tuple(values)?.get_value(heap)
+                let ptrs = values
+                    .into_iter()
+                    .map(|v| heap.alloc_value(v))
+                    .collect::<Result<Vec<_>, _>>()?;
+                heap.alloc_tuple(ptrs)?.get_value(heap)
             }
         }
 
-        impl<$($name: FromValue),+> FromValue for ($($name,)+) {
+        impl<'h, $($name: FromValue<'h>),+> FromValue<'h> for ($($name,)+) {
             #[allow(non_snake_case)]
-            fn from_value(value: &Value, name: &str) -> Result<Self, EngineError> {
+            fn from_value(value: &Value<'h>, name: &str) -> Result<Self, EngineError> {
                 match value {
                     Value::Tuple(items) => match items.as_slice() {
                         [$($name),+] => {
-                            Ok(($(<$name as FromValue>::from_value($name, name)?),+,))
+                            Ok(($(<$name as FromValue>::from_value($name.as_value(), name)?),+,))
                         }
                         _ => Err(EngineError::NativeType {
                             name: sym(name),

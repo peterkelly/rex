@@ -64,10 +64,10 @@ impl ReplState {
 }
 
 #[derive(Clone)]
-pub struct ModuleInstance {
+pub struct ModuleInstance<'h> {
     pub id: ModuleId,
     pub exports: ModuleExports,
-    pub init_value: Value,
+    pub init_value: Value<'h>,
 }
 
 pub(crate) fn prefix_for_module(id: &ModuleId) -> String {

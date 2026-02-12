@@ -1,4 +1,4 @@
-use rex::{Engine, GasCosts, GasMeter, Parser, Token, Type, sym};
+use rex::{Engine, GasCosts, GasMeter, Heap, Parser, Token, Type, sym};
 
 #[test]
 fn vec_from_value() {
@@ -6,7 +6,8 @@ fn vec_from_value() {
         format!("accept_vec: {:?}", items)
     }
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine.inject_fn1("accept_vec", accept_vec).unwrap();
 
     let expr = r#"accept_vec (prim_array_from_list [1, 2, 3])"#;
@@ -35,7 +36,8 @@ fn vec_to_value() {
         result
     }
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine.inject_fn1("return_vec", return_vec).unwrap();
 
     let expr = r#"return_vec "hello""#;
@@ -48,11 +50,11 @@ fn vec_to_value() {
     assert_eq!(
         result,
         heap.alloc_array(vec![
-            heap.alloc_i32(0).unwrap().get_value(heap).unwrap(),
-            heap.alloc_i32(1).unwrap().get_value(heap).unwrap(),
-            heap.alloc_i32(2).unwrap().get_value(heap).unwrap(),
-            heap.alloc_i32(3).unwrap().get_value(heap).unwrap(),
-            heap.alloc_i32(4).unwrap().get_value(heap).unwrap(),
+            heap.alloc_i32(0).unwrap(),
+            heap.alloc_i32(1).unwrap(),
+            heap.alloc_i32(2).unwrap(),
+            heap.alloc_i32(3).unwrap(),
+            heap.alloc_i32(4).unwrap(),
         ])
         .unwrap()
         .get_value(heap)
@@ -70,7 +72,8 @@ fn vec_rex_type() {
         result
     }
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine.inject_fn1("return_vec", return_vec).unwrap();
 
     let expr = r#"return_vec "hello""#;
@@ -85,7 +88,8 @@ fn vec_rex_type() {
 #[test]
 fn option_prelude() {
     let expr = r#"(Some 4, None)"#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let result = engine.eval(program.expr.as_ref()).unwrap();
@@ -93,17 +97,9 @@ fn option_prelude() {
     assert_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(
-                sym("Some"),
-                vec![heap.alloc_i32(4).unwrap().get_value(heap).unwrap()],
-            )
-            .unwrap()
-            .get_value(heap)
-            .unwrap(),
-            heap.alloc_adt(sym("None"), vec![])
-                .unwrap()
-                .get_value(heap)
+            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(4).unwrap()],)
                 .unwrap(),
+            heap.alloc_adt(sym("None"), vec![]).unwrap(),
         ])
         .unwrap()
         .get_value(heap)
@@ -118,7 +114,8 @@ fn option_from_value() {
     }
 
     let expr = r#"(accept_opt (Some 4), accept_opt None)"#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine.inject_fn1("accept_opt", accept_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
@@ -129,13 +126,8 @@ fn option_from_value() {
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_opt: Some(4)".to_string())
-                .unwrap()
-                .get_value(heap)
                 .unwrap(),
-            heap.alloc_string("accept_opt: None".to_string())
-                .unwrap()
-                .get_value(heap)
-                .unwrap(),
+            heap.alloc_string("accept_opt: None".to_string()).unwrap(),
         ])
         .unwrap()
         .get_value(heap)
@@ -154,7 +146,8 @@ fn option_into_value() {
     }
 
     let expr = r#"(return_opt "hello", return_opt "")"#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine.inject_fn1("return_opt", return_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
@@ -164,17 +157,9 @@ fn option_into_value() {
     assert_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(
-                sym("Some"),
-                vec![heap.alloc_i32(5).unwrap().get_value(heap).unwrap()],
-            )
-            .unwrap()
-            .get_value(heap)
-            .unwrap(),
-            heap.alloc_adt(sym("None"), vec![])
-                .unwrap()
-                .get_value(heap)
+            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(5).unwrap()],)
                 .unwrap(),
+            heap.alloc_adt(sym("None"), vec![]).unwrap(),
         ])
         .unwrap()
         .get_value(heap)
@@ -193,7 +178,8 @@ fn option_rex_type() {
     }
 
     let expr = r#"return_opt "hello""#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine.inject_fn1("return_opt", return_opt).unwrap();
 
     let costs = GasCosts::sensible_defaults();

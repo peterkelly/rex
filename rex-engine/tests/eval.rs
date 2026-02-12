@@ -1,7 +1,7 @@
 use futures::executor::block_on;
 use futures::future;
 use rex_ast::expr::sym_eq;
-use rex_engine::{CancellationToken, Engine, EngineError, Value};
+use rex_engine::{CancellationToken, Engine, EngineError, Heap, Value};
 use rex_ts::TypeError;
 use rex_util::{GasCosts, GasMeter};
 use std::sync::Arc;
@@ -23,19 +23,38 @@ fn strip_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn engine_with_arith() -> Engine {
-    Engine::with_prelude().unwrap()
+fn test_heap() -> &'static Heap {
+    Box::leak(Box::new(Heap::new()))
 }
 
-fn list_values(value: &Value) -> Vec<Value> {
+fn engine_with_arith() -> Engine<'static> {
+    Engine::with_prelude(test_heap()).unwrap()
+}
+
+macro_rules! pval {
+    ($engine:expr, $ptr:expr) => {
+        $ptr.get_value($engine.heap()).unwrap()
+    };
+}
+
+macro_rules! pvals {
+    ($engine:expr, $vals:expr) => {
+        $vals
+            .iter()
+            .map(|value| value.get_value($engine.heap()).unwrap())
+            .collect::<Vec<_>>()
+    };
+}
+
+fn list_values<'h>(engine: &Engine<'h>, value: &Value<'h>) -> Vec<Value<'h>> {
     let mut out = Vec::new();
     let mut cur = value;
     loop {
         match cur {
             Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return out,
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
-                out.push(args[0].clone());
-                cur = &args[1];
+                out.push(pval!(engine, args[0]));
+                cur = args[1].as_value();
             }
             _ => panic!("expected list value"),
         }
@@ -52,10 +71,11 @@ fn eval_let_lambda() {
             id (id 1, id 2)
         "#,
     );
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(test_heap());
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
             assert_eq!(
                 xs[0],
@@ -83,7 +103,7 @@ fn eval_let_lambda() {
 #[test]
 fn eval_async_native_injection() {
     let expr = parse("inc 1");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     engine
         .inject_async_fn1("inc", |x: i32| async move { x + 1 })
         .unwrap();
@@ -114,7 +134,7 @@ fn eval_async_native_injection() {
 #[test]
 fn eval_async_can_be_cancelled() {
     let expr = parse("stall");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
 
     let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
     engine
@@ -144,7 +164,7 @@ fn eval_async_can_be_cancelled() {
 #[test]
 fn eval_with_gas_rejects_out_of_budget() {
     let expr = parse("1");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let mut gas = GasMeter::new(
         Some(0),
         GasCosts {
@@ -180,11 +200,11 @@ fn eval_deep_list_does_not_overflow() {
         .parse_program_with_stack_size(128 * 1024 * 1024)
         .unwrap();
     let expr = program.expr;
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine
         .eval_with_stack_size(expr.as_ref(), 64 * 1024 * 1024)
         .unwrap();
-    let xs = list_values(&value);
+    let xs = list_values(&engine, &value);
     assert_eq!(xs.len(), N);
     let expected = engine
         .heap()
@@ -329,7 +349,7 @@ fn eval_type_annotation_mismatch() {
 
 #[test]
 fn eval_native_injection() {
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(test_heap());
     engine.inject_fn0("zero", || -> u32 { 0u32 }).unwrap();
     engine
         .inject_fn2("(+)", |x: u32, y: u32| -> u32 { x + y })
@@ -517,6 +537,7 @@ fn eval_match_dict_and_tuple() {
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
             assert_eq!(
                 xs[0],
@@ -544,7 +565,7 @@ fn eval_match_dict_and_tuple() {
 #[test]
 fn eval_match_missing_arm_errors() {
     let expr = parse("match (Err 1) when Ok x -> x");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let result = engine.eval(expr.as_ref());
     match result {
         Err(EngineError::Type(err)) => {
@@ -558,7 +579,7 @@ fn eval_match_missing_arm_errors() {
 #[test]
 fn eval_match_invalid_pattern_type_error() {
     let expr = parse("match (Ok 1) when [] -> 0 when x:xs -> 1");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let result = engine.eval(expr.as_ref());
     match result {
         Err(EngineError::Type(err)) => {
@@ -611,10 +632,11 @@ fn eval_safe_div_pipeline() {
             )
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 3);
             match xs[0] {
                 Value::F32(v) => assert!((v - 1.0).abs() < 1e-3),
@@ -645,7 +667,7 @@ fn eval_user_adt_declaration() {
                 when Box x -> x
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -671,7 +693,7 @@ fn eval_fn_decl_simple() {
         add 1 2
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -698,7 +720,7 @@ fn eval_fn_decl_with_where_constraints() {
         my_add 1 2
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -728,7 +750,7 @@ fn eval_adt_record_projection_single_variant() {
             (x.field1, x.field2)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -737,6 +759,7 @@ fn eval_adt_record_projection_single_variant() {
     let value = engine.eval(program.expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(
                 xs[0],
                 engine
@@ -768,7 +791,7 @@ fn eval_adt_record_projection_match_arm() {
                 when MyVariant2 _ -> 0
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -799,12 +822,13 @@ fn eval_list_map_fold_filter() {
             (ys, zs, total)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 3);
-            let vals = list_values(&xs[0]);
+            let vals = list_values(&engine, &xs[0]);
             assert_eq!(vals.len(), 3);
             assert_eq!(
                 vals[0],
@@ -833,7 +857,7 @@ fn eval_list_map_fold_filter() {
                     .get_value(engine.heap())
                     .unwrap()
             );
-            let vals = list_values(&xs[1]);
+            let vals = list_values(&engine, &xs[1]);
             assert_eq!(vals.len(), 1);
             assert_eq!(
                 vals[0],
@@ -870,12 +894,13 @@ fn eval_list_flat_map_zip_unzip() {
             (xs, unzipped)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
-            let vals = list_values(&xs[0]);
+            let vals = list_values(&engine, &xs[0]);
             assert_eq!(vals.len(), 4);
             assert_eq!(
                 vals[0],
@@ -915,9 +940,10 @@ fn eval_list_flat_map_zip_unzip() {
             );
             match &xs[1] {
                 Value::Tuple(parts) => {
+                    let parts = pvals!(engine, parts);
                     assert_eq!(parts.len(), 2);
-                    list_values(&parts[0]);
-                    list_values(&parts[1]);
+                    list_values(&engine, &parts[0]);
+                    list_values(&engine, &parts[1]);
                 }
                 _ => panic!("expected unzip tuple"),
             }
@@ -939,10 +965,11 @@ fn eval_list_sum_mean_min_max() {
             (s, m, lo, hi)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 4);
             assert_eq!(
                 xs[0],
@@ -994,10 +1021,11 @@ fn eval_option_result_helpers() {
             (opt2, res, ok, err)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 4);
             assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
             assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "Ok")));
@@ -1038,10 +1066,11 @@ fn eval_order_ops() {
             (a, b, c, d, e)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 5);
             assert_eq!(
                 xs[0],
@@ -1106,10 +1135,11 @@ fn eval_option_and_then_or_else() {
             (a, b, c)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 3);
             assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
             assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "None")));
@@ -1133,10 +1163,11 @@ fn eval_result_filter_pipeline() {
             (count ys, total)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
             assert_eq!(
                 xs[0],
@@ -1163,7 +1194,7 @@ fn eval_result_filter_pipeline() {
 
 #[test]
 fn eval_array_combinators() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(test_heap()).unwrap();
     engine.inject_value("arr", vec![1i32, 2i32, 3i32]).unwrap();
     let expr = parse(
         r#"
@@ -1181,9 +1212,11 @@ fn eval_array_combinators() {
     let value = engine.eval(expr.as_ref()).unwrap();
     match value {
         Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 5);
             match &xs[0] {
                 Value::Array(vals) => {
+                    let vals = pvals!(engine, vals);
                     assert_eq!(vals.len(), 3);
                     assert_eq!(
                         vals[0],
@@ -1226,6 +1259,7 @@ fn eval_array_combinators() {
             );
             match &xs[2] {
                 Value::Array(vals) => {
+                    let vals = pvals!(engine, vals);
                     assert_eq!(vals.len(), 2);
                     assert_eq!(
                         vals[0],
@@ -1250,6 +1284,7 @@ fn eval_array_combinators() {
             }
             match &xs[3] {
                 Value::Array(vals) => {
+                    let vals = pvals!(engine, vals);
                     assert_eq!(vals.len(), 2);
                     assert_eq!(
                         vals[0],
@@ -1274,6 +1309,7 @@ fn eval_array_combinators() {
             }
             match &xs[4] {
                 Value::Tuple(parts) => {
+                    let parts = pvals!(engine, parts);
                     assert_eq!(parts.len(), 2);
                     match &parts[0] {
                         Value::Array(vals) => assert_eq!(vals.len(), 3),

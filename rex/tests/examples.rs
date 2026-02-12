@@ -1,4 +1,4 @@
-use rex::{Engine, Parser, Token, TypeSystem};
+use rex::{Engine, Heap, Parser, Token, TypeSystem};
 
 fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");
@@ -21,7 +21,8 @@ fn assert_program_ok(name: &str, source: &str) {
     ts.infer(program.expr.as_ref())
         .unwrap_or_else(|err| panic!("{name}: type error: {err}"));
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let heap = Heap::new();
+    let mut engine = Engine::with_prelude(&heap).unwrap();
     engine
         .inject_decls(&program.decls)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
