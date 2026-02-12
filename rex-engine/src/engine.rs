@@ -48,7 +48,7 @@ type AsyncNativeCallableCancellable =
     Arc<dyn Fn(Engine, CancellationToken, Type, Vec<Value>) -> NativeFuture + Send + Sync>;
 
 #[derive(Clone)]
-enum NativeCallable {
+pub(crate) enum NativeCallable {
     Sync(SyncNativeCallable),
     Async(AsyncNativeCallable),
     AsyncCancellable(AsyncNativeCallableCancellable),
@@ -143,6 +143,26 @@ impl NativeFn {
         }
     }
 
+    pub(crate) fn from_parts(
+        name: Symbol,
+        arity: usize,
+        typ: Type,
+        func: NativeCallable,
+        gas_cost: u64,
+        applied: Vec<Value>,
+        applied_types: Vec<Type>,
+    ) -> Self {
+        Self {
+            name,
+            arity,
+            typ,
+            func,
+            gas_cost,
+            applied,
+            applied_types,
+        }
+    }
+
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
     }
@@ -172,7 +192,19 @@ impl NativeFn {
         self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&self.typ) {
-            return engine.heap().alloc_native(self);
+            let NativeFn {
+                name,
+                arity,
+                typ,
+                func,
+                gas_cost,
+                applied,
+                applied_types,
+            } = self;
+            return engine
+                .heap()
+                .alloc_native(name, arity, typ, func, gas_cost, applied, applied_types)?
+                .get_value(engine.heap());
         }
         let mut full_ty = self.typ.clone();
         for arg_ty in self.applied_types.iter().rev() {
@@ -224,8 +256,26 @@ impl OverloadedFn {
         }
     }
 
+    pub(crate) fn from_parts(
+        name: Symbol,
+        typ: Type,
+        applied: Vec<Value>,
+        applied_types: Vec<Type>,
+    ) -> Self {
+        Self {
+            name,
+            typ,
+            applied,
+            applied_types,
+        }
+    }
+
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
+    }
+
+    pub(crate) fn into_parts(self) -> (Symbol, Type, Vec<Value>, Vec<Type>) {
+        (self.name, self.typ, self.applied, self.applied_types)
     }
 
     fn apply(
@@ -255,12 +305,10 @@ impl OverloadedFn {
         self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&rest_ty) {
-            return engine.heap().alloc_overloaded(OverloadedFn {
-                name: self.name,
-                typ: rest_ty,
-                applied: self.applied,
-                applied_types: self.applied_types,
-            });
+            return engine
+                .heap()
+                .alloc_overloaded(self.name, rest_ty, self.applied, self.applied_types)?
+                .get_value(engine.heap());
         }
         let mut full_ty = rest_ty;
         for arg_ty in self.applied_types.iter().rev() {
@@ -319,12 +367,10 @@ impl OverloadedFn {
         self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&rest_ty) {
-            return engine.heap().alloc_overloaded(OverloadedFn {
-                name: self.name,
-                typ: rest_ty,
-                applied: self.applied,
-                applied_types: self.applied_types,
-            });
+            return engine
+                .heap()
+                .alloc_overloaded(self.name, rest_ty, self.applied, self.applied_types)?
+                .get_value(engine.heap());
         }
         let mut full_ty = rest_ty;
         for arg_ty in self.applied_types.iter().rev() {
@@ -390,12 +436,10 @@ impl OverloadedFn {
         self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&rest_ty) {
-            return engine.heap().alloc_overloaded(OverloadedFn {
-                name: self.name,
-                typ: rest_ty,
-                applied: self.applied,
-                applied_types: self.applied_types,
-            });
+            return engine
+                .heap()
+                .alloc_overloaded(self.name, rest_ty, self.applied, self.applied_types)?
+                .get_value(engine.heap());
         }
         let mut full_ty = rest_ty;
         for arg_ty in self.applied_types.iter().rev() {
@@ -727,7 +771,10 @@ impl Engine {
             };
 
             log(&message);
-            engine.heap().alloc_string(message)
+            engine
+                .heap()
+                .alloc_string(message)?
+                .get_value(engine.heap())
         })
     }
 
@@ -1212,7 +1259,10 @@ impl Engine {
         for (ctor, scheme) in adt.constructor_schemes() {
             let ctor_name = ctor.clone();
             let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Value]| {
-                engine.heap().alloc_adt(ctor_name.clone(), args.to_vec())
+                engine
+                    .heap()
+                    .alloc_adt(ctor_name.clone(), args.to_vec())?
+                    .get_value(engine.heap())
             });
             let arity = type_arity(&scheme.typ);
             self.register_native(ctor, scheme, arity, NativeCallable::Sync(func), 0)?;
@@ -1651,9 +1701,12 @@ impl Engine {
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
+                let (name, typ, applied, applied_types) =
+                    OverloadedFn::new(name.clone(), typ.clone()).into_parts();
                 return self
                     .heap()
-                    .alloc_overloaded(OverloadedFn::new(name.clone(), typ.clone()));
+                    .alloc_overloaded(name, typ, applied, applied_types)?
+                    .get_value(self.heap());
             }
             Err(err) => return Err(err),
         };
@@ -1677,9 +1730,12 @@ impl Engine {
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
+                let (name, typ, applied, applied_types) =
+                    OverloadedFn::new(name.clone(), typ.clone()).into_parts();
                 return self
                     .heap()
-                    .alloc_overloaded(OverloadedFn::new(name.clone(), typ.clone()));
+                    .alloc_overloaded(name, typ, applied, applied_types)?
+                    .get_value(self.heap());
             }
             Err(err) => return Err(err),
         };
@@ -1784,7 +1840,18 @@ impl Engine {
             }),
             1 => {
                 let imp = matches[0].clone();
-                self.heap().alloc_native(imp.to_native_fn(typ.clone()))
+                let NativeFn {
+                    name,
+                    arity,
+                    typ,
+                    func,
+                    gas_cost,
+                    applied,
+                    applied_types,
+                } = imp.to_native_fn(typ.clone());
+                self.heap()
+                    .alloc_native(name, arity, typ, func, gas_cost, applied, applied_types)?
+                    .get_value(self.heap())
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -1793,8 +1860,11 @@ impl Engine {
                         typ: typ.to_string(),
                     })
                 } else if is_function_type(typ) {
+                    let (name, typ, applied, applied_types) =
+                        OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
                     self.heap()
-                        .alloc_overloaded(OverloadedFn::new(sym_name.clone(), typ.clone()))
+                        .alloc_overloaded(name, typ, applied, applied_types)?
+                        .get_value(self.heap())
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }
@@ -1825,7 +1895,18 @@ impl Engine {
             }),
             1 => {
                 let imp = matches[0].clone();
-                self.heap().alloc_native(imp.to_native_fn(typ.clone()))
+                let NativeFn {
+                    name,
+                    arity,
+                    typ,
+                    func,
+                    gas_cost,
+                    applied,
+                    applied_types,
+                } = imp.to_native_fn(typ.clone());
+                self.heap()
+                    .alloc_native(name, arity, typ, func, gas_cost, applied, applied_types)?
+                    .get_value(self.heap())
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -1834,8 +1915,11 @@ impl Engine {
                         typ: typ.to_string(),
                     })
                 } else if is_function_type(typ) {
+                    let (name, typ, applied, applied_types) =
+                        OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
                     self.heap()
-                        .alloc_overloaded(OverloadedFn::new(sym_name.clone(), typ.clone()))
+                        .alloc_overloaded(name, typ, applied, applied_types)?
+                        .get_value(self.heap())
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }
@@ -2362,7 +2446,19 @@ impl NativeFn {
         self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&self.typ) {
-            return engine.heap().alloc_native(self);
+            let NativeFn {
+                name,
+                arity,
+                typ,
+                func,
+                gas_cost,
+                applied,
+                applied_types,
+            } = self;
+            return engine
+                .heap()
+                .alloc_native(name, arity, typ, func, gas_cost, applied, applied_types)?
+                .get_value(engine.heap());
         }
 
         let mut full_ty = self.typ.clone();
@@ -2423,7 +2519,19 @@ impl NativeFn {
         self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&self.typ) {
-            return engine.heap().alloc_native(self);
+            let NativeFn {
+                name,
+                arity,
+                typ,
+                func,
+                gas_cost,
+                applied,
+                applied_types,
+            } = self;
+            return engine
+                .heap()
+                .alloc_native(name, arity, typ, func, gas_cost, applied, applied_types)?
+                .get_value(engine.heap());
         }
 
         let mut full_ty = self.typ.clone();
@@ -2471,20 +2579,23 @@ fn eval_typed_expr_with_gas(
 
     gas.charge(gas.costs.eval_node)?;
     match &cur.kind {
-        TypedExprKind::Bool(v) => engine.heap().alloc_bool(*v),
-        TypedExprKind::Uint(v) => engine.heap().alloc_i32(*v as i32),
-        TypedExprKind::Int(v) => engine.heap().alloc_i32(*v as i32),
-        TypedExprKind::Float(v) => engine.heap().alloc_f32(*v as f32),
-        TypedExprKind::String(v) => engine.heap().alloc_string(v.clone()),
-        TypedExprKind::Uuid(v) => engine.heap().alloc_uuid(*v),
-        TypedExprKind::DateTime(v) => engine.heap().alloc_datetime(*v),
+        TypedExprKind::Bool(v) => engine.heap().alloc_bool(*v)?.get_value(engine.heap()),
+        TypedExprKind::Uint(v) => engine.heap().alloc_i32(*v as i32)?.get_value(engine.heap()),
+        TypedExprKind::Int(v) => engine.heap().alloc_i32(*v as i32)?.get_value(engine.heap()),
+        TypedExprKind::Float(v) => engine.heap().alloc_f32(*v as f32)?.get_value(engine.heap()),
+        TypedExprKind::String(v) => engine
+            .heap()
+            .alloc_string(v.clone())?
+            .get_value(engine.heap()),
+        TypedExprKind::Uuid(v) => engine.heap().alloc_uuid(*v)?.get_value(engine.heap()),
+        TypedExprKind::DateTime(v) => engine.heap().alloc_datetime(*v)?.get_value(engine.heap()),
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
                 values.push(eval_typed_expr_with_gas(engine, &env, elem, gas)?);
             }
-            engine.heap().alloc_tuple(values)
+            engine.heap().alloc_tuple(values)?.get_value(engine.heap())
         }
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
@@ -2500,7 +2611,7 @@ fn eval_typed_expr_with_gas(
                 check_cancelled(engine)?;
                 out.insert(k.clone(), eval_typed_expr_with_gas(engine, &env, v, gas)?);
             }
-            engine.heap().alloc_dict(out)
+            engine.heap().alloc_dict(out)?.get_value(engine.heap())
         }
         TypedExprKind::RecordUpdate { base, updates } => {
             let base_val = eval_typed_expr_with_gas(engine, &env, base, gas)?;
@@ -2516,7 +2627,7 @@ fn eval_typed_expr_with_gas(
                         gas.charge(gas.costs.eval_record_update_field)?;
                         map.insert(k, v);
                     }
-                    engine.heap().alloc_dict(map)
+                    engine.heap().alloc_dict(map)?.get_value(engine.heap())
                 }
                 Value::Adt(tag, args) if args.len() == 1 => match &args[0] {
                     Value::Dict(map) => {
@@ -2525,8 +2636,11 @@ fn eval_typed_expr_with_gas(
                             gas.charge(gas.costs.eval_record_update_field)?;
                             out.insert(k, v);
                         }
-                        let dict = engine.heap().alloc_dict(out)?;
-                        engine.heap().alloc_adt(tag, vec![dict])
+                        let dict = engine.heap().alloc_dict(out)?.get_value(engine.heap())?;
+                        engine
+                            .heap()
+                            .alloc_adt(tag, vec![dict])?
+                            .get_value(engine.heap())
                     }
                     _ => Err(EngineError::UnsupportedExpr),
                 },
@@ -2583,15 +2697,21 @@ fn eval_typed_expr_with_gas(
             let value = eval_typed_expr_with_gas(engine, &env, expr, gas)?;
             project_value(field, value)
         }
-        TypedExprKind::Lam { param, body } => engine.heap().alloc_closure(Closure {
-            env: env.clone(),
-            param: param.clone(),
-            param_ty: split_fun(&expr.typ)
+        TypedExprKind::Lam { param, body } => {
+            let param_ty = split_fun(&expr.typ)
                 .map(|(arg, _)| arg)
-                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?,
-            typ: expr.typ.clone(),
-            body: Arc::new(body.as_ref().clone()),
-        }),
+                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?;
+            engine
+                .heap()
+                .alloc_closure(
+                    env.clone(),
+                    param.clone(),
+                    param_ty,
+                    expr.typ.clone(),
+                    Arc::new(body.as_ref().clone()),
+                )?
+                .get_value(engine.heap())
+        }
         TypedExprKind::Ite {
             cond,
             then_expr,
@@ -2701,20 +2821,23 @@ async fn eval_typed_expr_async_with_gas(
 
     gas.charge(gas.costs.eval_node)?;
     match &cur.kind {
-        TypedExprKind::Bool(v) => engine.heap().alloc_bool(*v),
-        TypedExprKind::Uint(v) => engine.heap().alloc_i32(*v as i32),
-        TypedExprKind::Int(v) => engine.heap().alloc_i32(*v as i32),
-        TypedExprKind::Float(v) => engine.heap().alloc_f32(*v as f32),
-        TypedExprKind::String(v) => engine.heap().alloc_string(v.clone()),
-        TypedExprKind::Uuid(v) => engine.heap().alloc_uuid(*v),
-        TypedExprKind::DateTime(v) => engine.heap().alloc_datetime(*v),
+        TypedExprKind::Bool(v) => engine.heap().alloc_bool(*v)?.get_value(engine.heap()),
+        TypedExprKind::Uint(v) => engine.heap().alloc_i32(*v as i32)?.get_value(engine.heap()),
+        TypedExprKind::Int(v) => engine.heap().alloc_i32(*v as i32)?.get_value(engine.heap()),
+        TypedExprKind::Float(v) => engine.heap().alloc_f32(*v as f32)?.get_value(engine.heap()),
+        TypedExprKind::String(v) => engine
+            .heap()
+            .alloc_string(v.clone())?
+            .get_value(engine.heap()),
+        TypedExprKind::Uuid(v) => engine.heap().alloc_uuid(*v)?.get_value(engine.heap()),
+        TypedExprKind::DateTime(v) => engine.heap().alloc_datetime(*v)?.get_value(engine.heap()),
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
                 values.push(eval_typed_expr_async_with_gas(engine, &env, elem, gas).await?);
             }
-            engine.heap().alloc_tuple(values)
+            engine.heap().alloc_tuple(values)?.get_value(engine.heap())
         }
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
@@ -2733,7 +2856,7 @@ async fn eval_typed_expr_async_with_gas(
                     eval_typed_expr_async_with_gas(engine, &env, v, gas).await?,
                 );
             }
-            engine.heap().alloc_dict(out)
+            engine.heap().alloc_dict(out)?.get_value(engine.heap())
         }
         TypedExprKind::RecordUpdate { base, updates } => {
             let base_val = eval_typed_expr_async_with_gas(engine, &env, base, gas).await?;
@@ -2752,7 +2875,7 @@ async fn eval_typed_expr_async_with_gas(
                         gas.charge(gas.costs.eval_record_update_field)?;
                         map.insert(k, v);
                     }
-                    engine.heap().alloc_dict(map)
+                    engine.heap().alloc_dict(map)?.get_value(engine.heap())
                 }
                 Value::Adt(tag, args) if args.len() == 1 => match &args[0] {
                     Value::Dict(map) => {
@@ -2761,8 +2884,11 @@ async fn eval_typed_expr_async_with_gas(
                             gas.charge(gas.costs.eval_record_update_field)?;
                             out.insert(k, v);
                         }
-                        let dict = engine.heap().alloc_dict(out)?;
-                        engine.heap().alloc_adt(tag, vec![dict])
+                        let dict = engine.heap().alloc_dict(out)?.get_value(engine.heap())?;
+                        engine
+                            .heap()
+                            .alloc_adt(tag, vec![dict])?
+                            .get_value(engine.heap())
                     }
                     _ => Err(EngineError::UnsupportedExpr),
                 },
@@ -2820,15 +2946,21 @@ async fn eval_typed_expr_async_with_gas(
             let value = eval_typed_expr_async_with_gas(engine, &env, expr, gas).await?;
             project_value(field, value)
         }
-        TypedExprKind::Lam { param, body } => engine.heap().alloc_closure(Closure {
-            env: env.clone(),
-            param: param.clone(),
-            param_ty: split_fun(&expr.typ)
+        TypedExprKind::Lam { param, body } => {
+            let param_ty = split_fun(&expr.typ)
                 .map(|(arg, _)| arg)
-                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?,
-            typ: expr.typ.clone(),
-            body: Arc::new(body.as_ref().clone()),
-        }),
+                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?;
+            engine
+                .heap()
+                .alloc_closure(
+                    env.clone(),
+                    param.clone(),
+                    param_ty,
+                    expr.typ.clone(),
+                    Arc::new(body.as_ref().clone()),
+                )?
+                .get_value(engine.heap())
+        }
         TypedExprKind::Ite {
             cond,
             then_expr,
@@ -3014,13 +3146,29 @@ mod tests {
         let v1 = engine
             .eval_repl_program_with_gas(&program1, &mut state, &mut gas)
             .unwrap();
-        assert_eq!(v1, engine.heap().alloc_i32(2).unwrap());
+        assert_eq!(
+            v1,
+            engine
+                .heap()
+                .alloc_i32(2)
+                .unwrap()
+                .get_value(engine.heap())
+                .unwrap()
+        );
 
         let program2 = parse_program("inc 2");
         let v2 = engine
             .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
             .unwrap();
-        assert_eq!(v2, engine.heap().alloc_i32(3).unwrap());
+        assert_eq!(
+            v2,
+            engine
+                .heap()
+                .alloc_i32(3)
+                .unwrap()
+                .get_value(engine.heap())
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3043,7 +3191,15 @@ mod tests {
         let v2 = engine
             .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
             .unwrap();
-        assert_eq!(v2, engine.heap().alloc_i32(30).unwrap());
+        assert_eq!(
+            v2,
+            engine
+                .heap()
+                .alloc_i32(30)
+                .unwrap()
+                .get_value(engine.heap())
+                .unwrap()
+        );
     }
 
     #[test]
@@ -3082,7 +3238,7 @@ mod tests {
         let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
         engine
             .inject_native_scheme_typed_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
-                engine.heap().alloc_i32(1)
+                engine.heap().alloc_i32(1)?.get_value(engine.heap())
             })
             .unwrap();
 

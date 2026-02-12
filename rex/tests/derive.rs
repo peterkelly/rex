@@ -231,7 +231,7 @@ fn derive_can_be_used_in_injected_native_functions() {
     let program = parser.parse_program().unwrap();
     let v = engine.eval(program.expr.as_ref()).unwrap();
     let heap = engine.heap();
-    assert_eq!(v, heap.alloc_i32(100).unwrap());
+    assert_eq!(v, heap.alloc_i32(100).unwrap().get_value(heap).unwrap());
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
 
     let v = engine.eval(program.expr.as_ref()).unwrap();
     let heap = engine.heap();
-    assert_eq!(v, heap.alloc_i32(12).unwrap());
+    assert_eq!(v, heap.alloc_i32(12).unwrap().get_value(heap).unwrap());
 }
 
 #[test]
@@ -279,8 +279,14 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
         panic!("expected tuple, got {v}");
     };
     let heap = engine.heap();
-    assert_eq!(items[0], heap.alloc_i32(5).unwrap());
-    assert_eq!(items[1], heap.alloc_i32(0).unwrap());
+    assert_eq!(
+        items[0],
+        heap.alloc_i32(5).unwrap().get_value(heap).unwrap()
+    );
+    assert_eq!(
+        items[1],
+        heap.alloc_i32(0).unwrap().get_value(heap).unwrap()
+    );
 }
 
 #[test]

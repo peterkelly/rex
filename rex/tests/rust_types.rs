@@ -19,6 +19,8 @@ fn vec_from_value() {
     assert_eq!(
         result,
         heap.alloc_string("accept_vec: [1, 2, 3]".to_string())
+            .unwrap()
+            .get_value(heap)
             .unwrap(),
     );
 }
@@ -46,12 +48,14 @@ fn vec_to_value() {
     assert_eq!(
         result,
         heap.alloc_array(vec![
-            heap.alloc_i32(0).unwrap(),
-            heap.alloc_i32(1).unwrap(),
-            heap.alloc_i32(2).unwrap(),
-            heap.alloc_i32(3).unwrap(),
-            heap.alloc_i32(4).unwrap(),
+            heap.alloc_i32(0).unwrap().get_value(heap).unwrap(),
+            heap.alloc_i32(1).unwrap().get_value(heap).unwrap(),
+            heap.alloc_i32(2).unwrap().get_value(heap).unwrap(),
+            heap.alloc_i32(3).unwrap().get_value(heap).unwrap(),
+            heap.alloc_i32(4).unwrap().get_value(heap).unwrap(),
         ])
+        .unwrap()
+        .get_value(heap)
         .unwrap()
     );
 }
@@ -89,10 +93,20 @@ fn option_prelude() {
     assert_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(4).unwrap()])
+            heap.alloc_adt(
+                sym("Some"),
+                vec![heap.alloc_i32(4).unwrap().get_value(heap).unwrap()],
+            )
+            .unwrap()
+            .get_value(heap)
+            .unwrap(),
+            heap.alloc_adt(sym("None"), vec![])
+                .unwrap()
+                .get_value(heap)
                 .unwrap(),
-            heap.alloc_adt(sym("None"), vec![]).unwrap(),
         ])
+        .unwrap()
+        .get_value(heap)
         .unwrap()
     );
 }
@@ -115,9 +129,16 @@ fn option_from_value() {
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_opt: Some(4)".to_string())
+                .unwrap()
+                .get_value(heap)
                 .unwrap(),
-            heap.alloc_string("accept_opt: None".to_string()).unwrap(),
+            heap.alloc_string("accept_opt: None".to_string())
+                .unwrap()
+                .get_value(heap)
+                .unwrap(),
         ])
+        .unwrap()
+        .get_value(heap)
         .unwrap(),
     );
 }
@@ -143,10 +164,20 @@ fn option_into_value() {
     assert_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(5).unwrap()])
+            heap.alloc_adt(
+                sym("Some"),
+                vec![heap.alloc_i32(5).unwrap().get_value(heap).unwrap()],
+            )
+            .unwrap()
+            .get_value(heap)
+            .unwrap(),
+            heap.alloc_adt(sym("None"), vec![])
+                .unwrap()
+                .get_value(heap)
                 .unwrap(),
-            heap.alloc_adt(sym("None"), vec![]).unwrap(),
         ])
+        .unwrap()
+        .get_value(heap)
         .unwrap(),
     );
 }

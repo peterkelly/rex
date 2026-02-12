@@ -27,7 +27,7 @@ fn lock_arc_mutex<'a, T>(
 }
 
 fn unit_value(heap: &Heap) -> Result<Value, EngineError> {
-    heap.alloc_tuple(vec![])
+    heap.alloc_tuple(vec![])?.get_value(heap)
 }
 
 fn value_type_name(value: &Value) -> &'static str {
@@ -113,9 +113,9 @@ fn array_u8_to_bytes(value: &Value, name: &str) -> Result<Vec<u8>, EngineError> 
 fn bytes_to_array_u8(heap: &Heap, bytes: Vec<u8>) -> Result<Value, EngineError> {
     let out = bytes
         .into_iter()
-        .map(|b| heap.alloc_u8(b))
+        .map(|b| heap.alloc_u8(b)?.get_value(heap))
         .collect::<Result<Vec<_>, _>>()?;
-    heap.alloc_array(out)
+    heap.alloc_array(out)?.get_value(heap)
 }
 
 #[derive(Default)]
@@ -418,9 +418,18 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     .insert(id, entry);
 
                 let mut payload = BTreeMap::new();
-                payload.insert(sym("id"), engine.heap().alloc_uuid(id)?);
-                let payload = engine.heap().alloc_dict(payload)?;
-                engine.heap().alloc_adt(subprocess_ctor, vec![payload])
+                payload.insert(
+                    sym("id"),
+                    engine.heap().alloc_uuid(id)?.get_value(engine.heap())?,
+                );
+                let payload = engine
+                    .heap()
+                    .alloc_dict(payload)?
+                    .get_value(engine.heap())?;
+                engine
+                    .heap()
+                    .alloc_adt(subprocess_ctor, vec![payload])?
+                    .get_value(engine.heap())
             }
         },
     )?;
@@ -447,7 +456,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let entry = subprocess_get(&id, wait_sym.as_ref())?;
 
                 if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
-                    return engine.heap().alloc_i32(code);
+                    return engine.heap().alloc_i32(code)?.get_value(engine.heap());
                 }
 
                 let status = {
@@ -489,7 +498,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     let _ = handle.join();
                 }
 
-                engine.heap().alloc_i32(code)
+                engine.heap().alloc_i32(code)?.get_value(engine.heap())
             }
         },
     )?;
@@ -656,7 +665,15 @@ mod tests {
                 let Value::Tuple(xs) = value else {
                     panic!("expected tuple");
                 };
-                assert_eq!(xs[0], engine.heap().alloc_i32(0).unwrap());
+                assert_eq!(
+                    xs[0],
+                    engine
+                        .heap()
+                        .alloc_i32(0)
+                        .unwrap()
+                        .get_value(engine.heap())
+                        .unwrap()
+                );
 
                 let Value::Array(out) = &xs[1] else {
                     panic!("expected stdout bytes");

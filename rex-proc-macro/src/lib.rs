@@ -379,7 +379,7 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(quote! {{
                 let (#(#vars,)*) = #expr;
-                heap.alloc_tuple(::std::vec![#(#encs,)*])?
+                heap.alloc_tuple(::std::vec![#(#encs,)*])?.get_value(heap)?
             }})
         }
         Type::Path(type_path) => {
@@ -408,12 +408,16 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     };
                     let inner_encode = into_value_expr(quote!(item), inner)?;
                     Ok(quote! {{
-                        let mut out = heap.alloc_adt(::rex::intern("Empty"), ::std::vec::Vec::new())?;
+                        let mut out = heap
+                            .alloc_adt(::rex::intern("Empty"), ::std::vec::Vec::new())?
+                            .get_value(heap)?;
                         for item in #expr.into_iter().rev() {
-                            out = heap.alloc_adt(
-                                ::rex::intern("Cons"),
-                                ::std::vec![#inner_encode, out],
-                            )?;
+                            out = heap
+                                .alloc_adt(
+                                    ::rex::intern("Cons"),
+                                    ::std::vec![#inner_encode, out],
+                                )?
+                                .get_value(heap)?;
                         }
                         out
                     }})
@@ -434,7 +438,7 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                         for (k, v) in #expr {
                             out.insert(::rex::intern(&k), #v_encode);
                         }
-                        heap.alloc_dict(out)?
+                        heap.alloc_dict(out)?.get_value(heap)?
                     }})
                 }
                 "Option" => {
@@ -444,8 +448,12 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     let inner_encode = into_value_expr(quote!(v), inner)?;
                     Ok(quote! {{
                         match #expr {
-                            Some(v) => heap.alloc_adt(::rex::intern("Some"), ::std::vec![#inner_encode])?,
-                            None => heap.alloc_adt(::rex::intern("None"), ::std::vec::Vec::new())?,
+                            Some(v) => heap
+                                .alloc_adt(::rex::intern("Some"), ::std::vec![#inner_encode])?
+                                .get_value(heap)?,
+                            None => heap
+                                .alloc_adt(::rex::intern("None"), ::std::vec::Vec::new())?
+                                .get_value(heap)?,
                         }
                     }})
                 }
@@ -457,8 +465,12 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     let err_encode = into_value_expr(quote!(e), err_ty)?;
                     Ok(quote! {{
                         match #expr {
-                            Ok(v) => heap.alloc_adt(::rex::intern("Ok"), ::std::vec![#ok_encode])?,
-                            Err(e) => heap.alloc_adt(::rex::intern("Err"), ::std::vec![#err_encode])?,
+                            Ok(v) => heap
+                                .alloc_adt(::rex::intern("Ok"), ::std::vec![#ok_encode])?
+                                .get_value(heap)?,
+                            Err(e) => heap
+                                .alloc_adt(::rex::intern("Err"), ::std::vec![#err_encode])?
+                                .get_value(heap)?,
                         }
                     }})
                 }
@@ -668,8 +680,9 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 quote! {{
                     let mut map = ::std::collections::BTreeMap::new();
                     #(#inserts)*
-                    let dict = heap.alloc_dict(map)?;
+                    let dict = heap.alloc_dict(map)?.get_value(heap)?;
                     heap.alloc_adt(::rex::intern(#ctor), ::std::vec![dict])?
+                        .get_value(heap)?
                 }}
             }
             Fields::Unnamed(fields) => {
@@ -683,10 +696,12 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 quote! {{
                     let Self(#(#bindings,)*) = self;
                     heap.alloc_adt(::rex::intern(#ctor), ::std::vec![#(#args,)*])?
+                        .get_value(heap)?
                 }}
             }
             Fields::Unit => quote! {
                 heap.alloc_adt(::rex::intern(#ctor), ::std::vec::Vec::new())?
+                    .get_value(heap)?
             },
         },
         Data::Enum(data) => {
@@ -699,7 +714,9 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
                 let arm = match &variant.fields {
                     Fields::Unit => quote! {
-                        Self::#variant_ident => heap.alloc_adt(::rex::intern(#variant_name), ::std::vec::Vec::new())?
+                        Self::#variant_ident => heap
+                            .alloc_adt(::rex::intern(#variant_name), ::std::vec::Vec::new())?
+                            .get_value(heap)?
                     },
                     Fields::Unnamed(fields) => {
                         let vars: Vec<Ident> = (0..fields.unnamed.len())
@@ -711,7 +728,9 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             .map(|(v, f)| into_value_expr(quote!(#v), &f.ty))
                             .collect::<Result<Vec<_>, _>>()?;
                         quote! {
-                            Self::#variant_ident(#(#vars,)*) => heap.alloc_adt(::rex::intern(#variant_name), ::std::vec![#(#encs,)*])?
+                            Self::#variant_ident(#(#vars,)*) => heap
+                                .alloc_adt(::rex::intern(#variant_name), ::std::vec![#(#encs,)*])?
+                                .get_value(heap)?
                         }
                     }
                     Fields::Named(fields) => {
@@ -736,8 +755,9 @@ fn into_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             Self::#variant_ident { #(#vars,)* } => {
                                 let mut map = ::std::collections::BTreeMap::new();
                                 #(#inserts)*
-                                let dict = heap.alloc_dict(map)?;
+                                let dict = heap.alloc_dict(map)?.get_value(heap)?;
                                 heap.alloc_adt(::rex::intern(#variant_name), ::std::vec![dict])?
+                                    .get_value(heap)?
                             }
                         }
                     }
