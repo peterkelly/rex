@@ -26,7 +26,7 @@ fn lock_arc_mutex<'a, T>(
         .map_err(|_| EngineError::Internal(format!("{context}: mutex poisoned (this is a bug)")))
 }
 
-fn unit_value(heap: &Heap) -> Value {
+fn unit_value(heap: &Heap) -> Result<Value, EngineError> {
     heap.alloc_tuple(vec![])
 }
 
@@ -110,8 +110,11 @@ fn array_u8_to_bytes(value: &Value, name: &str) -> Result<Vec<u8>, EngineError> 
     Ok(out)
 }
 
-fn bytes_to_array_u8(heap: &Heap, bytes: Vec<u8>) -> Value {
-    let out = bytes.into_iter().map(|b| heap.alloc_u8(b)).collect();
+fn bytes_to_array_u8(heap: &Heap, bytes: Vec<u8>) -> Result<Value, EngineError> {
+    let out = bytes
+        .into_iter()
+        .map(|b| heap.alloc_u8(b))
+        .collect::<Result<Vec<_>, _>>()?;
     heap.alloc_array(out)
 }
 
@@ -210,7 +213,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 io::stdin()
                     .read_to_end(&mut buf)
                     .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
-                Ok(bytes_to_array_u8(engine.heap(), buf))
+                bytes_to_array_u8(engine.heap(), buf)
             }
         },
     )?;
@@ -264,7 +267,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     }
                 }
 
-                Ok(unit_value(engine.heap()))
+                unit_value(engine.heap())
             }
         },
     )?;
@@ -415,10 +418,9 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     .insert(id, entry);
 
                 let mut payload = BTreeMap::new();
-                payload.insert(sym("id"), engine.heap().alloc_uuid(id));
-                Ok(engine
-                    .heap()
-                    .alloc_adt(subprocess_ctor, vec![engine.heap().alloc_dict(payload)]))
+                payload.insert(sym("id"), engine.heap().alloc_uuid(id)?);
+                let payload = engine.heap().alloc_dict(payload)?;
+                engine.heap().alloc_adt(subprocess_ctor, vec![payload])
             }
         },
     )?;
@@ -445,7 +447,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let entry = subprocess_get(&id, wait_sym.as_ref())?;
 
                 if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
-                    return Ok(engine.heap().alloc_i32(code));
+                    return engine.heap().alloc_i32(code);
                 }
 
                 let status = {
@@ -487,7 +489,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     let _ = handle.join();
                 }
 
-                Ok(engine.heap().alloc_i32(code))
+                engine.heap().alloc_i32(code)
             }
         },
     )?;
@@ -517,7 +519,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let id = subprocess_id(&args[0], &subprocess_ctor, stdout_sym.as_ref())?;
                 let entry = subprocess_get(&id, stdout_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stdout, "std.process.stdout buffer")?.clone();
-                Ok(bytes_to_array_u8(engine.heap(), bytes))
+                bytes_to_array_u8(engine.heap(), bytes)
             }
         },
     )?;
@@ -547,7 +549,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 let id = subprocess_id(&args[0], &subprocess_ctor, stderr_sym.as_ref())?;
                 let entry = subprocess_get(&id, stderr_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stderr, "std.process.stderr buffer")?.clone();
-                Ok(bytes_to_array_u8(engine.heap(), bytes))
+                bytes_to_array_u8(engine.heap(), bytes)
             }
         },
     )?;
@@ -654,7 +656,7 @@ mod tests {
                 let Value::Tuple(xs) = value else {
                     panic!("expected tuple");
                 };
-                assert_eq!(xs[0], engine.heap().alloc_i32(0));
+                assert_eq!(xs[0], engine.heap().alloc_i32(0).unwrap());
 
                 let Value::Array(out) = &xs[1] else {
                     panic!("expected stdout bytes");
