@@ -7,10 +7,11 @@ use rex_ast::expr::{Symbol, intern, sym, sym_eq};
 use rex_ts::{Scheme, Type, TypeKind, Types, unify};
 use uuid::Uuid;
 
-use crate::engine::{apply as apply_pointer, binary_arg_types};
+use crate::engine::{apply as apply_pointer_with_gas, binary_arg_types};
 use crate::value::{Heap, Pointer, list_to_vec};
 use crate::virtual_export_name;
 use crate::{Engine, EngineError, FromPointer, IntoPointer, OverloadedFn, Value};
+use rex_util::{GasCosts, GasMeter};
 
 fn values_to_ptrs<T: IntoPointer>(
     heap: &Heap,
@@ -29,7 +30,8 @@ fn invoke_pointer_fn(
     func_ty: Option<&Type>,
     arg_ty: Option<&Type>,
 ) -> Result<Pointer, EngineError> {
-    apply_pointer(engine, func, arg, func_ty, arg_ty)
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    apply_pointer_with_gas(engine, func, arg, func_ty, arg_ty, &mut gas)
 }
 
 fn expect_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
@@ -345,8 +347,8 @@ pub(crate) fn foldl_values(
 ) -> Result<Pointer, EngineError> {
     let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
     for value in values {
-        let step = apply_pointer(engine, func.clone(), acc, Some(func_ty), Some(acc_ty))?;
-        acc = apply_pointer(engine, step, value, Some(&step_ty), Some(elem_ty))?;
+        let step = invoke_pointer_fn(engine, func.clone(), acc, Some(func_ty), Some(acc_ty))?;
+        acc = invoke_pointer_fn(engine, step, value, Some(&step_ty), Some(elem_ty))?;
     }
     Ok(acc)
 }
@@ -362,8 +364,8 @@ pub(crate) fn foldr_values(
 ) -> Result<Pointer, EngineError> {
     let step_ty = Type::fun(acc_ty.clone(), acc_ty.clone());
     for value in values.into_iter().rev() {
-        let step = apply_pointer(engine, func.clone(), value, Some(func_ty), Some(elem_ty))?;
-        acc = apply_pointer(engine, step, acc, Some(&step_ty), Some(acc_ty))?;
+        let step = invoke_pointer_fn(engine, func.clone(), value, Some(func_ty), Some(elem_ty))?;
+        acc = invoke_pointer_fn(engine, step, acc, Some(&step_ty), Some(acc_ty))?;
     }
     Ok(acc)
 }

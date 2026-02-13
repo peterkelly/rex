@@ -32,7 +32,7 @@ async fn eval_module_file(
     path: &Path,
 ) -> Result<Pointer, rex_engine::EngineError> {
     let mut gas = unlimited_gas();
-    engine.eval_module_file_with_gas(path, &mut gas).await
+    engine.eval_module_file(path, &mut gas).await
 }
 
 async fn eval_snippet(
@@ -40,7 +40,7 @@ async fn eval_snippet(
     source: &str,
 ) -> Result<Pointer, rex_engine::EngineError> {
     let mut gas = unlimited_gas();
-    engine.eval_snippet_with_gas(source, &mut gas).await
+    engine.eval_snippet(source, &mut gas).await
 }
 
 async fn eval_snippet_at(
@@ -50,7 +50,7 @@ async fn eval_snippet_at(
 ) -> Result<Pointer, rex_engine::EngineError> {
     let mut gas = unlimited_gas();
     engine
-        .eval_snippet_at_with_gas(source, importer_path, &mut gas)
+        .eval_snippet_at(source, importer_path, &mut gas)
         .await
 }
 

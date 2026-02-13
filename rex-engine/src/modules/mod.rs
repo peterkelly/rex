@@ -1224,7 +1224,7 @@ impl Engine {
     }
 
     #[async_recursion]
-    async fn alias_exports_for_decls_with_gas(
+    async fn alias_exports_for_decls(
         &mut self,
         decls: &[Decl],
         importer: Option<ModuleId>,
@@ -1240,16 +1240,14 @@ impl Engine {
                 module_name: spec,
                 importer: importer.clone(),
             })?;
-            let inst = self
-                .load_module_from_resolved_with_gas(imported, gas)
-                .await?;
+            let inst = self.load_module_from_resolved(imported, gas).await?;
             alias_exports.insert(alias.clone(), inst.exports.clone());
         }
         Ok(alias_exports)
     }
 
     #[async_recursion]
-    async fn load_module_from_resolved_with_gas(
+    async fn load_module_from_resolved(
         &mut self,
         resolved: ResolvedModule,
         gas: &mut GasMeter,
@@ -1265,7 +1263,7 @@ impl Engine {
 
         // Resolve imports first so qualified names exist in the environment.
         let alias_exports = self
-            .alias_exports_for_decls_with_gas(&program.decls, Some(resolved.id.clone()), gas)
+            .alias_exports_for_decls(&program.decls, Some(resolved.id.clone()), gas)
             .await?;
 
         // Qualify local names, then rewrite `alias.foo` uses into internal symbols.
@@ -1274,7 +1272,7 @@ impl Engine {
         let rewritten = rewrite_import_uses(&qualified, &alias_exports, None);
 
         self.inject_decls(&rewritten.decls)?;
-        let init_value = self.eval_with_gas(rewritten.expr.as_ref(), gas).await?;
+        let init_value = self.eval(rewritten.expr.as_ref(), gas).await?;
 
         let exports = exports_from_program(&program, &prefix);
         let inst = ModuleInstance {
@@ -1286,7 +1284,7 @@ impl Engine {
         Ok(inst)
     }
 
-    fn load_module_types_from_resolved_with_gas(
+    fn load_module_types_from_resolved(
         &mut self,
         resolved: ResolvedModule,
         gas: &mut GasMeter,
@@ -1344,8 +1342,7 @@ impl Engine {
                 module_name: spec,
                 importer: importer.clone(),
             })?;
-            let exports =
-                self.load_module_types_from_resolved_with_gas(imported, gas, loaded, loading)?;
+            let exports = self.load_module_types_from_resolved(imported, gas, loaded, loading)?;
             alias_exports.insert(alias.clone(), exports);
         }
 
@@ -1392,17 +1389,17 @@ impl Engine {
         })
     }
 
-    pub fn infer_module_file_with_gas(
+    pub fn infer_module_file(
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
         let source = self.decode_local_module_source(&id, bytes)?;
-        self.infer_module_source_with_gas(ResolvedModule { id, source }, gas)
+        self.infer_module_source(ResolvedModule { id, source }, gas)
     }
 
-    fn infer_module_source_with_gas(
+    fn infer_module_source(
         &mut self,
         resolved: ResolvedModule,
         gas: &mut GasMeter,
@@ -1426,7 +1423,7 @@ impl Engine {
         )?;
         self.inject_decls(&rewritten.decls)?;
 
-        let (preds, ty) = self.infer_type_with_gas(rewritten.expr.as_ref(), gas)?;
+        let (preds, ty) = self.infer_type(rewritten.expr.as_ref(), gas)?;
 
         let exports = exports_from_program(&program, &prefix);
         loaded.insert(resolved.id.clone(), exports);
@@ -1435,7 +1432,7 @@ impl Engine {
         Ok((preds, ty))
     }
 
-    pub fn infer_snippet_with_gas(
+    pub fn infer_snippet(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
@@ -1443,7 +1440,7 @@ impl Engine {
         self.infer_snippet_with_gas_and_importer(source, gas, None)
     }
 
-    pub fn infer_snippet_at_with_gas(
+    pub fn infer_snippet_at(
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
@@ -1479,10 +1476,10 @@ impl Engine {
             &mut loading,
         )?;
         self.inject_decls(&rewritten.decls)?;
-        self.infer_type_with_gas(rewritten.expr.as_ref(), gas)
+        self.infer_type(rewritten.expr.as_ref(), gas)
     }
 
-    pub async fn eval_module_file_with_gas(
+    pub async fn eval_module_file(
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
@@ -1493,12 +1490,12 @@ impl Engine {
         }
         let source = self.decode_local_module_source(&id, bytes)?;
         let inst = self
-            .load_module_from_resolved_with_gas(ResolvedModule { id, source }, gas)
+            .load_module_from_resolved(ResolvedModule { id, source }, gas)
             .await?;
         Ok(inst.init_value)
     }
 
-    pub async fn eval_module_source_with_gas(
+    pub async fn eval_module_source(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
@@ -1510,7 +1507,7 @@ impl Engine {
             return Ok(inst.init_value);
         }
         let inst = self
-            .load_module_from_resolved_with_gas(
+            .load_module_from_resolved(
                 ResolvedModule {
                     id,
                     source: source.to_string(),
@@ -1521,7 +1518,7 @@ impl Engine {
         Ok(inst.init_value)
     }
 
-    pub async fn eval_snippet_with_gas(
+    pub async fn eval_snippet(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
@@ -1530,7 +1527,7 @@ impl Engine {
             .await
     }
 
-    pub async fn eval_repl_program_with_gas(
+    pub async fn eval_repl_program(
         &mut self,
         program: &Program,
         state: &mut ReplState,
@@ -1542,7 +1539,7 @@ impl Engine {
         });
 
         let alias_exports = self
-            .alias_exports_for_decls_with_gas(&program.decls, importer.clone(), gas)
+            .alias_exports_for_decls(&program.decls, importer.clone(), gas)
             .await?;
         state.alias_exports.extend(alias_exports);
 
@@ -1556,11 +1553,11 @@ impl Engine {
         state
             .defined_values
             .extend(decl_value_names(&program.decls));
-        self.eval_with_gas(rewritten.expr.as_ref(), gas).await
+        self.eval(rewritten.expr.as_ref(), gas).await
     }
 
     /// Evaluate a non-module snippet (with gas), but use `importer_path` for resolving local-relative imports.
-    pub async fn eval_snippet_at_with_gas(
+    pub async fn eval_snippet_at(
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
@@ -1585,7 +1582,7 @@ impl Engine {
         });
 
         let alias_exports = self
-            .alias_exports_for_decls_with_gas(&program.decls, importer.clone(), gas)
+            .alias_exports_for_decls(&program.decls, importer.clone(), gas)
             .await?;
 
         let prefix = format!("@snippet{}", Uuid::new_v4());
@@ -1594,6 +1591,6 @@ impl Engine {
         let rewritten = rewrite_import_uses(&qualified, &alias_exports, None);
 
         self.inject_decls(&rewritten.decls)?;
-        self.eval_with_gas(rewritten.expr.as_ref(), gas).await
+        self.eval(rewritten.expr.as_ref(), gas).await
     }
 }

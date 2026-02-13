@@ -27,7 +27,7 @@ async fn assert_program_ok(name: &str, source: &str) {
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
     let _value = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .eval(program.expr.as_ref(), &mut gas)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
 }

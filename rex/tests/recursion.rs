@@ -8,9 +8,7 @@ async fn eval(source: &str) -> Result<(Heap, Pointer), EngineError> {
     let mut engine = Engine::with_prelude().unwrap();
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let pointer = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await?;
+    let pointer = engine.eval(program.expr.as_ref(), &mut gas).await?;
     let heap = engine.into_heap();
     Ok((heap, pointer))
 }

@@ -17,7 +17,7 @@ use rex_lexer::{
 };
 
 use crate::{error::ParserErr, op::Operator};
-use rex_util::GasMeter;
+use rex_util::{GasCosts, GasMeter};
 
 pub struct Parser {
     token_cursor: usize,
@@ -444,7 +444,7 @@ impl Parser {
         self.errors.push(e);
     }
 
-    pub fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
+    fn parse_program_core(&mut self) -> Result<Program, Vec<ParserErr>> {
         let mut decls = Vec::new();
         loop {
             let mut is_pub = false;
@@ -534,6 +534,11 @@ impl Parser {
         }
     }
 
+    pub fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
+        let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+        self.parse_program_with_gas(&mut gas)
+    }
+
     pub fn parse_program_with_gas(
         &mut self,
         gas: &mut GasMeter,
@@ -546,7 +551,7 @@ impl Parser {
             return Err(vec![ParserErr::new(Span::default(), e.to_string())]);
         }
 
-        let program = self.parse_program()?;
+        let program = self.parse_program_core()?;
         let expr_nodes = count_expr_nodes(program.expr.as_ref());
         let decl_nodes = program.decls.len() as u64;
         let node_cost = gas

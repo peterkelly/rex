@@ -19,9 +19,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
 
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let pointer = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await?;
+    let pointer = engine.eval(program.expr.as_ref(), &mut gas).await?;
     let heap = engine.into_heap();
     Ok((heap, pointer))
 }
@@ -161,10 +159,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
 
     engine.inject_decls(&program.decls).unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let v_ptr = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let v_ptr = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let v = engine
         .heap()
         .get(&v_ptr)
@@ -225,10 +220,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         .unwrap();
 
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let v_ptr = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let v_ptr = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let bumped = MyStruct::from_pointer(engine.heap(), &v_ptr).unwrap();
     assert_eq!(bumped.y, 43);
 
@@ -249,10 +241,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let tokens = Token::tokenize("const_struct.y").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let v = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let v = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(heap, v, heap.alloc_i32(100).unwrap());
 }
@@ -278,10 +267,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let program = parser.parse_program().unwrap();
 
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let v = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let v = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
 }
@@ -302,10 +288,7 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let v_ptr = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let v_ptr = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let v = engine
         .heap()
         .get(&v_ptr)

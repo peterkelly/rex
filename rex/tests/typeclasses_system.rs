@@ -13,7 +13,7 @@ async fn eval_to_string(code: &str) -> Result<String, String> {
         .map_err(|e| format!("{e}"))?;
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
     let pointer = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .eval(program.expr.as_ref(), &mut gas)
         .await
         .map_err(|e| format!("{e}"))?;
     let value = engine.heap().get(&pointer).map_err(|e| format!("{e}"))?;

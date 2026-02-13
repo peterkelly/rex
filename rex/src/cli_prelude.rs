@@ -540,7 +540,7 @@ mod tests {
         inject_cli_prelude_engine(&mut engine).unwrap();
         engine.add_default_resolvers();
         let mut gas = unlimited_gas();
-        engine.eval_snippet_with_gas(code, &mut gas).await.unwrap();
+        engine.eval_snippet(code, &mut gas).await.unwrap();
     }
 
     #[tokio::test]
@@ -556,7 +556,7 @@ mod tests {
         inject_cli_prelude_engine(&mut engine).unwrap();
         engine.add_default_resolvers();
         let mut gas = unlimited_gas();
-        let value = engine.eval_snippet_with_gas(code, &mut gas).await.unwrap();
+        let value = engine.eval_snippet(code, &mut gas).await.unwrap();
         let value = engine
             .heap()
             .get(&value)

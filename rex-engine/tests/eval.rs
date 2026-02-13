@@ -35,7 +35,7 @@ async fn eval_expr(
     expr: &rex_ast::expr::Expr,
 ) -> Result<rex_engine::Pointer, EngineError> {
     let mut gas = unlimited_gas();
-    engine.eval_with_gas(expr, &mut gas).await
+    engine.eval(expr, &mut gas).await
 }
 
 macro_rules! pval {
@@ -295,7 +295,7 @@ async fn eval_can_be_cancelled() {
 
     let token = engine.cancellation_token();
     let mut gas = unlimited_gas();
-    let handle = tokio::spawn(async move { engine.eval_with_gas(expr.as_ref(), &mut gas).await });
+    let handle = tokio::spawn(async move { engine.eval(expr.as_ref(), &mut gas).await });
 
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
@@ -330,7 +330,7 @@ async fn eval_with_gas_rejects_out_of_budget() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let err = match engine.eval_with_gas(expr.as_ref(), &mut gas).await {
+    let err = match engine.eval(expr.as_ref(), &mut gas).await {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };

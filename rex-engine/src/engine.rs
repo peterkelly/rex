@@ -185,78 +185,6 @@ impl NativeFn {
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
     }
-
-    fn apply(
-        mut self,
-        engine: &Engine,
-        arg: Pointer,
-        arg_type: Option<&Type>,
-    ) -> Result<Pointer, EngineError> {
-        if self.arity == 0 {
-            return Err(EngineError::NativeArity {
-                name: self.name,
-                expected: 0,
-                got: 1,
-            });
-        }
-        let (arg_ty, rest_ty) =
-            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
-        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            expected: arg_ty.to_string(),
-            got: actual_ty.to_string(),
-        })?;
-        self.typ = rest_ty.apply(&subst);
-        self.applied.push(arg);
-        self.applied_types.push(actual_ty);
-        if is_function_type(&self.typ) {
-            let NativeFn {
-                name,
-                arity,
-                typ,
-                func,
-                gas_cost,
-                applied,
-                applied_types,
-            } = self;
-            return engine.heap().alloc_native(
-                name,
-                arity,
-                typ,
-                func,
-                gas_cost,
-                applied,
-                applied_types,
-            );
-        }
-        let mut full_ty = self.typ.clone();
-        for arg_ty in self.applied_types.iter().rev() {
-            full_ty = Type::fun(arg_ty.clone(), full_ty);
-        }
-        self.func.call_sync(engine, &full_ty, &self.applied)
-    }
-
-    fn call_zero(&self, engine: &Engine) -> Result<Pointer, EngineError> {
-        if self.arity != 0 {
-            return Err(EngineError::NativeArity {
-                name: self.name.clone(),
-                expected: self.arity,
-                got: 0,
-            });
-        }
-        self.func.call_sync(engine, &self.typ, &[])
-    }
-
-    async fn call_zero_async(&self, engine: &Engine) -> Result<Pointer, EngineError> {
-        if self.arity != 0 {
-            return Err(EngineError::NativeArity {
-                name: self.name.clone(),
-                expected: self.arity,
-                got: 0,
-            });
-        }
-        self.func.call_async(engine, self.typ.clone(), &[]).await
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -305,66 +233,6 @@ impl OverloadedFn {
         arg: Pointer,
         func_type: Option<&Type>,
         arg_type: Option<&Type>,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(expected) = func_type {
-            let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
-                expected: self.typ.to_string(),
-                got: expected.to_string(),
-            })?;
-            self.typ = self.typ.apply(&subst);
-        }
-        let (arg_ty, rest_ty) =
-            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
-        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            expected: arg_ty.to_string(),
-            got: actual_ty.to_string(),
-        })?;
-        let rest_ty = rest_ty.apply(&subst);
-        self.applied.push(arg);
-        self.applied_types.push(actual_ty);
-        if is_function_type(&rest_ty) {
-            return engine.heap().alloc_overloaded(
-                self.name,
-                rest_ty,
-                self.applied,
-                self.applied_types,
-            );
-        }
-        let mut full_ty = rest_ty;
-        for arg_ty in self.applied_types.iter().rev() {
-            full_ty = Type::fun(arg_ty.clone(), full_ty);
-        }
-        if engine.types.class_methods.contains_key(&self.name) {
-            // Defer typeclass method selection until we have concrete argument
-            // types. This mirrors the native-overload behavior and keeps
-            // polymorphic code runnable without guessing an instance.
-            let mut func = engine.resolve_class_method(&self.name, &full_ty)?;
-            let mut cur_ty = full_ty;
-            for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
-                let (arg_ty, rest_ty) = split_fun(&cur_ty)
-                    .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
-                let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
-                    expected: arg_ty.to_string(),
-                    got: applied_ty.to_string(),
-                })?;
-                let rest_ty = rest_ty.apply(&subst);
-                func = apply(engine, func, applied, Some(&cur_ty), Some(applied_ty))?;
-                cur_ty = rest_ty;
-            }
-            return Ok(func);
-        }
-
-        let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
-        imp.func.call_sync(engine, &full_ty, &self.applied)
-    }
-
-    fn apply_with_gas(
-        mut self,
-        engine: &Engine,
-        arg: Pointer,
-        func_type: Option<&Type>,
-        arg_type: Option<&Type>,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
         if let Some(expected) = func_type {
@@ -407,7 +275,7 @@ impl OverloadedFn {
                     got: applied_ty.to_string(),
                 })?;
                 let rest_ty = rest_ty.apply(&subst);
-                func = apply_with_gas(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas)?;
+                func = apply(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas)?;
                 cur_ty = rest_ty;
             }
             return Ok(func);
@@ -427,7 +295,7 @@ impl OverloadedFn {
         imp.func.call_sync(engine, &full_ty, &self.applied)
     }
 
-    async fn apply_async_with_gas(
+    async fn apply_async(
         mut self,
         engine: &Engine,
         arg: Pointer,
@@ -477,15 +345,8 @@ impl OverloadedFn {
                     got: applied_ty.to_string(),
                 })?;
                 let rest_ty = rest_ty.apply(&subst);
-                func = apply_async_with_gas(
-                    engine,
-                    func,
-                    applied,
-                    Some(&cur_ty),
-                    Some(applied_ty),
-                    gas,
-                )
-                .await?;
+                func = apply_async(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas)
+                    .await?;
                 cur_ty = rest_ty;
             }
             return Ok(func);
@@ -853,12 +714,14 @@ impl Engine {
                 .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
             let pretty_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
             let pretty_ptr = engine.resolve_class_method(&sym("pretty"), &pretty_ty)?;
+            let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
             let rendered_ptr = apply(
                 engine,
                 pretty_ptr,
                 args[0].clone(),
                 Some(&pretty_ty),
                 Some(&arg_ty),
+                &mut gas,
             )?;
             let message = engine.heap().pointer_as_string(&rendered_ptr)?;
 
@@ -1358,7 +1221,8 @@ impl Engine {
         }
 
         let typed = self.type_check(lam_body.as_ref())?;
-        let ptr = eval_typed_expr(self, &self.env, &typed)?;
+        let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+        let ptr = eval_typed_expr(self, &self.env, &typed, &mut gas)?;
         self.env = self.env.extend(decl.name.name.clone(), ptr);
         Ok(())
     }
@@ -1390,14 +1254,10 @@ impl Engine {
         self.types.inject_instance(class, inst);
     }
 
-    pub async fn eval_with_gas(
-        &mut self,
-        expr: &Expr,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    pub async fn eval(&mut self, expr: &Expr, gas: &mut GasMeter) -> Result<Pointer, EngineError> {
         check_cancelled(self)?;
         let typed = self.type_check(expr)?;
-        eval_typed_expr_async_with_gas(self, &self.env, &typed, gas).await
+        eval_typed_expr_async(self, &self.env, &typed, gas).await
     }
 
     fn inject_prelude(&mut self) -> Result<(), EngineError> {
@@ -1506,7 +1366,7 @@ impl Engine {
         Ok(typed)
     }
 
-    pub(crate) fn infer_type_with_gas(
+    pub(crate) fn infer_type(
         &mut self,
         expr: &Expr,
         gas: &mut GasMeter,
@@ -1716,32 +1576,58 @@ impl Engine {
         self.typeclasses.resolve(&info.class, name, &param_type)
     }
 
-    fn resolve_class_method(&self, name: &Symbol, typ: &Type) -> Result<Pointer, EngineError> {
-        if typ.ftv().is_empty()
-            && let Ok(cache) = self.typeclass_cache.lock()
-            && let Some(pointer) = cache.get(&(name.clone(), typ.clone()))
-        {
-            return Ok(pointer.clone());
+    fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
+        if !typ.ftv().is_empty() {
+            return None;
         }
+        let cache = self.typeclass_cache.lock().ok()?;
+        cache.get(&(name.clone(), typ.clone())).cloned()
+    }
 
+    fn insert_cached_class_method(&self, name: &Symbol, typ: &Type, pointer: &Pointer) {
+        if typ.ftv().is_empty()
+            && let Ok(mut cache) = self.typeclass_cache.lock()
+        {
+            cache.insert((name.clone(), typ.clone()), pointer.clone());
+        }
+    }
+
+    fn resolve_class_method_plan(
+        &self,
+        name: &Symbol,
+        typ: &Type,
+    ) -> Result<Result<(Env, TypedExpr), Pointer>, EngineError> {
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
                 let (name, typ, applied, applied_types) =
                     OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                return self
+                let pointer = self
                     .heap()
-                    .alloc_overloaded(name, typ, applied, applied_types);
+                    .alloc_overloaded(name, typ, applied, applied_types)?;
+                return Ok(Err(pointer));
             }
             Err(err) => return Err(err),
         };
         let specialized = typed.as_ref().apply(&s);
-        let pointer = eval_typed_expr(self, &def_env, &specialized)?;
+        Ok(Ok((def_env, specialized)))
+    }
 
-        if typ.ftv().is_empty()
-            && let Ok(mut cache) = self.typeclass_cache.lock()
-        {
-            cache.insert((name.clone(), typ.clone()), pointer.clone());
+    fn resolve_class_method(&self, name: &Symbol, typ: &Type) -> Result<Pointer, EngineError> {
+        if let Some(pointer) = self.cached_class_method(name, typ) {
+            return Ok(pointer);
+        }
+
+        let pointer = match self.resolve_class_method_plan(name, typ)? {
+            Ok((def_env, specialized)) => {
+                let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+                eval_typed_expr(self, &def_env, &specialized, &mut gas)?
+            }
+            Err(pointer) => pointer,
+        };
+
+        if typ.ftv().is_empty() {
+            self.insert_cached_class_method(name, typ, &pointer);
         }
         Ok(pointer)
     }
@@ -1752,19 +1638,21 @@ impl Engine {
         typ: &Type,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
-        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
-            Ok(res) => res,
-            Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
-                let (name, typ, applied, applied_types) =
-                    OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                return self
-                    .heap()
-                    .alloc_overloaded(name, typ, applied, applied_types);
+        if let Some(pointer) = self.cached_class_method(name, typ) {
+            return Ok(pointer);
+        }
+
+        let pointer = match self.resolve_class_method_plan(name, typ)? {
+            Ok((def_env, specialized)) => {
+                eval_typed_expr_async(self, &def_env, &specialized, gas).await?
             }
-            Err(err) => return Err(err),
+            Err(pointer) => pointer,
         };
-        let specialized = typed.as_ref().apply(&s);
-        eval_typed_expr_async_with_gas(self, &def_env, &specialized, gas).await
+
+        if typ.ftv().is_empty() {
+            self.insert_cached_class_method(name, typ, &pointer);
+        }
+        Ok(pointer)
     }
 
     pub(crate) fn resolve_global(&self, name: &Symbol, typ: &Type) -> Result<Pointer, EngineError> {
@@ -1772,18 +1660,21 @@ impl Engine {
             let value = self.heap().get(&ptr)?;
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    native.call_zero(self)
+                    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+                    native.call_zero(self, &mut gas)
                 }
                 _ => Ok(ptr),
             }
         } else if self.types.class_methods.contains_key(name) {
             self.resolve_class_method(name, typ)
         } else {
-            let pointer = self.resolve_native(name.as_ref(), typ)?;
+            let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+            let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
             let value = self.heap().get(&pointer)?;
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    native.call_zero(self)
+                    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+                    native.call_zero(self, &mut gas)
                 }
                 _ => Ok(pointer),
             }
@@ -1844,55 +1735,7 @@ impl Engine {
         imp.call_sync(self, typ, args)
     }
 
-    fn resolve_native(&self, name: &str, typ: &Type) -> Result<Pointer, EngineError> {
-        let sym_name = sym(name);
-        let impls = self
-            .natives
-            .get(&sym_name)
-            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<NativeImpl> = impls
-            .iter()
-            .filter(|imp| impl_matches_type(imp, typ))
-            .cloned()
-            .collect();
-        match matches.len() {
-            0 => Err(EngineError::MissingImpl {
-                name: sym_name.clone(),
-                typ: typ.to_string(),
-            }),
-            1 => {
-                let imp = matches[0].clone();
-                let NativeFn {
-                    name,
-                    arity,
-                    typ,
-                    func,
-                    gas_cost,
-                    applied,
-                    applied_types,
-                } = imp.to_native_fn(typ.clone());
-                self.heap()
-                    .alloc_native(name, arity, typ, func, gas_cost, applied, applied_types)
-            }
-            _ => {
-                if typ.ftv().is_empty() {
-                    Err(EngineError::AmbiguousImpl {
-                        name: sym_name.clone(),
-                        typ: typ.to_string(),
-                    })
-                } else if is_function_type(typ) {
-                    let (name, typ, applied, applied_types) =
-                        OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    self.heap()
-                        .alloc_overloaded(name, typ, applied, applied_types)
-                } else {
-                    Err(EngineError::AmbiguousOverload { name: sym_name })
-                }
-            }
-        }
-    }
-
-    fn resolve_native_with_gas(
+    fn resolve_native(
         &self,
         name: &str,
         typ: &Type,
@@ -2373,71 +2216,25 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
     }
 }
 
-fn eval_typed_expr(engine: &Engine, env: &Env, expr: &TypedExpr) -> Result<Pointer, EngineError> {
-    let costs = GasCosts::sensible_defaults();
-    let mut gas = GasMeter::unlimited(costs);
-    eval_typed_expr_with_gas(engine, env, expr, &mut gas)
-}
-
-pub(crate) fn apply(
-    engine: &Engine,
-    func: Pointer,
-    arg: Pointer,
-    func_type: Option<&Type>,
-    arg_type: Option<&Type>,
-) -> Result<Pointer, EngineError> {
-    let func_value = engine.heap().get(&func)?.as_ref().clone();
-    match func_value {
-        Value::Closure(Closure {
-            env,
-            param,
-            param_ty,
-            typ,
-            body,
-        }) => {
-            let mut subst = Subst::new_sync();
-            if let Some(expected) = func_type {
-                let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
-                    expected: typ.to_string(),
-                    got: expected.to_string(),
-                })?;
-                subst = compose_subst(s_fun, subst);
-            }
-            let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
-            let param_ty = param_ty.apply(&subst);
-            let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-                expected: param_ty.to_string(),
-                got: actual_ty.to_string(),
-            })?;
-            subst = compose_subst(s_arg, subst);
-            let env = env.extend(param, arg);
-            let body = body.apply(&subst);
-            eval_typed_expr(engine, &env, &body)
-        }
-        Value::Native(native) => native.apply(engine, arg, arg_type),
-        Value::Overloaded(over) => over.apply(engine, arg, func_type, arg_type),
-        _ => Err(EngineError::NotCallable(
-            engine.heap().type_name(&func)?.into(),
-        )),
-    }
-}
-
 impl NativeFn {
-    fn call_zero_with_gas(
-        &self,
-        engine: &Engine,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    fn call_zero(&self, engine: &Engine, gas: &mut GasMeter) -> Result<Pointer, EngineError> {
         let amount = gas
             .costs
             .native_call_base
             .saturating_add(self.gas_cost)
             .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
         gas.charge(amount)?;
-        self.call_zero(engine)
+        if self.arity != 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name.clone(),
+                expected: self.arity,
+                got: 0,
+            });
+        }
+        self.func.call_sync(engine, &self.typ, &[])
     }
 
-    fn apply_with_gas(
+    fn apply(
         mut self,
         engine: &Engine,
         arg: Pointer,
@@ -2500,7 +2297,7 @@ impl NativeFn {
         self.func.call_sync(engine, &full_ty, &self.applied)
     }
 
-    async fn call_zero_async_with_gas(
+    async fn call_zero_async(
         &self,
         engine: &Engine,
         gas: &mut GasMeter,
@@ -2511,10 +2308,17 @@ impl NativeFn {
             .saturating_add(self.gas_cost)
             .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
         gas.charge(amount)?;
-        self.call_zero_async(engine).await
+        if self.arity != 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name.clone(),
+                expected: self.arity,
+                got: 0,
+            });
+        }
+        self.func.call_async(engine, self.typ.clone(), &[]).await
     }
 
-    async fn apply_async_with_gas(
+    async fn apply_async(
         mut self,
         engine: &Engine,
         arg: Pointer,
@@ -2578,7 +2382,7 @@ impl NativeFn {
     }
 }
 
-fn eval_typed_expr_with_gas(
+fn eval_typed_expr(
     engine: &Engine,
     env: &Env,
     expr: &TypedExpr,
@@ -2592,7 +2396,7 @@ fn eval_typed_expr_with_gas(
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 gas.charge(gas.costs.eval_node)?;
-                let ptr = eval_typed_expr_with_gas(engine, &env, def, gas)?;
+                let ptr = eval_typed_expr(engine, &env, def, gas)?;
                 env = env.extend(name.clone(), ptr);
                 cur = body;
             }
@@ -2613,7 +2417,7 @@ fn eval_typed_expr_with_gas(
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
-                values.push(eval_typed_expr_with_gas(engine, &env, elem, gas)?);
+                values.push(eval_typed_expr(engine, &env, elem, gas)?);
             }
             engine.heap().alloc_tuple(values)
         }
@@ -2621,7 +2425,7 @@ fn eval_typed_expr_with_gas(
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
-                values.push(eval_typed_expr_with_gas(engine, &env, elem, gas)?);
+                values.push(eval_typed_expr(engine, &env, elem, gas)?);
             }
             let mut list = engine.heap().alloc_adt(sym("Empty"), vec![])?;
             for value in values.into_iter().rev() {
@@ -2633,16 +2437,16 @@ fn eval_typed_expr_with_gas(
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
                 check_cancelled(engine)?;
-                out.insert(k.clone(), eval_typed_expr_with_gas(engine, &env, v, gas)?);
+                out.insert(k.clone(), eval_typed_expr(engine, &env, v, gas)?);
             }
             engine.heap().alloc_dict(out)
         }
         TypedExprKind::RecordUpdate { base, updates } => {
-            let base_ptr = eval_typed_expr_with_gas(engine, &env, base, gas)?;
+            let base_ptr = eval_typed_expr(engine, &env, base, gas)?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
                 check_cancelled(engine)?;
-                update_vals.insert(k.clone(), eval_typed_expr_with_gas(engine, &env, v, gas)?);
+                update_vals.insert(k.clone(), eval_typed_expr(engine, &env, v, gas)?);
             }
 
             let base_val = engine.heap().get(&base_ptr)?;
@@ -2678,17 +2482,17 @@ fn eval_typed_expr_with_gas(
                 let value = engine.heap().get(&ptr)?;
                 match value.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero_with_gas(engine, gas)
+                        native.call_zero(engine, gas)
                     }
                     _ => Ok(ptr),
                 }
             } else if engine.types.class_methods.contains_key(name) {
                 engine.resolve_class_method(name, &cur.typ)
             } else {
-                let value = engine.resolve_native_with_gas(name.as_ref(), &cur.typ, gas)?;
+                let value = engine.resolve_native(name.as_ref(), &cur.typ, gas)?;
                 match engine.heap().get(&value)?.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero_with_gas(engine, gas)
+                        native.call_zero(engine, gas)
                     }
                     _ => Ok(value),
                 }
@@ -2704,12 +2508,12 @@ fn eval_typed_expr_with_gas(
             }
             spine.reverse();
 
-            let mut func = eval_typed_expr_with_gas(engine, &env, head, gas)?;
+            let mut func = eval_typed_expr(engine, &env, head, gas)?;
             for (func_type, arg_expr) in spine {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_app_step)?;
-                let arg = eval_typed_expr_with_gas(engine, &env, arg_expr, gas)?;
-                func = apply_with_gas(
+                let arg = eval_typed_expr(engine, &env, arg_expr, gas)?;
+                func = apply(
                     engine,
                     func,
                     arg,
@@ -2721,7 +2525,7 @@ fn eval_typed_expr_with_gas(
             Ok(func)
         }
         TypedExprKind::Project { expr, field } => {
-            let value = eval_typed_expr_with_gas(engine, &env, expr, gas)?;
+            let value = eval_typed_expr(engine, &env, expr, gas)?;
             project_pointer(engine.heap(), field, &value)
         }
         TypedExprKind::Lam { param, body } => {
@@ -2748,45 +2552,45 @@ fn eval_typed_expr_with_gas(
             for ((_, def), slot) in bindings.iter().zip(slots.iter()) {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_node)?;
-                let def_ptr = eval_typed_expr_with_gas(engine, &env_rec, def, gas)?;
+                let def_ptr = eval_typed_expr(engine, &env_rec, def, gas)?;
                 let def_value = engine.heap().get(&def_ptr)?;
                 engine.heap().overwrite(slot, def_value.as_ref().clone())?;
             }
 
-            eval_typed_expr_with_gas(engine, &env_rec, body, gas)
+            eval_typed_expr(engine, &env_rec, body, gas)
         }
         TypedExprKind::Ite {
             cond,
             then_expr,
             else_expr,
         } => {
-            let cond_ptr = eval_typed_expr_with_gas(engine, &env, cond, gas)?;
+            let cond_ptr = eval_typed_expr(engine, &env, cond, gas)?;
             match engine.heap().pointer_as_bool(&cond_ptr) {
-                Ok(true) => eval_typed_expr_with_gas(engine, &env, then_expr, gas),
-                Ok(false) => eval_typed_expr_with_gas(engine, &env, else_expr, gas),
+                Ok(true) => eval_typed_expr(engine, &env, then_expr, gas),
+                Ok(false) => eval_typed_expr(engine, &env, else_expr, gas),
                 Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
                 Err(err) => Err(err),
             }
         }
         TypedExprKind::Match { scrutinee, arms } => {
-            let value = eval_typed_expr_with_gas(engine, &env, scrutinee, gas)?;
+            let value = eval_typed_expr(engine, &env, scrutinee, gas)?;
             for (pat, expr) in arms {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_match_arm)?;
                 if let Some(bindings) = match_pattern_ptr(engine.heap(), pat, &value) {
                     let env = env.extend_many(bindings);
-                    return eval_typed_expr_with_gas(engine, &env, expr, gas);
+                    return eval_typed_expr(engine, &env, expr, gas);
                 }
             }
             Err(EngineError::MatchFailure)
         }
         TypedExprKind::Let { .. } => {
-            unreachable!("let chain handled in eval_typed_expr_with_gas loop")
+            unreachable!("let chain handled in eval_typed_expr loop")
         }
     }
 }
 
-fn apply_with_gas(
+pub(crate) fn apply(
     engine: &Engine,
     func: Pointer,
     arg: Pointer,
@@ -2820,10 +2624,10 @@ fn apply_with_gas(
             subst = compose_subst(s_arg, subst);
             let env = env.extend(param, arg);
             let body = body.apply(&subst);
-            eval_typed_expr_with_gas(engine, &env, &body, gas)
+            eval_typed_expr(engine, &env, &body, gas)
         }
-        Value::Native(native) => native.apply_with_gas(engine, arg, arg_type, gas),
-        Value::Overloaded(over) => over.apply_with_gas(engine, arg, func_type, arg_type, gas),
+        Value::Native(native) => native.apply(engine, arg, arg_type, gas),
+        Value::Overloaded(over) => over.apply(engine, arg, func_type, arg_type, gas),
         _ => Err(EngineError::NotCallable(
             engine.heap().type_name(&func)?.into(),
         )),
@@ -2831,7 +2635,7 @@ fn apply_with_gas(
 }
 
 #[async_recursion]
-async fn eval_typed_expr_async_with_gas(
+async fn eval_typed_expr_async(
     engine: &Engine,
     env: &Env,
     expr: &TypedExpr,
@@ -2845,7 +2649,7 @@ async fn eval_typed_expr_async_with_gas(
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 gas.charge(gas.costs.eval_node)?;
-                let ptr = eval_typed_expr_async_with_gas(engine, &env, def, gas).await?;
+                let ptr = eval_typed_expr_async(engine, &env, def, gas).await?;
                 env = env.extend(name.clone(), ptr);
                 cur = body;
             }
@@ -2866,7 +2670,7 @@ async fn eval_typed_expr_async_with_gas(
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
-                values.push(eval_typed_expr_async_with_gas(engine, &env, elem, gas).await?);
+                values.push(eval_typed_expr_async(engine, &env, elem, gas).await?);
             }
             engine.heap().alloc_tuple(values)
         }
@@ -2874,7 +2678,7 @@ async fn eval_typed_expr_async_with_gas(
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
-                values.push(eval_typed_expr_async_with_gas(engine, &env, elem, gas).await?);
+                values.push(eval_typed_expr_async(engine, &env, elem, gas).await?);
             }
             let mut list = engine.heap().alloc_adt(sym("Empty"), vec![])?;
             for value in values.into_iter().rev() {
@@ -2888,19 +2692,19 @@ async fn eval_typed_expr_async_with_gas(
                 check_cancelled(engine)?;
                 out.insert(
                     k.clone(),
-                    eval_typed_expr_async_with_gas(engine, &env, v, gas).await?,
+                    eval_typed_expr_async(engine, &env, v, gas).await?,
                 );
             }
             engine.heap().alloc_dict(out)
         }
         TypedExprKind::RecordUpdate { base, updates } => {
-            let base_ptr = eval_typed_expr_async_with_gas(engine, &env, base, gas).await?;
+            let base_ptr = eval_typed_expr_async(engine, &env, base, gas).await?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
                 check_cancelled(engine)?;
                 update_vals.insert(
                     k.clone(),
-                    eval_typed_expr_async_with_gas(engine, &env, v, gas).await?,
+                    eval_typed_expr_async(engine, &env, v, gas).await?,
                 );
             }
 
@@ -2937,7 +2741,7 @@ async fn eval_typed_expr_async_with_gas(
                 let value = engine.heap().get(&ptr)?;
                 match value.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero_async_with_gas(engine, gas).await
+                        native.call_zero_async(engine, gas).await
                     }
                     _ => Ok(ptr),
                 }
@@ -2946,10 +2750,10 @@ async fn eval_typed_expr_async_with_gas(
                     .resolve_class_method_with_gas(name, &cur.typ, gas)
                     .await
             } else {
-                let value = engine.resolve_native_with_gas(name.as_ref(), &cur.typ, gas)?;
+                let value = engine.resolve_native(name.as_ref(), &cur.typ, gas)?;
                 match engine.heap().get(&value)?.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero_async_with_gas(engine, gas).await
+                        native.call_zero_async(engine, gas).await
                     }
                     _ => Ok(value),
                 }
@@ -2965,12 +2769,12 @@ async fn eval_typed_expr_async_with_gas(
             }
             spine.reverse();
 
-            let mut func = eval_typed_expr_async_with_gas(engine, &env, head, gas).await?;
+            let mut func = eval_typed_expr_async(engine, &env, head, gas).await?;
             for (func_type, arg_expr) in spine {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_app_step)?;
-                let arg = eval_typed_expr_async_with_gas(engine, &env, arg_expr, gas).await?;
-                func = apply_async_with_gas(
+                let arg = eval_typed_expr_async(engine, &env, arg_expr, gas).await?;
+                func = apply_async(
                     engine,
                     func,
                     arg,
@@ -2983,7 +2787,7 @@ async fn eval_typed_expr_async_with_gas(
             Ok(func)
         }
         TypedExprKind::Project { expr, field } => {
-            let value = eval_typed_expr_async_with_gas(engine, &env, expr, gas).await?;
+            let value = eval_typed_expr_async(engine, &env, expr, gas).await?;
             project_pointer(engine.heap(), field, &value)
         }
         TypedExprKind::Lam { param, body } => {
@@ -3010,46 +2814,46 @@ async fn eval_typed_expr_async_with_gas(
             for ((_, def), slot) in bindings.iter().zip(slots.iter()) {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_node)?;
-                let def_ptr = eval_typed_expr_async_with_gas(engine, &env_rec, def, gas).await?;
+                let def_ptr = eval_typed_expr_async(engine, &env_rec, def, gas).await?;
                 let def_value = engine.heap().get(&def_ptr)?;
                 engine.heap().overwrite(slot, def_value.as_ref().clone())?;
             }
 
-            eval_typed_expr_async_with_gas(engine, &env_rec, body, gas).await
+            eval_typed_expr_async(engine, &env_rec, body, gas).await
         }
         TypedExprKind::Ite {
             cond,
             then_expr,
             else_expr,
         } => {
-            let cond_ptr = eval_typed_expr_async_with_gas(engine, &env, cond, gas).await?;
+            let cond_ptr = eval_typed_expr_async(engine, &env, cond, gas).await?;
             match engine.heap().pointer_as_bool(&cond_ptr) {
-                Ok(true) => eval_typed_expr_async_with_gas(engine, &env, then_expr, gas).await,
-                Ok(false) => eval_typed_expr_async_with_gas(engine, &env, else_expr, gas).await,
+                Ok(true) => eval_typed_expr_async(engine, &env, then_expr, gas).await,
+                Ok(false) => eval_typed_expr_async(engine, &env, else_expr, gas).await,
                 Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
                 Err(err) => Err(err),
             }
         }
         TypedExprKind::Match { scrutinee, arms } => {
-            let value = eval_typed_expr_async_with_gas(engine, &env, scrutinee, gas).await?;
+            let value = eval_typed_expr_async(engine, &env, scrutinee, gas).await?;
             for (pat, expr) in arms {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_match_arm)?;
                 if let Some(bindings) = match_pattern_ptr(engine.heap(), pat, &value) {
                     let env = env.extend_many(bindings);
-                    return eval_typed_expr_async_with_gas(engine, &env, expr, gas).await;
+                    return eval_typed_expr_async(engine, &env, expr, gas).await;
                 }
             }
             Err(EngineError::MatchFailure)
         }
         TypedExprKind::Let { .. } => {
-            unreachable!("let chain handled in eval_typed_expr_async_with_gas loop")
+            unreachable!("let chain handled in eval_typed_expr_async loop")
         }
     }
 }
 
 #[async_recursion]
-async fn apply_async_with_gas(
+async fn apply_async(
     engine: &Engine,
     func: Pointer,
     arg: Pointer,
@@ -3083,15 +2887,11 @@ async fn apply_async_with_gas(
             subst = compose_subst(s_arg, subst);
             let env = env.extend(param, arg);
             let body = body.apply(&subst);
-            eval_typed_expr_async_with_gas(engine, &env, &body, gas).await
+            eval_typed_expr_async(engine, &env, &body, gas).await
         }
-        Value::Native(native) => {
-            native
-                .apply_async_with_gas(engine, arg, arg_type, gas)
-                .await
-        }
+        Value::Native(native) => native.apply_async(engine, arg, arg_type, gas).await,
         Value::Overloaded(over) => {
-            over.apply_async_with_gas(engine, arg, func_type, arg_type, gas)
+            over.apply_async(engine, arg, func_type, arg_type, gas)
                 .await
         }
         _ => Err(EngineError::NotCallable(
@@ -3222,7 +3022,7 @@ mod tests {
 
         let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
         let v1 = engine
-            .eval_repl_program_with_gas(&program1, &mut state, &mut gas)
+            .eval_repl_program(&program1, &mut state, &mut gas)
             .await
             .unwrap();
         let expected = engine.heap().alloc_i32(2).unwrap();
@@ -3230,7 +3030,7 @@ mod tests {
 
         let program2 = parse_program("inc 2");
         let v2 = engine
-            .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
+            .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
         let expected = engine.heap().alloc_i32(3).unwrap();
@@ -3249,13 +3049,13 @@ mod tests {
         let mut state = ReplState::new();
         let program1 = parse_program("import foo.bar as Bar\n()");
         engine
-            .eval_repl_program_with_gas(&program1, &mut state, &mut gas)
+            .eval_repl_program(&program1, &mut state, &mut gas)
             .await
             .unwrap();
 
         let program2 = parse_program("Bar.triple 10");
         let v2 = engine
-            .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
+            .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
         let expected = engine.heap().alloc_i32(30).unwrap();
@@ -3281,8 +3081,7 @@ mod tests {
 
         let token = engine.cancellation_token();
         let mut gas = unlimited_gas();
-        let handle =
-            tokio::spawn(async move { engine.eval_with_gas(expr.as_ref(), &mut gas).await });
+        let handle = tokio::spawn(async move { engine.eval(expr.as_ref(), &mut gas).await });
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
@@ -3326,7 +3125,7 @@ mod tests {
                 ..GasCosts::sensible_defaults()
             },
         );
-        let err = match engine.eval_with_gas(expr.as_ref(), &mut gas).await {
+        let err = match engine.eval(expr.as_ref(), &mut gas).await {
             Ok(_) => panic!("expected out of gas"),
             Err(e) => e,
         };
@@ -3347,7 +3146,7 @@ mod tests {
         let mut engine = engine_with_arith();
         engine.inject_decls(&program.decls).unwrap();
         let mut gas = unlimited_gas();
-        match engine.eval_with_gas(program.expr.as_ref(), &mut gas).await {
+        match engine.eval(program.expr.as_ref(), &mut gas).await {
             Err(EngineError::Type(err)) => {
                 let err = strip_span(err);
                 assert!(matches!(err, TypeError::FieldNotKnown { .. }));

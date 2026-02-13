@@ -15,10 +15,7 @@ async fn vec_from_value() {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let result = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -47,10 +44,7 @@ async fn vec_to_value() {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let result = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -84,7 +78,7 @@ async fn vec_rex_type() {
 
     let costs = GasCosts::sensible_defaults();
     let mut gas = GasMeter::unlimited(costs);
-    let (_, ty) = engine.infer_snippet_with_gas(expr, &mut gas).unwrap();
+    let (_, ty) = engine.infer_snippet(expr, &mut gas).unwrap();
 
     assert_eq!(ty, Type::app(Type::con("Array", 1), Type::con("i32", 0),));
 }
@@ -96,10 +90,7 @@ async fn option_prelude() {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let result = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(
         heap,
@@ -125,10 +116,7 @@ async fn option_from_value() {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let result = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -159,10 +147,7 @@ async fn option_into_value() {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let result = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -193,7 +178,7 @@ async fn option_rex_type() {
 
     let costs = GasCosts::sensible_defaults();
     let mut gas = GasMeter::unlimited(costs);
-    let (_, ty) = engine.infer_snippet_with_gas(expr, &mut gas).unwrap();
+    let (_, ty) = engine.infer_snippet(expr, &mut gas).unwrap();
 
     assert_eq!(ty, Type::app(Type::con("Option", 1), Type::con("i32", 0),));
 }

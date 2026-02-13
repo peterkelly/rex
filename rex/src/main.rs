@@ -322,7 +322,7 @@ async fn repl_loop(
         };
 
         match engine
-            .eval_repl_program_with_gas(&program, &mut state, &mut gas)
+            .eval_repl_program(&program, &mut state, &mut gas)
             .await
         {
             Ok(v) => {
@@ -424,12 +424,12 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let pointer = if let Some(path) = file {
         engine
-            .eval_module_file_with_gas(&path, &mut gas)
+            .eval_module_file(&path, &mut gas)
             .await
             .map_err(|e| format!("{e}"))?
     } else {
         engine
-            .eval_snippet_with_gas(source, &mut gas)
+            .eval_snippet(source, &mut gas)
             .await
             .map_err(|e| format!("{e}"))?
     };
@@ -471,11 +471,11 @@ fn infer_type_json(
 
     let (preds, ty) = if let Some(path) = file {
         engine
-            .infer_module_file_with_gas(path, gas)
+            .infer_module_file(path, gas)
             .map_err(|e| format!("{e}"))?
     } else {
         engine
-            .infer_snippet_with_gas(source, gas)
+            .infer_snippet(source, gas)
             .map_err(|e| format!("{e}"))?
     };
 

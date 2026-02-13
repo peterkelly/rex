@@ -23,10 +23,7 @@ async fn record_update_end_to_end() {
     let mut engine = Engine::with_prelude().unwrap();
     engine.inject_decls(&program.decls).unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-    let value_ptr = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let value_ptr = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
