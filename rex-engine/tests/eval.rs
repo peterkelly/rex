@@ -127,6 +127,155 @@ async fn eval_native_injection() {
 }
 
 #[tokio::test]
+async fn eval_sync_native_injection_supports_arities_0_to_8() {
+    let expr = parse(
+        r#"
+        (
+            f0,
+            f1 1,
+            f2 1 2,
+            f3 1 2 3,
+            f4 1 2 3 4,
+            f5 1 2 3 4 5,
+            f6 1 2 3 4 5 6,
+            f7 1 2 3 4 5 6 7,
+            f8 1 2 3 4 5 6 7 8
+        )
+        "#,
+    );
+    let mut engine = Engine::with_prelude().unwrap();
+    engine.inject_fn0("f0", || 0i32).unwrap();
+    engine.inject_fn1("f1", |a: i32| a).unwrap();
+    engine.inject_fn2("f2", |a: i32, b: i32| a + b).unwrap();
+    engine
+        .inject_fn3("f3", |a: i32, b: i32, c: i32| a + b + c)
+        .unwrap();
+    engine
+        .inject_fn4("f4", |a: i32, b: i32, c: i32, d: i32| a + b + c + d)
+        .unwrap();
+    engine
+        .inject_fn5("f5", |a: i32, b: i32, c: i32, d: i32, e: i32| {
+            a + b + c + d + e
+        })
+        .unwrap();
+    engine
+        .inject_fn6("f6", |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| {
+            a + b + c + d + e + g
+        })
+        .unwrap();
+    engine
+        .inject_fn7(
+            "f7",
+            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| a + b + c + d + e + g + h,
+        )
+        .unwrap();
+    engine
+        .inject_fn8(
+            "f8",
+            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
+                a + b + c + d + e + g + h + i
+            },
+        )
+        .unwrap();
+
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
+    let value = pval!(engine, value);
+    match value {
+        Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
+            let expected = [0, 1, 3, 6, 10, 15, 21, 28, 36];
+            assert_eq!(xs.len(), expected.len());
+            for (idx, expected) in expected.iter().enumerate() {
+                match &xs[idx] {
+                    Value::I32(v) => assert_eq!(v, expected),
+                    _ => panic!("expected i32 at index {idx}"),
+                }
+            }
+        }
+        _ => panic!("expected tuple"),
+    }
+}
+
+#[tokio::test]
+async fn eval_async_native_injection_supports_arities_0_to_8() {
+    let expr = parse(
+        r#"
+        (
+            af0,
+            af1 1,
+            af2 1 2,
+            af3 1 2 3,
+            af4 1 2 3 4,
+            af5 1 2 3 4 5,
+            af6 1 2 3 4 5 6,
+            af7 1 2 3 4 5 6 7,
+            af8 1 2 3 4 5 6 7 8
+        )
+        "#,
+    );
+    let mut engine = Engine::with_prelude().unwrap();
+    engine.inject_async_fn0("af0", || async { 0i32 }).unwrap();
+    engine
+        .inject_async_fn1("af1", |a: i32| async move { a })
+        .unwrap();
+    engine
+        .inject_async_fn2("af2", |a: i32, b: i32| async move { a + b })
+        .unwrap();
+    engine
+        .inject_async_fn3("af3", |a: i32, b: i32, c: i32| async move { a + b + c })
+        .unwrap();
+    engine
+        .inject_async_fn4("af4", |a: i32, b: i32, c: i32, d: i32| async move {
+            a + b + c + d
+        })
+        .unwrap();
+    engine
+        .inject_async_fn5("af5", |a: i32, b: i32, c: i32, d: i32, e: i32| async move {
+            a + b + c + d + e
+        })
+        .unwrap();
+    engine
+        .inject_async_fn6(
+            "af6",
+            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move { a + b + c + d + e + g },
+        )
+        .unwrap();
+    engine
+        .inject_async_fn7(
+            "af7",
+            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
+                a + b + c + d + e + g + h
+            },
+        )
+        .unwrap();
+    engine
+        .inject_async_fn8(
+            "af8",
+            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
+                a + b + c + d + e + g + h + i
+            },
+        )
+        .unwrap();
+
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
+    let value = pval!(engine, value);
+    match value {
+        Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
+            let expected = [0, 1, 3, 6, 10, 15, 21, 28, 36];
+            assert_eq!(xs.len(), expected.len());
+            for (idx, expected) in expected.iter().enumerate() {
+                match &xs[idx] {
+                    Value::I32(v) => assert_eq!(v, expected),
+                    _ => panic!("expected i32 at index {idx}"),
+                }
+            }
+        }
+        _ => panic!("expected tuple"),
+    }
+}
+
+#[tokio::test]
 async fn eval_can_be_cancelled() {
     let expr = parse("stall");
     let mut engine = Engine::with_prelude().unwrap();

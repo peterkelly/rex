@@ -661,6 +661,84 @@ impl Default for Engine {
     }
 }
 
+macro_rules! native_fn_type {
+    (; $ret:ident) => {
+        $ret::rex_type()
+    };
+    ($arg_ty:ident $(, $rest:ident)* ; $ret:ident) => {
+        Type::fun($arg_ty::rex_type(), native_fn_type!($($rest),* ; $ret))
+    };
+}
+
+macro_rules! define_inject_fn_method {
+    ($method:ident, $arity:literal, [$(($arg_ty:ident, $arg_name:ident, $idx:tt)),* $(,)?]) => {
+        pub fn $method<F, R $(, $arg_ty)*>(&mut self, name: &str, f: F) -> Result<(), EngineError>
+        where
+            F: Fn($($arg_ty),*) -> R + Send + Sync + 'static,
+            R: IntoPointer + RexType,
+            $($arg_ty: FromPointer + RexType,)*
+        {
+            let name = normalize_name(name);
+            let name_sym = name.clone();
+            let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| {
+                if args.len() != $arity {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: $arity,
+                        got: args.len(),
+                    });
+                }
+                $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
+                f($($arg_name),*).into_pointer(engine.heap())
+            });
+            let typ = native_fn_type!($($arg_ty),* ; R);
+            let scheme = Scheme::new(vec![], vec![], typ);
+            self.register_native(name, scheme, $arity, NativeCallable::Sync(func), 0)
+        }
+    };
+}
+
+macro_rules! define_inject_async_fn_method {
+    ($method:ident, $arity:literal, [$(($arg_ty:ident, $arg_name:ident, $idx:tt)),* $(,)?]) => {
+        pub fn $method<F, Fut, R $(, $arg_ty)*>(
+            &mut self,
+            name: &str,
+            f: F,
+        ) -> Result<(), EngineError>
+        where
+            F: Fn($($arg_ty),*) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = R> + Send + 'static,
+            R: IntoPointer + RexType,
+            $($arg_ty: FromPointer + RexType,)*
+        {
+            let name = normalize_name(name);
+            let name_sym = name.clone();
+            let f = Arc::new(f);
+            let func: AsyncNativeCallable = Arc::new(
+                move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
+                    let f = f.clone();
+                    let name_sym = name_sym.clone();
+                    async move {
+                        if args.len() != $arity {
+                            return Err(EngineError::NativeArity {
+                                name: name_sym.clone(),
+                                expected: $arity,
+                                got: args.len(),
+                            });
+                        }
+                        $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
+                        f($($arg_name),*).await.into_pointer(engine.heap())
+                    }
+                    .boxed()
+                },
+            );
+            let typ = native_fn_type!($($arg_ty),* ; R);
+            let scheme = Scheme::new(vec![], vec![], typ);
+            self.register_native(name, scheme, $arity, NativeCallable::Async(func), 0)
+        }
+    };
+}
+
 impl Engine {
     pub fn new() -> Self {
         Self {
@@ -825,177 +903,109 @@ impl Engine {
         self.register_native(name, scheme, 0, NativeCallable::Sync(func), 0)
     }
 
-    pub fn inject_fn0<F, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
-    where
-        F: Fn() -> R + Send + Sync + 'static,
-        R: IntoPointer + RexType,
-    {
-        let name = normalize_name(name);
-        let name_string = name.clone();
-        let name_for_fn = name.clone();
-        let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| {
-            if !args.is_empty() {
-                return Err(EngineError::NativeArity {
-                    name: name_for_fn.clone(),
-                    expected: 0,
-                    got: args.len(),
-                });
-            }
-            f().into_pointer(engine.heap())
-        });
-        let typ = R::rex_type();
-        let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name_string, scheme, 0, NativeCallable::Sync(func), 0)
-    }
+    define_inject_fn_method!(inject_fn0, 0, []);
+    define_inject_fn_method!(inject_fn1, 1, [(A, a, 0)]);
+    define_inject_fn_method!(inject_fn2, 2, [(A, a, 0), (B, b, 1)]);
+    define_inject_fn_method!(inject_fn3, 3, [(A, a, 0), (B, b, 1), (C, c, 2)]);
+    define_inject_fn_method!(inject_fn4, 4, [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3)]);
+    define_inject_fn_method!(
+        inject_fn5,
+        5,
+        [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4)]
+    );
+    define_inject_fn_method!(
+        inject_fn6,
+        6,
+        [
+            (A, a, 0),
+            (B, b, 1),
+            (C, c, 2),
+            (D, d, 3),
+            (E, e, 4),
+            (G, g, 5)
+        ]
+    );
+    define_inject_fn_method!(
+        inject_fn7,
+        7,
+        [
+            (A, a, 0),
+            (B, b, 1),
+            (C, c, 2),
+            (D, d, 3),
+            (E, e, 4),
+            (G, g, 5),
+            (H, h, 6)
+        ]
+    );
+    define_inject_fn_method!(
+        inject_fn8,
+        8,
+        [
+            (A, a, 0),
+            (B, b, 1),
+            (C, c, 2),
+            (D, d, 3),
+            (E, e, 4),
+            (G, g, 5),
+            (H, h, 6),
+            (I, i, 7)
+        ]
+    );
 
-    pub fn inject_fn1<F, A, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
-    where
-        F: Fn(A) -> R + Send + Sync + 'static,
-        A: FromPointer + RexType,
-        R: IntoPointer + RexType,
-    {
-        let name = normalize_name(name);
-        let name_string = name.clone();
-        let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| {
-            if args.len() != 1 {
-                return Err(EngineError::NativeArity {
-                    name: name_string.clone(),
-                    expected: 1,
-                    got: args.len(),
-                });
-            }
-            let a = A::from_pointer(engine.heap(), &args[0])?;
-            f(a).into_pointer(engine.heap())
-        });
-        let typ = Type::fun(A::rex_type(), R::rex_type());
-        let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 1, NativeCallable::Sync(func), 0)
-    }
-
-    pub fn inject_fn2<F, A, B, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
-    where
-        F: Fn(A, B) -> R + Send + Sync + 'static,
-        A: FromPointer + RexType,
-        B: FromPointer + RexType,
-        R: IntoPointer + RexType,
-    {
-        let name = normalize_name(name);
-        let name_string = name.clone();
-        let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| {
-            if args.len() != 2 {
-                return Err(EngineError::NativeArity {
-                    name: name_string.clone(),
-                    expected: 2,
-                    got: args.len(),
-                });
-            }
-            let a = A::from_pointer(engine.heap(), &args[0])?;
-            let b = B::from_pointer(engine.heap(), &args[1])?;
-            f(a, b).into_pointer(engine.heap())
-        });
-        let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
-        let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 2, NativeCallable::Sync(func), 0)
-    }
-
-    pub fn inject_async_fn0<F, Fut, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
-    where
-        F: Fn() -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = R> + Send + 'static,
-        R: IntoPointer + RexType,
-    {
-        let name = normalize_name(name);
-        let name_sym = name.clone();
-        let f = Arc::new(f);
-        let func: AsyncNativeCallable = Arc::new(
-            move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
-                let f = f.clone();
-                let name_sym = name_sym.clone();
-                async move {
-                    if !args.is_empty() {
-                        return Err(EngineError::NativeArity {
-                            name: name_sym.clone(),
-                            expected: 0,
-                            got: args.len(),
-                        });
-                    }
-                    f().await.into_pointer(engine.heap())
-                }
-                .boxed()
-            },
-        );
-        let typ = R::rex_type();
-        let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 0, NativeCallable::Async(func), 0)
-    }
-
-    pub fn inject_async_fn1<F, Fut, A, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
-    where
-        F: Fn(A) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = R> + Send + 'static,
-        A: FromPointer + RexType,
-        R: IntoPointer + RexType,
-    {
-        let name = normalize_name(name);
-        let name_sym = name.clone();
-        let f = Arc::new(f);
-        let func: AsyncNativeCallable = Arc::new(
-            move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
-                let f = f.clone();
-                let name_sym = name_sym.clone();
-                async move {
-                    if args.len() != 1 {
-                        return Err(EngineError::NativeArity {
-                            name: name_sym.clone(),
-                            expected: 1,
-                            got: args.len(),
-                        });
-                    }
-                    let a = A::from_pointer(engine.heap(), &args[0])?;
-                    f(a).await.into_pointer(engine.heap())
-                }
-                .boxed()
-            },
-        );
-        let typ = Type::fun(A::rex_type(), R::rex_type());
-        let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 1, NativeCallable::Async(func), 0)
-    }
-
-    pub fn inject_async_fn2<F, Fut, A, B, R>(&mut self, name: &str, f: F) -> Result<(), EngineError>
-    where
-        F: Fn(A, B) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = R> + Send + 'static,
-        A: FromPointer + RexType,
-        B: FromPointer + RexType,
-        R: IntoPointer + RexType,
-    {
-        let name = normalize_name(name);
-        let name_sym = name.clone();
-        let f = Arc::new(f);
-        let func: AsyncNativeCallable = Arc::new(
-            move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
-                let f = f.clone();
-                let name_sym = name_sym.clone();
-                async move {
-                    if args.len() != 2 {
-                        return Err(EngineError::NativeArity {
-                            name: name_sym.clone(),
-                            expected: 2,
-                            got: args.len(),
-                        });
-                    }
-                    let a = A::from_pointer(engine.heap(), &args[0])?;
-                    let b = B::from_pointer(engine.heap(), &args[1])?;
-                    f(a, b).await.into_pointer(engine.heap())
-                }
-                .boxed()
-            },
-        );
-        let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
-        let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 2, NativeCallable::Async(func), 0)
-    }
+    define_inject_async_fn_method!(inject_async_fn0, 0, []);
+    define_inject_async_fn_method!(inject_async_fn1, 1, [(A, a, 0)]);
+    define_inject_async_fn_method!(inject_async_fn2, 2, [(A, a, 0), (B, b, 1)]);
+    define_inject_async_fn_method!(inject_async_fn3, 3, [(A, a, 0), (B, b, 1), (C, c, 2)]);
+    define_inject_async_fn_method!(
+        inject_async_fn4,
+        4,
+        [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3)]
+    );
+    define_inject_async_fn_method!(
+        inject_async_fn5,
+        5,
+        [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4)]
+    );
+    define_inject_async_fn_method!(
+        inject_async_fn6,
+        6,
+        [
+            (A, a, 0),
+            (B, b, 1),
+            (C, c, 2),
+            (D, d, 3),
+            (E, e, 4),
+            (G, g, 5)
+        ]
+    );
+    define_inject_async_fn_method!(
+        inject_async_fn7,
+        7,
+        [
+            (A, a, 0),
+            (B, b, 1),
+            (C, c, 2),
+            (D, d, 3),
+            (E, e, 4),
+            (G, g, 5),
+            (H, h, 6)
+        ]
+    );
+    define_inject_async_fn_method!(
+        inject_async_fn8,
+        8,
+        [
+            (A, a, 0),
+            (B, b, 1),
+            (C, c, 2),
+            (D, d, 3),
+            (E, e, 4),
+            (G, g, 5),
+            (H, h, 6),
+            (I, i, 7)
+        ]
+    );
 
     pub fn inject_async_fn0_cancellable<F, Fut, R>(
         &mut self,
