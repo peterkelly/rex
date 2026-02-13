@@ -43,10 +43,11 @@ fn type_head_is_var(typ: &Type) -> bool {
 type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
 type SyncNativeCallable =
     Arc<dyn Fn(&Engine, &Type, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static>;
-type AsyncNativeCallable =
-    Arc<dyn for<'a> Fn(&'a Engine, Type, Vec<Pointer>) -> NativeFuture<'a> + Send + Sync + 'static>;
+type AsyncNativeCallable = Arc<
+    dyn for<'a> Fn(&'a Engine, Type, &'a [Pointer]) -> NativeFuture<'a> + Send + Sync + 'static,
+>;
 type AsyncNativeCallableCancellable = Arc<
-    dyn for<'a> Fn(&'a Engine, CancellationToken, Type, Vec<Pointer>) -> NativeFuture<'a>
+    dyn for<'a> Fn(&'a Engine, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
         + Send
         + Sync
         + 'static,
@@ -85,7 +86,7 @@ impl NativeCallable {
         match self {
             NativeCallable::Sync(f) => (f)(engine, typ, args),
             NativeCallable::Async(..) | NativeCallable::AsyncCancellable(..) => {
-                futures::executor::block_on(self.call_async(engine, typ.clone(), args.to_vec()))
+                futures::executor::block_on(self.call_async(engine, typ.clone(), args))
             }
         }
     }
@@ -94,7 +95,7 @@ impl NativeCallable {
         &self,
         engine: &Engine,
         typ: Type,
-        args: Vec<Pointer>,
+        args: &[Pointer],
     ) -> Result<Pointer, EngineError> {
         let token = engine.cancellation_token();
         if token.is_cancelled() {
@@ -102,7 +103,7 @@ impl NativeCallable {
         }
 
         match self {
-            NativeCallable::Sync(f) => (f)(engine, &typ, &args),
+            NativeCallable::Sync(f) => (f)(engine, &typ, args),
             NativeCallable::Async(f) => {
                 let call_fut = (f)(engine, typ, args).fuse();
                 let cancel_fut = token.cancelled().fuse();
@@ -254,9 +255,7 @@ impl NativeFn {
                 got: 0,
             });
         }
-        self.func
-            .call_async(engine, self.typ.clone(), Vec::new())
-            .await
+        self.func.call_async(engine, self.typ.clone(), &[]).await
     }
 }
 
@@ -501,7 +500,7 @@ impl OverloadedFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        imp.func.call_async(engine, full_ty, self.applied).await
+        imp.func.call_async(engine, full_ty, &self.applied).await
     }
 }
 
@@ -907,7 +906,7 @@ impl Engine {
         let name_sym = name.clone();
         let f = Arc::new(f);
         let func: AsyncNativeCallable = Arc::new(
-            move |engine: &Engine, _typ: Type, args: Vec<Pointer>| -> NativeFuture<'_> {
+            move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
                 let f = f.clone();
                 let name_sym = name_sym.clone();
                 async move {
@@ -939,7 +938,7 @@ impl Engine {
         let name_sym = name.clone();
         let f = Arc::new(f);
         let func: AsyncNativeCallable = Arc::new(
-            move |engine: &Engine, _typ: Type, args: Vec<Pointer>| -> NativeFuture<'_> {
+            move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
                 let f = f.clone();
                 let name_sym = name_sym.clone();
                 async move {
@@ -973,7 +972,7 @@ impl Engine {
         let name_sym = name.clone();
         let f = Arc::new(f);
         let func: AsyncNativeCallable = Arc::new(
-            move |engine: &Engine, _typ: Type, args: Vec<Pointer>| -> NativeFuture<'_> {
+            move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
                 let f = f.clone();
                 let name_sym = name_sym.clone();
                 async move {
@@ -1013,7 +1012,7 @@ impl Engine {
             move |engine: &Engine,
                   token: CancellationToken,
                   _typ: Type,
-                  args: Vec<Pointer>|
+                  args: &[Pointer]|
                   -> NativeFuture<'_> {
                 let f = f.clone();
                 let name_sym = name_sym.clone();
@@ -1053,7 +1052,7 @@ impl Engine {
             move |engine: &Engine,
                   token: CancellationToken,
                   _typ: Type,
-                  args: Vec<Pointer>|
+                  args: &[Pointer]|
                   -> NativeFuture<'_> {
                 let f = f.clone();
                 let name_sym = name_sym.clone();
@@ -1095,7 +1094,7 @@ impl Engine {
             move |engine: &Engine,
                   token: CancellationToken,
                   _typ: Type,
-                  args: Vec<Pointer>|
+                  args: &[Pointer]|
                   -> NativeFuture<'_> {
                 let f = f.clone();
                 let name_sym = name_sym.clone();
@@ -1206,7 +1205,7 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, Type, Vec<Pointer>) -> NativeFuture<'a> + Send + Sync + 'static,
+        F: for<'a> Fn(&'a Engine, Type, &'a [Pointer]) -> NativeFuture<'a> + Send + Sync + 'static,
     {
         let name = normalize_name(name);
         let func: AsyncNativeCallable = Arc::new(move |engine, typ, args| func(engine, typ, args));
@@ -1222,7 +1221,7 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, Type, Vec<Pointer>) -> NativeFuture<'a> + Send + Sync + 'static,
+        F: for<'a> Fn(&'a Engine, Type, &'a [Pointer]) -> NativeFuture<'a> + Send + Sync + 'static,
     {
         let name = normalize_name(name);
         let func: AsyncNativeCallable = Arc::new(move |engine, typ, args| func(engine, typ, args));
@@ -1237,7 +1236,7 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, CancellationToken, Type, Vec<Pointer>) -> NativeFuture<'a>
+        F: for<'a> Fn(&'a Engine, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,
@@ -1263,7 +1262,7 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, CancellationToken, Type, Vec<Pointer>) -> NativeFuture<'a>
+        F: for<'a> Fn(&'a Engine, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,
@@ -2597,7 +2596,7 @@ impl NativeFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        self.func.call_async(engine, full_ty, self.applied).await
+        self.func.call_async(engine, full_ty, &self.applied).await
     }
 }
 
