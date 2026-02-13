@@ -202,7 +202,6 @@ impl NativeFn {
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            name: self.name.clone(),
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
@@ -310,7 +309,6 @@ impl OverloadedFn {
     ) -> Result<Pointer, EngineError> {
         if let Some(expected) = func_type {
             let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
-                name: self.name.clone(),
                 expected: self.typ.to_string(),
                 got: expected.to_string(),
             })?;
@@ -320,7 +318,6 @@ impl OverloadedFn {
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            name: self.name.clone(),
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
@@ -349,7 +346,6 @@ impl OverloadedFn {
                 let (arg_ty, rest_ty) = split_fun(&cur_ty)
                     .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
                 let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
-                    name: self.name.clone(),
                     expected: arg_ty.to_string(),
                     got: applied_ty.to_string(),
                 })?;
@@ -374,7 +370,6 @@ impl OverloadedFn {
     ) -> Result<Pointer, EngineError> {
         if let Some(expected) = func_type {
             let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
-                name: self.name.clone(),
                 expected: self.typ.to_string(),
                 got: expected.to_string(),
             })?;
@@ -384,7 +379,6 @@ impl OverloadedFn {
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            name: self.name.clone(),
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
@@ -410,7 +404,6 @@ impl OverloadedFn {
                 let (arg_ty, rest_ty) = split_fun(&cur_ty)
                     .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
                 let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
-                    name: self.name.clone(),
                     expected: arg_ty.to_string(),
                     got: applied_ty.to_string(),
                 })?;
@@ -445,7 +438,6 @@ impl OverloadedFn {
     ) -> Result<Pointer, EngineError> {
         if let Some(expected) = func_type {
             let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
-                name: self.name.clone(),
                 expected: self.typ.to_string(),
                 got: expected.to_string(),
             })?;
@@ -455,7 +447,6 @@ impl OverloadedFn {
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            name: self.name.clone(),
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
@@ -481,7 +472,6 @@ impl OverloadedFn {
                 let (arg_ty, rest_ty) = split_fun(&cur_ty)
                     .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
                 let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
-                    name: self.name.clone(),
                     expected: arg_ty.to_string(),
                     got: applied_ty.to_string(),
                 })?;
@@ -791,16 +781,17 @@ impl Engine {
                 Some(&pretty_ty),
                 Some(&arg_ty),
             )?;
-            let rendered = engine.heap().get(&rendered_ptr)?;
-
-            let Value::String(message) = rendered.as_ref() else {
-                return Err(EngineError::NativeType {
-                    name: name_sym.clone(),
-                    expected: "string".to_string(),
-                    got: engine.heap().type_name(&rendered_ptr)?.to_string(),
-                });
-            };
-            let message = message.clone();
+            let message =
+                engine
+                    .heap()
+                    .pointer_as_string(&rendered_ptr)
+                    .map_err(|err| match err {
+                        EngineError::NativeType { got, .. } => EngineError::NativeType {
+                            expected: "string".to_string(),
+                            got,
+                        },
+                        other => other,
+                    })?;
 
             log(&message);
             engine.heap().alloc_string(message)
@@ -882,7 +873,7 @@ impl Engine {
                     got: args.len(),
                 });
             }
-            let a = A::from_pointer(engine.heap(), &args[0], name_string.as_ref())?;
+            let a = A::from_pointer(engine.heap(), &args[0])?;
             f(a).into_pointer(engine.heap())
         });
         let typ = Type::fun(A::rex_type(), R::rex_type());
@@ -907,8 +898,8 @@ impl Engine {
                     got: args.len(),
                 });
             }
-            let a = A::from_pointer(engine.heap(), &args[0], name_string.as_ref())?;
-            let b = B::from_pointer(engine.heap(), &args[1], name_string.as_ref())?;
+            let a = A::from_pointer(engine.heap(), &args[0])?;
+            let b = B::from_pointer(engine.heap(), &args[1])?;
             f(a, b).into_pointer(engine.heap())
         });
         let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
@@ -969,7 +960,7 @@ impl Engine {
                             got: args.len(),
                         });
                     }
-                    let a = A::from_pointer(engine.heap(), &args[0], name_sym.as_ref())?;
+                    let a = A::from_pointer(engine.heap(), &args[0])?;
                     f(a).await.into_pointer(engine.heap())
                 }
                 .boxed()
@@ -1003,8 +994,8 @@ impl Engine {
                             got: args.len(),
                         });
                     }
-                    let a = A::from_pointer(engine.heap(), &args[0], name_sym.as_ref())?;
-                    let b = B::from_pointer(engine.heap(), &args[1], name_sym.as_ref())?;
+                    let a = A::from_pointer(engine.heap(), &args[0])?;
+                    let b = B::from_pointer(engine.heap(), &args[1])?;
                     f(a, b).await.into_pointer(engine.heap())
                 }
                 .boxed()
@@ -1084,7 +1075,7 @@ impl Engine {
                             got: args.len(),
                         });
                     }
-                    let a = A::from_pointer(engine.heap(), &args[0], name_sym.as_ref())?;
+                    let a = A::from_pointer(engine.heap(), &args[0])?;
                     f(token, a).await.into_pointer(engine.heap())
                 }
                 .boxed()
@@ -1126,8 +1117,8 @@ impl Engine {
                             got: args.len(),
                         });
                     }
-                    let a = A::from_pointer(engine.heap(), &args[0], name_sym.as_ref())?;
-                    let b = B::from_pointer(engine.heap(), &args[1], name_sym.as_ref())?;
+                    let a = A::from_pointer(engine.heap(), &args[0])?;
+                    let b = B::from_pointer(engine.heap(), &args[1])?;
                     f(token, a, b).await.into_pointer(engine.heap())
                 }
                 .boxed()
@@ -2276,7 +2267,6 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
                 let ty = pointer_type(elem)?;
                 if ty != elem_ty {
                     return Err(EngineError::NativeType {
-                        name: sym("array"),
                         expected: elem_ty.to_string(),
                         got: ty.to_string(),
                     });
@@ -2294,7 +2284,6 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
                 let ty = pointer_type(val)?;
                 if ty != elem_ty {
                     return Err(EngineError::NativeType {
-                        name: sym("dict"),
                         expected: elem_ty.to_string(),
                         got: ty.to_string(),
                     });
@@ -2315,7 +2304,7 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
         Value::Adt(tag, args)
             if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 =>
         {
-            let elems = list_to_vec(heap, value, "list")?;
+            let elems = list_to_vec(heap, value)?;
             let first = elems
                 .first()
                 .ok_or_else(|| EngineError::UnknownType(sym("list")))?;
@@ -2324,7 +2313,6 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
                 let ty = pointer_type(elem)?;
                 if ty != elem_ty {
                     return Err(EngineError::NativeType {
-                        name: sym("list"),
                         expected: elem_ty.to_string(),
                         got: ty.to_string(),
                     });
@@ -2362,14 +2350,12 @@ fn resolve_arg_type(
     }
 }
 
-pub(crate) fn binary_arg_types(name: &str, typ: &Type) -> Result<(Type, Type), EngineError> {
+pub(crate) fn binary_arg_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     let (lhs, rest) = split_fun(typ).ok_or_else(|| EngineError::NativeType {
-        name: sym(name),
         expected: "binary function".into(),
         got: typ.to_string(),
     })?;
     let (rhs, _res) = split_fun(&rest).ok_or_else(|| EngineError::NativeType {
-        name: sym(name),
         expected: "binary function".into(),
         got: typ.to_string(),
     })?;
@@ -2445,7 +2431,6 @@ pub(crate) fn apply(
             let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
-                    name: param.clone(),
                     expected: typ.to_string(),
                     got: expected.to_string(),
                 })?;
@@ -2454,7 +2439,6 @@ pub(crate) fn apply(
             let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
             let param_ty = param_ty.apply(&subst);
             let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-                name: param.clone(),
                 expected: param_ty.to_string(),
                 got: actual_ty.to_string(),
             })?;
@@ -2504,7 +2488,6 @@ impl NativeFn {
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            name: self.name.clone(),
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
@@ -2582,7 +2565,6 @@ impl NativeFn {
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
         let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            name: self.name.clone(),
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
         })?;
@@ -2812,13 +2794,11 @@ fn eval_typed_expr_with_gas(
             else_expr,
         } => {
             let cond_ptr = eval_typed_expr_with_gas(engine, &env, cond, gas)?;
-            let cond_value = engine.heap().get(&cond_ptr)?;
-            match cond_value.as_ref() {
-                Value::Bool(true) => eval_typed_expr_with_gas(engine, &env, then_expr, gas),
-                Value::Bool(false) => eval_typed_expr_with_gas(engine, &env, else_expr, gas),
-                _ => Err(EngineError::ExpectedBool(
-                    engine.heap().type_name(&cond_ptr)?.into(),
-                )),
+            match engine.heap().pointer_as_bool(&cond_ptr) {
+                Ok(true) => eval_typed_expr_with_gas(engine, &env, then_expr, gas),
+                Ok(false) => eval_typed_expr_with_gas(engine, &env, else_expr, gas),
+                Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
+                Err(err) => Err(err),
             }
         }
         TypedExprKind::Match { scrutinee, arms } => {
@@ -2859,7 +2839,6 @@ fn apply_with_gas(
             let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
-                    name: param.clone(),
                     expected: typ.to_string(),
                     got: expected.to_string(),
                 })?;
@@ -2868,7 +2847,6 @@ fn apply_with_gas(
             let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
             let param_ty = param_ty.apply(&subst);
             let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-                name: param.clone(),
                 expected: param_ty.to_string(),
                 got: actual_ty.to_string(),
             })?;
@@ -3087,17 +3065,11 @@ async fn eval_typed_expr_async_with_gas(
             else_expr,
         } => {
             let cond_ptr = eval_typed_expr_async_with_gas(engine, &env, cond, gas).await?;
-            let cond_value = engine.heap().get(&cond_ptr)?;
-            match cond_value.as_ref() {
-                Value::Bool(true) => {
-                    eval_typed_expr_async_with_gas(engine, &env, then_expr, gas).await
-                }
-                Value::Bool(false) => {
-                    eval_typed_expr_async_with_gas(engine, &env, else_expr, gas).await
-                }
-                _ => Err(EngineError::ExpectedBool(
-                    engine.heap().type_name(&cond_ptr)?.into(),
-                )),
+            match engine.heap().pointer_as_bool(&cond_ptr) {
+                Ok(true) => eval_typed_expr_async_with_gas(engine, &env, then_expr, gas).await,
+                Ok(false) => eval_typed_expr_async_with_gas(engine, &env, else_expr, gas).await,
+                Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
+                Err(err) => Err(err),
             }
         }
         TypedExprKind::Match { scrutinee, arms } => {
@@ -3139,7 +3111,6 @@ async fn apply_async_with_gas(
             let mut subst = Subst::new_sync();
             if let Some(expected) = func_type {
                 let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
-                    name: param.clone(),
                     expected: typ.to_string(),
                     got: expected.to_string(),
                 })?;
@@ -3148,7 +3119,6 @@ async fn apply_async_with_gas(
             let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
             let param_ty = param_ty.apply(&subst);
             let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-                name: param.clone(),
                 expected: param_ty.to_string(),
                 got: actual_ty.to_string(),
             })?;
@@ -3202,7 +3172,7 @@ fn match_pattern_ptr(
         }
         Pattern::List(_, ps) => {
             let v = heap.get(value).ok()?;
-            let values = list_to_vec(heap, v.as_ref(), "pattern").ok()?;
+            let values = list_to_vec(heap, v.as_ref()).ok()?;
             if values.len() == ps.len() {
                 match_patterns(heap, ps, &values)
             } else {

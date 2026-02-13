@@ -102,31 +102,98 @@ impl Heap {
     }
 
     pub(crate) fn type_name_of_value(&self, value: &Value) -> &'static str {
-        match value {
-            Value::Bool(..) => "bool",
-            Value::U8(..) => "u8",
-            Value::U16(..) => "u16",
-            Value::U32(..) => "u32",
-            Value::U64(..) => "u64",
-            Value::I8(..) => "i8",
-            Value::I16(..) => "i16",
-            Value::I32(..) => "i32",
-            Value::I64(..) => "i64",
-            Value::F32(..) => "f32",
-            Value::F64(..) => "f64",
-            Value::String(..) => "string",
-            Value::Uuid(..) => "uuid",
-            Value::DateTime(..) => "datetime",
-            Value::Tuple(..) => "tuple",
-            Value::Array(..) => "array",
-            Value::Dict(..) => "dict",
-            Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
-            Value::Adt(..) => "adt",
-            Value::Uninitialized(..) => "uninitialized",
-            Value::Closure(..) => "closure",
-            Value::Native(..) => "native",
-            Value::Overloaded(..) => "overloaded",
-        }
+        value.value_type_name()
+    }
+
+    pub fn pointer_as_bool(&self, pointer: &Pointer) -> Result<bool, EngineError> {
+        self.get(pointer)?.as_ref().value_as_bool()
+    }
+
+    pub fn pointer_as_u8(&self, pointer: &Pointer) -> Result<u8, EngineError> {
+        self.get(pointer)?.as_ref().value_as_u8()
+    }
+
+    pub fn pointer_as_u16(&self, pointer: &Pointer) -> Result<u16, EngineError> {
+        self.get(pointer)?.as_ref().value_as_u16()
+    }
+
+    pub fn pointer_as_u32(&self, pointer: &Pointer) -> Result<u32, EngineError> {
+        self.get(pointer)?.as_ref().value_as_u32()
+    }
+
+    pub fn pointer_as_u64(&self, pointer: &Pointer) -> Result<u64, EngineError> {
+        self.get(pointer)?.as_ref().value_as_u64()
+    }
+
+    pub fn pointer_as_i8(&self, pointer: &Pointer) -> Result<i8, EngineError> {
+        self.get(pointer)?.as_ref().value_as_i8()
+    }
+
+    pub fn pointer_as_i16(&self, pointer: &Pointer) -> Result<i16, EngineError> {
+        self.get(pointer)?.as_ref().value_as_i16()
+    }
+
+    pub fn pointer_as_i32(&self, pointer: &Pointer) -> Result<i32, EngineError> {
+        self.get(pointer)?.as_ref().value_as_i32()
+    }
+
+    pub fn pointer_as_i64(&self, pointer: &Pointer) -> Result<i64, EngineError> {
+        self.get(pointer)?.as_ref().value_as_i64()
+    }
+
+    pub fn pointer_as_f32(&self, pointer: &Pointer) -> Result<f32, EngineError> {
+        self.get(pointer)?.as_ref().value_as_f32()
+    }
+
+    pub fn pointer_as_f64(&self, pointer: &Pointer) -> Result<f64, EngineError> {
+        self.get(pointer)?.as_ref().value_as_f64()
+    }
+
+    pub fn pointer_as_string(&self, pointer: &Pointer) -> Result<String, EngineError> {
+        self.get(pointer)?.as_ref().value_as_string()
+    }
+
+    pub fn pointer_as_uuid(&self, pointer: &Pointer) -> Result<Uuid, EngineError> {
+        self.get(pointer)?.as_ref().value_as_uuid()
+    }
+
+    pub fn pointer_as_datetime(&self, pointer: &Pointer) -> Result<DateTime<Utc>, EngineError> {
+        self.get(pointer)?.as_ref().value_as_datetime()
+    }
+
+    pub fn pointer_as_tuple(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
+        self.get(pointer)?.as_ref().value_as_tuple()
+    }
+
+    pub fn pointer_as_array(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
+        self.get(pointer)?.as_ref().value_as_array()
+    }
+
+    pub fn pointer_as_dict(
+        &self,
+        pointer: &Pointer,
+    ) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
+        self.get(pointer)?.as_ref().value_as_dict()
+    }
+
+    pub fn pointer_as_adt(&self, pointer: &Pointer) -> Result<(Symbol, Vec<Pointer>), EngineError> {
+        self.get(pointer)?.as_ref().value_as_adt()
+    }
+
+    pub fn pointer_as_uninitialized(&self, pointer: &Pointer) -> Result<Symbol, EngineError> {
+        self.get(pointer)?.as_ref().value_as_uninitialized()
+    }
+
+    pub fn pointer_as_closure(&self, pointer: &Pointer) -> Result<Closure, EngineError> {
+        self.get(pointer)?.as_ref().value_as_closure()
+    }
+
+    pub fn pointer_as_native(&self, pointer: &Pointer) -> Result<NativeFn, EngineError> {
+        self.get(pointer)?.as_ref().value_as_native()
+    }
+
+    pub fn pointer_as_overloaded(&self, pointer: &Pointer) -> Result<OverloadedFn, EngineError> {
+        self.get(pointer)?.as_ref().value_as_overloaded()
     }
 
     pub fn alloc_bool(&self, value: bool) -> Result<Pointer, EngineError> {
@@ -400,6 +467,197 @@ pub enum Value {
     Closure(Closure),
     Native(NativeFn),
     Overloaded(OverloadedFn),
+}
+
+impl Value {
+    pub fn value_type_name(&self) -> &'static str {
+        match self {
+            Value::Bool(..) => "bool",
+            Value::U8(..) => "u8",
+            Value::U16(..) => "u16",
+            Value::U32(..) => "u32",
+            Value::U64(..) => "u64",
+            Value::I8(..) => "i8",
+            Value::I16(..) => "i16",
+            Value::I32(..) => "i32",
+            Value::I64(..) => "i64",
+            Value::F32(..) => "f32",
+            Value::F64(..) => "f64",
+            Value::String(..) => "string",
+            Value::Uuid(..) => "uuid",
+            Value::DateTime(..) => "datetime",
+            Value::Tuple(..) => "tuple",
+            Value::Array(..) => "array",
+            Value::Dict(..) => "dict",
+            Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
+            Value::Adt(..) => "adt",
+            Value::Uninitialized(..) => "uninitialized",
+            Value::Closure(..) => "closure",
+            Value::Native(..) => "native",
+            Value::Overloaded(..) => "overloaded",
+        }
+    }
+
+    fn value_type_error(&self, expected: &'static str) -> EngineError {
+        EngineError::NativeType {
+            expected: expected.to_string(),
+            got: self.value_type_name().to_string(),
+        }
+    }
+
+    pub fn value_as_bool(&self) -> Result<bool, EngineError> {
+        match self {
+            Value::Bool(v) => Ok(*v),
+            _ => Err(self.value_type_error("bool")),
+        }
+    }
+
+    pub fn value_as_u8(&self) -> Result<u8, EngineError> {
+        match self {
+            Value::U8(v) => Ok(*v),
+            _ => Err(self.value_type_error("u8")),
+        }
+    }
+
+    pub fn value_as_u16(&self) -> Result<u16, EngineError> {
+        match self {
+            Value::U16(v) => Ok(*v),
+            _ => Err(self.value_type_error("u16")),
+        }
+    }
+
+    pub fn value_as_u32(&self) -> Result<u32, EngineError> {
+        match self {
+            Value::U32(v) => Ok(*v),
+            _ => Err(self.value_type_error("u32")),
+        }
+    }
+
+    pub fn value_as_u64(&self) -> Result<u64, EngineError> {
+        match self {
+            Value::U64(v) => Ok(*v),
+            _ => Err(self.value_type_error("u64")),
+        }
+    }
+
+    pub fn value_as_i8(&self) -> Result<i8, EngineError> {
+        match self {
+            Value::I8(v) => Ok(*v),
+            _ => Err(self.value_type_error("i8")),
+        }
+    }
+
+    pub fn value_as_i16(&self) -> Result<i16, EngineError> {
+        match self {
+            Value::I16(v) => Ok(*v),
+            _ => Err(self.value_type_error("i16")),
+        }
+    }
+
+    pub fn value_as_i32(&self) -> Result<i32, EngineError> {
+        match self {
+            Value::I32(v) => Ok(*v),
+            _ => Err(self.value_type_error("i32")),
+        }
+    }
+
+    pub fn value_as_i64(&self) -> Result<i64, EngineError> {
+        match self {
+            Value::I64(v) => Ok(*v),
+            _ => Err(self.value_type_error("i64")),
+        }
+    }
+
+    pub fn value_as_f32(&self) -> Result<f32, EngineError> {
+        match self {
+            Value::F32(v) => Ok(*v),
+            _ => Err(self.value_type_error("f32")),
+        }
+    }
+
+    pub fn value_as_f64(&self) -> Result<f64, EngineError> {
+        match self {
+            Value::F64(v) => Ok(*v),
+            _ => Err(self.value_type_error("f64")),
+        }
+    }
+
+    pub fn value_as_string(&self) -> Result<String, EngineError> {
+        match self {
+            Value::String(v) => Ok(v.clone()),
+            _ => Err(self.value_type_error("string")),
+        }
+    }
+
+    pub fn value_as_uuid(&self) -> Result<Uuid, EngineError> {
+        match self {
+            Value::Uuid(v) => Ok(*v),
+            _ => Err(self.value_type_error("uuid")),
+        }
+    }
+
+    pub fn value_as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
+        match self {
+            Value::DateTime(v) => Ok(*v),
+            _ => Err(self.value_type_error("datetime")),
+        }
+    }
+
+    pub fn value_as_tuple(&self) -> Result<Vec<Pointer>, EngineError> {
+        match self {
+            Value::Tuple(v) => Ok(v.clone()),
+            _ => Err(self.value_type_error("tuple")),
+        }
+    }
+
+    pub fn value_as_array(&self) -> Result<Vec<Pointer>, EngineError> {
+        match self {
+            Value::Array(v) => Ok(v.clone()),
+            _ => Err(self.value_type_error("array")),
+        }
+    }
+
+    pub fn value_as_dict(&self) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
+        match self {
+            Value::Dict(v) => Ok(v.clone()),
+            _ => Err(self.value_type_error("dict")),
+        }
+    }
+
+    pub fn value_as_adt(&self) -> Result<(Symbol, Vec<Pointer>), EngineError> {
+        match self {
+            Value::Adt(name, args) => Ok((name.clone(), args.clone())),
+            _ => Err(self.value_type_error("adt")),
+        }
+    }
+
+    pub fn value_as_uninitialized(&self) -> Result<Symbol, EngineError> {
+        match self {
+            Value::Uninitialized(name) => Ok(name.clone()),
+            _ => Err(self.value_type_error("uninitialized")),
+        }
+    }
+
+    pub fn value_as_closure(&self) -> Result<Closure, EngineError> {
+        match self {
+            Value::Closure(v) => Ok(v.clone()),
+            _ => Err(self.value_type_error("closure")),
+        }
+    }
+
+    pub fn value_as_native(&self) -> Result<NativeFn, EngineError> {
+        match self {
+            Value::Native(v) => Ok(v.clone()),
+            _ => Err(self.value_type_error("native")),
+        }
+    }
+
+    pub fn value_as_overloaded(&self) -> Result<OverloadedFn, EngineError> {
+        match self {
+            Value::Overloaded(v) => Ok(v.clone()),
+            _ => Err(self.value_type_error("overloaded")),
+        }
+    }
 }
 
 type PointerKey = (u64, u32, u32);
@@ -809,11 +1067,7 @@ fn list_to_vec_opt(heap: &Heap, value: &Value) -> Result<Option<Vec<Pointer>>, E
     }
 }
 
-pub(crate) fn list_to_vec(
-    heap: &Heap,
-    value: &Value,
-    name: &str,
-) -> Result<Vec<Pointer>, EngineError> {
+pub(crate) fn list_to_vec(heap: &Heap, value: &Value) -> Result<Vec<Pointer>, EngineError> {
     enum Cursor<'a> {
         Borrowed(&'a Value),
         Owned(ValueRef),
@@ -835,7 +1089,6 @@ pub(crate) fn list_to_vec(
             }
             _ => {
                 return Err(EngineError::NativeType {
-                    name: sym(name),
                     expected: "list".into(),
                     got: heap.type_name_of_value(cur).into(),
                 });
@@ -849,7 +1102,7 @@ pub trait IntoPointer {
 }
 
 pub trait FromPointer: Sized {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError>;
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError>;
 }
 
 pub trait RexType {
@@ -1094,97 +1347,69 @@ impl<T: RexType> RexType for Option<T> {
     }
 }
 
+fn map_value_type_to_native(expected: &str, err: EngineError) -> EngineError {
+    match err {
+        EngineError::NativeType { got, .. } => EngineError::NativeType {
+            expected: expected.into(),
+            got,
+        },
+        other => other,
+    }
+}
+
 impl FromPointer for bool {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-        let value = heap.get(pointer)?;
-        match value.as_ref() {
-            Value::Bool(v) => Ok(*v),
-            _ => Err(EngineError::NativeType {
-                name: sym(name),
-                expected: "bool".into(),
-                got: heap.type_name(pointer)?.into(),
-            }),
-        }
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        heap.pointer_as_bool(pointer)
+            .map_err(|err| map_value_type_to_native("bool", err))
     }
 }
 
 macro_rules! impl_from_pointer_num {
-    ($t:ty, $variant:ident, $label:literal) => {
+    ($t:ty, $pointer_as:ident, $label:literal) => {
         impl FromPointer for $t {
-            fn from_pointer(
-                heap: &Heap,
-                pointer: &Pointer,
-                name: &str,
-            ) -> Result<Self, EngineError> {
-                let value = heap.get(&pointer)?;
-                match value.as_ref() {
-                    Value::$variant(v) => Ok(*v as $t),
-                    _ => Err(EngineError::NativeType {
-                        name: sym(name),
-                        expected: $label.into(),
-                        got: heap.type_name(pointer)?.into(),
-                    }),
-                }
+            fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+                heap.$pointer_as(pointer)
+                    .map(|v| v as $t)
+                    .map_err(|err| map_value_type_to_native($label, err))
             }
         }
     };
 }
 
-impl_from_pointer_num!(u8, U8, "u8");
-impl_from_pointer_num!(u16, U16, "u16");
-impl_from_pointer_num!(u32, U32, "u32");
-impl_from_pointer_num!(u64, U64, "u64");
-impl_from_pointer_num!(i8, I8, "i8");
-impl_from_pointer_num!(i16, I16, "i16");
-impl_from_pointer_num!(i32, I32, "i32");
-impl_from_pointer_num!(i64, I64, "i64");
-impl_from_pointer_num!(f32, F32, "f32");
-impl_from_pointer_num!(f64, F64, "f64");
+impl_from_pointer_num!(u8, pointer_as_u8, "u8");
+impl_from_pointer_num!(u16, pointer_as_u16, "u16");
+impl_from_pointer_num!(u32, pointer_as_u32, "u32");
+impl_from_pointer_num!(u64, pointer_as_u64, "u64");
+impl_from_pointer_num!(i8, pointer_as_i8, "i8");
+impl_from_pointer_num!(i16, pointer_as_i16, "i16");
+impl_from_pointer_num!(i32, pointer_as_i32, "i32");
+impl_from_pointer_num!(i64, pointer_as_i64, "i64");
+impl_from_pointer_num!(f32, pointer_as_f32, "f32");
+impl_from_pointer_num!(f64, pointer_as_f64, "f64");
 
 impl FromPointer for String {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-        let value = heap.get(pointer)?;
-        match value.as_ref() {
-            Value::String(v) => Ok(v.clone()),
-            _ => Err(EngineError::NativeType {
-                name: sym(name),
-                expected: "string".into(),
-                got: heap.type_name(pointer)?.into(),
-            }),
-        }
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        heap.pointer_as_string(pointer)
+            .map_err(|err| map_value_type_to_native("string", err))
     }
 }
 
 impl FromPointer for Uuid {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-        let value = heap.get(pointer)?;
-        match value.as_ref() {
-            Value::Uuid(v) => Ok(*v),
-            _ => Err(EngineError::NativeType {
-                name: sym(name),
-                expected: "uuid".into(),
-                got: heap.type_name(pointer)?.into(),
-            }),
-        }
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        heap.pointer_as_uuid(pointer)
+            .map_err(|err| map_value_type_to_native("uuid", err))
     }
 }
 
 impl FromPointer for DateTime<Utc> {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-        let value = heap.get(pointer)?;
-        match value.as_ref() {
-            Value::DateTime(v) => Ok(*v),
-            _ => Err(EngineError::NativeType {
-                name: sym(name),
-                expected: "datetime".into(),
-                got: heap.type_name(pointer)?.into(),
-            }),
-        }
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        heap.pointer_as_datetime(pointer)
+            .map_err(|err| map_value_type_to_native("datetime", err))
     }
 }
 
 impl FromPointer for Value {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, _name: &str) -> Result<Self, EngineError> {
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         heap.get(pointer).map(|value| value.as_ref().clone())
     }
 }
@@ -1193,22 +1418,15 @@ impl<T> FromPointer for Vec<T>
 where
     T: FromPointer,
 {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-        let value = heap.get(pointer)?;
-        match value.as_ref() {
-            Value::Array(xs) => {
-                let mut ys = Vec::with_capacity(xs.len());
-                for x in xs {
-                    ys.push(T::from_pointer(heap, x, name)?);
-                }
-                Ok(ys)
-            }
-            _ => Err(EngineError::NativeType {
-                name: sym(name),
-                expected: "vec".into(),
-                got: heap.type_name(pointer)?.into(),
-            }),
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let xs = heap
+            .pointer_as_array(pointer)
+            .map_err(|err| map_value_type_to_native("vec", err))?;
+        let mut ys = Vec::with_capacity(xs.len());
+        for x in &xs {
+            ys.push(T::from_pointer(heap, x)?);
         }
+        Ok(ys)
     }
 }
 
@@ -1216,19 +1434,20 @@ impl<T> FromPointer for Option<T>
 where
     T: FromPointer,
 {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-        let value = heap.get(pointer)?;
-        match value.as_ref() {
-            Value::Adt(n, xs) if sym_eq(n, "Some") && xs.len() == 1 => {
-                Ok(Some(T::from_pointer(heap, &xs[0], name)?))
-            }
-            Value::Adt(n, xs) if sym_eq(n, "None") && xs.is_empty() => Ok(None),
-            _ => Err(EngineError::NativeType {
-                name: sym(name),
-                expected: "vec".into(),
-                got: heap.type_name(pointer)?.into(),
-            }),
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let (tag, args) = heap
+            .pointer_as_adt(pointer)
+            .map_err(|err| map_value_type_to_native("vec", err))?;
+        if sym_eq(&tag, "Some") && args.len() == 1 {
+            return Ok(Some(T::from_pointer(heap, &args[0])?));
         }
+        if sym_eq(&tag, "None") && args.is_empty() {
+            return Ok(None);
+        }
+        Err(EngineError::NativeType {
+            expected: "vec".into(),
+            got: heap.type_name(pointer)?.into(),
+        })
     }
 }
 
@@ -1245,15 +1464,17 @@ impl IntoPointer for () {
 }
 
 impl FromPointer for () {
-    fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-        let value = heap.get(pointer)?;
-        match value.as_ref() {
-            Value::Tuple(items) if items.is_empty() => Ok(()),
-            _ => Err(EngineError::NativeType {
-                name: sym(name),
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let items = heap
+            .pointer_as_tuple(pointer)
+            .map_err(|err| map_value_type_to_native("tuple", err))?;
+        if items.is_empty() {
+            Ok(())
+        } else {
+            Err(EngineError::NativeType {
                 expected: "tuple".into(),
                 got: heap.type_name(pointer)?.into(),
-            }),
+            })
         }
     }
 }
@@ -1277,21 +1498,15 @@ macro_rules! impl_tuple_traits {
 
         impl<$($name: FromPointer),+> FromPointer for ($($name,)+) {
             #[allow(non_snake_case)]
-            fn from_pointer(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Self, EngineError> {
-                let value = heap.get(&pointer)?;
-                match value.as_ref() {
-                    Value::Tuple(items) => match items.as_slice() {
-                        [$($name),+] => {
-                            Ok(($(<$name as FromPointer>::from_pointer(heap, $name, name)?),+,))
-                        }
-                        _ => Err(EngineError::NativeType {
-                            name: sym(name),
-                            expected: "tuple".into(),
-                            got: heap.type_name(pointer)?.into(),
-                        }),
-                    },
+            fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+                let items = heap
+                    .pointer_as_tuple(pointer)
+                    .map_err(|err| map_value_type_to_native("tuple", err))?;
+                match items.as_slice() {
+                    [$($name),+] => {
+                        Ok(($(<$name as FromPointer>::from_pointer(heap, $name)?),+,))
+                    }
                     _ => Err(EngineError::NativeType {
-                        name: sym(name),
                         expected: "tuple".into(),
                         got: heap.type_name(pointer)?.into(),
                     }),
@@ -1337,5 +1552,46 @@ mod tests {
             let value = heap.get(&pointer).expect("pointer should resolve");
             assert!(matches!(value.as_ref(), Value::I32(7)));
         });
+    }
+
+    #[test]
+    fn value_as_reports_mismatch_with_value_type_error() {
+        let value = Value::Bool(true);
+        let err = value
+            .value_as_i32()
+            .expect_err("bool should not coerce to i32");
+        match err {
+            EngineError::NativeType { expected, got } => {
+                assert_eq!(expected, "i32");
+                assert_eq!(got, "bool");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pointer_as_reports_mismatch_with_value_type_error() {
+        let heap = Heap::new();
+        let pointer = heap.alloc_bool(true).expect("alloc_bool should succeed");
+        let err = heap
+            .pointer_as_i32(&pointer)
+            .expect_err("bool pointer should not coerce to i32");
+        match err {
+            EngineError::NativeType { expected, got } => {
+                assert_eq!(expected, "i32");
+                assert_eq!(got, "bool");
+            }
+            other => panic!("unexpected error variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pointer_as_returns_payload_on_match() {
+        let heap = Heap::new();
+        let pointer = heap.alloc_i32(42).expect("alloc_i32 should succeed");
+        let value = heap
+            .pointer_as_i32(&pointer)
+            .expect("i32 pointer should decode");
+        assert_eq!(value, 42);
     }
 }

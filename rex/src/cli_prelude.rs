@@ -32,30 +32,16 @@ fn unit_pointer(heap: &Heap) -> Result<Pointer, EngineError> {
 
 #[cfg(test)]
 fn value_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Bool(..) => "bool",
-        Value::U8(..) => "u8",
-        Value::U16(..) => "u16",
-        Value::U32(..) => "u32",
-        Value::U64(..) => "u64",
-        Value::I8(..) => "i8",
-        Value::I16(..) => "i16",
-        Value::I32(..) => "i32",
-        Value::I64(..) => "i64",
-        Value::F32(..) => "f32",
-        Value::F64(..) => "f64",
-        Value::String(..) => "string",
-        Value::Uuid(..) => "uuid",
-        Value::DateTime(..) => "datetime",
-        Value::Tuple(..) => "tuple",
-        Value::Array(..) => "array",
-        Value::Dict(..) => "dict",
-        Value::Adt(tag, ..) if tag.as_ref() == "Empty" || tag.as_ref() == "Cons" => "list",
-        Value::Adt(..) => "adt",
-        Value::Uninitialized(..) => "uninitialized",
-        Value::Closure(..) => "closure",
-        Value::Native(..) => "native",
-        Value::Overloaded(..) => "overloaded",
+    value.value_type_name()
+}
+
+fn map_value_type_to_native(err: EngineError, expected: &str) -> EngineError {
+    match err {
+        EngineError::NativeType { got, .. } => EngineError::NativeType {
+            expected: expected.into(),
+            got,
+        },
+        other => other,
     }
 }
 
@@ -67,7 +53,7 @@ fn array_type(elem: Type) -> Type {
     Type::app(Type::con("Array", 1), elem)
 }
 
-fn list_to_vec(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Vec<Pointer>, EngineError> {
+fn list_to_vec(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     let mut out = Vec::new();
     let mut cursor = pointer.clone();
     loop {
@@ -80,7 +66,6 @@ fn list_to_vec(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Vec<Pointer
             }
             _ => {
                 return Err(EngineError::NativeType {
-                    name: sym(name),
                     expected: "List".into(),
                     got: heap.type_name(&cursor)?.into(),
                 });
@@ -89,28 +74,16 @@ fn list_to_vec(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Vec<Pointer
     }
 }
 
-fn array_u8_to_bytes(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Vec<u8>, EngineError> {
-    let value = heap.get(pointer)?;
-    let Value::Array(elems) = value.as_ref() else {
-        return Err(EngineError::NativeType {
-            name: sym(name),
-            expected: "Array u8".into(),
-            got: heap.type_name(pointer)?.into(),
-        });
-    };
+fn array_u8_to_bytes(heap: &Heap, pointer: &Pointer) -> Result<Vec<u8>, EngineError> {
+    let elems = heap
+        .pointer_as_array(pointer)
+        .map_err(|err| map_value_type_to_native(err, "Array u8"))?;
     let mut out = Vec::with_capacity(elems.len());
-    for elem in elems {
-        let elem_value = heap.get(elem)?;
-        match elem_value.as_ref() {
-            Value::U8(b) => out.push(*b),
-            _ => {
-                return Err(EngineError::NativeType {
-                    name: sym(name),
-                    expected: "u8".into(),
-                    got: heap.type_name(elem)?.into(),
-                });
-            }
-        }
+    for elem in &elems {
+        out.push(
+            heap.pointer_as_u8(elem)
+                .map_err(|err| map_value_type_to_native(err, "u8"))?,
+        );
     }
     Ok(out)
 }
@@ -200,7 +173,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let fd = i32::from_pointer(engine.heap(), &args[0], read_all_sym.as_ref())?;
+                let fd = i32::from_pointer(engine.heap(), &args[0])?;
 
                 if fd != 0 {
                     return Err(EngineError::Internal(format!(
@@ -237,8 +210,8 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let fd = i32::from_pointer(engine.heap(), &args[0], write_all_sym.as_ref())?;
-                let bytes = array_u8_to_bytes(engine.heap(), &args[1], write_all_sym.as_ref())?;
+                let fd = i32::from_pointer(engine.heap(), &args[0])?;
+                let bytes = array_u8_to_bytes(engine.heap(), &args[1])?;
 
                 match fd {
                     1 => {
@@ -298,33 +271,31 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let opts = engine.heap().get(&args[0])?;
-                let Value::Dict(map) = opts.as_ref() else {
-                    return Err(EngineError::NativeType {
-                        name: spawn_sym.clone(),
-                        expected: "{ cmd: string, args: List string }".into(),
-                        got: engine.heap().type_name(&args[0])?.into(),
-                    });
-                };
+                let map = engine
+                    .heap()
+                    .pointer_as_dict(&args[0])
+                    .map_err(|err| match err {
+                        EngineError::NativeType { got, .. } => EngineError::NativeType {
+                            expected: "{ cmd: string, args: List string }".into(),
+                            got,
+                        },
+                        other => other,
+                    })?;
 
                 let cmd_pointer = map
                     .get(&sym("cmd"))
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("spawn missing `cmd`".into()))?;
-                let cmd = String::from_pointer(engine.heap(), &cmd_pointer, spawn_sym.as_ref())?;
+                let cmd = String::from_pointer(engine.heap(), &cmd_pointer)?;
 
                 let args_pointer = map
                     .get(&sym("args"))
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("spawn missing `args`".into()))?;
-                let args_list = list_to_vec(engine.heap(), &args_pointer, spawn_sym.as_ref())?;
+                let args_list = list_to_vec(engine.heap(), &args_pointer)?;
                 let mut args_vec = Vec::with_capacity(args_list.len());
                 for arg in args_list {
-                    args_vec.push(String::from_pointer(
-                        engine.heap(),
-                        &arg,
-                        spawn_sym.as_ref(),
-                    )?);
+                    args_vec.push(String::from_pointer(engine.heap(), &arg)?);
                 }
 
                 let mut child = Command::new(cmd)
@@ -424,8 +395,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id =
-                    subprocess_id(engine.heap(), &args[0], &subprocess_ctor, wait_sym.as_ref())?;
+                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
                 let entry = subprocess_get(&id, wait_sym.as_ref())?;
 
                 if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
@@ -498,12 +468,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(
-                    engine.heap(),
-                    &args[0],
-                    &subprocess_ctor,
-                    stdout_sym.as_ref(),
-                )?;
+                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
                 let entry = subprocess_get(&id, stdout_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stdout, "std.process.stdout buffer")?.clone();
                 bytes_to_array_u8(engine.heap(), bytes)
@@ -533,12 +498,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(
-                    engine.heap(),
-                    &args[0],
-                    &subprocess_ctor,
-                    stderr_sym.as_ref(),
-                )?;
+                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
                 let entry = subprocess_get(&id, stderr_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stderr, "std.process.stderr buffer")?.clone();
                 bytes_to_array_u8(engine.heap(), bytes)
@@ -549,43 +509,25 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
     Ok(())
 }
 
-fn subprocess_id(
-    heap: &Heap,
-    pointer: &Pointer,
-    tag: &Symbol,
-    name: &str,
-) -> Result<Uuid, EngineError> {
-    let value = heap.get(pointer)?;
-    match value.as_ref() {
-        Value::Adt(got_tag, args) if got_tag == tag && args.len() == 1 => {
-            let data = heap.get(&args[0])?;
-            let Value::Dict(map) = data.as_ref() else {
-                return Err(EngineError::NativeType {
-                    name: sym(name),
-                    expected: "Subprocess".into(),
-                    got: heap.type_name(pointer)?.into(),
-                });
-            };
-            let id_pointer = map
-                .get(&sym("id"))
-                .cloned()
-                .ok_or_else(|| EngineError::Internal("Subprocess missing id".into()))?;
-            let id_value = heap.get(&id_pointer)?;
-            let Value::Uuid(id) = id_value.as_ref() else {
-                return Err(EngineError::NativeType {
-                    name: sym(name),
-                    expected: "uuid".into(),
-                    got: heap.type_name(&id_pointer)?.into(),
-                });
-            };
-            Ok(*id)
-        }
-        _ => Err(EngineError::NativeType {
-            name: sym(name),
+fn subprocess_id(heap: &Heap, pointer: &Pointer, tag: &Symbol) -> Result<Uuid, EngineError> {
+    let (got_tag, args) = heap
+        .pointer_as_adt(pointer)
+        .map_err(|err| map_value_type_to_native(err, "Subprocess"))?;
+    if &got_tag != tag || args.len() != 1 {
+        return Err(EngineError::NativeType {
             expected: "Subprocess".into(),
             got: heap.type_name(pointer)?.into(),
-        }),
+        });
     }
+    let map = heap
+        .pointer_as_dict(&args[0])
+        .map_err(|err| map_value_type_to_native(err, "Subprocess"))?;
+    let id_pointer = map
+        .get(&sym("id"))
+        .cloned()
+        .ok_or_else(|| EngineError::Internal("Subprocess missing id".into()))?;
+    heap.pointer_as_uuid(&id_pointer)
+        .map_err(|err| map_value_type_to_native(err, "uuid"))
 }
 
 fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineError> {

@@ -198,12 +198,8 @@ pub enum EngineError {
         expected: usize,
         got: usize,
     },
-    #[error("native `{name}` expected {expected}, got {got}")]
-    NativeType {
-        name: Symbol,
-        expected: String,
-        got: String,
-    },
+    #[error("expected {expected}, got {got}")]
+    NativeType { expected: String, got: String },
     #[error("pattern match failure")]
     MatchFailure,
     #[error("expected boolean, got {0}")]

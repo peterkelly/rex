@@ -68,7 +68,7 @@ fn derive_struct_roundtrip_value() {
     )
     .unwrap();
 
-    let decoded = MyStruct::from_pointer(&heap, &v_ptr, "test").unwrap();
+    let decoded = MyStruct::from_pointer(&heap, &v_ptr).unwrap();
     assert_eq!(
         decoded,
         MyStruct {
@@ -86,7 +86,7 @@ fn derive_struct_roundtrip_value() {
 #[test]
 fn derive_generic_struct_roundtrip_value() {
     let (heap, v_ptr) = eval("Boxed { value = 123 }").unwrap();
-    let decoded = Boxed::<i32>::from_pointer(&heap, &v_ptr, "boxed").unwrap();
+    let decoded = Boxed::<i32>::from_pointer(&heap, &v_ptr).unwrap();
     assert_eq!(decoded, Boxed { value: 123 });
 }
 
@@ -168,11 +168,11 @@ fn derive_generic_worked_example_polymorphic_adt() {
     };
     assert_eq!(items.len(), 2);
     assert_eq!(
-        Maybe::<i32>::from_pointer(engine.heap(), &items[0], "a").unwrap(),
+        Maybe::<i32>::from_pointer(engine.heap(), &items[0]).unwrap(),
         Maybe::Just(1)
     );
     assert_eq!(
-        Maybe::<bool>::from_pointer(engine.heap(), &items[1], "b").unwrap(),
+        Maybe::<bool>::from_pointer(engine.heap(), &items[1]).unwrap(),
         Maybe::Just(true)
     );
 }
@@ -214,7 +214,7 @@ fn derive_can_be_used_in_injected_native_functions() {
         .unwrap();
 
     let v_ptr = engine.eval(program.expr.as_ref()).unwrap();
-    let bumped = MyStruct::from_pointer(engine.heap(), &v_ptr, "bumped").unwrap();
+    let bumped = MyStruct::from_pointer(engine.heap(), &v_ptr).unwrap();
     assert_eq!(bumped.y, 43);
 
     engine
@@ -329,8 +329,8 @@ fn derive_enum_constructor_currying() {
         panic!("expected tuple, got {}", heap.type_name(&v_ptr).unwrap());
     };
     assert_eq!(items.len(), 2);
-    let a = Shape::from_pointer(&heap, &items[0], "a").unwrap();
-    let b = Shape::from_pointer(&heap, &items[1], "b").unwrap();
+    let a = Shape::from_pointer(&heap, &items[0]).unwrap();
+    let b = Shape::from_pointer(&heap, &items[1]).unwrap();
     assert_eq!(a, Shape::Rectangle(6, 12));
     assert_eq!(b, Shape::Rectangle(6, 8));
 }

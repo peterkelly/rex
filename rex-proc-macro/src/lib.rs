@@ -504,9 +504,7 @@ fn from_value_expr(
                     ::rex::Value::Tuple(items) if items.len() == #len => {
                         Ok((#(#decs?,)*))
                     }
-                    other => Err(::rex::EngineError::NativeType {
-                        name: ::rex::intern(#name_expr),
-                        expected: "tuple".into(),
+                    other => Err(::rex::EngineError::NativeType { expected: "tuple".into(),
                         got: ::rex::value_display(heap, &other)
                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                     }),
@@ -556,9 +554,7 @@ fn from_value_expr(
                                     cur = heap.get(&args[1])?.as_ref().clone();
                                 }
                                 other => {
-                                    break Err(::rex::EngineError::NativeType {
-                                        name: ::rex::intern(#name_expr),
-                                        expected: "list".into(),
+                                    break Err(::rex::EngineError::NativeType { expected: "list".into(),
                                         got: ::rex::value_display(heap, &other)
                                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                                     });
@@ -592,9 +588,7 @@ fn from_value_expr(
                                 }
                                 Ok(out)
                             }
-                            other => Err(::rex::EngineError::NativeType {
-                                name: ::rex::intern(#name_expr),
-                                expected: "dict".into(),
+                            other => Err(::rex::EngineError::NativeType { expected: "dict".into(),
                                 got: ::rex::value_display(heap, &other)
                                     .unwrap_or_else(|err| format!("<display error: {err}>")),
                             }),
@@ -614,9 +608,7 @@ fn from_value_expr(
                         match #value_expr {
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => Ok(None),
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => Ok(Some(#inner_decode?)),
-                            other => Err(::rex::EngineError::NativeType {
-                                name: ::rex::intern(#name_expr),
-                                expected: "option".into(),
+                            other => Err(::rex::EngineError::NativeType { expected: "option".into(),
                                 got: ::rex::value_display(heap, &other)
                                     .unwrap_or_else(|err| format!("<display error: {err}>")),
                             }),
@@ -641,9 +633,7 @@ fn from_value_expr(
                         match #value_expr {
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "Ok" && args.len() == 1 => Ok(Ok(#ok_decode?)),
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "Err" && args.len() == 1 => Ok(Err(#err_decode?)),
-                            other => Err(::rex::EngineError::NativeType {
-                                name: ::rex::intern(#name_expr),
-                                expected: "result".into(),
+                            other => Err(::rex::EngineError::NativeType { expected: "result".into(),
                                 got: ::rex::value_display(heap, &other)
                                     .unwrap_or_else(|err| format!("<display error: {err}>")),
                             }),
@@ -653,7 +643,7 @@ fn from_value_expr(
                 _ => Ok(quote! {{
                     let __rex_value: ::rex::Value = (#value_expr).clone();
                     let __rex_ptr = heap.alloc_value(__rex_value)?;
-                    <#type_path as ::rex::FromPointer>::from_pointer(heap, &__rex_ptr, #name_expr)
+                    <#type_path as ::rex::FromPointer>::from_pointer(heap, &__rex_ptr)
                 }}),
             }
         }
@@ -842,9 +832,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                         name_expr.clone(),
                     )?;
                     field_decodes.push(quote! {
-                        let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType {
-                            name: ::rex::intern(name),
-                            expected: format!("missing field `{}`", #name),
+                        let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType { expected: format!("missing field `{}`", #name),
                             got: "dict".into(),
                         })?;
                         let #ident = #decode?;
@@ -858,17 +846,13 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                                     #(#field_decodes)*
                                     Ok(Self { #(#field_idents,)* })
                                 }
-                                other => Err(::rex::EngineError::NativeType {
-                                    name: ::rex::intern(name),
-                                    expected: "dict".into(),
+                                other => Err(::rex::EngineError::NativeType { expected: "dict".into(),
                                     got: ::rex::value_display(heap, &other)
                                         .unwrap_or_else(|err| format!("<display error: {err}>")),
                                 }),
                             }
                         }
-                        other => Err(::rex::EngineError::NativeType {
-                            name: ::rex::intern(name),
-                            expected: #type_name.into(),
+                        other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
                             got: ::rex::value_display(heap, &other)
                                 .unwrap_or_else(|err| format!("<display error: {err}>")),
                         }),
@@ -891,9 +875,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                         ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == #len => {
                             Ok(Self(#(#decs,)*))
                         }
-                        other => Err(::rex::EngineError::NativeType {
-                            name: ::rex::intern(name),
-                            expected: #type_name.into(),
+                        other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
                             got: ::rex::value_display(heap, &other)
                                 .unwrap_or_else(|err| format!("<display error: {err}>")),
                         }),
@@ -903,9 +885,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             Fields::Unit => Ok(quote! {{
                 match value {
                     ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.is_empty() => Ok(Self),
-                    other => Err(::rex::EngineError::NativeType {
-                        name: ::rex::intern(name),
-                        expected: #type_name.into(),
+                    other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
                         got: ::rex::value_display(heap, &other)
                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                     }),
@@ -967,9 +947,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                                 name_expr.clone(),
                             )?;
                             field_decodes.push(quote! {
-                                let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType {
-                                    name: ::rex::intern(name),
-                                    expected: format!("missing field `{}`", #name),
+                                let v = map.get(&#key).ok_or_else(|| ::rex::EngineError::NativeType { expected: format!("missing field `{}`", #name),
                                     got: "dict".into(),
                                 })?;
                                 let #ident = #decode?;
@@ -982,9 +960,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                                         #(#field_decodes)*
                                         Ok(Self::#variant_ident { #(#fields_init,)* })
                                     }
-                                    other => Err(::rex::EngineError::NativeType {
-                                        name: ::rex::intern(name),
-                                        expected: "dict".into(),
+                                    other => Err(::rex::EngineError::NativeType { expected: "dict".into(),
                                         got: ::rex::value_display(heap, &other)
                                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                                     }),
@@ -999,9 +975,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             Ok(quote! {{
                 match value {
                     #(#arms,)*
-                    other => Err(::rex::EngineError::NativeType {
-                        name: ::rex::intern(name),
-                        expected: #type_name.into(),
+                    other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
                         got: ::rex::value_display(heap, &other)
                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                     }),
@@ -1024,7 +998,6 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             fn from_pointer(
                 heap: &::rex::Heap,
                 pointer: &::rex::Pointer,
-                name: &str,
             ) -> Result<Self, ::rex::EngineError> {
                 let value = heap.get(&pointer)?.as_ref().clone();
                 #body
