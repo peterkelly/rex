@@ -1,6 +1,8 @@
 use std::{
+    borrow::Borrow,
     collections::{BTreeMap, HashMap},
     fmt::{self, Display, Formatter},
+    ops::Deref,
     sync::{Arc, Mutex, OnceLock},
 };
 
@@ -10,13 +12,68 @@ use rpds::HashTrieMapSync;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-pub type Symbol = Arc<str>;
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize, serde::Serialize,
+)]
+#[serde(transparent)]
+pub struct Symbol(Arc<str>);
+
+impl Symbol {
+    pub fn as_str(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl Deref for Symbol {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<str> for Symbol {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl Borrow<str> for Symbol {
+    fn borrow(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl Display for Symbol {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(value: &str) -> Self {
+        Symbol(Arc::from(value))
+    }
+}
+
+impl From<String> for Symbol {
+    fn from(value: String) -> Self {
+        Symbol(Arc::from(value))
+    }
+}
+
+impl From<Arc<str>> for Symbol {
+    fn from(value: Arc<str>) -> Self {
+        Symbol(value)
+    }
+}
+
 pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;
 
 // Global symbol interner.
 //
 // Design constraints:
-// - Symbols are `Arc<str>` so cloning them is cheap and comparisons are fast.
+// - Symbols wrap `Arc<str>` so cloning them is cheap and comparisons are fast.
 // - The table is process-global and monotonically grows; that's fine for a
 //   typical “compile a program, then exit” workflow.
 // - Locking makes the cost model explicit (and obvious in profiles). If this
@@ -33,7 +90,7 @@ pub fn intern(name: &str) -> Symbol {
     if let Some(existing) = table.get(name) {
         return existing.clone();
     }
-    let sym: Symbol = Arc::from(name);
+    let sym = Symbol(Arc::from(name));
     table.insert(name.to_string(), sym.clone());
     sym
 }
@@ -522,9 +579,10 @@ pub enum Expr {
         Arc<Expr>,
     ), // λx → e
     Let(Span, Var, Option<TypeExpr>, Arc<Expr>, Arc<Expr>), // let x = e1 in e2
-    Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>), // if e1 then e2 else e3
-    Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>), // match e1 with patterns
-    Ann(Span, Arc<Expr>, TypeExpr),   // e is t
+    LetRec(Span, Vec<(Var, Option<TypeExpr>, Arc<Expr>)>, Arc<Expr>), // let rec f = e1 and g = e2 in e3
+    Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>),                       // if e1 then e2 else e3
+    Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>),                // match e1 with patterns
+    Ann(Span, Arc<Expr>, TypeExpr),                                   // e is t
 }
 
 impl Expr {
@@ -546,6 +604,7 @@ impl Expr {
             | Self::Project(span, ..)
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
+            | Self::LetRec(span, ..)
             | Self::Ite(span, ..)
             | Self::Match(span, ..)
             | Self::Ann(span, ..) => span,
@@ -570,6 +629,7 @@ impl Expr {
             | Self::Project(span, ..)
             | Self::Lam(span, ..)
             | Self::Let(span, ..)
+            | Self::LetRec(span, ..)
             | Self::Ite(span, ..)
             | Self::Match(span, ..)
             | Self::Ann(span, ..) => span,
@@ -627,6 +687,14 @@ impl Expr {
             Expr::Let(_, var, ann, def, body) => {
                 Expr::Let(span, var.clone(), ann.clone(), def.clone(), body.clone())
             }
+            Expr::LetRec(_, bindings, body) => Expr::LetRec(
+                span,
+                bindings
+                    .iter()
+                    .map(|(var, ann, def)| (var.clone(), ann.clone(), def.clone()))
+                    .collect(),
+                body.clone(),
+            ),
             Expr::Ite(_, cond, then, r#else) => {
                 Expr::Ite(span, cond.clone(), then.clone(), r#else.clone())
             }
@@ -702,6 +770,20 @@ impl Expr {
                 var.reset_spans(),
                 ann.as_ref().map(|t| t.reset_spans()),
                 Arc::new(def.reset_spans()),
+                Arc::new(body.reset_spans()),
+            ),
+            Expr::LetRec(_, bindings, body) => Expr::LetRec(
+                Span::default(),
+                bindings
+                    .iter()
+                    .map(|(var, ann, def)| {
+                        (
+                            var.reset_spans(),
+                            ann.as_ref().map(TypeExpr::reset_spans),
+                            Arc::new(def.reset_spans()),
+                        )
+                    })
+                    .collect(),
                 Arc::new(body.reset_spans()),
             ),
             Expr::Ite(_, cond, then, r#else) => Expr::Ite(
@@ -841,6 +923,23 @@ impl Display for Expr {
                 }
                 " = ".fmt(f)?;
                 def.fmt(f)?;
+                " in ".fmt(f)?;
+                body.fmt(f)
+            }
+            Self::LetRec(_span, bindings, body) => {
+                "let rec ".fmt(f)?;
+                for (idx, (var, ann, def)) in bindings.iter().enumerate() {
+                    if idx > 0 {
+                        " and ".fmt(f)?;
+                    }
+                    var.fmt(f)?;
+                    if let Some(ann) = ann {
+                        ": ".fmt(f)?;
+                        ann.fmt(f)?;
+                    }
+                    " = ".fmt(f)?;
+                    def.fmt(f)?;
+                }
                 " in ".fmt(f)?;
                 body.fmt(f)
             }

@@ -7,7 +7,7 @@ use std::io::{self, BufRead, Read, Write};
 use std::thread;
 
 use clap::{Args, Parser, Subcommand};
-use rex_engine::{Engine, ReplState};
+use rex_engine::{Engine, ReplState, value_display};
 use rex_lexer::Token;
 use rex_parser::{Parser as RexParser, ParserLimits};
 use rex_util::{GasCosts, GasMeter};
@@ -352,7 +352,14 @@ fn repl_loop(
         };
 
         match engine.eval_repl_program_with_gas(&program, &mut state, &mut gas) {
-            Ok(v) => println!("{v}"),
+            Ok(v) => {
+                let rendered = engine
+                    .heap()
+                    .get(&v)
+                    .and_then(|value| value_display(engine.heap(), value.as_ref()))
+                    .unwrap_or_else(|e| format!("<display error: {e}>"));
+                println!("{rendered}");
+            }
             Err(e) => eprintln!("error: {e}"),
         }
         buffer.clear();
@@ -442,7 +449,7 @@ fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let mut engine = init_engine(&include)?;
 
-    let value = if let Some(path) = file {
+    let pointer = if let Some(path) = file {
         engine
             .eval_module_file_with_gas(&path, &mut gas)
             .map_err(|e| format!("{e}"))?
@@ -451,7 +458,12 @@ fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
             .eval_snippet_with_gas(source, &mut gas)
             .map_err(|e| format!("{e}"))?
     };
-    println!("{value}");
+    let rendered = engine
+        .heap()
+        .get(&pointer)
+        .and_then(|value| value_display(engine.heap(), value.as_ref()))
+        .unwrap_or_else(|e| format!("<display error: {e}>"));
+    println!("{rendered}");
     Ok(())
 }
 

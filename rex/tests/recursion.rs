@@ -1,0 +1,172 @@
+use rex::{Engine, EngineError, Heap, Parser, Pointer, Token};
+use rex_engine::assert_pointer_eq;
+
+fn eval(source: &str) -> Result<(Heap, Pointer), EngineError> {
+    let tokens = Token::tokenize(source).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+    let mut engine = Engine::with_prelude().unwrap();
+    engine.inject_decls(&program.decls)?;
+    let pointer = engine.eval(program.expr.as_ref())?;
+    let heap = engine.into_heap();
+    Ok((heap, pointer))
+}
+
+fn assert_i32_result(source: &str, expected: i32) {
+    let (heap, pointer) = eval(source).unwrap();
+    let expected = heap.alloc_i32(expected).unwrap();
+    assert_pointer_eq!(&heap, &pointer, &expected);
+}
+
+fn assert_even_odd_tuple(source: &str) {
+    let (heap, pointer) = eval(source).unwrap();
+    let t0 = heap.alloc_bool(true).unwrap();
+    let t1 = heap.alloc_bool(false).unwrap();
+    let t2 = heap.alloc_bool(false).unwrap();
+    let t3 = heap.alloc_bool(true).unwrap();
+    let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
+    assert_pointer_eq!(&heap, &pointer, &expected);
+}
+
+#[test]
+fn factorial_let_rec() {
+    let expr = r#"
+        let rec fact = \n ->
+          if n == 0 then 1 else n * fact (n - 1)
+        in
+          fact 6
+    "#;
+    assert_i32_result(expr, 720);
+}
+
+#[test]
+fn mutual_even_odd_let_rec() {
+    let expr = r#"
+        let rec
+          even = \n -> if n == 0 then true else odd (n - 1)
+        and
+          odd = \n -> if n == 0 then false else even (n - 1)
+        in
+          (even 10, odd 10, even 11, odd 11)
+    "#;
+    assert_even_odd_tuple(expr);
+}
+
+#[test]
+fn mutual_list_cycle_let_rec() {
+    let expr = r#"
+        let rec
+          a = Cons 1 b
+        and
+          b = Cons 2 a
+        in
+        match b
+          when Cons h _t -> h
+          when Empty -> 0
+    "#;
+    assert_i32_result(expr, 2);
+}
+
+#[test]
+fn self_referential_list_let_rec() {
+    let expr = r#"
+        let rec xs = Cons 1 xs in
+        match xs
+          when Cons head _tail -> head
+          when Empty -> 0
+    "#;
+    assert_i32_result(expr, 1);
+}
+
+#[test]
+fn factorial_plain_let() {
+    let expr = r#"
+        type Rec a b = Rec ((Rec a b) -> a -> b)
+
+        let unrec = \r ->
+          match r
+            when Rec f -> f
+        in
+        let fix = \f ->
+          let g = \x -> f (\v -> unrec x x v) in
+          g (Rec g)
+        in
+        let fact = fix (\self -> \n ->
+          if n == 0 then 1 else n * self (n - 1)
+        )
+        in
+          fact 6
+    "#;
+    assert_i32_result(expr, 720);
+}
+
+#[test]
+fn mutual_even_odd_plain_let() {
+    let expr = r#"
+        type Rec a b = Rec ((Rec a b) -> a -> b)
+
+        let unrec = \r ->
+          match r
+            when Rec f -> f
+        in
+        let fix = \f ->
+          let g = \x -> f (\v -> unrec x x v) in
+          g (Rec g)
+        in
+        let toggle = \b -> if b then false else true in
+        let parity = fix (\self -> \is_even -> \n ->
+          if n == 0 then is_even else self (toggle is_even) (n - 1)
+        )
+        in
+          (parity true 10, parity false 10, parity true 11, parity false 11)
+    "#;
+    assert_even_odd_tuple(expr);
+}
+
+#[test]
+fn mutual_list_cycle_plain_let() {
+    let expr = r#"
+        type Rec a b = Rec ((Rec a b) -> a -> b)
+
+        let unrec = \r ->
+          match r
+            when Rec f -> f
+        in
+        let fix = \f ->
+          let g = \x -> f (\v -> unrec x x v) in
+          g (Rec g)
+        in
+        let toggle = \b -> if b then false else true in
+        let alternating_head = fix (\self -> \from_b -> \n ->
+          if n == 0 then
+            if from_b then 2 else 1
+          else
+            self (toggle from_b) (n - 1)
+        )
+        in
+          alternating_head true 0
+    "#;
+    assert_i32_result(expr, 2);
+}
+
+#[test]
+fn self_referential_list_plain_let() {
+    let expr = r#"
+        type Rec a b = Rec ((Rec a b) -> a -> b)
+
+        let unrec = \r ->
+          match r
+            when Rec f -> f
+        in
+        let fix = \f ->
+          let g = \x -> f (\v -> unrec x x v) in
+          g (Rec g)
+        in
+        let repeated_head = fix (\self -> \n ->
+          if n == 0 then 1 else self (n - 1)
+        )
+        in
+          repeated_head 8
+    "#;
+    assert_i32_result(expr, 1);
+}

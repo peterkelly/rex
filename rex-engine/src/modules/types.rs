@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use rex_ast::expr::{Symbol, intern};
 
-use crate::Value;
+use crate::Pointer;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ModuleId {
@@ -67,7 +67,7 @@ impl ReplState {
 pub struct ModuleInstance {
     pub id: ModuleId,
     pub exports: ModuleExports,
-    pub init_value: Value,
+    pub init_value: Pointer,
 }
 
 pub(crate) fn prefix_for_module(id: &ModuleId) -> String {

@@ -1310,104 +1310,176 @@ impl Parser {
             }
         };
 
-        // Parse the variable declarations.
-        let mut decls = VecDeque::new();
-        let is_pattern_start = |token: Token| {
-            matches!(
-                token,
-                Token::Ident(..) | Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..)
-            )
+        let is_rec = if matches!(self.current_token(), Token::Rec(..)) {
+            self.next_token();
+            true
+        } else {
+            false
         };
-        while is_pattern_start(self.current_token()) {
-            let (pat, ann) = match (self.current_token(), self.peek_token(1)) {
-                (Token::Ident(val, span, ..), Token::Colon(..)) => {
-                    self.next_token();
-                    self.next_token();
-                    let var = Var::with_span(span, val);
-                    let ann = Some(self.parse_type_expr()?);
-                    (Pattern::Var(var), ann)
-                }
-                _ => {
-                    let pat = self.parse_pattern()?;
-                    let mut ann = None;
-                    if let Token::Colon(..) = self.current_token() {
-                        self.next_token();
-                        ann = Some(self.parse_type_expr()?);
-                    }
-                    (pat, ann)
-                }
-            };
 
-            // =
-            self.expect_assign()?;
-            // Parse the variable definition
-            decls.push_back((pat, ann, self.parse_expr()?));
-            // Parse `,` or `in`
-            match self.current_token() {
-                Token::Comma(_span, ..) => {
-                    self.next_token();
-                    continue;
+        if is_rec {
+            let mut bindings = Vec::new();
+            loop {
+                let (pat, ann) = match (self.current_token(), self.peek_token(1)) {
+                    (Token::Ident(val, span, ..), Token::Colon(..)) => {
+                        self.next_token();
+                        self.next_token();
+                        let var = Var::with_span(span, val);
+                        let ann = Some(self.parse_type_expr()?);
+                        (Pattern::Var(var), ann)
+                    }
+                    _ => {
+                        let pat = self.parse_pattern()?;
+                        let mut ann = None;
+                        if let Token::Colon(..) = self.current_token() {
+                            self.next_token();
+                            ann = Some(self.parse_type_expr()?);
+                        }
+                        (pat, ann)
+                    }
+                };
+
+                let var = match pat {
+                    Pattern::Var(var) => var,
+                    other => {
+                        return Err(ParserErr::new(
+                            *other.span(),
+                            "let rec only supports variable bindings".to_string(),
+                        ));
+                    }
+                };
+
+                self.expect_assign()?;
+                let def = Arc::new(self.parse_expr()?);
+                bindings.push((var, ann, def));
+
+                match self.current_token() {
+                    Token::AndKw(..) | Token::Comma(..) => {
+                        self.next_token();
+                    }
+                    Token::In(..) => break,
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `and` or `in` got {}", token),
+                        ));
+                    }
                 }
-                Token::In(..) => break,
+            }
+
+            match self.current_token() {
+                Token::In(..) => self.next_token(),
                 token => {
                     return Err(ParserErr::new(
                         *token.span(),
-                        format!("expected `,` or `in` got {}", token),
+                        format!("expected `in` got {}", token),
                     ));
                 }
-            }
-        }
+            };
 
-        // Parse the `in` token
-        let _span_arrow = match self.current_token() {
-            Token::In(span, ..) => {
-                self.next_token();
-                span
-            }
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected `in` got {}", token),
-                ));
-            }
-        };
-
-        // Parse the body
-        let mut body = self.parse_expr()?;
-        let mut body_span_end = body.span().end;
-        while let Some((pat, ann, def)) = decls.pop_back() {
-            match pat {
-                Pattern::Var(var) => {
-                    body = Expr::Let(
-                        Span::from_begin_end(var.span.begin, body_span_end),
-                        var,
-                        ann,
-                        Arc::new(def),
-                        Arc::new(body),
-                    );
-                }
-                pat => {
-                    let def_expr = match ann {
-                        Some(ann) => {
-                            let span = Span::from_begin_end(def.span().begin, ann.span().end);
-                            Expr::Ann(span, Arc::new(def), ann)
+            let body = Arc::new(self.parse_expr()?);
+            let span = Span::from_begin_end(span_begin, body.span().end);
+            Ok(Expr::LetRec(span, bindings, body))
+        } else {
+            // Parse the variable declarations.
+            let mut decls = VecDeque::new();
+            let is_pattern_start = |token: Token| {
+                matches!(
+                    token,
+                    Token::Ident(..) | Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..)
+                )
+            };
+            while is_pattern_start(self.current_token()) {
+                let (pat, ann) = match (self.current_token(), self.peek_token(1)) {
+                    (Token::Ident(val, span, ..), Token::Colon(..)) => {
+                        self.next_token();
+                        self.next_token();
+                        let var = Var::with_span(span, val);
+                        let ann = Some(self.parse_type_expr()?);
+                        (Pattern::Var(var), ann)
+                    }
+                    _ => {
+                        let pat = self.parse_pattern()?;
+                        let mut ann = None;
+                        if let Token::Colon(..) = self.current_token() {
+                            self.next_token();
+                            ann = Some(self.parse_type_expr()?);
                         }
-                        None => def,
-                    };
-                    body = Expr::Match(
-                        Span::from_begin_end(pat.span().begin, body_span_end),
-                        Arc::new(def_expr),
-                        vec![(pat, Arc::new(body))],
-                    );
+                        (pat, ann)
+                    }
+                };
+
+                // =
+                self.expect_assign()?;
+                // Parse the variable definition
+                decls.push_back((pat, ann, self.parse_expr()?));
+                // Parse `,` or `in`
+                match self.current_token() {
+                    Token::Comma(_span, ..) => {
+                        self.next_token();
+                        continue;
+                    }
+                    Token::In(..) => break,
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `,` or `in` got {}", token),
+                        ));
+                    }
                 }
             }
-            body_span_end = body.span().end;
-        }
-        // Adjust the outer most let-in expression to include the initial let
-        // token
-        let body = body.with_span_begin(span_begin);
 
-        Ok(body)
+            // Parse the `in` token
+            let _span_arrow = match self.current_token() {
+                Token::In(span, ..) => {
+                    self.next_token();
+                    span
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected `in` got {}", token),
+                    ));
+                }
+            };
+
+            // Parse the body
+            let mut body = self.parse_expr()?;
+            let mut body_span_end = body.span().end;
+            while let Some((pat, ann, def)) = decls.pop_back() {
+                match pat {
+                    Pattern::Var(var) => {
+                        body = Expr::Let(
+                            Span::from_begin_end(var.span.begin, body_span_end),
+                            var,
+                            ann,
+                            Arc::new(def),
+                            Arc::new(body),
+                        );
+                    }
+                    pat => {
+                        let def_expr = match ann {
+                            Some(ann) => {
+                                let span = Span::from_begin_end(def.span().begin, ann.span().end);
+                                Expr::Ann(span, Arc::new(def), ann)
+                            }
+                            None => def,
+                        };
+                        body = Expr::Match(
+                            Span::from_begin_end(pat.span().begin, body_span_end),
+                            Arc::new(def_expr),
+                            vec![(pat, Arc::new(body))],
+                        );
+                    }
+                }
+                body_span_end = body.span().end;
+            }
+            // Adjust the outer most let-in expression to include the initial let
+            // token
+            let body = body.with_span_begin(span_begin);
+
+            Ok(body)
+        }
     }
 
     //
@@ -3428,6 +3500,15 @@ fn count_expr_nodes(expr: &Expr) -> u64 {
             let ann_nodes = ann.as_ref().map(count_type_expr_nodes).unwrap_or(0);
             1 + ann_nodes + count_expr_nodes(def) + count_expr_nodes(body)
         }
+        Expr::LetRec(_, bindings, body) => {
+            let binding_nodes = bindings
+                .iter()
+                .map(|(_, ann, def)| {
+                    ann.as_ref().map(count_type_expr_nodes).unwrap_or(0) + count_expr_nodes(def)
+                })
+                .sum::<u64>();
+            1 + binding_nodes + count_expr_nodes(body)
+        }
         Expr::Ite(_, a, b, c) => {
             1 + count_expr_nodes(a) + count_expr_nodes(b) + count_expr_nodes(c)
         }
@@ -4165,6 +4246,38 @@ mod tests {
         ));
 
         assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_let_rec_single_binding() {
+        let expr = parse("let rec fact = \\n -> if n == 0 then 1 else n * fact (n - 1) in fact 5");
+        match expr.as_ref() {
+            Expr::LetRec(_, bindings, body) => {
+                assert_eq!(bindings.len(), 1);
+                let (name, ann, def) = &bindings[0];
+                assert_eq!(name.name.as_ref(), "fact");
+                assert!(ann.is_none());
+                assert!(matches!(def.as_ref(), Expr::Lam(..)));
+                assert_expr_eq!(body.clone(), app!(v!("fact"), u!(5)); ignore span);
+            }
+            other => panic!("expected let rec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_let_rec_mutual_bindings() {
+        let expr = parse("let rec even = \\n -> odd n and odd = \\n -> even n in (even 0, odd 1)");
+        match expr.as_ref() {
+            Expr::LetRec(_, bindings, body) => {
+                assert_eq!(bindings.len(), 2);
+                assert_eq!(bindings[0].0.name.as_ref(), "even");
+                assert_eq!(bindings[1].0.name.as_ref(), "odd");
+                assert!(matches!(bindings[0].2.as_ref(), Expr::Lam(..)));
+                assert!(matches!(bindings[1].2.as_ref(), Expr::Lam(..)));
+                assert!(matches!(body.as_ref(), Expr::Tuple(..)));
+            }
+            other => panic!("expected let rec, got {other:?}"),
+        }
     }
 
     #[test]

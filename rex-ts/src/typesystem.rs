@@ -471,6 +471,13 @@ impl TypedExpr {
                 def: Box::new(def.apply(s)),
                 body: Box::new(body.apply(s)),
             },
+            TypedExprKind::LetRec { bindings, body } => TypedExprKind::LetRec {
+                bindings: bindings
+                    .iter()
+                    .map(|(name, def)| (name.clone(), def.apply(s)))
+                    .collect(),
+                body: Box::new(body.apply(s)),
+            },
             TypedExprKind::Ite {
                 cond,
                 then_expr,
@@ -521,6 +528,10 @@ pub enum TypedExprKind {
     Let {
         name: Symbol,
         def: Box<TypedExpr>,
+        body: Box<TypedExpr>,
+    },
+    LetRec {
+        bindings: Vec<(Symbol, TypedExpr)>,
         body: Box<TypedExpr>,
     },
     Ite {
@@ -2862,6 +2873,61 @@ fn infer_expr_type(
                     infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, cur)?;
                 Ok((p_body, t_body))
             }
+            Expr::LetRec(_, bindings, body) => {
+                let mut env_seed = env.clone();
+                let mut known_seed = known.clone();
+                let mut binding_tys = HashMap::new();
+                for (var, _ann, _def) in bindings {
+                    let tv = Type::var(supply.fresh(Some(var.name.clone())));
+                    env_seed.extend(var.name.clone(), Scheme::new(vec![], vec![], tv.clone()));
+                    known_seed.remove(&var.name);
+                    binding_tys.insert(var.name.clone(), tv);
+                }
+
+                let mut inferred = Vec::with_capacity(bindings.len());
+                for (var, ann, def) in bindings {
+                    let (preds, def_ty) =
+                        infer_expr_type(unifier, supply, &env_seed, adts, &known_seed, def)?;
+                    if let Some(ann) = ann {
+                        let mut ann_vars = HashMap::new();
+                        let ann_ty =
+                            type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
+                        unifier.unify(&def_ty, &ann_ty)?;
+                    }
+                    let binding_ty = binding_tys
+                        .get(&var.name)
+                        .cloned()
+                        .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
+                    unifier.unify(&binding_ty, &def_ty)?;
+                    let resolved_ty = unifier.apply_type(&binding_ty);
+
+                    if let Some(known_variant) =
+                        known_variant_from_expr_with_known(def, &resolved_ty, adts, &known_seed)
+                    {
+                        known_seed.insert(
+                            var.name.clone(),
+                            KnownVariant {
+                                adt: known_variant.adt,
+                                variant: known_variant.variant,
+                            },
+                        );
+                    } else {
+                        known_seed.remove(&var.name);
+                    }
+                    inferred.push((var.name.clone(), preds, resolved_ty));
+                }
+
+                let mut env_body = env.clone();
+                for (name, preds, def_ty) in inferred {
+                    let scheme = generalize_with_unifier(&env_body, preds, def_ty, unifier);
+                    reject_ambiguous_scheme(&scheme)?;
+                    env_body.extend(name, scheme);
+                }
+
+                let (p_body, t_body) =
+                    infer_expr_type(unifier, supply, &env_body, adts, &known_seed, body)?;
+                Ok((p_body, t_body))
+            }
             Expr::Ite(_, cond, then_expr, else_expr) => {
                 let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, cond)?;
                 unifier.unify(&t1, &Type::con("bool", 0))?;
@@ -3251,6 +3317,70 @@ fn infer_expr(
                         },
                     );
                 }
+                Ok((p_body, t_body, typed))
+            }
+            Expr::LetRec(_, bindings, body) => {
+                let mut env_seed = env.clone();
+                let mut known_seed = known.clone();
+                let mut binding_tys = HashMap::new();
+                for (var, _ann, _def) in bindings {
+                    let tv = Type::var(supply.fresh(Some(var.name.clone())));
+                    env_seed.extend(var.name.clone(), Scheme::new(vec![], vec![], tv.clone()));
+                    known_seed.remove(&var.name);
+                    binding_tys.insert(var.name.clone(), tv);
+                }
+
+                let mut inferred_defs = Vec::with_capacity(bindings.len());
+                for (var, ann, def) in bindings {
+                    let (preds, def_ty, typed_def) =
+                        infer_expr(unifier, supply, &env_seed, adts, &known_seed, def)?;
+                    if let Some(ann) = ann {
+                        let mut ann_vars = HashMap::new();
+                        let ann_ty =
+                            type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
+                        unifier.unify(&def_ty, &ann_ty)?;
+                    }
+                    let binding_ty = binding_tys
+                        .get(&var.name)
+                        .cloned()
+                        .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
+                    unifier.unify(&binding_ty, &def_ty)?;
+                    let resolved_ty = unifier.apply_type(&binding_ty);
+
+                    if let Some(known_variant) =
+                        known_variant_from_expr_with_known(def, &resolved_ty, adts, &known_seed)
+                    {
+                        known_seed.insert(
+                            var.name.clone(),
+                            KnownVariant {
+                                adt: known_variant.adt,
+                                variant: known_variant.variant,
+                            },
+                        );
+                    } else {
+                        known_seed.remove(&var.name);
+                    }
+                    inferred_defs.push((var.name.clone(), preds, resolved_ty, typed_def));
+                }
+
+                let mut env_body = env.clone();
+                let mut typed_bindings = Vec::with_capacity(inferred_defs.len());
+                for (name, preds, def_ty, typed_def) in inferred_defs {
+                    let scheme = generalize_with_unifier(&env_body, preds, def_ty, unifier);
+                    reject_ambiguous_scheme(&scheme)?;
+                    env_body.extend(name.clone(), scheme);
+                    typed_bindings.push((name, typed_def));
+                }
+
+                let (p_body, t_body, typed_body) =
+                    infer_expr(unifier, supply, &env_body, adts, &known_seed, body)?;
+                let typed = TypedExpr::new(
+                    t_body.clone(),
+                    TypedExprKind::LetRec {
+                        bindings: typed_bindings,
+                        body: Box::new(typed_body),
+                    },
+                );
                 Ok((p_body, t_body, typed))
             }
             Expr::Ite(_, cond, then_expr, else_expr) => {

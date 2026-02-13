@@ -15,7 +15,7 @@ use rex_ts::{Predicate, Type};
 use rex_util::{GasMeter, sha256_hex};
 use uuid::Uuid;
 
-use crate::{Engine, EngineError, Value};
+use crate::{Engine, EngineError, Pointer};
 
 mod resolvers;
 mod system;
@@ -388,6 +388,43 @@ fn rename_expr(
                 Arc::new(renamed_body),
             )
         }
+        Expr::LetRec(span, bindings, body) => {
+            let names: Vec<Symbol> = bindings
+                .iter()
+                .map(|(var, _, _)| var.name.clone())
+                .collect();
+            for name in &names {
+                bound.insert(name.clone());
+            }
+            let renamed_bindings = bindings
+                .iter()
+                .map(|(var, ann, def)| {
+                    (
+                        var.clone(),
+                        ann.as_ref()
+                            .map(|t| rename_type_expr(t, type_renames, class_renames)),
+                        Arc::new(rename_expr(
+                            def,
+                            bound,
+                            value_renames,
+                            type_renames,
+                            class_renames,
+                        )),
+                    )
+                })
+                .collect();
+            let renamed_body = Arc::new(rename_expr(
+                body,
+                bound,
+                value_renames,
+                type_renames,
+                class_renames,
+            ));
+            for name in &names {
+                bound.remove(name);
+            }
+            Expr::LetRec(*span, renamed_bindings, renamed_body)
+        }
         Expr::Ite(span, c, t, e) => Expr::Ite(
             *span,
             Arc::new(rename_expr(
@@ -721,6 +758,40 @@ fn rewrite_import_uses_expr(
             bound.remove(&var.name);
             Expr::Let(*span, var.clone(), ann.clone(), val, body)
         }
+        Expr::LetRec(span, bindings, body) => {
+            let names: Vec<Symbol> = bindings
+                .iter()
+                .map(|(var, _, _)| var.name.clone())
+                .collect();
+            for name in &names {
+                bound.insert(name.clone());
+            }
+            let bindings = bindings
+                .iter()
+                .map(|(var, ann, def)| {
+                    (
+                        var.clone(),
+                        ann.clone(),
+                        Arc::new(rewrite_import_uses_expr(
+                            def,
+                            bound,
+                            aliases,
+                            shadowed_values,
+                        )),
+                    )
+                })
+                .collect();
+            let body = Arc::new(rewrite_import_uses_expr(
+                body,
+                bound,
+                aliases,
+                shadowed_values,
+            ));
+            for name in &names {
+                bound.remove(name);
+            }
+            Expr::LetRec(*span, bindings, body)
+        }
         Expr::Match(span, scrutinee, arms) => {
             let scrutinee = Arc::new(rewrite_import_uses_expr(
                 scrutinee,
@@ -911,6 +982,23 @@ fn validate_import_uses_expr(
             bound.insert(var.name.clone());
             let res = validate_import_uses_expr(body, bound, aliases, shadowed_values);
             bound.remove(&var.name);
+            res
+        }
+        Expr::LetRec(_, bindings, body) => {
+            let names: Vec<Symbol> = bindings
+                .iter()
+                .map(|(var, _, _)| var.name.clone())
+                .collect();
+            for name in &names {
+                bound.insert(name.clone());
+            }
+            for (_, _, def) in bindings {
+                validate_import_uses_expr(def, bound, aliases, shadowed_values)?;
+            }
+            let res = validate_import_uses_expr(body, bound, aliases, shadowed_values);
+            for name in &names {
+                bound.remove(name);
+            }
             res
         }
         Expr::Match(_, scrutinee, arms) => {
@@ -1429,7 +1517,7 @@ impl Engine {
         self.infer_type_with_gas(rewritten.expr.as_ref(), gas)
     }
 
-    pub fn eval_module_file(&mut self, path: impl AsRef<Path>) -> Result<Value, EngineError> {
+    pub fn eval_module_file(&mut self, path: impl AsRef<Path>) -> Result<Pointer, EngineError> {
         self.eval_module_file_impl(path.as_ref(), None)
     }
 
@@ -1437,7 +1525,7 @@ impl Engine {
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         self.eval_module_file_impl(path.as_ref(), Some(gas))
     }
 
@@ -1445,7 +1533,7 @@ impl Engine {
         &mut self,
         path: &Path,
         gas: Option<&mut GasMeter>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         let (id, bytes) = self.read_local_module_bytes(path)?;
         if let Some(inst) = self.modules.cached(&id)? {
             return Ok(inst.init_value);
@@ -1455,7 +1543,7 @@ impl Engine {
         Ok(inst.init_value)
     }
 
-    pub fn eval_module_source(&mut self, source: &str) -> Result<Value, EngineError> {
+    pub fn eval_module_source(&mut self, source: &str) -> Result<Pointer, EngineError> {
         self.eval_module_source_impl(source, None)
     }
 
@@ -1463,7 +1551,7 @@ impl Engine {
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         self.eval_module_source_impl(source, Some(gas))
     }
 
@@ -1471,7 +1559,7 @@ impl Engine {
         &mut self,
         source: &str,
         gas: Option<&mut GasMeter>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
         let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
@@ -1488,7 +1576,7 @@ impl Engine {
         Ok(inst.init_value)
     }
 
-    pub fn eval_snippet(&mut self, source: &str) -> Result<Value, EngineError> {
+    pub fn eval_snippet(&mut self, source: &str) -> Result<Pointer, EngineError> {
         self.eval_snippet_with_importer(source, None)
     }
 
@@ -1496,7 +1584,7 @@ impl Engine {
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         self.eval_snippet_with_gas_and_importer(source, gas, None)
     }
 
@@ -1505,7 +1593,7 @@ impl Engine {
         program: &Program,
         state: &mut ReplState,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         let importer = state.importer_path.as_ref().map(|p| ModuleId::Local {
             path: p.clone(),
             hash: "repl".into(),
@@ -1535,7 +1623,7 @@ impl Engine {
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         let path = importer_path.as_ref().to_path_buf();
         self.eval_snippet_with_importer(source, Some(path))
     }
@@ -1546,7 +1634,7 @@ impl Engine {
         source: &str,
         importer_path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         let path = importer_path.as_ref().to_path_buf();
         self.eval_snippet_with_gas_and_importer(source, gas, Some(path))
     }
@@ -1555,7 +1643,7 @@ impl Engine {
         &mut self,
         source: &str,
         importer_path: Option<PathBuf>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         let program = parse_program_from_source(source, None, None)?;
 
         let importer = importer_path.map(|p| ModuleId::Local {
@@ -1582,7 +1670,7 @@ impl Engine {
         source: &str,
         gas: &mut GasMeter,
         importer_path: Option<PathBuf>,
-    ) -> Result<Value, EngineError> {
+    ) -> Result<Pointer, EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
         let importer = importer_path.map(|p| ModuleId::Local {

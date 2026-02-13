@@ -9,7 +9,7 @@ use std::sync::{Mutex, OnceLock};
 
 use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
-    TypeDecl, TypeExpr, Var, intern,
+    Symbol, TypeDecl, TypeExpr, Var, intern,
 };
 use rex_lexer::{
     LexicalError, Token, Tokens,
@@ -413,6 +413,40 @@ fn rewrite_import_projections_expr(
             ));
             bound.remove(&var.name);
             Expr::Let(*span, var.clone(), ann.clone(), val, body)
+        }
+        Expr::LetRec(span, bindings, body) => {
+            let names: Vec<Symbol> = bindings
+                .iter()
+                .map(|(var, _, _)| var.name.clone())
+                .collect();
+            for name in &names {
+                bound.insert(name.clone());
+            }
+            let bindings = bindings
+                .iter()
+                .map(|(var, ann, def)| {
+                    (
+                        var.clone(),
+                        ann.clone(),
+                        std::sync::Arc::new(rewrite_import_projections_expr(
+                            def,
+                            bound,
+                            imports,
+                            diagnostics,
+                        )),
+                    )
+                })
+                .collect();
+            let body = std::sync::Arc::new(rewrite_import_projections_expr(
+                body,
+                bound,
+                imports,
+                diagnostics,
+            ));
+            for name in &names {
+                bound.remove(name);
+            }
+            Expr::LetRec(*span, bindings, body)
         }
         Expr::Ite(span, c, t, e) => Expr::Ite(
             *span,
@@ -1548,6 +1582,31 @@ fn hover_type_in_expr(
                 visit(ts, body.as_ref(), tbody.as_ref(), ctx);
             }
             (
+                Expr::LetRec(_span, bindings, body),
+                TypedExprKind::LetRec {
+                    bindings: typed_bindings,
+                    body: typed_body,
+                },
+            ) => {
+                for ((binding, _ann, def), (_name, typed_def)) in
+                    bindings.iter().zip(typed_bindings.iter())
+                {
+                    if span_contains_pos(binding.span, ctx.pos) {
+                        consider(
+                            ctx.best,
+                            HoverType {
+                                span: binding.span,
+                                label: binding.name.as_ref().to_string(),
+                                typ: typed_def.typ.to_string(),
+                                overloads: Vec::new(),
+                            },
+                        );
+                    }
+                    visit(ts, def.as_ref(), typed_def, ctx);
+                }
+                visit(ts, body.as_ref(), typed_body.as_ref(), ctx);
+            }
+            (
                 Expr::Lam(_span, _scope, param, _ann, _constraints, body),
                 TypedExprKind::Lam { body: tbody, .. },
             ) => {
@@ -2111,6 +2170,34 @@ fn values_in_scope_at_expr(
 
             Some(scope_to_map(scope))
         }
+        Expr::LetRec(_span, bindings, body) => {
+            let base_len = scope.len();
+            scope.extend(bindings.iter().map(|(var, _ann, def)| {
+                let kind = matches!(def.as_ref(), Expr::Lam(..))
+                    .then_some(CompletionItemKind::FUNCTION)
+                    .unwrap_or(CompletionItemKind::VARIABLE);
+                (var.name.to_string(), kind)
+            }));
+
+            for (_, _, def) in bindings {
+                if position_in_span(position, *def.span()) {
+                    let out = values_in_scope_at_expr(def, position, scope)
+                        .or_else(|| Some(scope_to_map(scope)));
+                    scope.truncate(base_len);
+                    return out;
+                }
+            }
+
+            if position_in_span(position, *body.span()) {
+                let out = values_in_scope_at_expr(body, position, scope)
+                    .or_else(|| Some(scope_to_map(scope)));
+                scope.truncate(base_len);
+                return out;
+            }
+
+            scope.truncate(base_len);
+            Some(scope_to_map(scope))
+        }
         Expr::Lam(_span, _scope, param, _ann, _constraints, body) => {
             if position_in_span(position, *body.span()) {
                 scope.push((param.name.to_string(), CompletionItemKind::VARIABLE));
@@ -2411,6 +2498,26 @@ fn field_env_at_expr(
             }
             Some(env.clone())
         }
+        Expr::LetRec(_, bindings, body) => {
+            let mut env_with = env.clone();
+            for (var, ann, def) in bindings {
+                let fields = binding_fields(ann.as_ref(), def, type_fields).unwrap_or_default();
+                env_with.insert(var.name.to_string(), fields);
+            }
+            for (_, _, def) in bindings {
+                if position_in_span(position, *def.span()) {
+                    return field_env_at_expr(def, position, &env_with, type_fields)
+                        .or_else(|| Some(env_with.clone()));
+                }
+            }
+            if position_in_span(position, *body.span()) {
+                if let Some(inner) = field_env_at_expr(body, position, &env_with, type_fields) {
+                    return Some(inner);
+                }
+                return Some(env_with);
+            }
+            Some(env.clone())
+        }
         Expr::Lam(_, _scope, param, ann, _constraints, body) => {
             if position_in_span(position, *body.span()) {
                 let mut env_with = env.clone();
@@ -2615,6 +2722,14 @@ fn project_base_at_position(expr: &Expr, position: RexPosition) -> Option<&Expr>
         Expr::Let(_, _var, _ann, def, body) => {
             if let Some(found) = project_base_at_position(def, position) {
                 return Some(found);
+            }
+            project_base_at_position(body, position)
+        }
+        Expr::LetRec(_, bindings, body) => {
+            for (_, _, def) in bindings {
+                if let Some(found) = project_base_at_position(def, position) {
+                    return Some(found);
+                }
             }
             project_base_at_position(body, position)
         }
@@ -3047,6 +3162,35 @@ fn definition_span_for_value_ident(
                 bindings.pop();
                 return out;
             }
+            None
+        }
+        Expr::LetRec(_span, rec_bindings, body) => {
+            for (var, _ann, _def) in rec_bindings {
+                if position_in_span(position, var.span) && var.name.as_ref() == ident {
+                    return Some(var.span);
+                }
+            }
+
+            let base_len = bindings.len();
+            for (var, _ann, _def) in rec_bindings {
+                bindings.push((var.name.to_string(), var.span));
+            }
+
+            for (_var, _ann, def) in rec_bindings {
+                if position_in_span(position, *def.span()) {
+                    let out =
+                        definition_span_for_value_ident(def, position, ident, bindings, tokens);
+                    bindings.truncate(base_len);
+                    return out;
+                }
+            }
+            if position_in_span(position, *body.span()) {
+                let out = definition_span_for_value_ident(body, position, ident, bindings, tokens);
+                bindings.truncate(base_len);
+                return out;
+            }
+
+            bindings.truncate(base_len);
             None
         }
         Expr::Lam(_span, _scope, param, _ann, _constraints, body) => {

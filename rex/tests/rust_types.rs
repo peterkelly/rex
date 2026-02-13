@@ -1,4 +1,5 @@
-use rex::{Engine, GasCosts, GasMeter, Parser, Token, Type, Value, sym};
+use rex::{Engine, GasCosts, GasMeter, Parser, Token, Type, sym};
+use rex_engine::assert_pointer_eq;
 
 #[test]
 fn vec_from_value() {
@@ -15,7 +16,13 @@ fn vec_from_value() {
     let program = Parser::new(tokens).parse_program().unwrap();
     let result = engine.eval(program.expr.as_ref()).unwrap();
 
-    assert_eq!(result, Value::String("accept_vec: [1, 2, 3]".to_string()),);
+    let heap = engine.heap();
+    assert_pointer_eq!(
+        heap,
+        result,
+        heap.alloc_string("accept_vec: [1, 2, 3]".to_string())
+            .unwrap(),
+    );
 }
 
 #[test]
@@ -37,15 +44,18 @@ fn vec_to_value() {
     let program = Parser::new(tokens).parse_program().unwrap();
     let result = engine.eval(program.expr.as_ref()).unwrap();
 
-    assert_eq!(
+    let heap = engine.heap();
+    assert_pointer_eq!(
+        heap,
         result,
-        Value::Array(vec![
-            Value::I32(0),
-            Value::I32(1),
-            Value::I32(2),
-            Value::I32(3),
-            Value::I32(4),
+        heap.alloc_array(vec![
+            heap.alloc_i32(0).unwrap(),
+            heap.alloc_i32(1).unwrap(),
+            heap.alloc_i32(2).unwrap(),
+            heap.alloc_i32(3).unwrap(),
+            heap.alloc_i32(4).unwrap(),
         ])
+        .unwrap()
     );
 }
 
@@ -78,12 +88,16 @@ fn option_prelude() {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let result = engine.eval(program.expr.as_ref()).unwrap();
-    assert_eq!(
+    let heap = engine.heap();
+    assert_pointer_eq!(
+        heap,
         result,
-        Value::Tuple(vec![
-            Value::Adt(sym("Some"), vec![Value::I32(4)]),
-            Value::Adt(sym("None"), vec![]),
+        heap.alloc_tuple(vec![
+            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(4).unwrap()],)
+                .unwrap(),
+            heap.alloc_adt(sym("None"), vec![]).unwrap(),
         ])
+        .unwrap()
     );
 }
 
@@ -100,12 +114,16 @@ fn option_from_value() {
     let program = Parser::new(tokens).parse_program().unwrap();
     let result = engine.eval(program.expr.as_ref()).unwrap();
 
-    assert_eq!(
+    let heap = engine.heap();
+    assert_pointer_eq!(
+        heap,
         result,
-        Value::Tuple(vec![
-            Value::String("accept_opt: Some(4)".to_string()),
-            Value::String("accept_opt: None".to_string()),
-        ]),
+        heap.alloc_tuple(vec![
+            heap.alloc_string("accept_opt: Some(4)".to_string())
+                .unwrap(),
+            heap.alloc_string("accept_opt: None".to_string()).unwrap(),
+        ])
+        .unwrap(),
     );
 }
 
@@ -126,12 +144,16 @@ fn option_into_value() {
     let program = Parser::new(tokens).parse_program().unwrap();
     let result = engine.eval(program.expr.as_ref()).unwrap();
 
-    assert_eq!(
+    let heap = engine.heap();
+    assert_pointer_eq!(
+        heap,
         result,
-        Value::Tuple(vec![
-            Value::Adt(sym("Some"), vec![Value::I32(5)]),
-            Value::Adt(sym("None"), vec![]),
-        ]),
+        heap.alloc_tuple(vec![
+            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(5).unwrap()],)
+                .unwrap(),
+            heap.alloc_adt(sym("None"), vec![]).unwrap(),
+        ])
+        .unwrap(),
     );
 }
 

@@ -1,4 +1,4 @@
-use rex::{Engine, Parser, Token};
+use rex::{Engine, Parser, Token, value_display};
 
 fn eval_to_string(code: &str) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
@@ -11,10 +11,11 @@ fn eval_to_string(code: &str) -> Result<String, String> {
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
-    let value = engine
+    let pointer = engine
         .eval(program.expr.as_ref())
         .map_err(|e| format!("{e}"))?;
-    Ok(format!("{value}"))
+    let value = engine.heap().get(&pointer).map_err(|e| format!("{e}"))?;
+    value_display(engine.heap(), value.as_ref()).map_err(|e| format!("{e}"))
 }
 
 fn assert_eval(code: &str, expected: &str) {

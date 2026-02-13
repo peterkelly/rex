@@ -2,12 +2,22 @@
 
 ## Summary
 
-Rex is a statically-typed functional programming language similar to OCaml. It is designed to be
-used as a library, embedded in a Rust program, for executing user-supplied scripts (aka workflows)
-that call native functions provided by the host.
+Rex is a statically-typed functional programming language similar to OCaml and Haskell. It uses
+strict evaluation. All expressions and functions are pure and thus free of side effects, allowing
+the interpreter to safely evaluate them in parallel. The interpreter uses async functions and tokio.
 
-The pipeline is:
-lexer (`rex-lexer`) → parser (`rex-parser`) → type inference (`rex-ts`) → evaluator (`rex-engine`).
+Rex is intended to be used as a library, embedded in a Rust program (the "host"), for executing
+user-supplied scripts (aka workflows) that call native functions provided ("injected") by the host.
+The primary use case is executing scientific workflows, where host functions invoke external
+pieces of software. Rex provides a language for coordinating these and performing intermediate
+computations and data manipulation.
+
+## Pipeline for executing a rex programs
+
+- lexer (`rex-lexer`)
+- parser (`rex-parser`)
+- type inference (`rex-ts`)
+- evaluator (`rex-engine`).
 
 ## Crates in this workspace
 

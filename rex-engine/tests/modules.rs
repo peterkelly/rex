@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rex_engine::{Engine, Value};
+use rex_engine::{Engine, Pointer, Value};
 use uuid::Uuid;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -16,6 +16,28 @@ fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(parent).unwrap();
     }
     fs::write(path, contents).unwrap();
+}
+
+fn engine_with_prelude() -> Engine {
+    Engine::with_prelude().unwrap()
+}
+
+macro_rules! pvals {
+    ($engine:expr, $vals:expr) => {
+        $vals
+            .iter()
+            .map(|pointer| {
+                (
+                    pointer.clone(),
+                    $engine
+                        .heap()
+                        .get(pointer)
+                        .map(|value| value.as_ref().clone())
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<(Pointer, Value)>>()
+    };
 }
 
 #[test]
@@ -40,12 +62,20 @@ Bar.add 1 2
 "#,
     );
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine.eval_module_file(&main).unwrap();
+    let value_ptr = engine.eval_module_file(&main).unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 3),
-        other => panic!("expected i32, got {other}"),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        ),
     }
 }
 
@@ -71,10 +101,10 @@ Bar.hidden 1
 "#,
     );
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let err = match engine.eval_module_file(&main) {
-        Ok(v) => panic!("expected error, got {v}"),
+        Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
     let msg = err.to_string();
@@ -105,13 +135,21 @@ Math.inc 41
 "#,
     );
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     engine.add_include_resolver(&include_root).unwrap();
-    let value = engine.eval_module_file(&main).unwrap();
+    let value_ptr = engine.eval_module_file(&main).unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 42),
-        other => panic!("expected i32, got {other}"),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        ),
     }
 }
 
@@ -127,9 +165,9 @@ pub fn add x: i32 -> y: i32 -> i32 = x + y
 "#,
     );
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine
+    let value_ptr = engine
         .eval_snippet_at(
             r#"
 import foo.bar as Bar
@@ -138,18 +176,26 @@ Bar.add 20 22
             dir.join("_snippet.rex"),
         )
         .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     match value {
         Value::I32(v) => assert_eq!(v, 42),
-        other => panic!("expected i32, got {other}"),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        ),
     }
 }
 
 #[test]
 fn std_json_encode_decode_smoke() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine
+    let value_ptr = engine
         .eval_snippet(
             r#"
 import std.json as Json
@@ -227,15 +273,27 @@ in
 "#,
         )
         .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let Value::Tuple(xs) = value else {
-        panic!("expected tuple, got {value}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
     };
+    let xs = pvals!(engine, xs);
     let got: Vec<i32> = xs
         .into_iter()
-        .map(|v| match v {
+        .map(|(pointer, v)| match v {
             Value::I32(n) => n,
-            other => panic!("expected i32, got {other}"),
+            _ => panic!(
+                "expected i32, got {}",
+                engine.heap().type_name(&pointer).unwrap()
+            ),
         })
         .collect();
     assert_eq!(got, vec![1, 1, 7, 1, 4, 3, 3, 1]);
@@ -243,9 +301,9 @@ in
 
 #[test]
 fn std_json_roundtrip_nested() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine
+    let value_ptr = engine
         .eval_snippet(
             r#"
 import std.json as Json
@@ -275,15 +333,27 @@ in
 "#,
         )
         .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let Value::Tuple(xs) = value else {
-        panic!("expected tuple, got {value}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
     };
+    let xs = pvals!(engine, xs);
     let got: Vec<i32> = xs
         .into_iter()
-        .map(|v| match v {
+        .map(|(pointer, v)| match v {
             Value::I32(n) => n,
-            other => panic!("expected i32, got {other}"),
+            _ => panic!(
+                "expected i32, got {}",
+                engine.heap().type_name(&pointer).unwrap()
+            ),
         })
         .collect();
     assert_eq!(got, vec![1, 1]);
@@ -291,9 +361,9 @@ in
 
 #[test]
 fn std_json_decode_errors_have_useful_messages() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine
+    let value_ptr = engine
         .eval_snippet(
             r#"
 import std.json as Json
@@ -329,15 +399,27 @@ in
 "#,
         )
         .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let Value::Tuple(parts) = value else {
-        panic!("expected tuple, got {value}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
     };
+    let parts = pvals!(engine, parts);
     let got: Vec<String> = parts
         .into_iter()
-        .map(|v| match v {
+        .map(|(pointer, v)| match v {
             Value::String(s) => s,
-            other => panic!("expected string, got {other}"),
+            _ => panic!(
+                "expected string, got {}",
+                engine.heap().type_name(&pointer).unwrap()
+            ),
         })
         .collect();
 
@@ -349,9 +431,9 @@ in
 
 #[test]
 fn std_json_numeric_decode_errors() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine
+    let value_ptr = engine
         .eval_snippet(
             r#"
 import std.json as Json
@@ -371,15 +453,27 @@ in
 "#,
         )
         .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let Value::Tuple(parts) = value else {
-        panic!("expected tuple, got {value}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
     };
+    let parts = pvals!(engine, parts);
     let got: Vec<String> = parts
         .into_iter()
-        .map(|v| match v {
+        .map(|(pointer, v)| match v {
             Value::String(s) => s,
-            other => panic!("expected string, got {other}"),
+            _ => panic!(
+                "expected string, got {}",
+                engine.heap().type_name(&pointer).unwrap()
+            ),
         })
         .collect();
 
@@ -389,9 +483,9 @@ in
 
 #[test]
 fn std_json_pretty_renders_valid_json() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine
+    let value_ptr = engine
         .eval_snippet(
             r#"
 import std.json as Json
@@ -413,9 +507,17 @@ in
 "#,
         )
         .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let Value::String(rendered) = value else {
-        panic!("expected string, got {value}");
+        panic!(
+            "expected string, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
     };
 
     let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
@@ -438,9 +540,9 @@ in
 
 #[test]
 fn std_json_parse_and_from_string_roundtrip() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value = engine
+    let value_ptr = engine
         .eval_snippet(
             r#"
 import std.json as Json
@@ -480,15 +582,27 @@ in
 "#,
         )
         .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let Value::Tuple(xs) = value else {
-        panic!("expected tuple, got {value}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
     };
+    let xs = pvals!(engine, xs);
     let got: Vec<i32> = xs
         .into_iter()
-        .map(|v| match v {
+        .map(|(pointer, v)| match v {
             Value::I32(n) => n,
-            other => panic!("expected i32, got {other}"),
+            _ => panic!(
+                "expected i32, got {}",
+                engine.heap().type_name(&pointer).unwrap()
+            ),
         })
         .collect();
     assert_eq!(got, vec![1, 1, 1]);

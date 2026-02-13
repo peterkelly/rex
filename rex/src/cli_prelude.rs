@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use rex_ast::expr::{Symbol, sym};
-use rex_engine::{Engine, EngineError, Value, virtual_export_name};
+use rex_engine::{Engine, EngineError, FromPointer, Heap, Pointer, Value, virtual_export_name};
 use rex_ts::{Scheme, Type};
 use uuid::Uuid;
 
@@ -26,10 +26,11 @@ fn lock_arc_mutex<'a, T>(
         .map_err(|_| EngineError::Internal(format!("{context}: mutex poisoned (this is a bug)")))
 }
 
-fn unit_value() -> Value {
-    Value::Tuple(vec![])
+fn unit_pointer(heap: &Heap) -> Result<Pointer, EngineError> {
+    heap.alloc_tuple(vec![])
 }
 
+#[cfg(test)]
 fn value_type_name(value: &Value) -> &'static str {
     match value {
         Value::Bool(..) => "bool",
@@ -51,6 +52,7 @@ fn value_type_name(value: &Value) -> &'static str {
         Value::Dict(..) => "dict",
         Value::Adt(tag, ..) if tag.as_ref() == "Empty" || tag.as_ref() == "Cons" => "list",
         Value::Adt(..) => "adt",
+        Value::Uninitialized(..) => "uninitialized",
         Value::Closure(..) => "closure",
         Value::Native(..) => "native",
         Value::Overloaded(..) => "overloaded",
@@ -65,44 +67,47 @@ fn array_type(elem: Type) -> Type {
     Type::app(Type::con("Array", 1), elem)
 }
 
-fn list_to_vec(value: &Value, name: &str) -> Result<Vec<Value>, EngineError> {
+fn list_to_vec(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Vec<Pointer>, EngineError> {
     let mut out = Vec::new();
-    let mut cur = value;
+    let mut cursor = pointer.clone();
     loop {
-        match cur {
+        let value = heap.get(&cursor)?;
+        match value.as_ref() {
             Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => return Ok(out),
             Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
                 out.push(args[0].clone());
-                cur = &args[1];
+                cursor = args[1].clone();
             }
-            other => {
+            _ => {
                 return Err(EngineError::NativeType {
                     name: sym(name),
                     expected: "List".into(),
-                    got: value_type_name(other).into(),
+                    got: heap.type_name(&cursor)?.into(),
                 });
             }
         }
     }
 }
 
-fn array_u8_to_bytes(value: &Value, name: &str) -> Result<Vec<u8>, EngineError> {
-    let Value::Array(elems) = value else {
+fn array_u8_to_bytes(heap: &Heap, pointer: &Pointer, name: &str) -> Result<Vec<u8>, EngineError> {
+    let value = heap.get(pointer)?;
+    let Value::Array(elems) = value.as_ref() else {
         return Err(EngineError::NativeType {
             name: sym(name),
             expected: "Array u8".into(),
-            got: value_type_name(value).into(),
+            got: heap.type_name(pointer)?.into(),
         });
     };
     let mut out = Vec::with_capacity(elems.len());
     for elem in elems {
-        match elem {
+        let elem_value = heap.get(elem)?;
+        match elem_value.as_ref() {
             Value::U8(b) => out.push(*b),
-            other => {
+            _ => {
                 return Err(EngineError::NativeType {
                     name: sym(name),
                     expected: "u8".into(),
-                    got: value_type_name(other).into(),
+                    got: heap.type_name(elem)?.into(),
                 });
             }
         }
@@ -110,8 +115,12 @@ fn array_u8_to_bytes(value: &Value, name: &str) -> Result<Vec<u8>, EngineError> 
     Ok(out)
 }
 
-fn bytes_to_array_u8(bytes: Vec<u8>) -> Value {
-    Value::Array(bytes.into_iter().map(Value::U8).collect())
+fn bytes_to_array_u8(heap: &Heap, bytes: Vec<u8>) -> Result<Pointer, EngineError> {
+    let out = bytes
+        .into_iter()
+        .map(|b| heap.alloc_u8(b))
+        .collect::<Result<Vec<_>, _>>()?;
+    heap.alloc_array(out)
 }
 
 #[derive(Default)]
@@ -181,9 +190,9 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         &read_all_name,
         Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), array_u8.clone())),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let read_all_sym = read_all_sym.clone();
-            async move {
+            Box::pin(async move {
                 if args.len() != 1 {
                     return Err(EngineError::NativeArity {
                         name: read_all_sym,
@@ -191,13 +200,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let Value::I32(fd) = args[0] else {
-                    return Err(EngineError::NativeType {
-                        name: read_all_sym,
-                        expected: "i32".into(),
-                        got: value_type_name(&args[0]).into(),
-                    });
-                };
+                let fd = i32::from_pointer(engine.heap(), &args[0], read_all_sym.as_ref())?;
 
                 if fd != 0 {
                     return Err(EngineError::Internal(format!(
@@ -209,8 +212,8 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 io::stdin()
                     .read_to_end(&mut buf)
                     .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
-                Ok(bytes_to_array_u8(buf))
-            }
+                bytes_to_array_u8(engine.heap(), buf)
+            })
         },
     )?;
 
@@ -224,9 +227,9 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(i32_ty, Type::fun(array_u8, unit_type())),
         ),
         2,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let write_all_sym = write_all_sym.clone();
-            async move {
+            Box::pin(async move {
                 if args.len() != 2 {
                     return Err(EngineError::NativeArity {
                         name: write_all_sym,
@@ -234,14 +237,8 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let Value::I32(fd) = args[0] else {
-                    return Err(EngineError::NativeType {
-                        name: write_all_sym,
-                        expected: "i32".into(),
-                        got: value_type_name(&args[0]).into(),
-                    });
-                };
-                let bytes = array_u8_to_bytes(&args[1], write_all_sym.as_ref())?;
+                let fd = i32::from_pointer(engine.heap(), &args[0], write_all_sym.as_ref())?;
+                let bytes = array_u8_to_bytes(engine.heap(), &args[1], write_all_sym.as_ref())?;
 
                 match fd {
                     1 => {
@@ -263,8 +260,8 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     }
                 }
 
-                Ok(unit_value())
-            }
+                unit_pointer(engine.heap())
+            })
         },
     )?;
 
@@ -290,10 +287,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         &spawn_name,
         Scheme::new(vec![], vec![], Type::fun(opts, subprocess.clone())),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let spawn_sym = spawn_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_spawn.clone();
-            async move {
+            Box::pin(async move {
                 if args.len() != 1 {
                     return Err(EngineError::NativeArity {
                         name: spawn_sym.clone(),
@@ -301,45 +298,33 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let Value::Dict(map) = &args[0] else {
+                let opts = engine.heap().get(&args[0])?;
+                let Value::Dict(map) = opts.as_ref() else {
                     return Err(EngineError::NativeType {
                         name: spawn_sym.clone(),
                         expected: "{ cmd: string, args: List string }".into(),
-                        got: value_type_name(&args[0]).into(),
+                        got: engine.heap().type_name(&args[0])?.into(),
                     });
                 };
 
-                let Value::String(cmd) = map
+                let cmd_pointer = map
                     .get(&sym("cmd"))
-                    .ok_or_else(|| EngineError::Internal("spawn missing `cmd`".into()))?
-                else {
-                    return Err(EngineError::NativeType {
-                        name: spawn_sym.clone(),
-                        expected: "string".into(),
-                        got: map
-                            .get(&sym("cmd"))
-                            .map(value_type_name)
-                            .unwrap_or("unknown")
-                            .into(),
-                    });
-                };
+                    .cloned()
+                    .ok_or_else(|| EngineError::Internal("spawn missing `cmd`".into()))?;
+                let cmd = String::from_pointer(engine.heap(), &cmd_pointer, spawn_sym.as_ref())?;
 
-                let args_value = map
+                let args_pointer = map
                     .get(&sym("args"))
+                    .cloned()
                     .ok_or_else(|| EngineError::Internal("spawn missing `args`".into()))?;
-                let args_list = list_to_vec(args_value, spawn_sym.as_ref())?;
+                let args_list = list_to_vec(engine.heap(), &args_pointer, spawn_sym.as_ref())?;
                 let mut args_vec = Vec::with_capacity(args_list.len());
                 for arg in args_list {
-                    match arg {
-                        Value::String(s) => args_vec.push(s),
-                        other => {
-                            return Err(EngineError::NativeType {
-                                name: spawn_sym.clone(),
-                                expected: "string".into(),
-                                got: value_type_name(&other).into(),
-                            });
-                        }
-                    }
+                    args_vec.push(String::from_pointer(
+                        engine.heap(),
+                        &arg,
+                        spawn_sym.as_ref(),
+                    )?);
                 }
 
                 let mut child = Command::new(cmd)
@@ -414,9 +399,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     .insert(id, entry);
 
                 let mut payload = BTreeMap::new();
-                payload.insert(sym("id"), Value::Uuid(id));
-                Ok(Value::Adt(subprocess_ctor, vec![Value::Dict(payload)]))
-            }
+                payload.insert(sym("id"), engine.heap().alloc_uuid(id)?);
+                let payload = engine.heap().alloc_dict(payload)?;
+                engine.heap().alloc_adt(subprocess_ctor, vec![payload])
+            })
         },
     )?;
 
@@ -427,10 +413,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         &wait_name,
         Scheme::new(vec![], vec![], Type::fun(subprocess.clone(), i32_ty)),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let wait_sym = wait_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_wait.clone();
-            async move {
+            Box::pin(async move {
                 if args.len() != 1 {
                     return Err(EngineError::NativeArity {
                         name: wait_sym.clone(),
@@ -438,11 +424,12 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(&args[0], &subprocess_ctor, wait_sym.as_ref())?;
+                let id =
+                    subprocess_id(engine.heap(), &args[0], &subprocess_ctor, wait_sym.as_ref())?;
                 let entry = subprocess_get(&id, wait_sym.as_ref())?;
 
                 if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
-                    return Ok(Value::I32(code));
+                    return engine.heap().alloc_i32(code);
                 }
 
                 let status = {
@@ -484,8 +471,8 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     let _ = handle.join();
                 }
 
-                Ok(Value::I32(code))
-            }
+                engine.heap().alloc_i32(code)
+            })
         },
     )?;
 
@@ -500,10 +487,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(subprocess.clone(), array_type(Type::con("u8", 0))),
         ),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let stdout_sym = stdout_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_stdout.clone();
-            async move {
+            Box::pin(async move {
                 if args.len() != 1 {
                     return Err(EngineError::NativeArity {
                         name: stdout_sym.clone(),
@@ -511,11 +498,16 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(&args[0], &subprocess_ctor, stdout_sym.as_ref())?;
+                let id = subprocess_id(
+                    engine.heap(),
+                    &args[0],
+                    &subprocess_ctor,
+                    stdout_sym.as_ref(),
+                )?;
                 let entry = subprocess_get(&id, stdout_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stdout, "std.process.stdout buffer")?.clone();
-                Ok(bytes_to_array_u8(bytes))
-            }
+                bytes_to_array_u8(engine.heap(), bytes)
+            })
         },
     )?;
 
@@ -530,10 +522,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
             Type::fun(subprocess, array_type(Type::con("u8", 0))),
         ),
         1,
-        move |_engine, _call_type, args| {
+        move |engine, _call_type, args| {
             let stderr_sym = stderr_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_stderr.clone();
-            async move {
+            Box::pin(async move {
                 if args.len() != 1 {
                     return Err(EngineError::NativeArity {
                         name: stderr_sym.clone(),
@@ -541,39 +533,49 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(&args[0], &subprocess_ctor, stderr_sym.as_ref())?;
+                let id = subprocess_id(
+                    engine.heap(),
+                    &args[0],
+                    &subprocess_ctor,
+                    stderr_sym.as_ref(),
+                )?;
                 let entry = subprocess_get(&id, stderr_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stderr, "std.process.stderr buffer")?.clone();
-                Ok(bytes_to_array_u8(bytes))
-            }
+                bytes_to_array_u8(engine.heap(), bytes)
+            })
         },
     )?;
 
     Ok(())
 }
 
-fn subprocess_id(value: &Value, tag: &Symbol, name: &str) -> Result<Uuid, EngineError> {
-    match value {
+fn subprocess_id(
+    heap: &Heap,
+    pointer: &Pointer,
+    tag: &Symbol,
+    name: &str,
+) -> Result<Uuid, EngineError> {
+    let value = heap.get(pointer)?;
+    match value.as_ref() {
         Value::Adt(got_tag, args) if got_tag == tag && args.len() == 1 => {
-            let Value::Dict(map) = &args[0] else {
+            let data = heap.get(&args[0])?;
+            let Value::Dict(map) = data.as_ref() else {
                 return Err(EngineError::NativeType {
                     name: sym(name),
                     expected: "Subprocess".into(),
-                    got: value_type_name(value).into(),
+                    got: heap.type_name(pointer)?.into(),
                 });
             };
-            let Value::Uuid(id) = map
+            let id_pointer = map
                 .get(&sym("id"))
-                .ok_or_else(|| EngineError::Internal("Subprocess missing id".into()))?
-            else {
+                .cloned()
+                .ok_or_else(|| EngineError::Internal("Subprocess missing id".into()))?;
+            let id_value = heap.get(&id_pointer)?;
+            let Value::Uuid(id) = id_value.as_ref() else {
                 return Err(EngineError::NativeType {
                     name: sym(name),
                     expected: "uuid".into(),
-                    got: map
-                        .get(&sym("id"))
-                        .map(value_type_name)
-                        .unwrap_or("unknown")
-                        .into(),
+                    got: heap.type_name(&id_pointer)?.into(),
                 });
             };
             Ok(*id)
@@ -581,7 +583,7 @@ fn subprocess_id(value: &Value, tag: &Symbol, name: &str) -> Result<Uuid, Engine
         _ => Err(EngineError::NativeType {
             name: sym(name),
             expected: "Subprocess".into(),
-            got: value_type_name(value).into(),
+            got: heap.type_name(pointer)?.into(),
         }),
     }
 }
@@ -604,7 +606,7 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 mod tests {
     use std::thread;
 
-    use rex_engine::Engine;
+    use rex_engine::{Engine, assert_pointer_eq};
 
     use super::*;
 
@@ -648,24 +650,50 @@ mod tests {
                 inject_cli_prelude_engine(&mut engine).unwrap();
                 engine.add_default_resolvers();
                 let value = engine.eval_snippet(code).unwrap();
+                let value = engine
+                    .heap()
+                    .get(&value)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap();
                 let Value::Tuple(xs) = value else {
                     panic!("expected tuple");
                 };
-                assert_eq!(xs[0], Value::I32(0));
+                assert_pointer_eq!(
+                    engine.heap(),
+                    xs[0].clone(),
+                    engine.heap().alloc_i32(0).unwrap()
+                );
 
-                let Value::Array(out) = &xs[1] else {
+                let Value::Array(out) = engine
+                    .heap()
+                    .get(&xs[1])
+                    .map(|value| value.as_ref().clone())
+                    .unwrap()
+                else {
                     panic!("expected stdout bytes");
                 };
                 let got: Vec<u8> = out
                     .iter()
-                    .map(|v| match v {
-                        Value::U8(b) => *b,
-                        other => panic!("expected u8, got {}", value_type_name(other)),
+                    .map(|v| {
+                        match engine
+                            .heap()
+                            .get(v)
+                            .map(|value| value.as_ref().clone())
+                            .unwrap()
+                        {
+                            Value::U8(b) => b,
+                            other => panic!("expected u8, got {}", value_type_name(&other)),
+                        }
                     })
                     .collect();
                 assert_eq!(got, b"hi");
 
-                let Value::Array(err) = &xs[2] else {
+                let Value::Array(err) = engine
+                    .heap()
+                    .get(&xs[2])
+                    .map(|value| value.as_ref().clone())
+                    .unwrap()
+                else {
                     panic!("expected stderr bytes");
                 };
                 assert!(err.is_empty());

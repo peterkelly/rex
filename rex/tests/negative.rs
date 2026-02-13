@@ -24,7 +24,10 @@ fn compile_err(code: &str) -> EngineError {
         return e;
     }
     match engine.eval(program.expr.as_ref()) {
-        Ok(v) => panic!("expected error, got value: {v}\ncode:\n{code}"),
+        Ok(v) => {
+            let value_type = engine.heap().type_name(&v).unwrap_or("<invalid pointer>");
+            panic!("expected error, got value type: {value_type}\ncode:\n{code}");
+        }
         Err(e) => e,
     }
 }

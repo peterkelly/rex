@@ -22,19 +22,37 @@ fn record_update_end_to_end() {
 
     let mut engine = Engine::with_prelude().unwrap();
     engine.inject_decls(&program.decls).unwrap();
-    let value = engine.eval(program.expr.as_ref()).unwrap();
+    let value_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let rex_engine::Value::Tuple(items) = value else {
-        panic!("expected tuple, got {value}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
     };
     assert_eq!(items.len(), 2);
 
-    let rex_engine::Value::I32(a) = items[0] else {
-        panic!("expected i32, got {}", items[0]);
+    let a_ptr = &items[0];
+    let a_value = engine.heap().get(a_ptr).unwrap();
+    let rex_engine::Value::I32(a) = a_value.as_ref() else {
+        panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(a_ptr).unwrap()
+        );
     };
-    let rex_engine::Value::I32(b) = items[1] else {
-        panic!("expected i32, got {}", items[1]);
+    let b_ptr = &items[1];
+    let b_value = engine.heap().get(b_ptr).unwrap();
+    let rex_engine::Value::I32(b) = b_value.as_ref() else {
+        panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(b_ptr).unwrap()
+        );
     };
-    assert_eq!(a, 6);
-    assert_eq!(b, 2);
+    assert_eq!(*a, 6);
+    assert_eq!(*b, 2);
 }

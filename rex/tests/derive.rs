@@ -1,26 +1,23 @@
-use rex::{Engine, FromValue, Parser, Rex, RexType, Token, Value};
+use rex::{Engine, EngineError, FromPointer, Heap, Parser, Pointer, Rex, RexType, Token, Value};
+use rex_engine::assert_pointer_eq;
 use std::collections::HashMap;
 
-fn eval(code: &str) -> Result<Value, String> {
-    let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
+fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
+    let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program()
-        .map_err(|errs| format!("parse error: {errs:?}"))?;
+    let program = parser.parse_program().unwrap();
 
-    let mut engine = Engine::with_prelude().unwrap();
-    MyInnerStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
-    MyStruct::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
-    Boxed::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
-    Maybe::<i32>::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
-    Shape::inject_rex(&mut engine).map_err(|e| format!("{e}"))?;
+    let mut engine = Engine::with_prelude()?;
+    MyInnerStruct::inject_rex(&mut engine)?;
+    MyStruct::inject_rex(&mut engine)?;
+    Boxed::<i32>::inject_rex(&mut engine)?;
+    Maybe::<i32>::inject_rex(&mut engine)?;
+    Shape::inject_rex(&mut engine)?;
 
-    engine
-        .inject_decls(&program.decls)
-        .map_err(|e| format!("{e}"))?;
-    engine
-        .eval(program.expr.as_ref())
-        .map_err(|e| format!("{e}"))
+    engine.inject_decls(&program.decls)?;
+    let pointer = engine.eval(program.expr.as_ref())?;
+    let heap = engine.into_heap();
+    Ok((heap, pointer))
 }
 
 #[derive(Rex, Debug, PartialEq)]
@@ -56,7 +53,7 @@ enum Maybe<T> {
 
 #[test]
 fn derive_struct_roundtrip_value() {
-    let v = eval(
+    let (heap, v_ptr) = eval(
         r#"
         MyStruct {
             x = true,
@@ -71,7 +68,7 @@ fn derive_struct_roundtrip_value() {
     )
     .unwrap();
 
-    let decoded = MyStruct::from_value(&v, "test").unwrap();
+    let decoded = MyStruct::from_pointer(&heap, &v_ptr, "test").unwrap();
     assert_eq!(
         decoded,
         MyStruct {
@@ -88,8 +85,8 @@ fn derive_struct_roundtrip_value() {
 
 #[test]
 fn derive_generic_struct_roundtrip_value() {
-    let v = eval("Boxed { value = 123 }").unwrap();
-    let decoded = Boxed::<i32>::from_value(&v, "boxed").unwrap();
+    let (heap, v_ptr) = eval("Boxed { value = 123 }").unwrap();
+    let decoded = Boxed::<i32>::from_pointer(&heap, &v_ptr, "boxed").unwrap();
     assert_eq!(decoded, Boxed { value: 123 });
 }
 
@@ -156,18 +153,26 @@ fn derive_generic_worked_example_polymorphic_adt() {
         .unwrap();
 
     engine.inject_decls(&program.decls).unwrap();
-    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let v_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let v = engine
+        .heap()
+        .get(&v_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
 
     let Value::Tuple(items) = v else {
-        panic!("expected tuple, got {v}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&v_ptr).unwrap()
+        );
     };
     assert_eq!(items.len(), 2);
     assert_eq!(
-        Maybe::<i32>::from_value(&items[0], "a").unwrap(),
+        Maybe::<i32>::from_pointer(engine.heap(), &items[0], "a").unwrap(),
         Maybe::Just(1)
     );
     assert_eq!(
-        Maybe::<bool>::from_value(&items[1], "b").unwrap(),
+        Maybe::<bool>::from_pointer(engine.heap(), &items[1], "b").unwrap(),
         Maybe::Just(true)
     );
 }
@@ -208,8 +213,8 @@ fn derive_can_be_used_in_injected_native_functions() {
         })
         .unwrap();
 
-    let v = engine.eval(program.expr.as_ref()).unwrap();
-    let bumped = MyStruct::from_value(&v, "bumped").unwrap();
+    let v_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let bumped = MyStruct::from_pointer(engine.heap(), &v_ptr, "bumped").unwrap();
     assert_eq!(bumped.y, 43);
 
     engine
@@ -230,7 +235,8 @@ fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let v = engine.eval(program.expr.as_ref()).unwrap();
-    assert_eq!(v, Value::I32(100));
+    let heap = engine.heap();
+    assert_pointer_eq!(heap, v, heap.alloc_i32(100).unwrap());
 }
 
 #[test]
@@ -254,7 +260,8 @@ fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let program = parser.parse_program().unwrap();
 
     let v = engine.eval(program.expr.as_ref()).unwrap();
-    assert_eq!(v, Value::I32(12));
+    let heap = engine.heap();
+    assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
 }
 
 #[test]
@@ -272,17 +279,44 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let v_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let v = engine
+        .heap()
+        .get(&v_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
     let Value::Tuple(items) = v else {
-        panic!("expected tuple, got {v}");
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&v_ptr).unwrap()
+        );
     };
-    assert_eq!(items[0], Value::I32(5));
-    assert_eq!(items[1], Value::I32(0));
+    let items = items
+        .into_iter()
+        .map(|item| {
+            engine
+                .heap()
+                .get(&item)
+                .map(|value| value.as_ref().clone())
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    let heap = engine.heap();
+    assert_pointer_eq!(
+        heap,
+        heap.alloc_value(items[0].clone()).unwrap(),
+        heap.alloc_i32(5).unwrap()
+    );
+    assert_pointer_eq!(
+        heap,
+        heap.alloc_value(items[1].clone()).unwrap(),
+        heap.alloc_i32(0).unwrap()
+    );
 }
 
 #[test]
 fn derive_enum_constructor_currying() {
-    let v = eval(
+    let (heap, v_ptr) = eval(
         r#"
         let partial = Rectangle (2 * 3) in
             (partial (3 * 4), partial (2 * 4))
@@ -290,12 +324,13 @@ fn derive_enum_constructor_currying() {
     )
     .unwrap();
 
-    let Value::Tuple(items) = v else {
-        panic!("expected tuple, got {v}");
+    let value = heap.get(&v_ptr).unwrap().as_ref().clone();
+    let Value::Tuple(items) = value else {
+        panic!("expected tuple, got {}", heap.type_name(&v_ptr).unwrap());
     };
     assert_eq!(items.len(), 2);
-    let a = Shape::from_value(&items[0], "a").unwrap();
-    let b = Shape::from_value(&items[1], "b").unwrap();
+    let a = Shape::from_pointer(&heap, &items[0], "a").unwrap();
+    let b = Shape::from_pointer(&heap, &items[1], "b").unwrap();
     assert_eq!(a, Shape::Rectangle(6, 12));
     assert_eq!(b, Shape::Rectangle(6, 8));
 }
