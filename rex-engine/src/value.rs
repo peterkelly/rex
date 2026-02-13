@@ -43,9 +43,7 @@ impl Heap {
         let heap = Heap::new();
         f(&heap)
     }
-}
 
-impl Heap {
     pub fn new() -> Self {
         static NEXT_HEAP_ID: AtomicU64 = AtomicU64::new(1);
         let id = NEXT_HEAP_ID.fetch_add(1, Ordering::Relaxed);

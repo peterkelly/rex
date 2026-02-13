@@ -77,21 +77,7 @@ impl std::fmt::Debug for NativeCallable {
 }
 
 impl NativeCallable {
-    fn call_sync(
-        &self,
-        engine: &Engine,
-        typ: &Type,
-        args: &[Pointer],
-    ) -> Result<Pointer, EngineError> {
-        match self {
-            NativeCallable::Sync(f) => (f)(engine, typ, args),
-            NativeCallable::Async(..) | NativeCallable::AsyncCancellable(..) => Err(
-                EngineError::Internal("async native callable used in sync path".into()),
-            ),
-        }
-    }
-
-    async fn call_async(
+    async fn call(
         &self,
         engine: &Engine,
         typ: Type,
@@ -185,6 +171,88 @@ impl NativeFn {
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
     }
+
+    async fn call_zero(&self, engine: &Engine, gas: &mut GasMeter) -> Result<Pointer, EngineError> {
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(self.gas_cost)
+            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
+        gas.charge(amount)?;
+        if self.arity != 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name.clone(),
+                expected: self.arity,
+                got: 0,
+            });
+        }
+        self.func.call(engine, self.typ.clone(), &[]).await
+    }
+
+    async fn apply(
+        mut self,
+        engine: &Engine,
+        arg: Pointer,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+    ) -> Result<Pointer, EngineError> {
+        // `self` is an owned copy cloned from heap storage; we mutate it to
+        // accumulate partial-application state and never mutate shared values.
+        if self.arity == 0 {
+            return Err(EngineError::NativeArity {
+                name: self.name,
+                expected: 0,
+                got: 1,
+            });
+        }
+        let (arg_ty, rest_ty) =
+            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
+        let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
+        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+            expected: arg_ty.to_string(),
+            got: actual_ty.to_string(),
+        })?;
+        self.typ = rest_ty.apply(&subst);
+        self.applied.push(arg);
+        self.applied_types.push(actual_ty);
+        if is_function_type(&self.typ) {
+            let NativeFn {
+                name,
+                arity,
+                typ,
+                func,
+                gas_cost,
+                applied,
+                applied_types,
+            } = self;
+            return engine.heap().alloc_native(
+                name,
+                arity,
+                typ,
+                func,
+                gas_cost,
+                applied,
+                applied_types,
+            );
+        }
+
+        let mut full_ty = self.typ.clone();
+        for arg_ty in self.applied_types.iter().rev() {
+            full_ty = Type::fun(arg_ty.clone(), full_ty);
+        }
+
+        let amount = gas
+            .costs
+            .native_call_base
+            .saturating_add(self.gas_cost)
+            .saturating_add(
+                gas.costs
+                    .native_call_per_arg
+                    .saturating_mul(self.applied.len() as u64),
+            );
+        gas.charge(amount)?;
+        self.func.call(engine, full_ty, &self.applied).await
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -227,75 +295,7 @@ impl OverloadedFn {
         (self.name, self.typ, self.applied, self.applied_types)
     }
 
-    fn apply(
-        mut self,
-        engine: &Engine,
-        arg: Pointer,
-        func_type: Option<&Type>,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(expected) = func_type {
-            let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
-                expected: self.typ.to_string(),
-                got: expected.to_string(),
-            })?;
-            self.typ = self.typ.apply(&subst);
-        }
-        let (arg_ty, rest_ty) =
-            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
-        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            expected: arg_ty.to_string(),
-            got: actual_ty.to_string(),
-        })?;
-        let rest_ty = rest_ty.apply(&subst);
-        self.applied.push(arg);
-        self.applied_types.push(actual_ty);
-        if is_function_type(&rest_ty) {
-            return engine.heap().alloc_overloaded(
-                self.name,
-                rest_ty,
-                self.applied,
-                self.applied_types,
-            );
-        }
-        let mut full_ty = rest_ty;
-        for arg_ty in self.applied_types.iter().rev() {
-            full_ty = Type::fun(arg_ty.clone(), full_ty);
-        }
-        if engine.types.class_methods.contains_key(&self.name) {
-            let mut func = engine.resolve_class_method(&self.name, &full_ty)?;
-            let mut cur_ty = full_ty;
-            for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
-                let (arg_ty, rest_ty) = split_fun(&cur_ty)
-                    .ok_or_else(|| EngineError::NotCallable(cur_ty.to_string()))?;
-                let subst = unify(&arg_ty, applied_ty).map_err(|_| EngineError::NativeType {
-                    expected: arg_ty.to_string(),
-                    got: applied_ty.to_string(),
-                })?;
-                let rest_ty = rest_ty.apply(&subst);
-                func = apply(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas)?;
-                cur_ty = rest_ty;
-            }
-            return Ok(func);
-        }
-
-        let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
-        let amount = gas
-            .costs
-            .native_call_base
-            .saturating_add(imp.gas_cost)
-            .saturating_add(
-                gas.costs
-                    .native_call_per_arg
-                    .saturating_mul(self.applied.len() as u64),
-            );
-        gas.charge(amount)?;
-        imp.func.call_sync(engine, &full_ty, &self.applied)
-    }
-
-    async fn apply_async(
+    async fn apply(
         mut self,
         engine: &Engine,
         arg: Pointer,
@@ -334,7 +334,7 @@ impl OverloadedFn {
         }
         if engine.types.class_methods.contains_key(&self.name) {
             let mut func = engine
-                .resolve_class_method_with_gas(&self.name, &full_ty, gas)
+                .resolve_class_method(&self.name, &full_ty, gas)
                 .await?;
             let mut cur_ty = full_ty;
             for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
@@ -345,8 +345,7 @@ impl OverloadedFn {
                     got: applied_ty.to_string(),
                 })?;
                 let rest_ty = rest_ty.apply(&subst);
-                func = apply_async(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas)
-                    .await?;
+                func = apply(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas).await?;
                 cur_ty = rest_ty;
             }
             return Ok(func);
@@ -363,7 +362,7 @@ impl OverloadedFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        imp.func.call_async(engine, full_ty, &self.applied).await
+        imp.func.call(engine, full_ty, &self.applied).await
     }
 }
 
@@ -385,15 +384,6 @@ impl NativeImpl {
             self.func.clone(),
             self.gas_cost,
         )
-    }
-
-    pub(crate) fn call_sync(
-        &self,
-        engine: &Engine,
-        typ: &Type,
-        args: &[Pointer],
-    ) -> Result<Pointer, EngineError> {
-        self.func.call_sync(engine, typ, args)
     }
 }
 
@@ -701,32 +691,39 @@ impl Engine {
         log: fn(&str),
     ) -> Result<(), EngineError> {
         let name_sym = sym(name);
-        self.inject_native_scheme_typed(name, scheme, 1, move |engine, call_type, args| {
-            if args.len() != 1 {
-                return Err(EngineError::NativeArity {
-                    name: name_sym.clone(),
-                    expected: 1,
-                    got: args.len(),
-                });
+        self.inject_native_scheme_typed_async(name, scheme, 1, move |engine, call_type, args| {
+            let name_sym = name_sym.clone();
+            async move {
+                if args.len() != 1 {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 1,
+                        got: args.len(),
+                    });
+                }
+
+                let (arg_ty, _ret_ty) = split_fun(&call_type)
+                    .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
+                let pretty_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
+                let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+                let pretty_ptr = engine
+                    .resolve_class_method(&sym("pretty"), &pretty_ty, &mut gas)
+                    .await?;
+                let rendered_ptr = apply(
+                    engine,
+                    pretty_ptr,
+                    args[0].clone(),
+                    Some(&pretty_ty),
+                    Some(&arg_ty),
+                    &mut gas,
+                )
+                .await?;
+                let message = engine.heap().pointer_as_string(&rendered_ptr)?;
+
+                log(&message);
+                engine.heap().alloc_string(message)
             }
-
-            let (arg_ty, _ret_ty) = split_fun(call_type)
-                .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
-            let pretty_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
-            let pretty_ptr = engine.resolve_class_method(&sym("pretty"), &pretty_ty)?;
-            let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-            let rendered_ptr = apply(
-                engine,
-                pretty_ptr,
-                args[0].clone(),
-                Some(&pretty_ty),
-                Some(&arg_ty),
-                &mut gas,
-            )?;
-            let message = engine.heap().pointer_as_string(&rendered_ptr)?;
-
-            log(&message);
-            engine.heap().alloc_string(message)
+            .boxed()
         })
     }
 
@@ -1221,8 +1218,20 @@ impl Engine {
         }
 
         let typed = self.type_check(lam_body.as_ref())?;
-        let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-        let ptr = eval_typed_expr(self, &self.env, &typed, &mut gas)?;
+        let (param_ty, _ret_ty) =
+            split_fun(&typed.typ).ok_or_else(|| EngineError::NotCallable(typed.typ.to_string()))?;
+        let TypedExprKind::Lam { param, body } = &typed.kind else {
+            return Err(EngineError::Internal(
+                "fn declaration did not lower to lambda".into(),
+            ));
+        };
+        let ptr = self.heap().alloc_closure(
+            self.env.clone(),
+            param.clone(),
+            param_ty,
+            typed.typ.clone(),
+            Arc::new(body.as_ref().clone()),
+        )?;
         self.env = self.env.extend(decl.name.name.clone(), ptr);
         Ok(())
     }
@@ -1257,7 +1266,7 @@ impl Engine {
     pub async fn eval(&mut self, expr: &Expr, gas: &mut GasMeter) -> Result<Pointer, EngineError> {
         check_cancelled(self)?;
         let typed = self.type_check(expr)?;
-        eval_typed_expr_async(self, &self.env, &typed, gas).await
+        eval_typed_expr(self, &self.env, &typed, gas).await
     }
 
     fn inject_prelude(&mut self) -> Result<(), EngineError> {
@@ -1613,26 +1622,7 @@ impl Engine {
         Ok(Ok((def_env, specialized)))
     }
 
-    fn resolve_class_method(&self, name: &Symbol, typ: &Type) -> Result<Pointer, EngineError> {
-        if let Some(pointer) = self.cached_class_method(name, typ) {
-            return Ok(pointer);
-        }
-
-        let pointer = match self.resolve_class_method_plan(name, typ)? {
-            Ok((def_env, specialized)) => {
-                let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-                eval_typed_expr(self, &def_env, &specialized, &mut gas)?
-            }
-            Err(pointer) => pointer,
-        };
-
-        if typ.ftv().is_empty() {
-            self.insert_cached_class_method(name, typ, &pointer);
-        }
-        Ok(pointer)
-    }
-
-    async fn resolve_class_method_with_gas(
+    async fn resolve_class_method(
         &self,
         name: &Symbol,
         typ: &Type,
@@ -1644,7 +1634,7 @@ impl Engine {
 
         let pointer = match self.resolve_class_method_plan(name, typ)? {
             Ok((def_env, specialized)) => {
-                eval_typed_expr_async(self, &def_env, &specialized, gas).await?
+                eval_typed_expr(self, &def_env, &specialized, gas).await?
             }
             Err(pointer) => pointer,
         };
@@ -1655,18 +1645,23 @@ impl Engine {
         Ok(pointer)
     }
 
-    pub(crate) fn resolve_global(&self, name: &Symbol, typ: &Type) -> Result<Pointer, EngineError> {
+    pub(crate) async fn resolve_global(
+        &self,
+        name: &Symbol,
+        typ: &Type,
+    ) -> Result<Pointer, EngineError> {
         if let Some(ptr) = self.env.get(name) {
             let value = self.heap().get(&ptr)?;
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-                    native.call_zero(self, &mut gas)
+                    native.call_zero(self, &mut gas).await
                 }
                 _ => Ok(ptr),
             }
         } else if self.types.class_methods.contains_key(name) {
-            self.resolve_class_method(name, typ)
+            let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+            self.resolve_class_method(name, typ, &mut gas).await
         } else {
             let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
             let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
@@ -1674,7 +1669,7 @@ impl Engine {
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-                    native.call_zero(self, &mut gas)
+                    native.call_zero(self, &mut gas).await
                 }
                 _ => Ok(pointer),
             }
@@ -1725,14 +1720,14 @@ impl Engine {
         }
     }
 
-    pub(crate) fn call_native_impl_sync(
+    pub(crate) async fn call_native_impl(
         &self,
         name: &str,
         typ: &Type,
         args: &[Pointer],
     ) -> Result<Pointer, EngineError> {
         let imp = self.resolve_native_impl(name, typ)?;
-        imp.call_sync(self, typ, args)
+        imp.func.call(self, typ.clone(), args).await
     }
 
     fn resolve_native(
@@ -2216,426 +2211,8 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
     }
 }
 
-impl NativeFn {
-    fn call_zero(&self, engine: &Engine, gas: &mut GasMeter) -> Result<Pointer, EngineError> {
-        let amount = gas
-            .costs
-            .native_call_base
-            .saturating_add(self.gas_cost)
-            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
-        gas.charge(amount)?;
-        if self.arity != 0 {
-            return Err(EngineError::NativeArity {
-                name: self.name.clone(),
-                expected: self.arity,
-                got: 0,
-            });
-        }
-        self.func.call_sync(engine, &self.typ, &[])
-    }
-
-    fn apply(
-        mut self,
-        engine: &Engine,
-        arg: Pointer,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        if self.arity == 0 {
-            return Err(EngineError::NativeArity {
-                name: self.name,
-                expected: 0,
-                got: 1,
-            });
-        }
-        let (arg_ty, rest_ty) =
-            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
-        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            expected: arg_ty.to_string(),
-            got: actual_ty.to_string(),
-        })?;
-        self.typ = rest_ty.apply(&subst);
-        self.applied.push(arg);
-        self.applied_types.push(actual_ty);
-        if is_function_type(&self.typ) {
-            let NativeFn {
-                name,
-                arity,
-                typ,
-                func,
-                gas_cost,
-                applied,
-                applied_types,
-            } = self;
-            return engine.heap().alloc_native(
-                name,
-                arity,
-                typ,
-                func,
-                gas_cost,
-                applied,
-                applied_types,
-            );
-        }
-
-        let mut full_ty = self.typ.clone();
-        for arg_ty in self.applied_types.iter().rev() {
-            full_ty = Type::fun(arg_ty.clone(), full_ty);
-        }
-
-        let amount = gas
-            .costs
-            .native_call_base
-            .saturating_add(self.gas_cost)
-            .saturating_add(
-                gas.costs
-                    .native_call_per_arg
-                    .saturating_mul(self.applied.len() as u64),
-            );
-        gas.charge(amount)?;
-        self.func.call_sync(engine, &full_ty, &self.applied)
-    }
-
-    async fn call_zero_async(
-        &self,
-        engine: &Engine,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        let amount = gas
-            .costs
-            .native_call_base
-            .saturating_add(self.gas_cost)
-            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
-        gas.charge(amount)?;
-        if self.arity != 0 {
-            return Err(EngineError::NativeArity {
-                name: self.name.clone(),
-                expected: self.arity,
-                got: 0,
-            });
-        }
-        self.func.call_async(engine, self.typ.clone(), &[]).await
-    }
-
-    async fn apply_async(
-        mut self,
-        engine: &Engine,
-        arg: Pointer,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        if self.arity == 0 {
-            return Err(EngineError::NativeArity {
-                name: self.name,
-                expected: 0,
-                got: 1,
-            });
-        }
-        let (arg_ty, rest_ty) =
-            split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
-        let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-            expected: arg_ty.to_string(),
-            got: actual_ty.to_string(),
-        })?;
-        self.typ = rest_ty.apply(&subst);
-        self.applied.push(arg);
-        self.applied_types.push(actual_ty);
-        if is_function_type(&self.typ) {
-            let NativeFn {
-                name,
-                arity,
-                typ,
-                func,
-                gas_cost,
-                applied,
-                applied_types,
-            } = self;
-            return engine.heap().alloc_native(
-                name,
-                arity,
-                typ,
-                func,
-                gas_cost,
-                applied,
-                applied_types,
-            );
-        }
-
-        let mut full_ty = self.typ.clone();
-        for arg_ty in self.applied_types.iter().rev() {
-            full_ty = Type::fun(arg_ty.clone(), full_ty);
-        }
-
-        let amount = gas
-            .costs
-            .native_call_base
-            .saturating_add(self.gas_cost)
-            .saturating_add(
-                gas.costs
-                    .native_call_per_arg
-                    .saturating_mul(self.applied.len() as u64),
-            );
-        gas.charge(amount)?;
-        self.func.call_async(engine, full_ty, &self.applied).await
-    }
-}
-
-fn eval_typed_expr(
-    engine: &Engine,
-    env: &Env,
-    expr: &TypedExpr,
-    gas: &mut GasMeter,
-) -> Result<Pointer, EngineError> {
-    check_cancelled(engine)?;
-    let mut env = env.clone();
-    let mut cur = expr;
-    loop {
-        check_cancelled(engine)?;
-        match &cur.kind {
-            TypedExprKind::Let { name, def, body } => {
-                gas.charge(gas.costs.eval_node)?;
-                let ptr = eval_typed_expr(engine, &env, def, gas)?;
-                env = env.extend(name.clone(), ptr);
-                cur = body;
-            }
-            _ => break,
-        }
-    }
-
-    gas.charge(gas.costs.eval_node)?;
-    match &cur.kind {
-        TypedExprKind::Bool(v) => engine.heap().alloc_bool(*v),
-        TypedExprKind::Uint(v) => engine.heap().alloc_i32(*v as i32),
-        TypedExprKind::Int(v) => engine.heap().alloc_i32(*v as i32),
-        TypedExprKind::Float(v) => engine.heap().alloc_f32(*v as f32),
-        TypedExprKind::String(v) => engine.heap().alloc_string(v.clone()),
-        TypedExprKind::Uuid(v) => engine.heap().alloc_uuid(*v),
-        TypedExprKind::DateTime(v) => engine.heap().alloc_datetime(*v),
-        TypedExprKind::Tuple(elems) => {
-            let mut values = Vec::with_capacity(elems.len());
-            for elem in elems {
-                check_cancelled(engine)?;
-                values.push(eval_typed_expr(engine, &env, elem, gas)?);
-            }
-            engine.heap().alloc_tuple(values)
-        }
-        TypedExprKind::List(elems) => {
-            let mut values = Vec::with_capacity(elems.len());
-            for elem in elems {
-                check_cancelled(engine)?;
-                values.push(eval_typed_expr(engine, &env, elem, gas)?);
-            }
-            let mut list = engine.heap().alloc_adt(sym("Empty"), vec![])?;
-            for value in values.into_iter().rev() {
-                list = engine.heap().alloc_adt(sym("Cons"), vec![value, list])?;
-            }
-            Ok(list)
-        }
-        TypedExprKind::Dict(kvs) => {
-            let mut out = BTreeMap::new();
-            for (k, v) in kvs {
-                check_cancelled(engine)?;
-                out.insert(k.clone(), eval_typed_expr(engine, &env, v, gas)?);
-            }
-            engine.heap().alloc_dict(out)
-        }
-        TypedExprKind::RecordUpdate { base, updates } => {
-            let base_ptr = eval_typed_expr(engine, &env, base, gas)?;
-            let mut update_vals = BTreeMap::new();
-            for (k, v) in updates {
-                check_cancelled(engine)?;
-                update_vals.insert(k.clone(), eval_typed_expr(engine, &env, v, gas)?);
-            }
-
-            let base_val = engine.heap().get(&base_ptr)?;
-            match base_val.as_ref() {
-                Value::Dict(map) => {
-                    let mut map = map.clone();
-                    for (k, v) in update_vals {
-                        gas.charge(gas.costs.eval_record_update_field)?;
-                        map.insert(k, v);
-                    }
-                    engine.heap().alloc_dict(map)
-                }
-                Value::Adt(tag, args) if args.len() == 1 => {
-                    let inner = engine.heap().get(&args[0])?;
-                    match inner.as_ref() {
-                        Value::Dict(map) => {
-                            let mut out = map.clone();
-                            for (k, v) in update_vals {
-                                gas.charge(gas.costs.eval_record_update_field)?;
-                                out.insert(k, v);
-                            }
-                            let dict = engine.heap().alloc_dict(out)?;
-                            engine.heap().alloc_adt(tag.clone(), vec![dict])
-                        }
-                        _ => Err(EngineError::UnsupportedExpr),
-                    }
-                }
-                _ => Err(EngineError::UnsupportedExpr),
-            }
-        }
-        TypedExprKind::Var { name, .. } => {
-            if let Some(ptr) = env.get(name) {
-                let value = engine.heap().get(&ptr)?;
-                match value.as_ref() {
-                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero(engine, gas)
-                    }
-                    _ => Ok(ptr),
-                }
-            } else if engine.types.class_methods.contains_key(name) {
-                engine.resolve_class_method(name, &cur.typ)
-            } else {
-                let value = engine.resolve_native(name.as_ref(), &cur.typ, gas)?;
-                match engine.heap().get(&value)?.as_ref() {
-                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero(engine, gas)
-                    }
-                    _ => Ok(value),
-                }
-            }
-        }
-        TypedExprKind::App(..) => {
-            let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
-            let mut head = cur;
-            while let TypedExprKind::App(f, x) = &head.kind {
-                check_cancelled(engine)?;
-                spine.push((f.typ.clone(), x.as_ref()));
-                head = f.as_ref();
-            }
-            spine.reverse();
-
-            let mut func = eval_typed_expr(engine, &env, head, gas)?;
-            for (func_type, arg_expr) in spine {
-                check_cancelled(engine)?;
-                gas.charge(gas.costs.eval_app_step)?;
-                let arg = eval_typed_expr(engine, &env, arg_expr, gas)?;
-                func = apply(
-                    engine,
-                    func,
-                    arg,
-                    Some(&func_type),
-                    Some(&arg_expr.typ),
-                    gas,
-                )?;
-            }
-            Ok(func)
-        }
-        TypedExprKind::Project { expr, field } => {
-            let value = eval_typed_expr(engine, &env, expr, gas)?;
-            project_pointer(engine.heap(), field, &value)
-        }
-        TypedExprKind::Lam { param, body } => {
-            let param_ty = split_fun(&expr.typ)
-                .map(|(arg, _)| arg)
-                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?;
-            engine.heap().alloc_closure(
-                env.clone(),
-                param.clone(),
-                param_ty,
-                expr.typ.clone(),
-                Arc::new(body.as_ref().clone()),
-            )
-        }
-        TypedExprKind::LetRec { bindings, body } => {
-            let mut env_rec = env.clone();
-            let mut slots = Vec::with_capacity(bindings.len());
-            for (name, _) in bindings {
-                let placeholder = engine.heap().alloc_uninitialized(name.clone())?;
-                env_rec = env_rec.extend(name.clone(), placeholder.clone());
-                slots.push(placeholder);
-            }
-
-            for ((_, def), slot) in bindings.iter().zip(slots.iter()) {
-                check_cancelled(engine)?;
-                gas.charge(gas.costs.eval_node)?;
-                let def_ptr = eval_typed_expr(engine, &env_rec, def, gas)?;
-                let def_value = engine.heap().get(&def_ptr)?;
-                engine.heap().overwrite(slot, def_value.as_ref().clone())?;
-            }
-
-            eval_typed_expr(engine, &env_rec, body, gas)
-        }
-        TypedExprKind::Ite {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            let cond_ptr = eval_typed_expr(engine, &env, cond, gas)?;
-            match engine.heap().pointer_as_bool(&cond_ptr) {
-                Ok(true) => eval_typed_expr(engine, &env, then_expr, gas),
-                Ok(false) => eval_typed_expr(engine, &env, else_expr, gas),
-                Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
-                Err(err) => Err(err),
-            }
-        }
-        TypedExprKind::Match { scrutinee, arms } => {
-            let value = eval_typed_expr(engine, &env, scrutinee, gas)?;
-            for (pat, expr) in arms {
-                check_cancelled(engine)?;
-                gas.charge(gas.costs.eval_match_arm)?;
-                if let Some(bindings) = match_pattern_ptr(engine.heap(), pat, &value) {
-                    let env = env.extend_many(bindings);
-                    return eval_typed_expr(engine, &env, expr, gas);
-                }
-            }
-            Err(EngineError::MatchFailure)
-        }
-        TypedExprKind::Let { .. } => {
-            unreachable!("let chain handled in eval_typed_expr loop")
-        }
-    }
-}
-
-pub(crate) fn apply(
-    engine: &Engine,
-    func: Pointer,
-    arg: Pointer,
-    func_type: Option<&Type>,
-    arg_type: Option<&Type>,
-    gas: &mut GasMeter,
-) -> Result<Pointer, EngineError> {
-    let func_value = engine.heap().get(&func)?.as_ref().clone();
-    match func_value {
-        Value::Closure(Closure {
-            env,
-            param,
-            param_ty,
-            typ,
-            body,
-        }) => {
-            let mut subst = Subst::new_sync();
-            if let Some(expected) = func_type {
-                let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
-                    expected: typ.to_string(),
-                    got: expected.to_string(),
-                })?;
-                subst = compose_subst(s_fun, subst);
-            }
-            let actual_ty = resolve_arg_type(engine.heap(), arg_type, &arg)?;
-            let param_ty = param_ty.apply(&subst);
-            let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-                expected: param_ty.to_string(),
-                got: actual_ty.to_string(),
-            })?;
-            subst = compose_subst(s_arg, subst);
-            let env = env.extend(param, arg);
-            let body = body.apply(&subst);
-            eval_typed_expr(engine, &env, &body, gas)
-        }
-        Value::Native(native) => native.apply(engine, arg, arg_type, gas),
-        Value::Overloaded(over) => over.apply(engine, arg, func_type, arg_type, gas),
-        _ => Err(EngineError::NotCallable(
-            engine.heap().type_name(&func)?.into(),
-        )),
-    }
-}
-
 #[async_recursion]
-async fn eval_typed_expr_async(
+async fn eval_typed_expr(
     engine: &Engine,
     env: &Env,
     expr: &TypedExpr,
@@ -2649,7 +2226,7 @@ async fn eval_typed_expr_async(
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 gas.charge(gas.costs.eval_node)?;
-                let ptr = eval_typed_expr_async(engine, &env, def, gas).await?;
+                let ptr = eval_typed_expr(engine, &env, def, gas).await?;
                 env = env.extend(name.clone(), ptr);
                 cur = body;
             }
@@ -2670,7 +2247,7 @@ async fn eval_typed_expr_async(
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
-                values.push(eval_typed_expr_async(engine, &env, elem, gas).await?);
+                values.push(eval_typed_expr(engine, &env, elem, gas).await?);
             }
             engine.heap().alloc_tuple(values)
         }
@@ -2678,7 +2255,7 @@ async fn eval_typed_expr_async(
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
                 check_cancelled(engine)?;
-                values.push(eval_typed_expr_async(engine, &env, elem, gas).await?);
+                values.push(eval_typed_expr(engine, &env, elem, gas).await?);
             }
             let mut list = engine.heap().alloc_adt(sym("Empty"), vec![])?;
             for value in values.into_iter().rev() {
@@ -2690,22 +2267,16 @@ async fn eval_typed_expr_async(
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
                 check_cancelled(engine)?;
-                out.insert(
-                    k.clone(),
-                    eval_typed_expr_async(engine, &env, v, gas).await?,
-                );
+                out.insert(k.clone(), eval_typed_expr(engine, &env, v, gas).await?);
             }
             engine.heap().alloc_dict(out)
         }
         TypedExprKind::RecordUpdate { base, updates } => {
-            let base_ptr = eval_typed_expr_async(engine, &env, base, gas).await?;
+            let base_ptr = eval_typed_expr(engine, &env, base, gas).await?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
                 check_cancelled(engine)?;
-                update_vals.insert(
-                    k.clone(),
-                    eval_typed_expr_async(engine, &env, v, gas).await?,
-                );
+                update_vals.insert(k.clone(), eval_typed_expr(engine, &env, v, gas).await?);
             }
 
             let base_val = engine.heap().get(&base_ptr)?;
@@ -2741,19 +2312,17 @@ async fn eval_typed_expr_async(
                 let value = engine.heap().get(&ptr)?;
                 match value.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero_async(engine, gas).await
+                        native.call_zero(engine, gas).await
                     }
                     _ => Ok(ptr),
                 }
             } else if engine.types.class_methods.contains_key(name) {
-                engine
-                    .resolve_class_method_with_gas(name, &cur.typ, gas)
-                    .await
+                engine.resolve_class_method(name, &cur.typ, gas).await
             } else {
                 let value = engine.resolve_native(name.as_ref(), &cur.typ, gas)?;
                 match engine.heap().get(&value)?.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero_async(engine, gas).await
+                        native.call_zero(engine, gas).await
                     }
                     _ => Ok(value),
                 }
@@ -2769,12 +2338,12 @@ async fn eval_typed_expr_async(
             }
             spine.reverse();
 
-            let mut func = eval_typed_expr_async(engine, &env, head, gas).await?;
+            let mut func = eval_typed_expr(engine, &env, head, gas).await?;
             for (func_type, arg_expr) in spine {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_app_step)?;
-                let arg = eval_typed_expr_async(engine, &env, arg_expr, gas).await?;
-                func = apply_async(
+                let arg = eval_typed_expr(engine, &env, arg_expr, gas).await?;
+                func = apply(
                     engine,
                     func,
                     arg,
@@ -2787,7 +2356,7 @@ async fn eval_typed_expr_async(
             Ok(func)
         }
         TypedExprKind::Project { expr, field } => {
-            let value = eval_typed_expr_async(engine, &env, expr, gas).await?;
+            let value = eval_typed_expr(engine, &env, expr, gas).await?;
             project_pointer(engine.heap(), field, &value)
         }
         TypedExprKind::Lam { param, body } => {
@@ -2814,46 +2383,46 @@ async fn eval_typed_expr_async(
             for ((_, def), slot) in bindings.iter().zip(slots.iter()) {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_node)?;
-                let def_ptr = eval_typed_expr_async(engine, &env_rec, def, gas).await?;
+                let def_ptr = eval_typed_expr(engine, &env_rec, def, gas).await?;
                 let def_value = engine.heap().get(&def_ptr)?;
                 engine.heap().overwrite(slot, def_value.as_ref().clone())?;
             }
 
-            eval_typed_expr_async(engine, &env_rec, body, gas).await
+            eval_typed_expr(engine, &env_rec, body, gas).await
         }
         TypedExprKind::Ite {
             cond,
             then_expr,
             else_expr,
         } => {
-            let cond_ptr = eval_typed_expr_async(engine, &env, cond, gas).await?;
+            let cond_ptr = eval_typed_expr(engine, &env, cond, gas).await?;
             match engine.heap().pointer_as_bool(&cond_ptr) {
-                Ok(true) => eval_typed_expr_async(engine, &env, then_expr, gas).await,
-                Ok(false) => eval_typed_expr_async(engine, &env, else_expr, gas).await,
+                Ok(true) => eval_typed_expr(engine, &env, then_expr, gas).await,
+                Ok(false) => eval_typed_expr(engine, &env, else_expr, gas).await,
                 Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
                 Err(err) => Err(err),
             }
         }
         TypedExprKind::Match { scrutinee, arms } => {
-            let value = eval_typed_expr_async(engine, &env, scrutinee, gas).await?;
+            let value = eval_typed_expr(engine, &env, scrutinee, gas).await?;
             for (pat, expr) in arms {
                 check_cancelled(engine)?;
                 gas.charge(gas.costs.eval_match_arm)?;
                 if let Some(bindings) = match_pattern_ptr(engine.heap(), pat, &value) {
                     let env = env.extend_many(bindings);
-                    return eval_typed_expr_async(engine, &env, expr, gas).await;
+                    return eval_typed_expr(engine, &env, expr, gas).await;
                 }
             }
             Err(EngineError::MatchFailure)
         }
         TypedExprKind::Let { .. } => {
-            unreachable!("let chain handled in eval_typed_expr_async loop")
+            unreachable!("let chain handled in eval_typed_expr loop")
         }
     }
 }
 
 #[async_recursion]
-async fn apply_async(
+pub(crate) async fn apply(
     engine: &Engine,
     func: Pointer,
     arg: Pointer,
@@ -2887,13 +2456,10 @@ async fn apply_async(
             subst = compose_subst(s_arg, subst);
             let env = env.extend(param, arg);
             let body = body.apply(&subst);
-            eval_typed_expr_async(engine, &env, &body, gas).await
+            eval_typed_expr(engine, &env, &body, gas).await
         }
-        Value::Native(native) => native.apply_async(engine, arg, arg_type, gas).await,
-        Value::Overloaded(over) => {
-            over.apply_async(engine, arg, func_type, arg_type, gas)
-                .await
-        }
+        Value::Native(native) => native.apply(engine, arg, arg_type, gas).await,
+        Value::Overloaded(over) => over.apply(engine, arg, func_type, arg_type, gas).await,
         _ => Err(EngineError::NotCallable(
             engine.heap().type_name(&func)?.into(),
         )),
