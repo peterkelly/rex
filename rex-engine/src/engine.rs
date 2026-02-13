@@ -85,9 +85,9 @@ impl NativeCallable {
     ) -> Result<Pointer, EngineError> {
         match self {
             NativeCallable::Sync(f) => (f)(engine, typ, args),
-            NativeCallable::Async(..) | NativeCallable::AsyncCancellable(..) => {
-                futures::executor::block_on(self.call_async(engine, typ.clone(), args))
-            }
+            NativeCallable::Async(..) | NativeCallable::AsyncCancellable(..) => Err(
+                EngineError::Internal("async native callable used in sync path".into()),
+            ),
         }
     }
 
@@ -397,7 +397,7 @@ impl OverloadedFn {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
         if engine.types.class_methods.contains_key(&self.name) {
-            let mut func = engine.resolve_class_method_with_gas(&self.name, &full_ty, gas)?;
+            let mut func = engine.resolve_class_method(&self.name, &full_ty)?;
             let mut cur_ty = full_ty;
             for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
                 let (arg_ty, rest_ty) = split_fun(&cur_ty)
@@ -465,7 +465,9 @@ impl OverloadedFn {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
         if engine.types.class_methods.contains_key(&self.name) {
-            let mut func = engine.resolve_class_method_with_gas(&self.name, &full_ty, gas)?;
+            let mut func = engine
+                .resolve_class_method_with_gas(&self.name, &full_ty, gas)
+                .await?;
             let mut cur_ty = full_ty;
             for (applied, applied_ty) in self.applied.into_iter().zip(self.applied_types.iter()) {
                 let (arg_ty, rest_ty) = split_fun(&cur_ty)
@@ -1378,27 +1380,7 @@ impl Engine {
         self.types.inject_instance(class, inst);
     }
 
-    pub fn eval(&mut self, expr: &Expr) -> Result<Pointer, EngineError> {
-        self.eval_inner(expr)
-    }
-
-    pub async fn eval_async(&mut self, expr: &Expr) -> Result<Pointer, EngineError> {
-        check_cancelled(self)?;
-        let typed = self.type_check(expr)?;
-        eval_typed_expr_async(self, &self.env, &typed).await
-    }
-
-    pub fn eval_with_gas(
-        &mut self,
-        expr: &Expr,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        check_cancelled(self)?;
-        let typed = self.type_check(expr)?;
-        eval_typed_expr_with_gas(self, &self.env, &typed, gas)
-    }
-
-    pub async fn eval_async_with_gas(
+    pub async fn eval_with_gas(
         &mut self,
         expr: &Expr,
         gas: &mut GasMeter,
@@ -1406,20 +1388,6 @@ impl Engine {
         check_cancelled(self)?;
         let typed = self.type_check(expr)?;
         eval_typed_expr_async_with_gas(self, &self.env, &typed, gas).await
-    }
-
-    pub fn eval_with_stack_size(
-        &mut self,
-        expr: &Expr,
-        stack_size: usize,
-    ) -> Result<Pointer, EngineError> {
-        crate::stack::run_with_stack_size(stack_size, || self.eval_inner(expr))?
-    }
-
-    fn eval_inner(&mut self, expr: &Expr) -> Result<Pointer, EngineError> {
-        check_cancelled(self)?;
-        let typed = self.type_check(expr)?;
-        eval_typed_expr(self, &self.env, &typed)
     }
 
     fn inject_prelude(&mut self) -> Result<(), EngineError> {
@@ -1768,7 +1736,7 @@ impl Engine {
         Ok(pointer)
     }
 
-    fn resolve_class_method_with_gas(
+    async fn resolve_class_method_with_gas(
         &self,
         name: &Symbol,
         typ: &Type,
@@ -1786,7 +1754,7 @@ impl Engine {
             Err(err) => return Err(err),
         };
         let specialized = typed.as_ref().apply(&s);
-        eval_typed_expr_with_gas(self, &def_env, &specialized, gas)
+        eval_typed_expr_async_with_gas(self, &def_env, &specialized, gas).await
     }
 
     pub(crate) fn resolve_global(&self, name: &Symbol, typ: &Type) -> Result<Pointer, EngineError> {
@@ -2705,7 +2673,7 @@ fn eval_typed_expr_with_gas(
                     _ => Ok(ptr),
                 }
             } else if engine.types.class_methods.contains_key(name) {
-                engine.resolve_class_method_with_gas(name, &cur.typ, gas)
+                engine.resolve_class_method(name, &cur.typ)
             } else {
                 let value = engine.resolve_native_with_gas(name.as_ref(), &cur.typ, gas)?;
                 match engine.heap().get(&value)?.as_ref() {
@@ -2853,17 +2821,6 @@ fn apply_with_gas(
 }
 
 #[async_recursion]
-async fn eval_typed_expr_async(
-    engine: &Engine,
-    env: &Env,
-    expr: &TypedExpr,
-) -> Result<Pointer, EngineError> {
-    let costs = GasCosts::sensible_defaults();
-    let mut gas = GasMeter::unlimited(costs);
-    eval_typed_expr_async_with_gas(engine, env, expr, &mut gas).await
-}
-
-#[async_recursion]
 async fn eval_typed_expr_async_with_gas(
     engine: &Engine,
     env: &Env,
@@ -2975,7 +2932,9 @@ async fn eval_typed_expr_async_with_gas(
                     _ => Ok(ptr),
                 }
             } else if engine.types.class_methods.contains_key(name) {
-                engine.resolve_class_method_with_gas(name, &cur.typ, gas)
+                engine
+                    .resolve_class_method_with_gas(name, &cur.typ, gas)
+                    .await
             } else {
                 let value = engine.resolve_native_with_gas(name.as_ref(), &cur.typ, gas)?;
                 match engine.heap().get(&value)?.as_ref() {
@@ -3240,10 +3199,13 @@ mod tests {
         Engine::with_prelude().unwrap()
     }
 
-    #[test]
-    fn repl_persists_function_definitions() {
-        let costs = GasCosts::sensible_defaults();
-        let mut gas = GasMeter::unlimited(costs);
+    fn unlimited_gas() -> GasMeter {
+        GasMeter::unlimited(GasCosts::sensible_defaults())
+    }
+
+    #[tokio::test]
+    async fn repl_persists_function_definitions() {
+        let mut gas = unlimited_gas();
         let mut engine = Engine::with_prelude().unwrap();
         engine.add_default_resolvers();
         let mut state = ReplState::new();
@@ -3251,6 +3213,7 @@ mod tests {
         let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
         let v1 = engine
             .eval_repl_program_with_gas(&program1, &mut state, &mut gas)
+            .await
             .unwrap();
         let expected = engine.heap().alloc_i32(2).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &v1, &expected).unwrap());
@@ -3258,15 +3221,15 @@ mod tests {
         let program2 = parse_program("inc 2");
         let v2 = engine
             .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
+            .await
             .unwrap();
         let expected = engine.heap().alloc_i32(3).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &v2, &expected).unwrap());
     }
 
-    #[test]
-    fn repl_persists_import_aliases() {
-        let costs = GasCosts::sensible_defaults();
-        let mut gas = GasMeter::unlimited(costs);
+    #[tokio::test]
+    async fn repl_persists_import_aliases() {
+        let mut gas = unlimited_gas();
         let mut engine = Engine::with_prelude().unwrap();
         engine.add_default_resolvers();
 
@@ -3277,18 +3240,20 @@ mod tests {
         let program1 = parse_program("import foo.bar as Bar\n()");
         engine
             .eval_repl_program_with_gas(&program1, &mut state, &mut gas)
+            .await
             .unwrap();
 
         let program2 = parse_program("Bar.triple 10");
         let v2 = engine
             .eval_repl_program_with_gas(&program2, &mut state, &mut gas)
+            .await
             .unwrap();
         let expected = engine.heap().alloc_i32(30).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &v2, &expected).unwrap());
     }
 
-    #[test]
-    fn sync_eval_can_be_cancelled_while_blocking_on_async_native() {
+    #[tokio::test]
+    async fn eval_can_be_cancelled_while_waiting_on_async_native() {
         let expr = parse("stall");
         let mut engine = Engine::with_prelude().unwrap();
 
@@ -3305,19 +3270,34 @@ mod tests {
             .unwrap();
 
         let token = engine.cancellation_token();
-        let handle = std::thread::spawn(move || engine.eval(expr.as_ref()));
+        let mut gas = unlimited_gas();
+        let handle =
+            tokio::spawn(async move { engine.eval_with_gas(expr.as_ref(), &mut gas).await });
 
-        started_rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("stall native never started");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            match started_rx.try_recv() {
+                Ok(()) => break,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "stall native never started"
+                    );
+                    tokio::task::yield_now().await;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    panic!("stall native start signal dropped")
+                }
+            }
+        }
         token.cancel();
 
-        let res = handle.join().unwrap();
+        let res = handle.await.unwrap();
         assert!(matches!(res, Err(EngineError::Cancelled)));
     }
 
-    #[test]
-    fn native_per_impl_gas_cost_is_charged() {
+    #[tokio::test]
+    async fn native_per_impl_gas_cost_is_charged() {
         let expr = parse("foo");
         let mut engine = Engine::with_prelude().unwrap();
         let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
@@ -3336,15 +3316,15 @@ mod tests {
                 ..GasCosts::sensible_defaults()
             },
         );
-        let err = match engine.eval_with_gas(expr.as_ref(), &mut gas) {
+        let err = match engine.eval_with_gas(expr.as_ref(), &mut gas).await {
             Ok(_) => panic!("expected out of gas"),
             Err(e) => e,
         };
         assert!(matches!(err, EngineError::OutOfGas(..)));
     }
 
-    #[test]
-    fn record_update_requires_known_variant_for_sum_types() {
+    #[tokio::test]
+    async fn record_update_requires_known_variant_for_sum_types() {
         let program = parse_program(
             r#"
             type Foo = Bar { x: i32 } | Baz { x: i32 }
@@ -3356,7 +3336,8 @@ mod tests {
         );
         let mut engine = engine_with_arith();
         engine.inject_decls(&program.decls).unwrap();
-        match engine.eval(program.expr.as_ref()) {
+        let mut gas = unlimited_gas();
+        match engine.eval_with_gas(program.expr.as_ref(), &mut gas).await {
             Err(EngineError::Type(err)) => {
                 let err = strip_span(err);
                 assert!(matches!(err, TypeError::FieldNotKnown { .. }));

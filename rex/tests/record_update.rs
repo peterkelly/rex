@@ -1,7 +1,7 @@
-use rex::{Engine, Parser, Token};
+use rex::{Engine, GasCosts, GasMeter, Parser, Token};
 
-#[test]
-fn record_update_end_to_end() {
+#[tokio::test]
+async fn record_update_end_to_end() {
     let code = r#"
         type Foo = Bar { x: i32, y: i32, z: i32 }
         type Sum = A { x: i32 } | B { x: i32 }
@@ -22,7 +22,11 @@ fn record_update_end_to_end() {
 
     let mut engine = Engine::with_prelude().unwrap();
     engine.inject_decls(&program.decls).unwrap();
-    let value_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let value_ptr = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)

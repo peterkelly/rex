@@ -1,4 +1,3 @@
-use futures::executor::block_on;
 use futures::future;
 use rex_ast::expr::sym_eq;
 use rex_engine::{CancellationToken, Engine, EngineError, Value, assert_pointer_eq};
@@ -25,6 +24,18 @@ fn strip_span(mut err: TypeError) -> TypeError {
 
 fn engine_with_arith() -> Engine {
     Engine::with_prelude().unwrap()
+}
+
+fn unlimited_gas() -> GasMeter {
+    GasMeter::unlimited(GasCosts::sensible_defaults())
+}
+
+async fn eval_expr(
+    engine: &mut Engine,
+    expr: &rex_ast::expr::Expr,
+) -> Result<rex_engine::Pointer, EngineError> {
+    let mut gas = unlimited_gas();
+    engine.eval_with_gas(expr, &mut gas).await
 }
 
 macro_rules! pval {
@@ -71,8 +82,8 @@ fn list_values(engine: &Engine, value: &Value) -> Vec<rex_engine::Pointer> {
     }
 }
 
-#[test]
-fn eval_let_lambda() {
+#[tokio::test]
+async fn eval_let_lambda() {
     let expr = parse(
         r#"
         let
@@ -82,7 +93,7 @@ fn eval_let_lambda() {
         "#,
     );
     let mut engine = Engine::new();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -103,23 +114,20 @@ fn eval_let_lambda() {
     }
 }
 
-#[test]
-fn eval_async_native_injection() {
+#[tokio::test]
+async fn eval_native_injection() {
     let expr = parse("inc 1");
     let mut engine = Engine::with_prelude().unwrap();
     engine
         .inject_async_fn1("inc", |x: i32| async move { x + 1 })
         .unwrap();
 
-    let v_async = block_on(engine.eval_async(expr.as_ref())).unwrap();
-    assert_pointer_eq!(engine.heap(), v_async, engine.heap().alloc_i32(2).unwrap());
-
-    let v_sync = engine.eval(expr.as_ref()).unwrap();
-    assert_pointer_eq!(engine.heap(), v_sync, engine.heap().alloc_i32(2).unwrap());
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(2).unwrap());
 }
 
-#[test]
-fn eval_async_can_be_cancelled() {
+#[tokio::test]
+async fn eval_can_be_cancelled() {
     let expr = parse("stall");
     let mut engine = Engine::with_prelude().unwrap();
 
@@ -137,19 +145,33 @@ fn eval_async_can_be_cancelled() {
         .unwrap();
 
     let token = engine.cancellation_token();
-    let handle = std::thread::spawn(move || block_on(engine.eval_async(expr.as_ref())));
+    let mut gas = unlimited_gas();
+    let handle = tokio::spawn(async move { engine.eval_with_gas(expr.as_ref(), &mut gas).await });
 
-    started_rx
-        .recv_timeout(std::time::Duration::from_secs(2))
-        .expect("stall native never started");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        match started_rx.try_recv() {
+            Ok(()) => break,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "stall native never started"
+                );
+                tokio::task::yield_now().await;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                panic!("stall native start signal dropped")
+            }
+        }
+    }
     token.cancel();
 
-    let res = handle.join().unwrap();
+    let res = handle.await.unwrap();
     assert!(matches!(res, Err(EngineError::Cancelled)));
 }
 
-#[test]
-fn eval_with_gas_rejects_out_of_budget() {
+#[tokio::test]
+async fn eval_with_gas_rejects_out_of_budget() {
     let expr = parse("1");
     let mut engine = Engine::with_prelude().unwrap();
     let mut gas = GasMeter::new(
@@ -159,7 +181,7 @@ fn eval_with_gas_rejects_out_of_budget() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let err = match engine.eval_with_gas(expr.as_ref(), &mut gas) {
+    let err = match engine.eval_with_gas(expr.as_ref(), &mut gas).await {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
@@ -182,47 +204,59 @@ fn eval_deep_list_does_not_overflow() {
     }
     code.push_str(" in xs");
 
-    let tokens = rex_lexer::Token::tokenize(&code).unwrap();
-    let program = rex_parser::Parser::new(tokens)
-        .parse_program_with_stack_size(128 * 1024 * 1024)
+    let handle = std::thread::Builder::new()
+        .name("eval_deep_list_large_stack".into())
+        .stack_size(128 * 1024 * 1024)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            runtime.block_on(async move {
+                let tokens = rex_lexer::Token::tokenize(&code).unwrap();
+                let program = rex_parser::Parser::new(tokens)
+                    .parse_program_with_stack_size(128 * 1024 * 1024)
+                    .unwrap();
+                let expr = program.expr;
+                let mut engine = Engine::with_prelude().unwrap();
+                let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
+                let xs = engine
+                    .heap()
+                    .get(&value)
+                    .map(|value| list_values(&engine, value.as_ref()))
+                    .unwrap();
+                assert_eq!(xs.len(), N);
+                let expected = engine.heap().alloc_i32(0).unwrap();
+                assert_pointer_eq!(
+                    engine.heap(),
+                    xs.first().expect("list should be non-empty"),
+                    expected
+                );
+                assert_pointer_eq!(
+                    engine.heap(),
+                    xs.last().expect("list should be non-empty"),
+                    expected
+                );
+            });
+        })
         .unwrap();
-    let expr = program.expr;
-    let mut engine = Engine::with_prelude().unwrap();
-    let value = engine
-        .eval_with_stack_size(expr.as_ref(), 128 * 1024 * 1024)
-        .unwrap();
-    let xs = engine
-        .heap()
-        .get(&value)
-        .map(|value| list_values(&engine, value.as_ref()))
-        .unwrap();
-    assert_eq!(xs.len(), N);
-    let expected = engine.heap().alloc_i32(0).unwrap();
-    assert_pointer_eq!(
-        engine.heap(),
-        xs.first().expect("list should be non-empty"),
-        expected
-    );
-    assert_pointer_eq!(
-        engine.heap(),
-        xs.last().expect("list should be non-empty"),
-        expected
-    );
+
+    handle.join().unwrap();
 }
 
-#[test]
-fn eval_type_annotation_let() {
+#[tokio::test]
+async fn eval_type_annotation_let() {
     let expr = parse("let x: i32 = 42 in x");
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(42).unwrap());
 }
 
-#[test]
-fn eval_type_annotation_is() {
+#[tokio::test]
+async fn eval_type_annotation_is() {
     let expr = parse("\"hi\" is str");
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(
         engine.heap(),
         value,
@@ -230,17 +264,17 @@ fn eval_type_annotation_is() {
     );
 }
 
-#[test]
-fn eval_type_annotation_lambda_param() {
+#[tokio::test]
+async fn eval_type_annotation_lambda_param() {
     let expr = parse("let f = \\ (a : f32) -> a in f 1.5");
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     assert!(matches!(value, Value::F32(v) if (v - 1.5).abs() < f32::EPSILON));
 }
 
-#[test]
-fn eval_record_update_single_variant_adt() {
+#[tokio::test]
+async fn eval_record_update_single_variant_adt() {
     let program = parse_program(
         r#"
         type Foo = Bar { x: i32, y: i32, z: i32 }
@@ -253,12 +287,12 @@ fn eval_record_update_single_variant_adt() {
     );
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
-    let value = engine.eval(program.expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(6).unwrap());
 }
 
-#[test]
-fn eval_record_update_refined_by_match() {
+#[tokio::test]
+async fn eval_record_update_refined_by_match() {
     let program = parse_program(
         r#"
         type Foo = Bar { x: i32 } | Baz { x: i32 }
@@ -272,12 +306,12 @@ fn eval_record_update_refined_by_match() {
     );
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
-    let value = engine.eval(program.expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(2).unwrap());
 }
 
-#[test]
-fn eval_record_update_plain_record_type() {
+#[tokio::test]
+async fn eval_record_update_plain_record_type() {
     let program = parse_program(
         r#"
         let
@@ -288,15 +322,15 @@ fn eval_record_update_plain_record_type() {
     );
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
-    let value = engine.eval(program.expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(9).unwrap());
 }
 
-#[test]
-fn eval_type_annotation_mismatch() {
+#[tokio::test]
+async fn eval_type_annotation_mismatch() {
     let expr = parse("let x: i32 = 3.14 in x");
     let mut engine = engine_with_arith();
-    match engine.eval(expr.as_ref()) {
+    match eval_expr(&mut engine, expr.as_ref()).await {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
             assert!(matches!(err, TypeError::Unification(_, _)));
@@ -306,8 +340,8 @@ fn eval_type_annotation_mismatch() {
     }
 }
 
-#[test]
-fn eval_native_injection() {
+#[tokio::test]
+async fn eval_sync_native_injection() {
     let mut engine = Engine::new();
     engine.inject_fn0("zero", || -> u32 { 0u32 }).unwrap();
     engine
@@ -316,16 +350,16 @@ fn eval_native_injection() {
     engine.inject_value("one", 1u32).unwrap();
 
     let expr = parse("one + one");
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_u32(2).unwrap());
 
     let expr = parse("zero");
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_u32(0).unwrap());
 }
 
-#[test]
-fn eval_match_list() {
+#[tokio::test]
+async fn eval_match_list() {
     let mut engine = engine_with_arith();
 
     let expr = parse(
@@ -335,44 +369,44 @@ fn eval_match_list() {
             when x:xs -> x
         "#,
     );
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(1).unwrap());
 }
 
-#[test]
-fn eval_simple_addition() {
+#[tokio::test]
+async fn eval_simple_addition() {
     let expr = parse("420 + 69");
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(489).unwrap());
 }
 
-#[test]
-fn eval_simple_mod() {
+#[tokio::test]
+async fn eval_simple_mod() {
     let expr = parse("10 % 3");
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(1).unwrap());
 }
 
-#[test]
-fn eval_get_list_and_tuple() {
+#[tokio::test]
+async fn eval_get_list_and_tuple() {
     let mut engine = engine_with_arith();
 
     let expr = parse("get 1 [1, 2, 3]");
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(2).unwrap());
 
     let expr = parse("(1, 2, 3).2");
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
 }
 
-#[test]
-fn eval_simple_multiplication_float() {
+#[tokio::test]
+async fn eval_simple_multiplication_float() {
     let expr = parse("420.0 * 6.9");
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::F32(v) => assert!((v - 2898.0).abs() < 1e-3),
@@ -380,8 +414,8 @@ fn eval_simple_multiplication_float() {
     }
 }
 
-#[test]
-fn eval_let_id_nested() {
+#[tokio::test]
+async fn eval_let_id_nested() {
     let expr = parse(
         r#"
         let
@@ -391,12 +425,12 @@ fn eval_let_id_nested() {
         "#,
     );
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(489).unwrap());
 }
 
-#[test]
-fn eval_higher_order_add() {
+#[tokio::test]
+async fn eval_higher_order_add() {
     let expr = parse(
         r#"
         let
@@ -406,12 +440,12 @@ fn eval_higher_order_add() {
         "#,
     );
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(42).unwrap());
 }
 
-#[test]
-fn eval_match_dict_and_tuple() {
+#[tokio::test]
+async fn eval_match_dict_and_tuple() {
     let expr = parse(
         r#"
         let
@@ -422,7 +456,7 @@ fn eval_match_dict_and_tuple() {
         "#,
     );
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -443,11 +477,11 @@ fn eval_match_dict_and_tuple() {
     }
 }
 
-#[test]
-fn eval_match_missing_arm_errors() {
+#[tokio::test]
+async fn eval_match_missing_arm_errors() {
     let expr = parse("match (Err 1) when Ok x -> x");
     let mut engine = Engine::with_prelude().unwrap();
-    let result = engine.eval(expr.as_ref());
+    let result = eval_expr(&mut engine, expr.as_ref()).await;
     match result {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
@@ -457,11 +491,11 @@ fn eval_match_missing_arm_errors() {
     }
 }
 
-#[test]
-fn eval_match_invalid_pattern_type_error() {
+#[tokio::test]
+async fn eval_match_invalid_pattern_type_error() {
     let expr = parse("match (Ok 1) when [] -> 0 when x:xs -> 1");
     let mut engine = Engine::with_prelude().unwrap();
-    let result = engine.eval(expr.as_ref());
+    let result = eval_expr(&mut engine, expr.as_ref()).await;
     match result {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
@@ -471,8 +505,8 @@ fn eval_match_invalid_pattern_type_error() {
     }
 }
 
-#[test]
-fn eval_nested_match_list_sum() {
+#[tokio::test]
+async fn eval_nested_match_list_sum() {
     let expr = parse(
         r#"
         match [1, 2, 3]
@@ -484,12 +518,12 @@ fn eval_nested_match_list_sum() {
         "#,
     );
     let mut engine = engine_with_arith();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
 }
 
-#[test]
-fn eval_safe_div_pipeline() {
+#[tokio::test]
+async fn eval_safe_div_pipeline() {
     let expr = parse(
         r#"
         let
@@ -506,7 +540,7 @@ fn eval_safe_div_pipeline() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -529,8 +563,8 @@ fn eval_safe_div_pipeline() {
     }
 }
 
-#[test]
-fn eval_user_adt_declaration() {
+#[tokio::test]
+async fn eval_user_adt_declaration() {
     let program = parse_program(
         r#"
         type Boxed a = Box a
@@ -547,12 +581,12 @@ fn eval_user_adt_declaration() {
             engine.inject_type_decl(ty).unwrap();
         }
     }
-    let value = engine.eval(program.expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(42).unwrap());
 }
 
-#[test]
-fn eval_fn_decl_simple() {
+#[tokio::test]
+async fn eval_fn_decl_simple() {
     let program = parse_program(
         r#"
         fn add (x: i32, y: i32) -> i32 = x + y
@@ -566,12 +600,12 @@ fn eval_fn_decl_simple() {
         }
     }
     let expr = program.expr_with_fns();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
 }
 
-#[test]
-fn eval_fn_decl_with_where_constraints() {
+#[tokio::test]
+async fn eval_fn_decl_with_where_constraints() {
     let program = parse_program(
         r#"
         fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y
@@ -585,12 +619,12 @@ fn eval_fn_decl_with_where_constraints() {
         }
     }
     let expr = program.expr_with_fns();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
 }
 
-#[test]
-fn eval_adt_record_projection_single_variant() {
+#[tokio::test]
+async fn eval_adt_record_projection_single_variant() {
     let program = parse_program(
         r#"
         type MyADT = MyVariant1 { field1: i32, field2: f32 }
@@ -606,7 +640,7 @@ fn eval_adt_record_projection_single_variant() {
             engine.inject_type_decl(ty).unwrap();
         }
     }
-    let value = engine.eval(program.expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -625,8 +659,8 @@ fn eval_adt_record_projection_single_variant() {
     }
 }
 
-#[test]
-fn eval_adt_record_projection_match_arm() {
+#[tokio::test]
+async fn eval_adt_record_projection_match_arm() {
     let program = parse_program(
         r#"
         type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32
@@ -644,12 +678,12 @@ fn eval_adt_record_projection_match_arm() {
             engine.inject_type_decl(ty).unwrap();
         }
     }
-    let value = engine.eval(program.expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(1).unwrap());
 }
 
-#[test]
-fn eval_list_map_fold_filter() {
+#[tokio::test]
+async fn eval_list_map_fold_filter() {
     let expr = parse(
         r#"
         let
@@ -662,7 +696,7 @@ fn eval_list_map_fold_filter() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -686,8 +720,8 @@ fn eval_list_map_fold_filter() {
     }
 }
 
-#[test]
-fn eval_list_flat_map_zip_unzip() {
+#[tokio::test]
+async fn eval_list_flat_map_zip_unzip() {
     let expr = parse(
         r#"
         let
@@ -699,7 +733,7 @@ fn eval_list_flat_map_zip_unzip() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -725,8 +759,8 @@ fn eval_list_flat_map_zip_unzip() {
     }
 }
 
-#[test]
-fn eval_list_sum_mean_min_max() {
+#[tokio::test]
+async fn eval_list_sum_mean_min_max() {
     let expr = parse(
         r#"
         let
@@ -739,7 +773,7 @@ fn eval_list_sum_mean_min_max() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -769,8 +803,8 @@ fn eval_list_sum_mean_min_max() {
     }
 }
 
-#[test]
-fn eval_option_result_helpers() {
+#[tokio::test]
+async fn eval_option_result_helpers() {
     let expr = parse(
         r#"
         let
@@ -784,7 +818,7 @@ fn eval_option_result_helpers() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -807,8 +841,8 @@ fn eval_option_result_helpers() {
     }
 }
 
-#[test]
-fn eval_order_ops() {
+#[tokio::test]
+async fn eval_order_ops() {
     let expr = parse(
         r#"
         let
@@ -822,7 +856,7 @@ fn eval_order_ops() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -858,8 +892,8 @@ fn eval_order_ops() {
     }
 }
 
-#[test]
-fn eval_option_and_then_or_else() {
+#[tokio::test]
+async fn eval_option_and_then_or_else() {
     let expr = parse(
         r#"
         let
@@ -872,7 +906,7 @@ fn eval_option_and_then_or_else() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -886,8 +920,8 @@ fn eval_option_and_then_or_else() {
     }
 }
 
-#[test]
-fn eval_result_filter_pipeline() {
+#[tokio::test]
+async fn eval_result_filter_pipeline() {
     let expr = parse(
         r#"
         let
@@ -901,7 +935,7 @@ fn eval_result_filter_pipeline() {
         "#,
     );
     let mut engine = Engine::with_prelude().unwrap();
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -922,8 +956,8 @@ fn eval_result_filter_pipeline() {
     }
 }
 
-#[test]
-fn eval_array_combinators() {
+#[tokio::test]
+async fn eval_array_combinators() {
     let mut engine = Engine::with_prelude().unwrap();
     engine.inject_value("arr", vec![1i32, 2i32, 3i32]).unwrap();
     let expr = parse(
@@ -939,7 +973,7 @@ fn eval_array_combinators() {
             (mapped, total, taken, skipped, unzipped)
         "#,
     );
-    let value = engine.eval(expr.as_ref()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {

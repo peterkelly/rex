@@ -22,8 +22,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - `rex-engine`: runtime evaluator. Entry points:
   - `Engine::with_prelude()?` to inject runtime constructors and builtin implementations.
   - `Engine::inject_decls(&program.decls)` to make user declarations available at runtime.
-  - `Engine::eval(&program.expr)` to evaluate.
-  - `Engine::eval_with_stack_size` for deeply nested programs.
+  - `Engine::eval_with_gas(&program.expr, &mut gas).await` to evaluate.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.

@@ -1,6 +1,6 @@
-use rex::{Engine, Parser, Token, value_display};
+use rex::{Engine, GasCosts, GasMeter, Parser, Token, value_display};
 
-fn eval_to_string(code: &str) -> Result<String, String> {
+async fn eval_to_string(code: &str) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     let program = parser
@@ -11,28 +11,32 @@ fn eval_to_string(code: &str) -> Result<String, String> {
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
     let pointer = engine
-        .eval(program.expr.as_ref())
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
         .map_err(|e| format!("{e}"))?;
     let value = engine.heap().get(&pointer).map_err(|e| format!("{e}"))?;
     value_display(engine.heap(), value.as_ref()).map_err(|e| format!("{e}"))
 }
 
-fn assert_eval(code: &str, expected: &str) {
-    let actual = eval_to_string(code).unwrap_or_else(|e| panic!("expected ok, got error: {e}"));
+async fn assert_eval(code: &str, expected: &str) {
+    let actual = eval_to_string(code)
+        .await
+        .unwrap_or_else(|e| panic!("expected ok, got error: {e}"));
     assert_eq!(actual, expected);
 }
 
-fn assert_err_contains(code: &str, needle: &str) {
-    let err = eval_to_string(code).unwrap_err();
+async fn assert_err_contains(code: &str, needle: &str) {
+    let err = eval_to_string(code).await.unwrap_err();
     assert!(
         err.contains(needle),
         "expected error containing {needle:?}, got: {err}"
     );
 }
 
-#[test]
-fn default_record_dispatch() {
+#[tokio::test]
+async fn default_record_dispatch() {
     assert_eval(
         r#"
         class Default a
@@ -46,11 +50,12 @@ fn default_record_dispatch() {
         let x: Foo = default in x
         "#,
         "Bar {z = 0f32}",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn default_nested_context_list() {
+#[tokio::test]
+async fn default_nested_context_list() {
     assert_eval(
         r#"
         class Default a
@@ -65,11 +70,12 @@ fn default_nested_context_list() {
         let xs: List i32 = default in xs
         "#,
         "[0i32, 0i32]",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn pattern_field_renaming() {
+#[tokio::test]
+async fn pattern_field_renaming() {
     assert_eval(
         r#"
         type Point = Point { x: f32, y: f32 }
@@ -83,11 +89,12 @@ fn pattern_field_renaming() {
         (Point { x = 1.0, y = 2.0 }) + (Point { x = 3.0, y = 4.0 })
         "#,
         "Point {x = 4f32, y = 6f32}",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn default_nested_context_option() {
+#[tokio::test]
+async fn default_nested_context_option() {
     assert_eval(
         r#"
         class Default a
@@ -102,11 +109,12 @@ fn default_nested_context_option() {
         let x: Option i32 = default in x
         "#,
         "Some 0i32",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn methods_can_call_other_methods() {
+#[tokio::test]
+async fn methods_can_call_other_methods() {
     assert_eval(
         r#"
         class PairOps p
@@ -124,11 +132,12 @@ fn methods_can_call_other_methods() {
         sum_pair (Pair { a = 19, b = 23 })
         "#,
         "42i32",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn method_can_return_function() {
+#[tokio::test]
+async fn method_can_return_function() {
     assert_eval(
         r#"
         class Builder a
@@ -140,11 +149,12 @@ fn method_can_return_function() {
         let f = make_adder 5 in f 37
         "#,
         "42i32",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn instance_method_can_reference_global_fn() {
+#[tokio::test]
+async fn instance_method_can_reference_global_fn() {
     assert_eval(
         r#"
         fn inc (x: i32) -> i32 = x + 1
@@ -158,11 +168,12 @@ fn instance_method_can_reference_global_fn() {
         bump 41
         "#,
         "42i32",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn hkt_functor_option_and_result() {
+#[tokio::test]
+async fn hkt_functor_option_and_result() {
     assert_eval(
         r#"
         class MyFunctor f
@@ -190,11 +201,12 @@ fn hkt_functor_option_and_result() {
             (a, b, c, d)
         "#,
         r#"(Some 2i32, None, Ok 2i32, Err "bad")"#,
-    );
+    )
+    .await;
 }
 
-#[test]
-fn pattern_match_inside_method_body() {
+#[tokio::test]
+async fn pattern_match_inside_method_body() {
     assert_eval(
         r#"
         class Head a
@@ -209,11 +221,12 @@ fn pattern_match_inside_method_body() {
         (head_or 0 [1, 2, 3], head_or 7 [])
         "#,
         "(1i32, 7i32)",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn superclass_and_instance_context() {
+#[tokio::test]
+async fn superclass_and_instance_context() {
     assert_eval(
         r#"
         class MyEq a
@@ -245,11 +258,12 @@ fn superclass_and_instance_context() {
         (eq Red Blue, eq Blue Blue, my_cmp Red Green, my_cmp Blue Red)
         "#,
         "(false, true, -1i32, 1i32)",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn missing_instance_method_is_error() {
+#[tokio::test]
+async fn missing_instance_method_is_error() {
     assert_err_contains(
         r#"
         class Default a
@@ -259,11 +273,12 @@ fn missing_instance_method_is_error() {
         0
         "#,
         "missing implementation of `default`",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn unknown_instance_method_is_error() {
+#[tokio::test]
+async fn unknown_instance_method_is_error() {
     assert_err_contains(
         r#"
         class Default a
@@ -274,11 +289,12 @@ fn unknown_instance_method_is_error() {
         0
         "#,
         "unknown method `not_a_method`",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn missing_instance_constraint_is_error() {
+#[tokio::test]
+async fn missing_instance_constraint_is_error() {
     assert_err_contains(
         r#"
         class Default a
@@ -289,11 +305,12 @@ fn missing_instance_constraint_is_error() {
         0
         "#,
         "not in the instance context",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn duplicate_instances_are_rejected() {
+#[tokio::test]
+async fn duplicate_instances_are_rejected() {
     assert_err_contains(
         r#"
         class Default a
@@ -308,11 +325,12 @@ fn duplicate_instances_are_rejected() {
         0
         "#,
         "duplicate type class instance",
-    );
+    )
+    .await;
 }
 
-#[test]
-fn ambiguous_class_method_use_is_error() {
+#[tokio::test]
+async fn ambiguous_class_method_use_is_error() {
     assert_err_contains(
         r#"
         class Default a
@@ -324,5 +342,6 @@ fn ambiguous_class_method_use_is_error() {
         default
         "#,
         "ambiguous overload",
-    );
+    )
+    .await;
 }

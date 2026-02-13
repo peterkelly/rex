@@ -1,5 +1,4 @@
 use rex::{Engine, GasCosts, GasMeter, Parser, ParserLimits, Token, TypeSystem};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 #[derive(Clone)]
 struct XorShift64 {
@@ -26,8 +25,8 @@ impl XorShift64 {
     }
 }
 
-#[test]
-fn fuzz_smoke_pipeline_does_not_panic() {
+#[tokio::test]
+async fn fuzz_smoke_pipeline_does_not_panic() {
     let iters: usize = std::env::var("REX_FUZZ_ITERS")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -48,8 +47,9 @@ fn fuzz_smoke_pipeline_does_not_panic() {
             s.push(charset[idx]);
         }
 
-        let res = catch_unwind(AssertUnwindSafe(|| {
-            let tokens = match Token::tokenize(&s) {
+        let input = s.clone();
+        let res = tokio::spawn(async move {
+            let tokens = match Token::tokenize(&input) {
                 Ok(t) => t,
                 Err(_) => return,
             };
@@ -69,8 +69,9 @@ fn fuzz_smoke_pipeline_does_not_panic() {
 
             let mut engine = Engine::with_prelude().unwrap();
             let _ = engine.inject_decls(&program.decls);
-            let _ = engine.eval_with_gas(program.expr.as_ref(), &mut gas);
-        }));
+            let _ = engine.eval_with_gas(program.expr.as_ref(), &mut gas).await;
+        })
+        .await;
 
         if res.is_err() {
             panic!("panic in fuzz iteration {i} with input:\n{s}");

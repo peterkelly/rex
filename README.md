@@ -88,15 +88,20 @@ Other useful flags:
 use rex_engine::Engine;
 use rex_lexer::Token;
 use rex_parser::Parser;
+use rex_util::{GasCosts, GasMeter};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokens = Token::tokenize(r#"let x = 1 + 2 in x * 3"#)?;
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
     let mut engine = Engine::with_prelude()?;
     engine.inject_decls(&program.decls)?;
-    let value = engine.eval(program.expr.as_ref())?;
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let value = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await?;
     println!("{value}");
     Ok(())
 }
@@ -106,7 +111,6 @@ For deeply nested programs, prefer the large-stack entrypoints:
 
 - `rex_parser::Parser::parse_program_with_stack_size`
 - `rex_ts::TypeSystem::infer_with_stack_size`
-- `rex_engine::Engine::eval_with_stack_size`
 
 ### Type Inference
 
@@ -137,6 +141,7 @@ Derive support lives in `rex-proc-macro`. The derive generates:
 ```rust
 use rex_engine::{Engine, FromValue};
 use rex_proc_macro::Rex;
+use rex_util::{GasCosts, GasMeter};
 
 #[derive(Rex, Debug, PartialEq)]
 struct Point {
@@ -151,7 +156,10 @@ let tokens = rex_lexer::Token::tokenize("Point { x = 1, y = 2 }")?;
 let program = rex_parser::Parser::new(tokens)
     .parse_program()
     .map_err(|errs| format!("{errs:?}"))?;
-let value = engine.eval(program.expr.as_ref())?;
+let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let value = engine
+    .eval_with_gas(program.expr.as_ref(), &mut gas)
+    .await?;
 let point = Point::from_value(&value, "point")?;
 assert_eq!(point, Point { x: 1, y: 2 });
 ```

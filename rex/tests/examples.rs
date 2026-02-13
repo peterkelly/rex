@@ -1,4 +1,4 @@
-use rex::{Engine, Parser, Token, TypeSystem};
+use rex::{Engine, GasCosts, GasMeter, Parser, Token, TypeSystem};
 
 fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");
@@ -8,7 +8,7 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     out
 }
 
-fn assert_program_ok(name: &str, source: &str) {
+async fn assert_program_ok(name: &str, source: &str) {
     let tokens = Token::tokenize(source).unwrap_or_else(|err| panic!("{name}: lex error: {err}"));
     let mut parser = Parser::new(tokens);
     let program = parser
@@ -25,13 +25,15 @@ fn assert_program_ok(name: &str, source: &str) {
     engine
         .inject_decls(&program.decls)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
     let _value = engine
-        .eval(program.expr.as_ref())
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
 }
 
-#[test]
-fn example_adt_record_constructor() {
+#[tokio::test]
+async fn example_adt_record_constructor() {
     assert_program_ok(
         "adt_record_constructor",
         r#"
@@ -40,11 +42,12 @@ fn example_adt_record_constructor() {
             let v: Foo = Bar { x = 1, y = 2 } in
               v.x + v.y
         "#,
-    );
+    )
+    .await;
 }
 
-#[test]
-fn example_nested_lets() {
+#[tokio::test]
+async fn example_nested_lets() {
     assert_program_ok(
         "nested_lets",
         r#"
@@ -54,22 +57,24 @@ fn example_nested_lets() {
               c = a + b
             in c
         "#,
-    );
+    )
+    .await;
 }
 
-#[test]
-fn example_lambda_application() {
+#[tokio::test]
+async fn example_lambda_application() {
     assert_program_ok(
         "lambda_application",
         r#"
             let inc = \x -> x + 1 in
               inc 41
         "#,
-    );
+    )
+    .await;
 }
 
-#[test]
-fn example_match() {
+#[tokio::test]
+async fn example_match() {
     assert_program_ok(
         "match",
         r#"
@@ -80,5 +85,6 @@ fn example_match() {
                 when A {x} -> x
                 when B {x} -> x + 100
         "#,
-    );
+    )
+    .await;
 }

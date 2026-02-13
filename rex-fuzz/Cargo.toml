@@ -12,6 +12,7 @@ rex-parser = { workspace = true }
 rex-ts = { workspace = true }
 rex-util = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true

@@ -756,6 +756,7 @@ dependencies = [
  "rex-ts",
  "rex-util",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -792,6 +793,7 @@ dependencies = [
  "rex-util",
  "serde_json",
  "thiserror",
+ "tokio",
  "tracing",
  "uuid",
 ]
@@ -807,6 +809,7 @@ dependencies = [
  "rex-ts",
  "rex-util",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]

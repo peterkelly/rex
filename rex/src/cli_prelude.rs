@@ -517,14 +517,17 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 
 #[cfg(test)]
 mod tests {
-    use std::thread;
-
     use rex_engine::{Engine, assert_pointer_eq};
+    use rex_util::{GasCosts, GasMeter};
 
     use super::*;
 
-    #[test]
-    fn cli_prelude_typecheck_smoke() {
+    fn unlimited_gas() -> GasMeter {
+        GasMeter::unlimited(GasCosts::sensible_defaults())
+    }
+
+    #[tokio::test]
+    async fn cli_prelude_typecheck_smoke() {
         let code = r#"
             import std.process
             import std.io
@@ -533,21 +536,15 @@ mod tests {
               io.write_all 1 (process.stdout p)
         "#;
 
-        let handle = thread::Builder::new()
-            .name("cli-prelude-typecheck".into())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                let mut engine = Engine::with_prelude().unwrap();
-                inject_cli_prelude_engine(&mut engine).unwrap();
-                engine.add_default_resolvers();
-                engine.eval_snippet(code).unwrap();
-            })
-            .unwrap();
-        handle.join().unwrap();
+        let mut engine = Engine::with_prelude().unwrap();
+        inject_cli_prelude_engine(&mut engine).unwrap();
+        engine.add_default_resolvers();
+        let mut gas = unlimited_gas();
+        engine.eval_snippet_with_gas(code, &mut gas).await.unwrap();
     }
 
-    #[test]
-    fn cli_subprocess_captures_stdout_and_exit_code() {
+    #[tokio::test]
+    async fn cli_subprocess_captures_stdout_and_exit_code() {
         let code = r#"
             import std.process
 
@@ -555,63 +552,57 @@ mod tests {
               (process.wait p, process.stdout p, process.stderr p)
         "#;
 
-        let handle = thread::Builder::new()
-            .name("cli-subprocess-eval".into())
-            .stack_size(16 * 1024 * 1024)
-            .spawn(move || {
-                let mut engine = Engine::with_prelude().unwrap();
-                inject_cli_prelude_engine(&mut engine).unwrap();
-                engine.add_default_resolvers();
-                let value = engine.eval_snippet(code).unwrap();
-                let value = engine
-                    .heap()
-                    .get(&value)
-                    .map(|value| value.as_ref().clone())
-                    .unwrap();
-                let Value::Tuple(xs) = value else {
-                    panic!("expected tuple");
-                };
-                assert_pointer_eq!(
-                    engine.heap(),
-                    xs[0].clone(),
-                    engine.heap().alloc_i32(0).unwrap()
-                );
-
-                let Value::Array(out) = engine
-                    .heap()
-                    .get(&xs[1])
-                    .map(|value| value.as_ref().clone())
-                    .unwrap()
-                else {
-                    panic!("expected stdout bytes");
-                };
-                let got: Vec<u8> = out
-                    .iter()
-                    .map(|v| {
-                        match engine
-                            .heap()
-                            .get(v)
-                            .map(|value| value.as_ref().clone())
-                            .unwrap()
-                        {
-                            Value::U8(b) => b,
-                            other => panic!("expected u8, got {}", value_type_name(&other)),
-                        }
-                    })
-                    .collect();
-                assert_eq!(got, b"hi");
-
-                let Value::Array(err) = engine
-                    .heap()
-                    .get(&xs[2])
-                    .map(|value| value.as_ref().clone())
-                    .unwrap()
-                else {
-                    panic!("expected stderr bytes");
-                };
-                assert!(err.is_empty());
-            })
+        let mut engine = Engine::with_prelude().unwrap();
+        inject_cli_prelude_engine(&mut engine).unwrap();
+        engine.add_default_resolvers();
+        let mut gas = unlimited_gas();
+        let value = engine.eval_snippet_with_gas(code, &mut gas).await.unwrap();
+        let value = engine
+            .heap()
+            .get(&value)
+            .map(|value| value.as_ref().clone())
             .unwrap();
-        handle.join().unwrap();
+        let Value::Tuple(xs) = value else {
+            panic!("expected tuple");
+        };
+        assert_pointer_eq!(
+            engine.heap(),
+            xs[0].clone(),
+            engine.heap().alloc_i32(0).unwrap()
+        );
+
+        let Value::Array(out) = engine
+            .heap()
+            .get(&xs[1])
+            .map(|value| value.as_ref().clone())
+            .unwrap()
+        else {
+            panic!("expected stdout bytes");
+        };
+        let got: Vec<u8> = out
+            .iter()
+            .map(|v| {
+                match engine
+                    .heap()
+                    .get(v)
+                    .map(|value| value.as_ref().clone())
+                    .unwrap()
+                {
+                    Value::U8(b) => b,
+                    other => panic!("expected u8, got {}", value_type_name(&other)),
+                }
+            })
+            .collect();
+        assert_eq!(got, b"hi");
+
+        let Value::Array(err) = engine
+            .heap()
+            .get(&xs[2])
+            .map(|value| value.as_ref().clone())
+            .unwrap()
+        else {
+            panic!("expected stderr bytes");
+        };
+        assert!(err.is_empty());
     }
 }

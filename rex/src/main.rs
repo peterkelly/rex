@@ -4,7 +4,6 @@
 use std::fs;
 use std::io::IsTerminal;
 use std::io::{self, BufRead, Read, Write};
-use std::thread;
 
 use clap::{Args, Parser, Subcommand};
 use rex_engine::{Engine, ReplState, value_display};
@@ -123,10 +122,11 @@ struct ReplArgs {
     no_gas: bool,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     init_tracing();
     let cli = Cli::parse();
-    if let Err(err) = run(cli) {
+    if let Err(err) = run(cli).await {
         eprintln!("error: {err}");
         std::process::exit(1);
     }
@@ -151,14 +151,14 @@ fn init_tracing() {
         .try_init();
 }
 
-fn run(cli: Cli) -> Result<(), String> {
+async fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
-        Command::Run(args) => run_cmd(args),
-        Command::Repl(args) => repl_cmd(args),
+        Command::Run(args) => run_cmd(args).await,
+        Command::Repl(args) => repl_cmd(args).await,
     }
 }
 
-fn run_cmd(args: RunArgs) -> Result<(), String> {
+async fn run_cmd(args: RunArgs) -> Result<(), String> {
     let RunArgs {
         file,
         code,
@@ -166,14 +166,13 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         emit_ast,
         emit_type,
         include,
-        stack_size_mb,
+        stack_size_mb: _stack_size_mb,
         max_nesting,
         no_max_nesting,
         gas,
         no_gas,
     } = args;
 
-    let file_for_modules = file.clone();
     let source = if let Some(code) = code {
         code
     } else if stdin {
@@ -188,12 +187,6 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         return Err("missing input (file or `-c/--code`)".into());
     };
 
-    // Rex programs can be deeply nested (especially after desugaring). Run on a
-    // slightly larger stack to reduce overflow risk in parser/type inference/eval.
-    let stack_size = stack_size_mb
-        .checked_mul(1024 * 1024)
-        .ok_or_else(|| "stack size overflow".to_string())?;
-
     let parser_limits = if no_max_nesting {
         ParserLimits::unlimited()
     } else if let Some(max_nesting) = max_nesting {
@@ -204,45 +197,31 @@ fn run_cmd(args: RunArgs) -> Result<(), String> {
         ParserLimits::safe_defaults()
     };
 
-    let handle = thread::Builder::new()
-        .name("rex-run".to_string())
-        .stack_size(stack_size)
-        .spawn(move || {
-            run_source(
-                &source,
-                RunSourceOpts {
-                    file: file_for_modules,
-                    include,
-                    emit_ast,
-                    emit_type,
-                    gas,
-                    no_gas,
-                    parser_limits,
-                },
-            )
-        })
-        .map_err(|e| format!("failed to spawn runner thread: {e}"))?;
-
-    match handle.join() {
-        Ok(res) => res,
-        Err(_) => Err("runner thread panicked".into()),
-    }
+    run_source(
+        &source,
+        RunSourceOpts {
+            file,
+            include,
+            emit_ast,
+            emit_type,
+            gas,
+            no_gas,
+            parser_limits,
+        },
+    )
+    .await
 }
 
-fn repl_cmd(args: ReplArgs) -> Result<(), String> {
+async fn repl_cmd(args: ReplArgs) -> Result<(), String> {
     let ReplArgs {
         include,
-        stack_size_mb,
+        stack_size_mb: _stack_size_mb,
         max_nesting,
         no_max_nesting,
         gas,
         no_gas,
     } = args;
 
-    let stack_size = stack_size_mb
-        .checked_mul(1024 * 1024)
-        .ok_or_else(|| "stack size overflow".to_string())?;
-
     let parser_limits = if no_max_nesting {
         ParserLimits::unlimited()
     } else if let Some(max_nesting) = max_nesting {
@@ -253,19 +232,10 @@ fn repl_cmd(args: ReplArgs) -> Result<(), String> {
         ParserLimits::safe_defaults()
     };
 
-    let handle = thread::Builder::new()
-        .name("rex-repl".to_string())
-        .stack_size(stack_size)
-        .spawn(move || repl_loop(include, gas, no_gas, parser_limits))
-        .map_err(|e| format!("failed to spawn repl thread: {e}"))?;
-
-    match handle.join() {
-        Ok(res) => res,
-        Err(_) => Err("repl thread panicked".into()),
-    }
+    repl_loop(include, gas, no_gas, parser_limits).await
 }
 
-fn repl_loop(
+async fn repl_loop(
     include: Vec<String>,
     gas_budget: u64,
     no_gas: bool,
@@ -351,7 +321,10 @@ fn repl_loop(
             }
         };
 
-        match engine.eval_repl_program_with_gas(&program, &mut state, &mut gas) {
+        match engine
+            .eval_repl_program_with_gas(&program, &mut state, &mut gas)
+            .await
+        {
             Ok(v) => {
                 let rendered = engine
                     .heap()
@@ -407,7 +380,7 @@ fn init_engine(include: &[String]) -> Result<Engine, String> {
     Ok(engine)
 }
 
-fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
+async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     let RunSourceOpts {
         file,
         include,
@@ -452,10 +425,12 @@ fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     let pointer = if let Some(path) = file {
         engine
             .eval_module_file_with_gas(&path, &mut gas)
+            .await
             .map_err(|e| format!("{e}"))?
     } else {
         engine
             .eval_snippet_with_gas(source, &mut gas)
+            .await
             .map_err(|e| format!("{e}"))?
     };
     let rendered = engine

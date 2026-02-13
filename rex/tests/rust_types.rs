@@ -1,8 +1,8 @@
 use rex::{Engine, GasCosts, GasMeter, Parser, Token, Type, sym};
 use rex_engine::assert_pointer_eq;
 
-#[test]
-fn vec_from_value() {
+#[tokio::test]
+async fn vec_from_value() {
     fn accept_vec(items: Vec<i32>) -> String {
         format!("accept_vec: {:?}", items)
     }
@@ -14,7 +14,11 @@ fn vec_from_value() {
 
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
-    let result = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let result = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -25,8 +29,8 @@ fn vec_from_value() {
     );
 }
 
-#[test]
-fn vec_to_value() {
+#[tokio::test]
+async fn vec_to_value() {
     fn return_vec(input: String) -> Vec<i32> {
         let mut result: Vec<i32> = Vec::new();
         for i in 0..input.len() {
@@ -42,7 +46,11 @@ fn vec_to_value() {
 
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
-    let result = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let result = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -59,8 +67,8 @@ fn vec_to_value() {
     );
 }
 
-#[test]
-fn vec_rex_type() {
+#[tokio::test]
+async fn vec_rex_type() {
     fn return_vec(input: String) -> Vec<i32> {
         let mut result: Vec<i32> = Vec::new();
         for i in 0..input.len() {
@@ -81,13 +89,17 @@ fn vec_rex_type() {
     assert_eq!(ty, Type::app(Type::con("Array", 1), Type::con("i32", 0),));
 }
 
-#[test]
-fn option_prelude() {
+#[tokio::test]
+async fn option_prelude() {
     let expr = r#"(Some 4, None)"#;
     let mut engine = Engine::with_prelude().unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
-    let result = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let result = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(
         heap,
@@ -101,8 +113,8 @@ fn option_prelude() {
     );
 }
 
-#[test]
-fn option_from_value() {
+#[tokio::test]
+async fn option_from_value() {
     fn accept_opt(opt: Option<i32>) -> String {
         format!("accept_opt: {:?}", opt)
     }
@@ -112,7 +124,11 @@ fn option_from_value() {
     engine.inject_fn1("accept_opt", accept_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
-    let result = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let result = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -127,8 +143,8 @@ fn option_from_value() {
     );
 }
 
-#[test]
-fn option_into_value() {
+#[tokio::test]
+async fn option_into_value() {
     fn return_opt(s: String) -> Option<i32> {
         if s.is_empty() {
             None
@@ -142,7 +158,11 @@ fn option_into_value() {
     engine.inject_fn1("return_opt", return_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
-    let result = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let result = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -157,8 +177,8 @@ fn option_into_value() {
     );
 }
 
-#[test]
-fn option_rex_type() {
+#[tokio::test]
+async fn option_rex_type() {
     fn return_opt(s: String) -> Option<i32> {
         if s.is_empty() {
             None

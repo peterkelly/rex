@@ -1,4 +1,4 @@
-use rex::{Engine, EngineError, Parser, ParserLimits, Token, TypeError};
+use rex::{Engine, EngineError, GasCosts, GasMeter, Parser, ParserLimits, Token, TypeError};
 
 fn strip_span(mut err: TypeError) -> TypeError {
     while let TypeError::Spanned { error, .. } = err {
@@ -14,7 +14,7 @@ fn parse_program(code: &str) -> Result<rex_ast::expr::Program, Vec<rex_parser::e
     parser.parse_program()
 }
 
-fn compile_err(code: &str) -> EngineError {
+async fn compile_err(code: &str) -> EngineError {
     let program = parse_program(code).unwrap_or_else(|errs| {
         panic!("expected parse success, got: {errs:?}\ncode:\n{code}");
     });
@@ -23,7 +23,8 @@ fn compile_err(code: &str) -> EngineError {
     if let Err(e) = engine.inject_decls(&program.decls) {
         return e;
     }
-    match engine.eval(program.expr.as_ref()) {
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    match engine.eval_with_gas(program.expr.as_ref(), &mut gas).await {
         Ok(v) => {
             let value_type = engine.heap().type_name(&v).unwrap_or("<invalid pointer>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");
@@ -32,8 +33,8 @@ fn compile_err(code: &str) -> EngineError {
     }
 }
 
-fn expect_type_err(code: &str, f: impl FnOnce(&TypeError) -> bool) {
-    let err = compile_err(code);
+async fn expect_type_err(code: &str, f: impl FnOnce(&TypeError) -> bool) {
+    let err = compile_err(code).await;
     let EngineError::Type(te) = err else {
         panic!("expected type error, got: {err:?}\ncode:\n{code}");
     };
@@ -41,13 +42,13 @@ fn expect_type_err(code: &str, f: impl FnOnce(&TypeError) -> bool) {
     assert!(f(&te), "unexpected type error: {te:?}\ncode:\n{code}");
 }
 
-fn expect_engine_err(code: &str, f: impl FnOnce(&EngineError) -> bool) {
-    let err = compile_err(code);
+async fn expect_engine_err(code: &str, f: impl FnOnce(&EngineError) -> bool) {
+    let err = compile_err(code).await;
     assert!(f(&err), "unexpected engine error: {err:?}\ncode:\n{code}");
 }
 
-#[test]
-fn parse_rejects_invalid_programs() {
+#[tokio::test]
+async fn parse_rejects_invalid_programs() {
     let cases: &[(&str, &str)] = &[
         ("unterminated_paren", "("),
         ("orphan_close_paren", ")"),
@@ -76,8 +77,8 @@ fn parse_rejects_invalid_programs() {
     }
 }
 
-#[test]
-fn compile_rejects_invalid_programs() {
+#[tokio::test]
+async fn compile_rejects_invalid_programs() {
     // Each case is intentionally small; they act as “failure examples” for the language.
     type TypeErrorCase = (&'static str, &'static str, fn(&TypeError) -> bool);
     let cases: &[TypeErrorCase] = &[
@@ -343,12 +344,12 @@ fn compile_rejects_invalid_programs() {
     ];
 
     for (_name, code, pred) in cases {
-        expect_type_err(code, *pred);
+        expect_type_err(code, *pred).await;
     }
 }
 
-#[test]
-fn compile_rejects_invalid_programs_engine_errors() {
+#[tokio::test]
+async fn compile_rejects_invalid_programs_engine_errors() {
     type EngineErrorCase = (&'static str, &'static str, fn(&EngineError) -> bool);
     let cases: &[EngineErrorCase] = &[
         (
@@ -372,6 +373,6 @@ fn compile_rejects_invalid_programs_engine_errors() {
     ];
 
     for (_name, code, pred) in cases {
-        expect_engine_err(code, *pred);
+        expect_engine_err(code, *pred).await;
     }
 }

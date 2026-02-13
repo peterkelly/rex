@@ -79,6 +79,16 @@ pip install -r docs/requirements.txt
 make -C docs html
 ```
 
+## Commit messages
+
+- First line should contain a keyword, followed by a colon, a space, then a message that starts
+  with a capital letter.
+- Acceptable keywords: keywords: feat, fix, docs, style, refactor, test, chore
+- First line should be no more than 50 characters in total
+- Rest of the commit message should contain a summary of what change, focusing first on the why
+  and then on the what.
+- When making a commit, leave untracked files untouched
+
 ## Semantics Changes
 
 - Update `docs/SPEC.md` when behavior changes.
@@ -92,7 +102,7 @@ make -C docs html
 
 - Always cap parsing nesting depth with `ParserLimits::safe_defaults()` (or stricter).
 - Always run with a bounded `GasMeter` for parse + infer + eval.
-- Prefer `Engine::eval_async*` in async servers or offload `Engine::eval` to a blocking thread.
+- Prefer async evaluation with `Engine::eval_with_gas`.
 
 ## Lockfiles
 

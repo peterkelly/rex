@@ -1,8 +1,11 @@
-use rex::{Engine, EngineError, FromPointer, Heap, Parser, Pointer, Rex, RexType, Token, Value};
+use rex::{
+    Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Parser, Pointer, Rex, RexType,
+    Token, Value,
+};
 use rex_engine::assert_pointer_eq;
 use std::collections::HashMap;
 
-fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
+async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
@@ -15,7 +18,10 @@ fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     Shape::inject_rex(&mut engine)?;
 
     engine.inject_decls(&program.decls)?;
-    let pointer = engine.eval(program.expr.as_ref())?;
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let pointer = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await?;
     let heap = engine.into_heap();
     Ok((heap, pointer))
 }
@@ -51,8 +57,8 @@ enum Maybe<T> {
     Nothing,
 }
 
-#[test]
-fn derive_struct_roundtrip_value() {
+#[tokio::test]
+async fn derive_struct_roundtrip_value() {
     let (heap, v_ptr) = eval(
         r#"
         MyStruct {
@@ -66,6 +72,7 @@ fn derive_struct_roundtrip_value() {
         }
         "#,
     )
+    .await
     .unwrap();
 
     let decoded = MyStruct::from_pointer(&heap, &v_ptr).unwrap();
@@ -83,15 +90,15 @@ fn derive_struct_roundtrip_value() {
     );
 }
 
-#[test]
-fn derive_generic_struct_roundtrip_value() {
-    let (heap, v_ptr) = eval("Boxed { value = 123 }").unwrap();
+#[tokio::test]
+async fn derive_generic_struct_roundtrip_value() {
+    let (heap, v_ptr) = eval("Boxed { value = 123 }").await.unwrap();
     let decoded = Boxed::<i32>::from_pointer(&heap, &v_ptr).unwrap();
     assert_eq!(decoded, Boxed { value: 123 });
 }
 
-#[test]
-fn derive_generic_worked_example_polymorphic_adt() {
+#[tokio::test]
+async fn derive_generic_worked_example_polymorphic_adt() {
     // Worked example: `Maybe<T>` is injected into Rex once, but constructors stay polymorphic.
     //
     // The proc-macro generates *both*:
@@ -153,7 +160,11 @@ fn derive_generic_worked_example_polymorphic_adt() {
         .unwrap();
 
     engine.inject_decls(&program.decls).unwrap();
-    let v_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let v_ptr = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let v = engine
         .heap()
         .get(&v_ptr)
@@ -183,8 +194,8 @@ enum Shape {
     Circle(i32),
 }
 
-#[test]
-fn derive_can_be_used_in_injected_native_functions() {
+#[tokio::test]
+async fn derive_can_be_used_in_injected_native_functions() {
     let tokens = Token::tokenize(
         r#"
         bump_y (MyStruct {
@@ -213,7 +224,11 @@ fn derive_can_be_used_in_injected_native_functions() {
         })
         .unwrap();
 
-    let v_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let v_ptr = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let bumped = MyStruct::from_pointer(engine.heap(), &v_ptr).unwrap();
     assert_eq!(bumped.y, 43);
 
@@ -234,13 +249,16 @@ fn derive_can_be_used_in_injected_native_functions() {
     let tokens = Token::tokenize("const_struct.y").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let v = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(heap, v, heap.alloc_i32(100).unwrap());
 }
 
-#[test]
-fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
+#[tokio::test]
+async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let mut engine = Engine::with_prelude().unwrap();
     Shape::inject_rex(&mut engine).unwrap();
 
@@ -259,13 +277,17 @@ fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
 
-    let v = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let v = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
 }
 
-#[test]
-fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
+#[tokio::test]
+async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let mut engine = Engine::with_prelude().unwrap();
     Maybe::<i32>::inject_rex(&mut engine).unwrap();
 
@@ -279,7 +301,11 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let v_ptr = engine.eval(program.expr.as_ref()).unwrap();
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let v_ptr = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let v = engine
         .heap()
         .get(&v_ptr)
@@ -314,14 +340,15 @@ fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     );
 }
 
-#[test]
-fn derive_enum_constructor_currying() {
+#[tokio::test]
+async fn derive_enum_constructor_currying() {
     let (heap, v_ptr) = eval(
         r#"
         let partial = Rectangle (2 * 3) in
             (partial (3 * 4), partial (2 * 4))
         "#,
     )
+    .await
     .unwrap();
 
     let value = heap.get(&v_ptr).unwrap().as_ref().clone();

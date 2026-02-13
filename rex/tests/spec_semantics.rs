@@ -1,4 +1,7 @@
-use rex::{Engine, EngineError, Heap, Parser, Pointer, Token, Type, TypeError, TypeSystem, Value};
+use rex::{
+    Engine, EngineError, GasCosts, GasMeter, Heap, Parser, Pointer, Token, Type, TypeError,
+    TypeSystem, Value,
+};
 
 fn strip_type_span(mut err: TypeError) -> TypeError {
     while let TypeError::Spanned { error, .. } = err {
@@ -7,13 +10,16 @@ fn strip_type_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
+async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let mut engine = Engine::with_prelude().unwrap();
     engine.inject_decls(&program.decls)?;
-    let pointer = engine.eval(program.expr.as_ref())?;
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let pointer = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await?;
     let heap = engine.into_heap();
     Ok((heap, pointer))
 }
@@ -28,8 +34,8 @@ fn type_of(code: &str) -> Result<Type, TypeError> {
     Ok(ty)
 }
 
-#[test]
-fn spec_record_update_requires_refinement_for_sum_types() {
+#[tokio::test]
+async fn spec_record_update_requires_refinement_for_sum_types() {
     let code = r#"
 type Foo = Bar { x: i32 } | Baz { x: i32 }
 let
@@ -37,7 +43,7 @@ let
 in
   f (Bar { x = 1 })
 "#;
-    let err = match eval(code) {
+    let err = match eval(code).await {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -50,8 +56,8 @@ in
     ));
 }
 
-#[test]
-fn spec_typeclass_instance_overlap_is_rejected() {
+#[tokio::test]
+async fn spec_typeclass_instance_overlap_is_rejected() {
     let code = r#"
 class C a
     c : i32
@@ -64,15 +70,15 @@ instance C i32
 
 c
 "#;
-    let err = match eval(code) {
+    let err = match eval(code).await {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
     assert!(matches!(err, EngineError::DuplicateTypeclassImpl { .. }));
 }
 
-#[test]
-fn spec_typeclass_method_value_without_type_is_ambiguous() {
+#[tokio::test]
+async fn spec_typeclass_method_value_without_type_is_ambiguous() {
     let code = r#"
 class Pick a
     pick : a
@@ -85,25 +91,27 @@ instance Pick bool
 
 pick
 "#;
-    let err = match eval(code) {
+    let err = match eval(code).await {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
     assert!(matches!(err, EngineError::AmbiguousOverload { .. }));
 }
 
-#[test]
-fn spec_defaulting_picks_a_concrete_type_for_numeric_classes() {
+#[tokio::test]
+async fn spec_defaulting_picks_a_concrete_type_for_numeric_classes() {
     // `zero` has type `a` with an `AdditiveMonoid a` constraint.
     // With no other type hints, the engine defaults the ambiguous type.
-    let (heap, pointer) = eval("zero").unwrap();
+    let (heap, pointer) = eval("zero").await.unwrap();
     let value = heap.get(&pointer).unwrap();
     assert!(matches!(value.as_ref(), Value::F32(_)));
 }
 
-#[test]
-fn test_let_tuple_destructuring() {
-    let (heap, pointer) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in x").unwrap();
+#[tokio::test]
+async fn test_let_tuple_destructuring() {
+    let (heap, pointer) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in x")
+        .await
+        .unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::I32(n) => assert_eq!(*n, 1),
         _ => panic!("expected i32, got {}", heap.type_name(&pointer).unwrap()),
@@ -111,7 +119,9 @@ fn test_let_tuple_destructuring() {
     let ty = type_of("let t = (1, \"Hello\", true), (x, y, z) = t in x").unwrap();
     assert_eq!(ty, Type::con("i32", 0));
 
-    let (heap, pointer) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in y").unwrap();
+    let (heap, pointer) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in y")
+        .await
+        .unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::String(s) => assert_eq!(s, "Hello"),
         _ => panic!("expected string, got {}", heap.type_name(&pointer).unwrap()),
@@ -119,7 +129,9 @@ fn test_let_tuple_destructuring() {
     let ty = type_of("let t = (1, \"Hello\", true), (x, y, z) = t in y").unwrap();
     assert_eq!(ty, Type::con("string", 0));
 
-    let (heap, pointer) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in z").unwrap();
+    let (heap, pointer) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in z")
+        .await
+        .unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::Bool(b) => assert!(*b),
         _ => panic!("expected bool, got {}", heap.type_name(&pointer).unwrap()),
@@ -128,10 +140,11 @@ fn test_let_tuple_destructuring() {
     assert_eq!(ty, Type::con("bool", 0));
 }
 
-#[test]
-fn test_match_tuple_destructuring() {
-    let (heap, pointer) =
-        eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> x").unwrap();
+#[tokio::test]
+async fn test_match_tuple_destructuring() {
+    let (heap, pointer) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> x")
+        .await
+        .unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::I32(n) => assert_eq!(*n, 1),
         _ => panic!("expected i32, got {}", heap.type_name(&pointer).unwrap()),
@@ -139,8 +152,9 @@ fn test_match_tuple_destructuring() {
     let ty = type_of("let t = (1, \"Hello\", true) in match t when (x, y, z) -> x").unwrap();
     assert_eq!(ty, Type::con("i32", 0));
 
-    let (heap, pointer) =
-        eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> y").unwrap();
+    let (heap, pointer) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> y")
+        .await
+        .unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::String(s) => assert_eq!(s, "Hello"),
         _ => panic!("expected string, got {}", heap.type_name(&pointer).unwrap()),
@@ -148,8 +162,9 @@ fn test_match_tuple_destructuring() {
     let ty = type_of("let t = (1, \"Hello\", true) in match t when (x, y, z) -> y").unwrap();
     assert_eq!(ty, Type::con("string", 0));
 
-    let (heap, pointer) =
-        eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> z").unwrap();
+    let (heap, pointer) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> z")
+        .await
+        .unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::Bool(b) => assert!(*b),
         _ => panic!("expected bool, got {}", heap.type_name(&pointer).unwrap()),
@@ -158,9 +173,9 @@ fn test_match_tuple_destructuring() {
     assert_eq!(ty, Type::con("bool", 0));
 }
 
-#[test]
-fn test_tuple_projection() {
-    let (heap, pointer) = eval("let t = (4, \"Hello\", true) in t.0").unwrap();
+#[tokio::test]
+async fn test_tuple_projection() {
+    let (heap, pointer) = eval("let t = (4, \"Hello\", true) in t.0").await.unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::I32(n) => assert_eq!(*n, 4),
         _ => panic!("expected i32, got {}", heap.type_name(&pointer).unwrap()),
@@ -168,7 +183,7 @@ fn test_tuple_projection() {
     let ty = type_of("let t = (4, \"Hello\", true) in t.0").unwrap();
     assert_eq!(ty, Type::con("i32", 0));
 
-    let (heap, pointer) = eval("let t = (4, \"Hello\", true) in t.1").unwrap();
+    let (heap, pointer) = eval("let t = (4, \"Hello\", true) in t.1").await.unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::String(s) => assert_eq!(s, "Hello"),
         _ => panic!("expected string, got {}", heap.type_name(&pointer).unwrap()),
@@ -176,7 +191,7 @@ fn test_tuple_projection() {
     let ty = type_of("let t = (4, \"Hello\", true) in t.1").unwrap();
     assert_eq!(ty, Type::con("string", 0));
 
-    let (heap, pointer) = eval("let t = (4, \"Hello\", true) in t.2").unwrap();
+    let (heap, pointer) = eval("let t = (4, \"Hello\", true) in t.2").await.unwrap();
     match heap.get(&pointer).unwrap().as_ref() {
         Value::Bool(b) => assert!(*b),
         _ => panic!("expected bool, got {}", heap.type_name(&pointer).unwrap()),

@@ -1,13 +1,18 @@
-use rex::{Engine, EngineError, Heap, Parser, Pointer, Token, Type, TypeSystem, Value};
+use rex::{
+    Engine, EngineError, GasCosts, GasMeter, Heap, Parser, Pointer, Token, Type, TypeSystem, Value,
+};
 use rex_engine::assert_pointer_eq;
 
-fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
+async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
     let mut engine = Engine::with_prelude().unwrap();
     engine.inject_decls(&program.decls)?;
-    let pointer = engine.eval(program.expr.as_ref())?;
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let pointer = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await?;
     let heap = engine.into_heap();
     Ok((heap, pointer))
 }
@@ -22,25 +27,28 @@ fn type_of(code: &str) -> Type {
     ty
 }
 
-#[test]
-fn let_rec_self_recursive_factorial() {
+#[tokio::test]
+async fn let_rec_self_recursive_factorial() {
     let (heap, pointer) =
-        eval("let rec fact = \\n -> if n == 0 then 1 else n * fact (n - 1) in fact 6").unwrap();
+        eval("let rec fact = \\n -> if n == 0 then 1 else n * fact (n - 1) in fact 6")
+            .await
+            .unwrap();
     let expected = heap.alloc_i32(720).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
 
-#[test]
-fn let_rec_self_recursive_fibonacci() {
+#[tokio::test]
+async fn let_rec_self_recursive_fibonacci() {
     let (heap, pointer) =
         eval("let rec fib = \\n -> if n <= 1 then n else fib (n - 1) + fib (n - 2) in fib 8")
+            .await
             .unwrap();
     let expected = heap.alloc_i32(21).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
 
-#[test]
-fn let_rec_mutual_even_odd() {
+#[tokio::test]
+async fn let_rec_mutual_even_odd() {
     let (heap, pointer) = eval(
         r#"
 let rec
@@ -51,6 +59,7 @@ in
   (even 10, odd 10, even 11, odd 11)
 "#,
     )
+    .await
     .unwrap();
 
     let t0 = heap.alloc_bool(true).unwrap();
@@ -61,8 +70,8 @@ in
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
 
-#[test]
-fn let_rec_mutual_three_function_group() {
+#[tokio::test]
+async fn let_rec_mutual_three_function_group() {
     let (heap, pointer) = eval(
         r#"
 let rec
@@ -75,6 +84,7 @@ in
   (step0 3, step1 3, step2 3)
 "#,
     )
+    .await
     .unwrap();
 
     let a = heap.alloc_i32(0).unwrap();
@@ -84,9 +94,11 @@ in
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
 
-#[test]
-fn let_rec_function_is_still_polymorphic() {
-    let (heap, pointer) = eval("let rec id = \\x -> x in (id 1, id true)").unwrap();
+#[tokio::test]
+async fn let_rec_function_is_still_polymorphic() {
+    let (heap, pointer) = eval("let rec id = \\x -> x in (id 1, id true)")
+        .await
+        .unwrap();
     let one = heap.alloc_i32(1).unwrap();
     let tru = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![one, tru]).unwrap();
@@ -97,9 +109,9 @@ fn let_rec_function_is_still_polymorphic() {
     assert_eq!(ty, expected_ty);
 }
 
-#[test]
-fn let_rec_allows_self_referential_data_cycles() {
-    let (heap, pointer) = eval("let rec xs = Cons 1 xs in xs").unwrap();
+#[tokio::test]
+async fn let_rec_allows_self_referential_data_cycles() {
+    let (heap, pointer) = eval("let rec xs = Cons 1 xs in xs").await.unwrap();
     let value = heap.get(&pointer).unwrap();
     let Value::Adt(tag, args) = value.as_ref() else {
         panic!(
@@ -112,9 +124,11 @@ fn let_rec_allows_self_referential_data_cycles() {
     assert_pointer_eq!(&heap, &pointer, &args[1]);
 }
 
-#[test]
-fn let_rec_allows_mutual_data_cycles() {
-    let (heap, pointer) = eval("let rec a = Cons 1 b and b = Cons 2 a in (a, b)").unwrap();
+#[tokio::test]
+async fn let_rec_allows_mutual_data_cycles() {
+    let (heap, pointer) = eval("let rec a = Cons 1 b and b = Cons 2 a in (a, b)")
+        .await
+        .unwrap();
     let tuple = heap.get(&pointer).unwrap();
     let Value::Tuple(items) = tuple.as_ref() else {
         panic!("expected tuple, got {}", heap.type_name(&pointer).unwrap());

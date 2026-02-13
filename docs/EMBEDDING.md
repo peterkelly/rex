@@ -22,11 +22,9 @@ Recommended defaults for untrusted input:
 - Treat `EngineError::OutOfGas` and `EngineError::Cancelled` as normal user-visible outcomes.
 - Run evaluation in an isolation boundary you can hard-kill (separate process/container), with CPU/RSS/time limits.
 
-Async integration footgun:
+Evaluation API:
 
-- `Engine::eval()` will block on async natives internally. If your server is async, prefer
-  `Engine::eval_async*` end-to-end, or run `Engine::eval()` on a dedicated blocking thread. Do not
-  call `Engine::eval()` from inside another executor context that cannot be nested.
+- Evaluation is async and gas-metered via `Engine::eval_with_gas`.
 
 ## Evaluate Rex Code
 
@@ -34,6 +32,7 @@ Async integration footgun:
 use rex_engine::Engine;
 use rex_lexer::Token;
 use rex_parser::Parser;
+use rex_util::{GasCosts, GasMeter};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
@@ -41,7 +40,10 @@ let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude()?;
 engine.inject_decls(&program.decls)?;
-let value = engine.eval(program.expr.as_ref())?;
+let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let value = engine
+    .eval_with_gas(program.expr.as_ref(), &mut gas)
+    .await?;
 println!("{value}");
 ```
 
@@ -135,6 +137,7 @@ assert_eq!(ty.to_string(), "i32");
 use rex_engine::Engine;
 use rex_lexer::Token;
 use rex_parser::Parser;
+use rex_util::{GasCosts, GasMeter};
 
 let code = r#"
 class Size a
@@ -155,7 +158,10 @@ let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude()?;
 engine.inject_decls(&program.decls)?;
-let value = engine.eval(program.expr.as_ref())?;
+let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let value = engine
+    .eval_with_gas(program.expr.as_ref(), &mut gas)
+    .await?;
 println!("{value}");
 ```
 
@@ -174,10 +180,11 @@ engine.inject_fn1("inc", |x: i32| x + 1)?;
 ### Async Natives
 
 If your host functions are async, inject them with `inject_async_fn*` and evaluate with
-`Engine::eval_async` (or call `Engine::eval` to block on async natives).
+`Engine::eval_with_gas`.
 
 ```rust
 use rex_engine::Engine;
+use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude()?;
 engine.inject_async_fn1("inc", |x: i32| async move { x + 1 })?;
@@ -187,7 +194,8 @@ let mut parser = rex_parser::Parser::new(tokens);
 let program = parser
     .parse_program()
     .map_err(|errs| format!("parse error: {errs:?}"))?;
-let v = engine.eval_async(program.expr.as_ref()).await?;
+let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let v = engine.eval_with_gas(program.expr.as_ref(), &mut gas).await?;
 println!("{v}");
 ```
 
@@ -198,7 +206,7 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 
 ```rust
 use rex_engine::{CancellationToken, Engine, EngineError};
-use futures::executor::block_on;
+use rex_util::{GasCosts, GasMeter};
 
 let tokens = rex_lexer::Token::tokenize("stall")?;
 let mut parser = rex_parser::Parser::new(tokens);
@@ -214,11 +222,12 @@ engine.inject_async_fn0_cancellable("stall", |token: CancellationToken| async mo
 })?;
 
 let token = engine.cancellation_token();
-let handle = std::thread::spawn(move || block_on(engine.eval_async(expr.as_ref())));
+let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let handle = tokio::spawn(async move { engine.eval_with_gas(expr.as_ref(), &mut gas).await });
 token.cancel();
 let res = handle
-    .join()
-    .map_err(|_| EngineError::Internal("evaluation thread panicked".into()))?;
+    .await
+    .map_err(|_| EngineError::Internal("evaluation task panicked".into()))?;
 assert!(matches!(res, Err(EngineError::Cancelled)));
 ```
 
@@ -228,7 +237,7 @@ To defend against untrusted/large programs, you can run the pipeline with a gas 
 
 - `Parser::parse_program_with_gas`
 - `TypeSystem::infer_with_gas` / `infer_typed_with_gas`
-- `Engine::eval_with_gas` / `eval_async_with_gas`
+- `Engine::eval_with_gas`
 
 ### Parsing Limits
 
@@ -252,6 +261,7 @@ The derive:
 ```rust
 use rex_engine::{Engine, FromValue};
 use rex_proc_macro::Rex;
+use rex_util::{GasCosts, GasMeter};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -262,13 +272,12 @@ enum Maybe<T> {
 let mut engine = Engine::with_prelude()?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
-let v = engine.eval(
-    rex_parser::Parser::new(rex_lexer::Token::tokenize("Just 1")?)
-        .parse_program()
-        .map_err(|errs| format!("parse error: {errs:?}"))?
-        .expr
-        .as_ref(),
-)?;
+let expr = rex_parser::Parser::new(rex_lexer::Token::tokenize("Just 1")?)
+    .parse_program()
+    .map_err(|errs| format!("parse error: {errs:?}"))?
+    .expr;
+let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let v = engine.eval_with_gas(expr.as_ref(), &mut gas).await?;
 assert_eq!(Maybe::<i32>::from_value(&v, "v")?, Maybe::Just(1));
 ```
 
@@ -279,4 +288,3 @@ Some workloads (very deep nesting) can overflow the default thread stack. The pr
 
 - `rex_parser::Parser::parse_program_with_stack_size`
 - `rex_ts::TypeSystem::infer_with_stack_size`
-- `rex_engine::Engine::eval_with_stack_size`

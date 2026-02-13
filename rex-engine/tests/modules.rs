@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rex_engine::{Engine, Pointer, Value};
+use rex_util::{GasCosts, GasMeter};
 use uuid::Uuid;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -22,6 +23,37 @@ fn engine_with_prelude() -> Engine {
     Engine::with_prelude().unwrap()
 }
 
+fn unlimited_gas() -> GasMeter {
+    GasMeter::unlimited(GasCosts::sensible_defaults())
+}
+
+async fn eval_module_file(
+    engine: &mut Engine,
+    path: &Path,
+) -> Result<Pointer, rex_engine::EngineError> {
+    let mut gas = unlimited_gas();
+    engine.eval_module_file_with_gas(path, &mut gas).await
+}
+
+async fn eval_snippet(
+    engine: &mut Engine,
+    source: &str,
+) -> Result<Pointer, rex_engine::EngineError> {
+    let mut gas = unlimited_gas();
+    engine.eval_snippet_with_gas(source, &mut gas).await
+}
+
+async fn eval_snippet_at(
+    engine: &mut Engine,
+    source: &str,
+    importer_path: impl AsRef<Path>,
+) -> Result<Pointer, rex_engine::EngineError> {
+    let mut gas = unlimited_gas();
+    engine
+        .eval_snippet_at_with_gas(source, importer_path, &mut gas)
+        .await
+}
+
 macro_rules! pvals {
     ($engine:expr, $vals:expr) => {
         $vals
@@ -40,8 +72,8 @@ macro_rules! pvals {
     };
 }
 
-#[test]
-fn module_import_local_pub() {
+#[tokio::test]
+async fn module_import_local_pub() {
     let dir = temp_dir("module_import_local_pub");
     let main = dir.join("main.rex");
     let module = dir.join("foo").join("bar.rex");
@@ -64,7 +96,7 @@ Bar.add 1 2
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine.eval_module_file(&main).unwrap();
+    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -79,8 +111,8 @@ Bar.add 1 2
     }
 }
 
-#[test]
-fn module_import_rejects_private_access() {
+#[tokio::test]
+async fn module_import_rejects_private_access() {
     let dir = temp_dir("module_import_rejects_private_access");
     let main = dir.join("main.rex");
     let module = dir.join("foo").join("bar.rex");
@@ -103,7 +135,7 @@ Bar.hidden 1
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match engine.eval_module_file(&main) {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -111,8 +143,8 @@ Bar.hidden 1
     assert!(msg.contains("does not export"), "{msg}");
 }
 
-#[test]
-fn module_import_include_roots() {
+#[tokio::test]
+async fn module_import_include_roots() {
     let dir = temp_dir("module_import_include_roots");
     let include_root = dir.join("includes");
     let main_root = dir.join("src");
@@ -138,7 +170,7 @@ Math.inc 41
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     engine.add_include_resolver(&include_root).unwrap();
-    let value_ptr = engine.eval_module_file(&main).unwrap();
+    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -153,8 +185,8 @@ Math.inc 41
     }
 }
 
-#[test]
-fn snippet_can_import_with_explicit_base() {
+#[tokio::test]
+async fn snippet_can_import_with_explicit_base() {
     let dir = temp_dir("snippet_can_import_with_explicit_base");
     let module = dir.join("foo").join("bar.rex");
     write_file(
@@ -167,15 +199,16 @@ pub fn add x: i32 -> y: i32 -> i32 = x + y
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine
-        .eval_snippet_at(
-            r#"
+    let value_ptr = eval_snippet_at(
+        &mut engine,
+        r#"
 import foo.bar as Bar
 Bar.add 20 22
 "#,
-            dir.join("_snippet.rex"),
-        )
-        .unwrap();
+        dir.join("_snippet.rex"),
+    )
+    .await
+    .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -191,13 +224,13 @@ Bar.add 20 22
     }
 }
 
-#[test]
-fn std_json_encode_decode_smoke() {
+#[tokio::test]
+async fn std_json_encode_decode_smoke() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine
-        .eval_snippet(
-            r#"
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
 import std.json as Json
 
 let
@@ -271,8 +304,9 @@ let
 in
   (b_ok, n_ok, opt_val, list_head, arr0, dict_sum, res_ok, res_err_ok)
 "#,
-        )
-        .unwrap();
+    )
+    .await
+    .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -299,13 +333,13 @@ in
     assert_eq!(got, vec![1, 1, 7, 1, 4, 3, 3, 1]);
 }
 
-#[test]
-fn std_json_roundtrip_nested() {
+#[tokio::test]
+async fn std_json_roundtrip_nested() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine
-        .eval_snippet(
-            r#"
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
 import std.json as Json
 
 let
@@ -331,8 +365,9 @@ let
 in
   (xs_ok, arr_ok)
 "#,
-        )
-        .unwrap();
+    )
+    .await
+    .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -359,13 +394,13 @@ in
     assert_eq!(got, vec![1, 1]);
 }
 
-#[test]
-fn std_json_decode_errors_have_useful_messages() {
+#[tokio::test]
+async fn std_json_decode_errors_have_useful_messages() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine
-        .eval_snippet(
-            r#"
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
 import std.json as Json
 
 let
@@ -397,8 +432,9 @@ let
 in
   (both, neither, wrong_kind, bad_list_elem)
 "#,
-        )
-        .unwrap();
+    )
+    .await
+    .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -429,13 +465,13 @@ in
     assert!(got[3].contains("expected number, got string"), "{}", got[3]);
 }
 
-#[test]
-fn std_json_numeric_decode_errors() {
+#[tokio::test]
+async fn std_json_numeric_decode_errors() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine
-        .eval_snippet(
-            r#"
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
 import std.json as Json
 
 let
@@ -451,8 +487,9 @@ let
 in
   (u8_overflow, i32_fractional)
 "#,
-        )
-        .unwrap();
+    )
+    .await
+    .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -481,13 +518,13 @@ in
     assert!(got[1].contains("representable as i32"), "{}", got[1]);
 }
 
-#[test]
-fn std_json_pretty_renders_valid_json() {
+#[tokio::test]
+async fn std_json_pretty_renders_valid_json() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine
-        .eval_snippet(
-            r#"
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
 import std.json as Json
 
 let
@@ -505,8 +542,9 @@ let
 in
   pretty v
 "#,
-        )
-        .unwrap();
+    )
+    .await
+    .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -538,13 +576,13 @@ in
     assert_eq!(arr[2], serde_json::Value::Null);
 }
 
-#[test]
-fn std_json_parse_and_from_string_roundtrip() {
+#[tokio::test]
+async fn std_json_parse_and_from_string_roundtrip() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = engine
-        .eval_snippet(
-            r#"
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
 import std.json as Json
 
 let
@@ -580,8 +618,9 @@ let
 in
   (parsed_ok, decoded_ok, parse_err)
 "#,
-        )
-        .unwrap();
+    )
+    .await
+    .unwrap();
     let value = engine
         .heap()
         .get(&value_ptr)

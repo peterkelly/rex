@@ -3,13 +3,12 @@
 
 use rex_engine::Engine;
 use rex_fuzz::{
-    FuzzError, gas_meter_from_env, parser_limits_from_env, read_stdin_bytes, run_with_stack,
-    stack_bytes_from_env, tokenize_fuzz_input,
+    FuzzError, gas_meter_from_env, parser_limits_from_env, read_stdin_bytes, tokenize_fuzz_input,
 };
 use rex_parser::Parser;
 use rex_ts::TypeSystem;
 
-fn run_one(input: &[u8]) {
+async fn run_one(input: &[u8]) {
     let mut gas = gas_meter_from_env(300_000);
     let Some(tokens) = tokenize_fuzz_input(input) else {
         return;
@@ -38,11 +37,12 @@ fn run_one(input: &[u8]) {
     if engine.inject_decls(&program.decls).is_err() {
         return;
     }
-    let _ = engine.eval_with_gas(program.expr.as_ref(), &mut gas);
+    let _ = engine.eval_with_gas(program.expr.as_ref(), &mut gas).await;
 }
 
-fn main() -> Result<(), FuzzError> {
-    let stack_bytes = stack_bytes_from_env(16);
+#[tokio::main]
+async fn main() -> Result<(), FuzzError> {
     let input = read_stdin_bytes()?;
-    run_with_stack("rex-fuzz-e2e", stack_bytes, move || run_one(&input))
+    run_one(&input).await;
+    Ok(())
 }
