@@ -1347,64 +1347,48 @@ impl<T: RexType> RexType for Option<T> {
     }
 }
 
-fn map_value_type_to_native(expected: &str, err: EngineError) -> EngineError {
-    match err {
-        EngineError::NativeType { got, .. } => EngineError::NativeType {
-            expected: expected.into(),
-            got,
-        },
-        other => other,
-    }
-}
-
 impl FromPointer for bool {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         heap.pointer_as_bool(pointer)
-            .map_err(|err| map_value_type_to_native("bool", err))
     }
 }
 
 macro_rules! impl_from_pointer_num {
-    ($t:ty, $pointer_as:ident, $label:literal) => {
+    ($t:ty, $pointer_as:ident) => {
         impl FromPointer for $t {
             fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-                heap.$pointer_as(pointer)
-                    .map(|v| v as $t)
-                    .map_err(|err| map_value_type_to_native($label, err))
+                heap.$pointer_as(pointer).map(|v| v as $t)
             }
         }
     };
 }
 
-impl_from_pointer_num!(u8, pointer_as_u8, "u8");
-impl_from_pointer_num!(u16, pointer_as_u16, "u16");
-impl_from_pointer_num!(u32, pointer_as_u32, "u32");
-impl_from_pointer_num!(u64, pointer_as_u64, "u64");
-impl_from_pointer_num!(i8, pointer_as_i8, "i8");
-impl_from_pointer_num!(i16, pointer_as_i16, "i16");
-impl_from_pointer_num!(i32, pointer_as_i32, "i32");
-impl_from_pointer_num!(i64, pointer_as_i64, "i64");
-impl_from_pointer_num!(f32, pointer_as_f32, "f32");
-impl_from_pointer_num!(f64, pointer_as_f64, "f64");
+impl_from_pointer_num!(u8, pointer_as_u8);
+impl_from_pointer_num!(u16, pointer_as_u16);
+impl_from_pointer_num!(u32, pointer_as_u32);
+impl_from_pointer_num!(u64, pointer_as_u64);
+impl_from_pointer_num!(i8, pointer_as_i8);
+impl_from_pointer_num!(i16, pointer_as_i16);
+impl_from_pointer_num!(i32, pointer_as_i32);
+impl_from_pointer_num!(i64, pointer_as_i64);
+impl_from_pointer_num!(f32, pointer_as_f32);
+impl_from_pointer_num!(f64, pointer_as_f64);
 
 impl FromPointer for String {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         heap.pointer_as_string(pointer)
-            .map_err(|err| map_value_type_to_native("string", err))
     }
 }
 
 impl FromPointer for Uuid {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         heap.pointer_as_uuid(pointer)
-            .map_err(|err| map_value_type_to_native("uuid", err))
     }
 }
 
 impl FromPointer for DateTime<Utc> {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         heap.pointer_as_datetime(pointer)
-            .map_err(|err| map_value_type_to_native("datetime", err))
     }
 }
 
@@ -1419,9 +1403,7 @@ where
     T: FromPointer,
 {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        let xs = heap
-            .pointer_as_array(pointer)
-            .map_err(|err| map_value_type_to_native("vec", err))?;
+        let xs = heap.pointer_as_array(pointer)?;
         let mut ys = Vec::with_capacity(xs.len());
         for x in &xs {
             ys.push(T::from_pointer(heap, x)?);
@@ -1435,9 +1417,7 @@ where
     T: FromPointer,
 {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        let (tag, args) = heap
-            .pointer_as_adt(pointer)
-            .map_err(|err| map_value_type_to_native("vec", err))?;
+        let (tag, args) = heap.pointer_as_adt(pointer)?;
         if sym_eq(&tag, "Some") && args.len() == 1 {
             return Ok(Some(T::from_pointer(heap, &args[0])?));
         }
@@ -1465,9 +1445,7 @@ impl IntoPointer for () {
 
 impl FromPointer for () {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        let items = heap
-            .pointer_as_tuple(pointer)
-            .map_err(|err| map_value_type_to_native("tuple", err))?;
+        let items = heap.pointer_as_tuple(pointer)?;
         if items.is_empty() {
             Ok(())
         } else {
@@ -1499,9 +1477,7 @@ macro_rules! impl_tuple_traits {
         impl<$($name: FromPointer),+> FromPointer for ($($name,)+) {
             #[allow(non_snake_case)]
             fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-                let items = heap
-                    .pointer_as_tuple(pointer)
-                    .map_err(|err| map_value_type_to_native("tuple", err))?;
+                let items = heap.pointer_as_tuple(pointer)?;
                 match items.as_slice() {
                     [$($name),+] => {
                         Ok(($(<$name as FromPointer>::from_pointer(heap, $name)?),+,))

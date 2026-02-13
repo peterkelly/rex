@@ -32,16 +32,6 @@ fn invoke_pointer_fn(
     apply_pointer(engine, func, arg, func_ty, arg_ty)
 }
 
-fn map_value_type_to_native(err: EngineError, expected: &str) -> EngineError {
-    match err {
-        EngineError::NativeType { got, .. } => EngineError::NativeType {
-            expected: expected.into(),
-            got,
-        },
-        other => other,
-    }
-}
-
 fn expect_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     let value = heap.get(pointer)?;
     list_to_vec(heap, value.as_ref())
@@ -147,7 +137,6 @@ pub(crate) fn len_value_for_type(
 
 pub(crate) fn expect_array(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     heap.pointer_as_array(pointer)
-        .map_err(|err| map_value_type_to_native(err, "array"))
 }
 
 pub(crate) fn option_from_pointer(
@@ -161,9 +150,7 @@ pub(crate) fn option_from_pointer(
 }
 
 pub(crate) fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Pointer>, EngineError> {
-    let (tag, args) = heap
-        .pointer_as_adt(pointer)
-        .map_err(|err| map_value_type_to_native(err, "Option"))?;
+    let (tag, args) = heap.pointer_as_adt(pointer)?;
     if sym_eq(&tag, "Some") && args.len() == 1 {
         Ok(Some(args[0].clone()))
     } else if sym_eq(&tag, "None") && args.is_empty() {
@@ -180,9 +167,7 @@ pub(crate) fn result_value(
     heap: &Heap,
     pointer: &Pointer,
 ) -> Result<Result<Pointer, Pointer>, EngineError> {
-    let (tag, args) = heap
-        .pointer_as_adt(pointer)
-        .map_err(|err| map_value_type_to_native(err, "Result"))?;
+    let (tag, args) = heap.pointer_as_adt(pointer)?;
     if sym_eq(&tag, "Ok") && args.len() == 1 {
         Ok(Ok(args[0].clone()))
     } else if sym_eq(&tag, "Err") && args.len() == 1 {
@@ -433,13 +418,7 @@ pub(crate) fn unzip_tuple2(
     let mut left = Vec::new();
     let mut right = Vec::new();
     for pair in pairs {
-        let elems = heap.pointer_as_tuple(&pair).map_err(|err| match err {
-            EngineError::NativeType { got, .. } => EngineError::NativeType {
-                expected: "tuple2".into(),
-                got,
-            },
-            other => other,
-        })?;
+        let elems = heap.pointer_as_tuple(&pair)?;
         let len = elems.len();
         if len != 2 {
             return Err(EngineError::NativeType {
@@ -1248,10 +1227,7 @@ pub(crate) fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
-                let map = engine
-                    .heap()
-                    .pointer_as_dict(&args[1])
-                    .map_err(|err| map_value_type_to_native(err, "dict"))?;
+                let map = engine.heap().pointer_as_dict(&args[1])?;
                 let func = args[0].clone();
                 let mut out: BTreeMap<Symbol, Pointer> = BTreeMap::new();
                 for (k, v) in &map {
@@ -1295,10 +1271,7 @@ pub(crate) fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
-                let map = engine
-                    .heap()
-                    .pointer_as_dict(&args[1])
-                    .map_err(|err| map_value_type_to_native(err, "dict"))?;
+                let map = engine.heap().pointer_as_dict(&args[1])?;
 
                 let func = args[0].clone();
                 let mut out: BTreeMap<Symbol, Pointer> = BTreeMap::new();
@@ -2874,16 +2847,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                 let idx_ptr = args[0].clone();
                 let idx = i32::from_pointer(_engine.heap(), &idx_ptr)?;
                 let idx_usize = checked_index(sym("prim_get"), idx, size)?;
-                let xs = _engine
-                    .heap()
-                    .pointer_as_tuple(&args[1])
-                    .map_err(|err| match err {
-                        EngineError::NativeType { got, .. } => EngineError::NativeType {
-                            expected: format!("tuple{}", size),
-                            got,
-                        },
-                        other => other,
-                    })?;
+                let xs = _engine.heap().pointer_as_tuple(&args[1])?;
                 if xs.len() != size {
                     return Err(EngineError::NativeType {
                         expected: format!("tuple{}", size),

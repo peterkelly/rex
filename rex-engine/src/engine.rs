@@ -781,17 +781,7 @@ impl Engine {
                 Some(&pretty_ty),
                 Some(&arg_ty),
             )?;
-            let message =
-                engine
-                    .heap()
-                    .pointer_as_string(&rendered_ptr)
-                    .map_err(|err| match err {
-                        EngineError::NativeType { got, .. } => EngineError::NativeType {
-                            expected: "string".to_string(),
-                            got,
-                        },
-                        other => other,
-                    })?;
+            let message = engine.heap().pointer_as_string(&rendered_ptr)?;
 
             log(&message);
             engine.heap().alloc_string(message)

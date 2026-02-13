@@ -35,16 +35,6 @@ fn value_type_name(value: &Value) -> &'static str {
     value.value_type_name()
 }
 
-fn map_value_type_to_native(err: EngineError, expected: &str) -> EngineError {
-    match err {
-        EngineError::NativeType { got, .. } => EngineError::NativeType {
-            expected: expected.into(),
-            got,
-        },
-        other => other,
-    }
-}
-
 fn unit_type() -> Type {
     Type::tuple(vec![])
 }
@@ -75,15 +65,10 @@ fn list_to_vec(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineErr
 }
 
 fn array_u8_to_bytes(heap: &Heap, pointer: &Pointer) -> Result<Vec<u8>, EngineError> {
-    let elems = heap
-        .pointer_as_array(pointer)
-        .map_err(|err| map_value_type_to_native(err, "Array u8"))?;
+    let elems = heap.pointer_as_array(pointer)?;
     let mut out = Vec::with_capacity(elems.len());
     for elem in &elems {
-        out.push(
-            heap.pointer_as_u8(elem)
-                .map_err(|err| map_value_type_to_native(err, "u8"))?,
-        );
+        out.push(heap.pointer_as_u8(elem)?);
     }
     Ok(out)
 }
@@ -271,16 +256,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let map = engine
-                    .heap()
-                    .pointer_as_dict(&args[0])
-                    .map_err(|err| match err {
-                        EngineError::NativeType { got, .. } => EngineError::NativeType {
-                            expected: "{ cmd: string, args: List string }".into(),
-                            got,
-                        },
-                        other => other,
-                    })?;
+                let map = engine.heap().pointer_as_dict(&args[0])?;
 
                 let cmd_pointer = map
                     .get(&sym("cmd"))
@@ -510,24 +486,19 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
 }
 
 fn subprocess_id(heap: &Heap, pointer: &Pointer, tag: &Symbol) -> Result<Uuid, EngineError> {
-    let (got_tag, args) = heap
-        .pointer_as_adt(pointer)
-        .map_err(|err| map_value_type_to_native(err, "Subprocess"))?;
+    let (got_tag, args) = heap.pointer_as_adt(pointer)?;
     if &got_tag != tag || args.len() != 1 {
         return Err(EngineError::NativeType {
             expected: "Subprocess".into(),
             got: heap.type_name(pointer)?.into(),
         });
     }
-    let map = heap
-        .pointer_as_dict(&args[0])
-        .map_err(|err| map_value_type_to_native(err, "Subprocess"))?;
+    let map = heap.pointer_as_dict(&args[0])?;
     let id_pointer = map
         .get(&sym("id"))
         .cloned()
         .ok_or_else(|| EngineError::Internal("Subprocess missing id".into()))?;
     heap.pointer_as_uuid(&id_pointer)
-        .map_err(|err| map_value_type_to_native(err, "uuid"))
 }
 
 fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineError> {
