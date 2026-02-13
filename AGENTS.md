@@ -85,8 +85,8 @@ make -C docs html
   with a capital letter.
 - Acceptable keywords: keywords: feat, fix, docs, style, refactor, test, chore
 - First line should be no more than 50 characters in total
-- Rest of the commit message should contain a summary of what change, focusing first on the why
-  and then on the what.
+- Rest of the commit message should contain a summary of the changes, beginning with the reasons
+  why the changes were made.
 - When making a commit, leave untracked files untouched
 
 ## Semantics Changes
