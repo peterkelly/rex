@@ -3,11 +3,11 @@ use rex_engine::assert_pointer_eq;
 
 #[tokio::test]
 async fn vec_from_value() {
-    fn accept_vec(items: Vec<i32>) -> String {
+    fn accept_vec(_state: &(), items: Vec<i32>) -> String {
         format!("accept_vec: {:?}", items)
     }
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_vec", accept_vec).unwrap();
 
     let expr = r#"accept_vec (prim_array_from_list [1, 2, 3])"#;
@@ -28,7 +28,7 @@ async fn vec_from_value() {
 
 #[tokio::test]
 async fn vec_to_value() {
-    fn return_vec(input: String) -> Vec<i32> {
+    fn return_vec(_state: &(), input: String) -> Vec<i32> {
         let mut result: Vec<i32> = Vec::new();
         for i in 0..input.len() {
             result.push(i as i32);
@@ -36,7 +36,7 @@ async fn vec_to_value() {
         result
     }
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("return_vec", return_vec).unwrap();
 
     let expr = r#"return_vec "hello""#;
@@ -63,7 +63,7 @@ async fn vec_to_value() {
 
 #[tokio::test]
 async fn vec_rex_type() {
-    fn return_vec(input: String) -> Vec<i32> {
+    fn return_vec(_state: &(), input: String) -> Vec<i32> {
         let mut result: Vec<i32> = Vec::new();
         for i in 0..input.len() {
             result.push(i as i32);
@@ -71,7 +71,7 @@ async fn vec_rex_type() {
         result
     }
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("return_vec", return_vec).unwrap();
 
     let expr = r#"return_vec "hello""#;
@@ -86,7 +86,7 @@ async fn vec_rex_type() {
 #[tokio::test]
 async fn option_prelude() {
     let expr = r#"(Some 4, None)"#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
@@ -106,12 +106,12 @@ async fn option_prelude() {
 
 #[tokio::test]
 async fn option_from_value() {
-    fn accept_opt(opt: Option<i32>) -> String {
+    fn accept_opt(_state: &(), opt: Option<i32>) -> String {
         format!("accept_opt: {:?}", opt)
     }
 
     let expr = r#"(accept_opt (Some 4), accept_opt None)"#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_opt", accept_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
@@ -133,7 +133,7 @@ async fn option_from_value() {
 
 #[tokio::test]
 async fn option_into_value() {
-    fn return_opt(s: String) -> Option<i32> {
+    fn return_opt(_state: &(), s: String) -> Option<i32> {
         if s.is_empty() {
             None
         } else {
@@ -142,7 +142,7 @@ async fn option_into_value() {
     }
 
     let expr = r#"(return_opt "hello", return_opt "")"#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("return_opt", return_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
@@ -164,7 +164,7 @@ async fn option_into_value() {
 
 #[tokio::test]
 async fn option_rex_type() {
-    fn return_opt(s: String) -> Option<i32> {
+    fn return_opt(_state: &(), s: String) -> Option<i32> {
         if s.is_empty() {
             None
         } else {
@@ -173,7 +173,7 @@ async fn option_rex_type() {
     }
 
     let expr = r#"return_opt "hello""#;
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("return_opt", return_opt).unwrap();
 
     let costs = GasCosts::sensible_defaults();

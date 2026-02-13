@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::EngineError;
 use crate::Env;
-use crate::engine::{NativeCallable, NativeFn, OverloadedFn};
+use crate::engine::{NativeFn, OverloadedFn};
 
 #[derive(Default)]
 struct HeapState {
@@ -294,19 +294,19 @@ impl Heap {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn alloc_native(
         &self,
+        native_id: u64,
         name: Symbol,
         arity: usize,
         typ: Type,
-        func: NativeCallable,
         gas_cost: u64,
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer, EngineError> {
         self.alloc_slot(Value::Native(NativeFn::from_parts(
+            native_id,
             name,
             arity,
             typ,
-            func,
             gas_cost,
             applied,
             applied_types,

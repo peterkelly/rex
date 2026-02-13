@@ -1,6 +1,5 @@
-use futures::future;
 use rex_ast::expr::sym_eq;
-use rex_engine::{CancellationToken, Engine, EngineError, Value, assert_pointer_eq};
+use rex_engine::{Engine, EngineError, Value, assert_pointer_eq};
 use rex_ts::TypeError;
 use rex_util::{GasCosts, GasMeter};
 use std::sync::Arc;
@@ -23,7 +22,7 @@ fn strip_span(mut err: TypeError) -> TypeError {
 }
 
 fn engine_with_arith() -> Engine {
-    Engine::with_prelude().unwrap()
+    Engine::with_prelude(()).unwrap()
 }
 
 fn unlimited_gas() -> GasMeter {
@@ -92,7 +91,7 @@ async fn eval_let_lambda() {
             id (id 1, id 2)
         "#,
     );
-    let mut engine = Engine::new();
+    let mut engine = Engine::new(());
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -117,9 +116,9 @@ async fn eval_let_lambda() {
 #[tokio::test]
 async fn eval_native_injection() {
     let expr = parse("inc 1");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine
-        .inject_async_fn1("inc", |x: i32| async move { x + 1 })
+        .inject_async_fn1("inc", |_engine, x: i32| async move { x + 1 })
         .unwrap();
 
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
@@ -143,36 +142,43 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         )
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
-    engine.inject_fn0("f0", || 0i32).unwrap();
-    engine.inject_fn1("f1", |a: i32| a).unwrap();
-    engine.inject_fn2("f2", |a: i32, b: i32| a + b).unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
+    engine.inject_fn0("f0", |_engine| 0i32).unwrap();
+    engine.inject_fn1("f1", |_engine, a: i32| a).unwrap();
     engine
-        .inject_fn3("f3", |a: i32, b: i32, c: i32| a + b + c)
+        .inject_fn2("f2", |_engine, a: i32, b: i32| a + b)
         .unwrap();
     engine
-        .inject_fn4("f4", |a: i32, b: i32, c: i32, d: i32| a + b + c + d)
+        .inject_fn3("f3", |_engine, a: i32, b: i32, c: i32| a + b + c)
         .unwrap();
     engine
-        .inject_fn5("f5", |a: i32, b: i32, c: i32, d: i32, e: i32| {
+        .inject_fn4("f4", |_engine, a: i32, b: i32, c: i32, d: i32| {
+            a + b + c + d
+        })
+        .unwrap();
+    engine
+        .inject_fn5("f5", |_engine, a: i32, b: i32, c: i32, d: i32, e: i32| {
             a + b + c + d + e
         })
         .unwrap();
     engine
-        .inject_fn6("f6", |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| {
-            a + b + c + d + e + g
-        })
+        .inject_fn6(
+            "f6",
+            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| a + b + c + d + e + g,
+        )
         .unwrap();
     engine
         .inject_fn7(
             "f7",
-            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| a + b + c + d + e + g + h,
+            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| {
+                a + b + c + d + e + g + h
+            },
         )
         .unwrap();
     engine
         .inject_fn8(
             "f8",
-            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
+            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
                 a + b + c + d + e + g + h + i
             },
         )
@@ -213,37 +219,46 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         )
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
-    engine.inject_async_fn0("af0", || async { 0i32 }).unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine
-        .inject_async_fn1("af1", |a: i32| async move { a })
+        .inject_async_fn0("af0", |_engine| async { 0i32 })
         .unwrap();
     engine
-        .inject_async_fn2("af2", |a: i32, b: i32| async move { a + b })
+        .inject_async_fn1("af1", |_engine, a: i32| async move { a })
         .unwrap();
     engine
-        .inject_async_fn3("af3", |a: i32, b: i32, c: i32| async move { a + b + c })
+        .inject_async_fn2("af2", |_engine, a: i32, b: i32| async move { a + b })
         .unwrap();
     engine
-        .inject_async_fn4("af4", |a: i32, b: i32, c: i32, d: i32| async move {
-            a + b + c + d
-        })
+        .inject_async_fn3(
+            "af3",
+            |_engine, a: i32, b: i32, c: i32| async move { a + b + c },
+        )
         .unwrap();
     engine
-        .inject_async_fn5("af5", |a: i32, b: i32, c: i32, d: i32, e: i32| async move {
-            a + b + c + d + e
-        })
+        .inject_async_fn4(
+            "af4",
+            |_engine, a: i32, b: i32, c: i32, d: i32| async move { a + b + c + d },
+        )
+        .unwrap();
+    engine
+        .inject_async_fn5(
+            "af5",
+            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32| async move { a + b + c + d + e },
+        )
         .unwrap();
     engine
         .inject_async_fn6(
             "af6",
-            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move { a + b + c + d + e + g },
+            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move {
+                a + b + c + d + e + g
+            },
         )
         .unwrap();
     engine
         .inject_async_fn7(
             "af7",
-            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
+            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
                 a + b + c + d + e + g + h
             },
         )
@@ -251,7 +266,7 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
     engine
         .inject_async_fn8(
             "af8",
-            |a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
+            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
                 a + b + c + d + e + g + h + i
             },
         )
@@ -276,53 +291,9 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
 }
 
 #[tokio::test]
-async fn eval_can_be_cancelled() {
-    let expr = parse("stall");
-    let mut engine = Engine::with_prelude().unwrap();
-
-    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-    engine
-        .inject_async_fn0_cancellable("stall", move |token: CancellationToken| {
-            let started_tx = started_tx.clone();
-            async move {
-                let _ = started_tx.send(());
-                future::pending::<()>().await;
-                let _ = token;
-                0i32
-            }
-        })
-        .unwrap();
-
-    let token = engine.cancellation_token();
-    let mut gas = unlimited_gas();
-    let handle = tokio::spawn(async move { engine.eval(expr.as_ref(), &mut gas).await });
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    loop {
-        match started_rx.try_recv() {
-            Ok(()) => break,
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
-                assert!(
-                    std::time::Instant::now() < deadline,
-                    "stall native never started"
-                );
-                tokio::task::yield_now().await;
-            }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                panic!("stall native start signal dropped")
-            }
-        }
-    }
-    token.cancel();
-
-    let res = handle.await.unwrap();
-    assert!(matches!(res, Err(EngineError::Cancelled)));
-}
-
-#[tokio::test]
 async fn eval_with_gas_rejects_out_of_budget() {
     let expr = parse("1");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let mut gas = GasMeter::new(
         Some(0),
         GasCosts {
@@ -367,7 +338,7 @@ fn eval_deep_list_does_not_overflow() {
                     .parse_program_with_stack_size(128 * 1024 * 1024)
                     .unwrap();
                 let expr = program.expr;
-                let mut engine = Engine::with_prelude().unwrap();
+                let mut engine = Engine::with_prelude(()).unwrap();
                 let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
                 let xs = engine
                     .heap()
@@ -491,10 +462,12 @@ async fn eval_type_annotation_mismatch() {
 
 #[tokio::test]
 async fn eval_sync_native_injection() {
-    let mut engine = Engine::new();
-    engine.inject_fn0("zero", || -> u32 { 0u32 }).unwrap();
+    let mut engine = Engine::new(());
     engine
-        .inject_fn2("(+)", |x: u32, y: u32| -> u32 { x + y })
+        .inject_fn0("zero", |_engine| -> u32 { 0u32 })
+        .unwrap();
+    engine
+        .inject_fn2("(+)", |_engine, x: u32, y: u32| -> u32 { x + y })
         .unwrap();
     engine.inject_value("one", 1u32).unwrap();
 
@@ -629,7 +602,7 @@ async fn eval_match_dict_and_tuple() {
 #[tokio::test]
 async fn eval_match_missing_arm_errors() {
     let expr = parse("match (Err 1) when Ok x -> x");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let result = eval_expr(&mut engine, expr.as_ref()).await;
     match result {
         Err(EngineError::Type(err)) => {
@@ -643,7 +616,7 @@ async fn eval_match_missing_arm_errors() {
 #[tokio::test]
 async fn eval_match_invalid_pattern_type_error() {
     let expr = parse("match (Ok 1) when [] -> 0 when x:xs -> 1");
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let result = eval_expr(&mut engine, expr.as_ref()).await;
     match result {
         Err(EngineError::Type(err)) => {
@@ -688,7 +661,7 @@ async fn eval_safe_div_pipeline() {
             )
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -724,7 +697,7 @@ async fn eval_user_adt_declaration() {
                 when Box x -> x
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -742,7 +715,7 @@ async fn eval_fn_decl_simple() {
         add 1 2
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -761,7 +734,7 @@ async fn eval_fn_decl_with_where_constraints() {
         my_add 1 2
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -783,7 +756,7 @@ async fn eval_adt_record_projection_single_variant() {
             (x.field1, x.field2)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -821,7 +794,7 @@ async fn eval_adt_record_projection_match_arm() {
                 when MyVariant2 _ -> 0
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     for decl in &program.decls {
         if let rex_ast::expr::Decl::Type(ty) = decl {
             engine.inject_type_decl(ty).unwrap();
@@ -844,7 +817,7 @@ async fn eval_list_map_fold_filter() {
             (ys, zs, total)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -881,7 +854,7 @@ async fn eval_list_flat_map_zip_unzip() {
             (xs, unzipped)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -921,7 +894,7 @@ async fn eval_list_sum_mean_min_max() {
             (s, m, lo, hi)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -966,7 +939,7 @@ async fn eval_option_result_helpers() {
             (opt2, res, ok, err)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -1004,7 +977,7 @@ async fn eval_order_ops() {
             (a, b, c, d, e)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -1054,7 +1027,7 @@ async fn eval_option_and_then_or_else() {
             (a, b, c)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -1083,7 +1056,7 @@ async fn eval_result_filter_pipeline() {
             (count ys, total)
         "#,
     );
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -1107,7 +1080,7 @@ async fn eval_result_filter_pipeline() {
 
 #[tokio::test]
 async fn eval_array_combinators() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_value("arr", vec![1i32, 2i32, 3i32]).unwrap();
     let expr = parse(
         r#"

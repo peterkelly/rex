@@ -39,7 +39,7 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
     ];
 
     let mut rng = XorShift64::new(0x7265_785f_6675_7a7a);
-    for i in 0..iters {
+    for _ in 0..iters {
         let len = rng.gen_range(0, 250);
         let mut s = String::with_capacity(len);
         for _ in 0..len {
@@ -48,33 +48,26 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         }
 
         let input = s.clone();
-        let res = tokio::spawn(async move {
-            let tokens = match Token::tokenize(&input) {
-                Ok(t) => t,
-                Err(_) => return,
-            };
+        let tokens = match Token::tokenize(&input) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
 
-            let mut gas = GasMeter::new(Some(200_000), GasCosts::sensible_defaults());
+        let mut gas = GasMeter::new(Some(200_000), GasCosts::sensible_defaults());
 
-            let mut parser = Parser::new(tokens);
-            parser.set_limits(ParserLimits::safe_defaults());
-            let program = match parser.parse_program_with_gas(&mut gas) {
-                Ok(p) => p,
-                Err(_) => return,
-            };
+        let mut parser = Parser::new(tokens);
+        parser.set_limits(ParserLimits::safe_defaults());
+        let program = match parser.parse_program_with_gas(&mut gas) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
 
-            let mut ts = TypeSystem::with_prelude().unwrap();
-            let _ = ts.inject_decls(&program.decls);
-            let _ = ts.infer_with_gas(program.expr.as_ref(), &mut gas);
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let _ = ts.inject_decls(&program.decls);
+        let _ = ts.infer_with_gas(program.expr.as_ref(), &mut gas);
 
-            let mut engine = Engine::with_prelude().unwrap();
-            let _ = engine.inject_decls(&program.decls);
-            let _ = engine.eval(program.expr.as_ref(), &mut gas).await;
-        })
-        .await;
-
-        if res.is_err() {
-            panic!("panic in fuzz iteration {i} with input:\n{s}");
-        }
+        let mut engine = Engine::with_prelude(()).unwrap();
+        let _ = engine.inject_decls(&program.decls);
+        let _ = engine.eval(program.expr.as_ref(), &mut gas).await;
     }
 }

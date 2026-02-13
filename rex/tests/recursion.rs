@@ -5,7 +5,7 @@ async fn eval(source: &str) -> Result<(Heap, Pointer), EngineError> {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
     let pointer = engine.eval(program.expr.as_ref(), &mut gas).await?;

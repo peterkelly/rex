@@ -20,7 +20,7 @@ fn write_file(path: &Path, contents: &str) {
 }
 
 fn engine_with_prelude() -> Engine {
-    Engine::with_prelude().unwrap()
+    Engine::with_prelude(()).unwrap()
 }
 
 fn unlimited_gas() -> GasMeter {

@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-    let mut engine = Engine::with_prelude()?;
+    let mut engine = Engine::with_prelude(())?;
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
     let value = engine
@@ -106,6 +106,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+`Engine` is generic over host state (`Engine<State>`, where `State: Clone + Sync + 'static`).
+Use `Engine::with_prelude(())?` when you do not need host state, or pass your own state value
+to `Engine::new(state)` / `Engine::with_prelude(state)` and access it in injected natives via
+the first callback parameter (`&State`) for `inject_fn*` / `inject_async_fn*`.
 
 For deeply nested programs, prefer the large-stack entrypoints:
 
@@ -149,7 +154,7 @@ struct Point {
     y: i32,
 }
 
-let mut engine = Engine::with_prelude()?;
+let mut engine = Engine::with_prelude(())?;
 Point::inject_rex(&mut engine)?;
 
 let tokens = rex_lexer::Token::tokenize("Point { x = 1, y = 2 }")?;

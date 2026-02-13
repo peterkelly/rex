@@ -8,10 +8,11 @@ use rex_ast::expr::{Symbol, intern, sym, sym_eq};
 use rex_ts::{Scheme, Type, TypeKind, Types, unify};
 use uuid::Uuid;
 
+use crate::Engine;
 use crate::engine::{apply as apply_pointer, binary_arg_types};
 use crate::value::{Heap, Pointer, list_to_vec};
 use crate::virtual_export_name;
-use crate::{Engine, EngineError, FromPointer, IntoPointer, OverloadedFn, Value};
+use crate::{EngineError, FromPointer, IntoPointer, OverloadedFn, Value};
 use rex_util::{GasCosts, GasMeter};
 
 fn values_to_ptrs<T: IntoPointer>(
@@ -24,8 +25,8 @@ fn values_to_ptrs<T: IntoPointer>(
         .collect()
 }
 
-async fn invoke_pointer_fn(
-    engine: &Engine,
+async fn invoke_pointer_fn<State: Clone + Sync + 'static>(
+    engine: &Engine<State>,
     func: Pointer,
     arg: Pointer,
     func_ty: Option<&Type>,
@@ -114,8 +115,8 @@ pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     }
 }
 
-pub(crate) async fn resolve_binary_op(
-    engine: &Engine,
+pub(crate) async fn resolve_binary_op<State: Clone + Sync + 'static>(
+    engine: &Engine<State>,
     name: &str,
     elem_ty: &Type,
 ) -> Result<Pointer, EngineError> {
@@ -233,8 +234,8 @@ pub(crate) fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) async fn map_values<F, I, T>(
-    engine: &Engine,
+pub(crate) async fn map_values<State: Clone + Sync + 'static, F, I, T>(
+    engine: &Engine<State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -256,8 +257,8 @@ where
     Ok(out)
 }
 
-pub(crate) async fn filter_values<P, I, T>(
-    engine: &Engine,
+pub(crate) async fn filter_values<State: Clone + Sync + 'static, P, I, T>(
+    engine: &Engine<State>,
     pred: P,
     pred_ty: &Type,
     elem_ty: &Type,
@@ -287,8 +288,8 @@ where
     Ok(out)
 }
 
-pub(crate) async fn filter_map_values<F, I, T>(
-    engine: &Engine,
+pub(crate) async fn filter_map_values<State: Clone + Sync + 'static, F, I, T>(
+    engine: &Engine<State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -312,8 +313,8 @@ where
     Ok(out)
 }
 
-pub(crate) async fn flat_map_values<F, I, T>(
-    engine: &Engine,
+pub(crate) async fn flat_map_values<State: Clone + Sync + 'static, F, I, T>(
+    engine: &Engine<State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -336,8 +337,8 @@ where
     Ok(out)
 }
 
-pub(crate) async fn foldl_values(
-    engine: &Engine,
+pub(crate) async fn foldl_values<State: Clone + Sync + 'static>(
+    engine: &Engine<State>,
     func: Pointer,
     func_ty: &Type,
     acc_ty: &Type,
@@ -354,8 +355,8 @@ pub(crate) async fn foldl_values(
     Ok(acc)
 }
 
-pub(crate) async fn foldr_values(
-    engine: &Engine,
+pub(crate) async fn foldr_values<State: Clone + Sync + 'static>(
+    engine: &Engine<State>,
     func: Pointer,
     func_ty: &Type,
     acc_ty: &Type,
@@ -596,7 +597,9 @@ fn cmp_value_by_type(
     }
 }
 
-pub(crate) fn inject_prelude_adts(engine: &mut Engine) -> Result<(), EngineError> {
+pub(crate) fn inject_prelude_adts<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
     let mut list_adt = engine.adt_decl("List", &["a"]);
     let a_name = sym("a");
     let a = list_adt
@@ -631,45 +634,53 @@ pub(crate) fn inject_prelude_adts(engine: &mut Engine) -> Result<(), EngineError
     Ok(())
 }
 
-pub(crate) fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError> {
+pub(crate) fn inject_equality_ops<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
     // Equality primitives are monomorphic overloads (same name, different
     // concrete types), matching the numeric `prim_add` style.
-    engine.inject_fn2("prim_eq", |a: bool, b: bool| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: bool, b: bool| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: bool, b: bool| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: bool, b: bool| -> bool { a != b })?;
 
-    engine.inject_fn2("prim_eq", |a: u8, b: u8| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: u8, b: u8| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: u16, b: u16| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: u16, b: u16| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: u32, b: u32| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: u32, b: u32| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: u64, b: u64| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: u64, b: u64| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: u8, b: u8| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: u8, b: u8| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: u16, b: u16| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: u16, b: u16| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: u32, b: u32| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: u32, b: u32| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: u64, b: u64| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: u64, b: u64| -> bool { a != b })?;
 
-    engine.inject_fn2("prim_eq", |a: i8, b: i8| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: i8, b: i8| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: i16, b: i16| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: i16, b: i16| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: i32, b: i32| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: i32, b: i32| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: i64, b: i64| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: i64, b: i64| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: i8, b: i8| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: i8, b: i8| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: i16, b: i16| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: i16, b: i16| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: i32, b: i32| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: i32, b: i32| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: i64, b: i64| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: i64, b: i64| -> bool { a != b })?;
 
-    engine.inject_fn2("prim_eq", |a: f32, b: f32| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: f32, b: f32| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: f64, b: f64| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: f64, b: f64| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: f32, b: f32| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: f32, b: f32| -> bool { a != b })?;
+    engine.inject_fn2("prim_eq", |_engine, a: f64, b: f64| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: f64, b: f64| -> bool { a != b })?;
 
-    engine.inject_fn2("prim_eq", |a: String, b: String| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: String, b: String| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: Uuid, b: Uuid| -> bool { a == b })?;
-    engine.inject_fn2("prim_ne", |a: Uuid, b: Uuid| -> bool { a != b })?;
-    engine.inject_fn2("prim_eq", |a: DateTime<Utc>, b: DateTime<Utc>| -> bool {
+    engine.inject_fn2("prim_eq", |_engine, a: String, b: String| -> bool {
         a == b
     })?;
-    engine.inject_fn2("prim_ne", |a: DateTime<Utc>, b: DateTime<Utc>| -> bool {
+    engine.inject_fn2("prim_ne", |_engine, a: String, b: String| -> bool {
         a != b
     })?;
+    engine.inject_fn2("prim_eq", |_engine, a: Uuid, b: Uuid| -> bool { a == b })?;
+    engine.inject_fn2("prim_ne", |_engine, a: Uuid, b: Uuid| -> bool { a != b })?;
+    engine.inject_fn2(
+        "prim_eq",
+        |_engine, a: DateTime<Utc>, b: DateTime<Utc>| -> bool { a == b },
+    )?;
+    engine.inject_fn2(
+        "prim_ne",
+        |_engine, a: DateTime<Utc>, b: DateTime<Utc>| -> bool { a != b },
+    )?;
 
     // Array equality must respect `Eq a`. We can't express the loop without a
     // primitive, but we *can* express the element comparison: the primitive
@@ -726,7 +737,7 @@ pub(crate) fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError
                     }
                     engine.heap().alloc_bool(true)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
 
@@ -748,7 +759,7 @@ pub(crate) fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError
                         .heap()
                         .alloc_bool(!bool::from_pointer(engine.heap(), &eq)?)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -756,7 +767,9 @@ pub(crate) fn inject_equality_ops(engine: &mut Engine) -> Result<(), EngineError
     Ok(())
 }
 
-pub(crate) fn inject_order_ops(engine: &mut Engine) -> Result<(), EngineError> {
+pub(crate) fn inject_order_ops<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
     fn cmp_to_i32(ord: std::cmp::Ordering) -> i32 {
         match ord {
             std::cmp::Ordering::Less => -1,
@@ -767,71 +780,79 @@ pub(crate) fn inject_order_ops(engine: &mut Engine) -> Result<(), EngineError> {
 
     // Integer and string comparisons can be injected as direct typed natives,
     // with no runtime type switching.
-    engine.inject_fn2("prim_lt", |a: u8, b: u8| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: u8, b: u8| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: u8, b: u8| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: u8, b: u8| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: u8, b: u8| -> i32 { cmp_to_i32(a.cmp(&b)) })?;
-
-    engine.inject_fn2("prim_lt", |a: u16, b: u16| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: u16, b: u16| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: u16, b: u16| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: u16, b: u16| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: u16, b: u16| -> i32 {
+    engine.inject_fn2("prim_lt", |_engine, a: u8, b: u8| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: u8, b: u8| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: u8, b: u8| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: u8, b: u8| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: u8, b: u8| -> i32 {
         cmp_to_i32(a.cmp(&b))
     })?;
 
-    engine.inject_fn2("prim_lt", |a: u32, b: u32| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: u32, b: u32| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: u32, b: u32| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: u32, b: u32| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: u32, b: u32| -> i32 {
+    engine.inject_fn2("prim_lt", |_engine, a: u16, b: u16| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: u16, b: u16| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: u16, b: u16| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: u16, b: u16| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: u16, b: u16| -> i32 {
         cmp_to_i32(a.cmp(&b))
     })?;
 
-    engine.inject_fn2("prim_lt", |a: u64, b: u64| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: u64, b: u64| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: u64, b: u64| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: u64, b: u64| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: u64, b: u64| -> i32 {
+    engine.inject_fn2("prim_lt", |_engine, a: u32, b: u32| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: u32, b: u32| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: u32, b: u32| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: u32, b: u32| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: u32, b: u32| -> i32 {
         cmp_to_i32(a.cmp(&b))
     })?;
 
-    engine.inject_fn2("prim_lt", |a: i8, b: i8| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: i8, b: i8| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: i8, b: i8| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: i8, b: i8| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: i8, b: i8| -> i32 { cmp_to_i32(a.cmp(&b)) })?;
-
-    engine.inject_fn2("prim_lt", |a: i16, b: i16| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: i16, b: i16| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: i16, b: i16| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: i16, b: i16| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: i16, b: i16| -> i32 {
+    engine.inject_fn2("prim_lt", |_engine, a: u64, b: u64| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: u64, b: u64| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: u64, b: u64| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: u64, b: u64| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: u64, b: u64| -> i32 {
         cmp_to_i32(a.cmp(&b))
     })?;
 
-    engine.inject_fn2("prim_lt", |a: i32, b: i32| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: i32, b: i32| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: i32, b: i32| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: i32, b: i32| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: i32, b: i32| -> i32 {
+    engine.inject_fn2("prim_lt", |_engine, a: i8, b: i8| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: i8, b: i8| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: i8, b: i8| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: i8, b: i8| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: i8, b: i8| -> i32 {
         cmp_to_i32(a.cmp(&b))
     })?;
 
-    engine.inject_fn2("prim_lt", |a: i64, b: i64| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: i64, b: i64| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: i64, b: i64| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: i64, b: i64| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: i64, b: i64| -> i32 {
+    engine.inject_fn2("prim_lt", |_engine, a: i16, b: i16| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: i16, b: i16| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: i16, b: i16| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: i16, b: i16| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: i16, b: i16| -> i32 {
         cmp_to_i32(a.cmp(&b))
     })?;
 
-    engine.inject_fn2("prim_lt", |a: String, b: String| -> bool { a < b })?;
-    engine.inject_fn2("prim_le", |a: String, b: String| -> bool { a <= b })?;
-    engine.inject_fn2("prim_gt", |a: String, b: String| -> bool { a > b })?;
-    engine.inject_fn2("prim_ge", |a: String, b: String| -> bool { a >= b })?;
-    engine.inject_fn2("prim_cmp", |a: String, b: String| -> i32 {
+    engine.inject_fn2("prim_lt", |_engine, a: i32, b: i32| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: i32, b: i32| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: i32, b: i32| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: i32, b: i32| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: i32, b: i32| -> i32 {
+        cmp_to_i32(a.cmp(&b))
+    })?;
+
+    engine.inject_fn2("prim_lt", |_engine, a: i64, b: i64| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: i64, b: i64| -> bool { a <= b })?;
+    engine.inject_fn2("prim_gt", |_engine, a: i64, b: i64| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: i64, b: i64| -> bool { a >= b })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: i64, b: i64| -> i32 {
+        cmp_to_i32(a.cmp(&b))
+    })?;
+
+    engine.inject_fn2("prim_lt", |_engine, a: String, b: String| -> bool { a < b })?;
+    engine.inject_fn2("prim_le", |_engine, a: String, b: String| -> bool {
+        a <= b
+    })?;
+    engine.inject_fn2("prim_gt", |_engine, a: String, b: String| -> bool { a > b })?;
+    engine.inject_fn2("prim_ge", |_engine, a: String, b: String| -> bool {
+        a >= b
+    })?;
+    engine.inject_fn2("prim_cmp", |_engine, a: String, b: String| -> i32 {
         cmp_to_i32(a.cmp(&b))
     })?;
 
@@ -950,33 +971,43 @@ pub(crate) fn inject_order_ops(engine: &mut Engine) -> Result<(), EngineError> {
     Ok(())
 }
 
-pub(crate) fn inject_pretty_ops(engine: &mut Engine) -> Result<(), EngineError> {
-    engine.inject_fn1("prim_pretty", |x: bool| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: u8| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: u16| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: u32| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: u64| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: i8| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: i16| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: i32| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: i64| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: f32| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: f64| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: String| -> String { x })?;
-    engine.inject_fn1("prim_pretty", |x: Uuid| -> String { x.to_string() })?;
-    engine.inject_fn1("prim_pretty", |x: DateTime<Utc>| -> String {
+pub(crate) fn inject_pretty_ops<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
+    engine.inject_fn1("prim_pretty", |_engine, x: bool| -> String {
+        x.to_string()
+    })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: u8| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: u16| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: u32| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: u64| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: i8| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: i16| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: i32| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: i64| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: f32| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: f64| -> String { x.to_string() })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: String| -> String { x })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: Uuid| -> String {
+        x.to_string()
+    })?;
+    engine.inject_fn1("prim_pretty", |_engine, x: DateTime<Utc>| -> String {
         x.to_string()
     })?;
     Ok(())
 }
 
-pub(crate) fn inject_boolean_ops(engine: &mut Engine) -> Result<(), EngineError> {
-    engine.inject_fn2("(&&)", |a: bool, b: bool| -> bool { a && b })?;
-    engine.inject_fn2("(||)", |a: bool, b: bool| -> bool { a || b })?;
+pub(crate) fn inject_boolean_ops<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
+    engine.inject_fn2("(&&)", |_engine, a: bool, b: bool| -> bool { a && b })?;
+    engine.inject_fn2("(||)", |_engine, a: bool, b: bool| -> bool { a || b })?;
     Ok(())
 }
 
-pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError> {
+pub(crate) fn inject_numeric_ops<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
     // Additive identity
     engine.inject_value("prim_zero", String::new())?;
     engine.inject_value("prim_zero", 0u8)?;
@@ -1003,69 +1034,69 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
     engine.inject_value("prim_one", 1.0f64)?;
 
     // Addition
-    engine.inject_fn2("prim_add", |a: u8, b: u8| -> u8 { a + b })?;
-    engine.inject_fn2("prim_add", |a: u16, b: u16| -> u16 { a + b })?;
-    engine.inject_fn2("prim_add", |a: u32, b: u32| -> u32 { a + b })?;
-    engine.inject_fn2("prim_add", |a: u64, b: u64| -> u64 { a + b })?;
-    engine.inject_fn2("prim_add", |a: i8, b: i8| -> i8 { a + b })?;
-    engine.inject_fn2("prim_add", |a: i16, b: i16| -> i16 { a + b })?;
-    engine.inject_fn2("prim_add", |a: i32, b: i32| -> i32 { a + b })?;
-    engine.inject_fn2("prim_add", |a: i64, b: i64| -> i64 { a + b })?;
-    engine.inject_fn2("prim_add", |a: f32, b: f32| -> f32 { a + b })?;
-    engine.inject_fn2("prim_add", |a: f64, b: f64| -> f64 { a + b })?;
-    engine.inject_fn2("prim_add", |a: String, b: String| -> String {
+    engine.inject_fn2("prim_add", |_engine, a: u8, b: u8| -> u8 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: u16, b: u16| -> u16 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: u32, b: u32| -> u32 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: u64, b: u64| -> u64 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: i8, b: i8| -> i8 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: i16, b: i16| -> i16 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: i32, b: i32| -> i32 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: i64, b: i64| -> i64 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: f32, b: f32| -> f32 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: f64, b: f64| -> f64 { a + b })?;
+    engine.inject_fn2("prim_add", |_engine, a: String, b: String| -> String {
         format!("{}{}", a, b)
     })?;
 
     // Subtraction and negation
-    engine.inject_fn2("prim_sub", |a: i8, b: i8| -> i8 { a - b })?;
-    engine.inject_fn2("prim_sub", |a: i16, b: i16| -> i16 { a - b })?;
-    engine.inject_fn2("prim_sub", |a: i32, b: i32| -> i32 { a - b })?;
-    engine.inject_fn2("prim_sub", |a: i64, b: i64| -> i64 { a - b })?;
-    engine.inject_fn2("prim_sub", |a: f32, b: f32| -> f32 { a - b })?;
-    engine.inject_fn2("prim_sub", |a: f64, b: f64| -> f64 { a - b })?;
-    engine.inject_fn1("prim_negate", |a: i8| -> i8 { -a })?;
-    engine.inject_fn1("prim_negate", |a: i16| -> i16 { -a })?;
-    engine.inject_fn1("prim_negate", |a: i32| -> i32 { -a })?;
-    engine.inject_fn1("prim_negate", |a: i64| -> i64 { -a })?;
-    engine.inject_fn1("prim_negate", |a: f32| -> f32 { -a })?;
-    engine.inject_fn1("prim_negate", |a: f64| -> f64 { -a })?;
+    engine.inject_fn2("prim_sub", |_engine, a: i8, b: i8| -> i8 { a - b })?;
+    engine.inject_fn2("prim_sub", |_engine, a: i16, b: i16| -> i16 { a - b })?;
+    engine.inject_fn2("prim_sub", |_engine, a: i32, b: i32| -> i32 { a - b })?;
+    engine.inject_fn2("prim_sub", |_engine, a: i64, b: i64| -> i64 { a - b })?;
+    engine.inject_fn2("prim_sub", |_engine, a: f32, b: f32| -> f32 { a - b })?;
+    engine.inject_fn2("prim_sub", |_engine, a: f64, b: f64| -> f64 { a - b })?;
+    engine.inject_fn1("prim_negate", |_engine, a: i8| -> i8 { -a })?;
+    engine.inject_fn1("prim_negate", |_engine, a: i16| -> i16 { -a })?;
+    engine.inject_fn1("prim_negate", |_engine, a: i32| -> i32 { -a })?;
+    engine.inject_fn1("prim_negate", |_engine, a: i64| -> i64 { -a })?;
+    engine.inject_fn1("prim_negate", |_engine, a: f32| -> f32 { -a })?;
+    engine.inject_fn1("prim_negate", |_engine, a: f64| -> f64 { -a })?;
 
     // Multiplication and division
-    engine.inject_fn2("prim_mul", |a: u8, b: u8| -> u8 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: u16, b: u16| -> u16 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: u32, b: u32| -> u32 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: u64, b: u64| -> u64 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: i8, b: i8| -> i8 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: i16, b: i16| -> i16 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: i32, b: i32| -> i32 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: i64, b: i64| -> i64 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: f32, b: f32| -> f32 { a * b })?;
-    engine.inject_fn2("prim_mul", |a: f64, b: f64| -> f64 { a * b })?;
-    engine.inject_fn2("prim_div", |a: f32, b: f32| -> f32 { a / b })?;
-    engine.inject_fn2("prim_div", |a: f64, b: f64| -> f64 { a / b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: u8, b: u8| -> u8 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: u16, b: u16| -> u16 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: u32, b: u32| -> u32 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: u64, b: u64| -> u64 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: i8, b: i8| -> i8 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: i16, b: i16| -> i16 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: i32, b: i32| -> i32 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: i64, b: i64| -> i64 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: f32, b: f32| -> f32 { a * b })?;
+    engine.inject_fn2("prim_mul", |_engine, a: f64, b: f64| -> f64 { a * b })?;
+    engine.inject_fn2("prim_div", |_engine, a: f32, b: f32| -> f32 { a / b })?;
+    engine.inject_fn2("prim_div", |_engine, a: f64, b: f64| -> f64 { a / b })?;
 
     // Remainder
-    engine.inject_fn2("prim_mod", |a: u8, b: u8| -> u8 { a % b })?;
-    engine.inject_fn2("prim_mod", |a: u16, b: u16| -> u16 { a % b })?;
-    engine.inject_fn2("prim_mod", |a: u32, b: u32| -> u32 { a % b })?;
-    engine.inject_fn2("prim_mod", |a: u64, b: u64| -> u64 { a % b })?;
-    engine.inject_fn2("prim_mod", |a: i8, b: i8| -> i8 { a % b })?;
-    engine.inject_fn2("prim_mod", |a: i16, b: i16| -> i16 { a % b })?;
-    engine.inject_fn2("prim_mod", |a: i32, b: i32| -> i32 { a % b })?;
-    engine.inject_fn2("prim_mod", |a: i64, b: i64| -> i64 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: u8, b: u8| -> u8 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: u16, b: u16| -> u16 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: u32, b: u32| -> u32 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: u64, b: u64| -> u64 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: i8, b: i8| -> i8 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: i16, b: i16| -> i16 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: i32, b: i32| -> i32 { a % b })?;
+    engine.inject_fn2("prim_mod", |_engine, a: i64, b: i64| -> i64 { a % b })?;
 
     // Numeric conversions (used by `std.json`).
-    engine.inject_fn1("prim_to_f64", |x: u8| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: u16| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: u32| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: u64| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: i8| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: i16| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: i32| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: i64| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: f32| -> f64 { x as f64 })?;
-    engine.inject_fn1("prim_to_f64", |x: f64| -> f64 { x })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: u8| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: u16| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: u32| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: u64| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: i8| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: i16| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: i32| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: i64| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: f32| -> f64 { x as f64 })?;
+    engine.inject_fn1("prim_to_f64", |_engine, x: f64| -> f64 { x })?;
 
     // f64 -> Option <number> conversions (used by `std.json`).
     // - reject NaN/±inf
@@ -1086,7 +1117,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
             }};
         }
 
-        inject_f64_to!("prim_f64_to_u8", Type::con("u8", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_u8", Type::con("u8", 0), |engine: &Engine<
+            State,
+        >,
                                                               x: f64|
          -> Result<
             Option<Pointer>,
@@ -1098,7 +1131,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_u16", Type::con("u16", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_u16", Type::con("u16", 0), |engine: &Engine<
+            State,
+        >,
                                                                 x: f64|
          -> Result<
             Option<Pointer>,
@@ -1110,7 +1145,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_u32", Type::con("u32", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_u32", Type::con("u32", 0), |engine: &Engine<
+            State,
+        >,
                                                                 x: f64|
          -> Result<
             Option<Pointer>,
@@ -1122,7 +1159,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_u64", Type::con("u64", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_u64", Type::con("u64", 0), |engine: &Engine<
+            State,
+        >,
                                                                 x: f64|
          -> Result<
             Option<Pointer>,
@@ -1134,7 +1173,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_i8", Type::con("i8", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_i8", Type::con("i8", 0), |engine: &Engine<
+            State,
+        >,
                                                               x: f64|
          -> Result<
             Option<Pointer>,
@@ -1146,7 +1187,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_i16", Type::con("i16", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_i16", Type::con("i16", 0), |engine: &Engine<
+            State,
+        >,
                                                                 x: f64|
          -> Result<
             Option<Pointer>,
@@ -1158,7 +1201,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_i32", Type::con("i32", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_i32", Type::con("i32", 0), |engine: &Engine<
+            State,
+        >,
                                                                 x: f64|
          -> Result<
             Option<Pointer>,
@@ -1170,7 +1215,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_i64", Type::con("i64", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_i64", Type::con("i64", 0), |engine: &Engine<
+            State,
+        >,
                                                                 x: f64|
          -> Result<
             Option<Pointer>,
@@ -1182,7 +1229,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
                 Ok(None)
             }
         });
-        inject_f64_to!("prim_f64_to_f32", Type::con("f32", 0), |engine: &Engine,
+        inject_f64_to!("prim_f64_to_f32", Type::con("f32", 0), |engine: &Engine<
+            State,
+        >,
                                                                 x: f64|
          -> Result<
             Option<Pointer>,
@@ -1199,7 +1248,9 @@ pub(crate) fn inject_numeric_ops(engine: &mut Engine) -> Result<(), EngineError>
     Ok(())
 }
 
-pub(crate) fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError> {
+pub(crate) fn inject_json_primops<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
     // List -> Array conversion.
     {
         let a_tv = engine.fresh_type_var(Some("a".into()));
@@ -1260,7 +1311,7 @@ pub(crate) fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError
                     }
                     engine.heap().alloc_dict(out)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1316,7 +1367,7 @@ pub(crate) fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError
                     let dict = engine.heap().alloc_dict(out)?;
                     result_from_pointer(engine.heap(), Ok(dict))
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1580,7 +1631,9 @@ pub(crate) fn inject_json_primops(engine: &mut Engine) -> Result<(), EngineError
     Ok(())
 }
 
-pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineError> {
+pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
     {
         let a_tv = engine.fresh_type_var(Some("a".into()));
         let b_tv = engine.fresh_type_var(Some("b".into()));
@@ -1612,7 +1665,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     list_from_pointers(engine.heap(), ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1648,7 +1701,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     engine.heap().alloc_array(ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1705,7 +1758,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                         None => option_from_pointer(engine.heap(), None),
                     }
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1749,7 +1802,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                         Err(e) => result_from_pointer(engine.heap(), Err(e)),
                     }
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1797,7 +1850,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1845,7 +1898,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1892,7 +1945,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1940,7 +1993,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -1988,7 +2041,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2035,7 +2088,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2083,7 +2136,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2131,7 +2184,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2178,7 +2231,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     )
                     .await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2211,7 +2264,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     list_from_pointers(engine.heap(), ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2244,7 +2297,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     engine.heap().alloc_array(ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2286,7 +2339,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                         None => option_from_pointer(engine.heap(), None),
                     }
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2323,7 +2376,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     list_from_pointers(engine.heap(), ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2360,7 +2413,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     engine.heap().alloc_array(ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2401,7 +2454,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                         None => option_from_pointer(engine.heap(), None),
                     }
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2441,7 +2494,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     list_from_pointers(engine.heap(), ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2480,7 +2533,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let ptrs = values_to_ptrs(engine.heap(), out)?;
                     engine.heap().alloc_array(ptrs)
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2518,7 +2571,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                         None => option_from_pointer(engine.heap(), None),
                     }
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2563,7 +2616,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                         Err(e) => result_from_pointer(engine.heap(), Err(e)),
                     }
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2596,7 +2649,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let list = args[1].clone();
                     invoke_pointer_fn(engine, func, list, Some(&func_ty), Some(&list_ty)).await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2629,7 +2682,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let array = args[1].clone();
                     invoke_pointer_fn(engine, func, array, Some(&func_ty), Some(&array_ty)).await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2662,7 +2715,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     let opt = args[1].clone();
                     invoke_pointer_fn(engine, func, opt, Some(&func_ty), Some(&opt_ty)).await
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2699,7 +2752,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                         Ok(args[1].clone())
                     }
                 }
-                .boxed()
+                .boxed_local()
             },
         )?;
     }
@@ -2728,7 +2781,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                 let acc = values.remove(0);
                 foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc, values).await
             }
-            .boxed()
+            .boxed_local()
         })?;
     }
 
@@ -2756,7 +2809,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                 let acc = values.remove(0);
                 foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc, values).await
             }
-            .boxed()
+            .boxed_local()
         })?;
     }
 
@@ -2779,7 +2832,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     None => engine.resolve_global(&sym("zero"), &elem_ty).await,
                 }
             }
-            .boxed()
+            .boxed_local()
         })?;
     }
 
@@ -2815,7 +2868,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     invoke_pointer_fn(engine, div, acc, Some(&plus_ty), Some(&elem_ty)).await?;
                 invoke_pointer_fn(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty)).await
             }
-            .boxed()
+            .boxed_local()
         })?;
     }
 
@@ -2851,7 +2904,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     invoke_pointer_fn(engine, div, acc, Some(&plus_ty), Some(&elem_ty)).await?;
                 invoke_pointer_fn(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty)).await
             }
-            .boxed()
+            .boxed_local()
         })?;
     }
 
@@ -2885,7 +2938,7 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
                     None => Err(EngineError::EmptySequence),
                 }
             }
-            .boxed()
+            .boxed_local()
         })?;
     }
 
@@ -3327,7 +3380,9 @@ pub(crate) fn inject_list_builtins(engine: &mut Engine) -> Result<(), EngineErro
     Ok(())
 }
 
-pub(crate) fn inject_option_result_builtins(engine: &mut Engine) -> Result<(), EngineError> {
+pub(crate) fn inject_option_result_builtins<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError> {
     let is_some = sym("is_some");
     let is_some_scheme = engine.lookup_scheme(&is_some)?;
     engine.inject_native_scheme_typed(

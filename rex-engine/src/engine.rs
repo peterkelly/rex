@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use async_recursion::async_recursion;
-use futures::{FutureExt, future::BoxFuture, pin_mut};
+use futures::{FutureExt, future::LocalBoxFuture, pin_mut};
 use rex_ast::expr::{
     ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, sym, sym_eq,
 };
@@ -24,7 +24,9 @@ use crate::prelude::{
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType};
 
-fn check_cancelled(engine: &Engine) -> Result<(), EngineError> {
+fn check_cancelled<State: Clone + Sync + 'static>(
+    engine: &Engine<State>,
+) -> Result<(), EngineError> {
     if engine.cancel.is_cancelled() {
         Err(EngineError::Cancelled)
     } else {
@@ -40,33 +42,41 @@ fn type_head_is_var(typ: &Type) -> bool {
     matches!(cur.as_ref(), TypeKind::Var(..))
 }
 
-type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
-type SyncNativeCallable =
-    Arc<dyn Fn(&Engine, &Type, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static>;
-type AsyncNativeCallable = Arc<
-    dyn for<'a> Fn(&'a Engine, Type, &'a [Pointer]) -> NativeFuture<'a> + Send + Sync + 'static,
+type NativeFuture<'a> = LocalBoxFuture<'a, Result<Pointer, EngineError>>;
+type NativeId = u64;
+type SyncNativeCallable<State> = Arc<
+    dyn Fn(&Engine<State>, &Type, &[Pointer]) -> Result<Pointer, EngineError>
+        + Send
+        + Sync
+        + 'static,
 >;
-type AsyncNativeCallableCancellable = Arc<
-    dyn for<'a> Fn(&'a Engine, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
+type AsyncNativeCallable<State> = Arc<
+    dyn for<'a> Fn(&'a Engine<State>, Type, &'a [Pointer]) -> NativeFuture<'a>
+        + Send
+        + Sync
+        + 'static,
+>;
+type AsyncNativeCallableCancellable<State> = Arc<
+    dyn for<'a> Fn(&'a Engine<State>, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
         + Send
         + Sync
         + 'static,
 >;
 
 #[derive(Clone)]
-pub(crate) enum NativeCallable {
-    Sync(SyncNativeCallable),
-    Async(AsyncNativeCallable),
-    AsyncCancellable(AsyncNativeCallableCancellable),
+pub(crate) enum NativeCallable<State: Clone + Sync + 'static> {
+    Sync(SyncNativeCallable<State>),
+    Async(AsyncNativeCallable<State>),
+    AsyncCancellable(AsyncNativeCallableCancellable<State>),
 }
 
-impl PartialEq for NativeCallable {
-    fn eq(&self, _other: &NativeCallable) -> bool {
+impl<State: Clone + Sync + 'static> PartialEq for NativeCallable<State> {
+    fn eq(&self, _other: &NativeCallable<State>) -> bool {
         false
     }
 }
 
-impl std::fmt::Debug for NativeCallable {
+impl<State: Clone + Sync + 'static> std::fmt::Debug for NativeCallable<State> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
             NativeCallable::Sync(_) => write!(f, "Sync"),
@@ -76,10 +86,10 @@ impl std::fmt::Debug for NativeCallable {
     }
 }
 
-impl NativeCallable {
+impl<State: Clone + Sync + 'static> NativeCallable<State> {
     async fn call(
         &self,
-        engine: &Engine,
+        engine: &Engine<State>,
         typ: Type,
         args: &[Pointer],
     ) -> Result<Pointer, EngineError> {
@@ -126,22 +136,22 @@ impl NativeCallable {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeFn {
+    native_id: NativeId,
     name: Symbol,
     arity: usize,
     typ: Type,
-    func: NativeCallable,
     gas_cost: u64,
     applied: Vec<Pointer>,
     applied_types: Vec<Type>,
 }
 
 impl NativeFn {
-    fn new(name: Symbol, arity: usize, typ: Type, func: NativeCallable, gas_cost: u64) -> Self {
+    fn new(native_id: NativeId, name: Symbol, arity: usize, typ: Type, gas_cost: u64) -> Self {
         Self {
+            native_id,
             name,
             arity,
             typ,
-            func,
             gas_cost,
             applied: Vec::new(),
             applied_types: Vec::new(),
@@ -149,19 +159,19 @@ impl NativeFn {
     }
 
     pub(crate) fn from_parts(
+        native_id: NativeId,
         name: Symbol,
         arity: usize,
         typ: Type,
-        func: NativeCallable,
         gas_cost: u64,
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Self {
         Self {
+            native_id,
             name,
             arity,
             typ,
-            func,
             gas_cost,
             applied,
             applied_types,
@@ -172,7 +182,11 @@ impl NativeFn {
         &self.name
     }
 
-    async fn call_zero(&self, engine: &Engine, gas: &mut GasMeter) -> Result<Pointer, EngineError> {
+    async fn call_zero<State: Clone + Sync + 'static>(
+        &self,
+        engine: &Engine<State>,
+        gas: &mut GasMeter,
+    ) -> Result<Pointer, EngineError> {
         let amount = gas
             .costs
             .native_call_base
@@ -186,12 +200,15 @@ impl NativeFn {
                 got: 0,
             });
         }
-        self.func.call(engine, self.typ.clone(), &[]).await
+        engine
+            .native_callable(self.native_id)?
+            .call(engine, self.typ.clone(), &[])
+            .await
     }
 
-    async fn apply(
+    async fn apply<State: Clone + Sync + 'static>(
         mut self,
-        engine: &Engine,
+        engine: &Engine<State>,
         arg: Pointer,
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
@@ -217,19 +234,19 @@ impl NativeFn {
         self.applied_types.push(actual_ty);
         if is_function_type(&self.typ) {
             let NativeFn {
+                native_id,
                 name,
                 arity,
                 typ,
-                func,
                 gas_cost,
                 applied,
                 applied_types,
             } = self;
             return engine.heap().alloc_native(
+                native_id,
                 name,
                 arity,
                 typ,
-                func,
                 gas_cost,
                 applied,
                 applied_types,
@@ -251,7 +268,10 @@ impl NativeFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        self.func.call(engine, full_ty, &self.applied).await
+        engine
+            .native_callable(self.native_id)?
+            .call(engine, full_ty, &self.applied)
+            .await
     }
 }
 
@@ -295,9 +315,9 @@ impl OverloadedFn {
         (self.name, self.typ, self.applied, self.applied_types)
     }
 
-    async fn apply(
+    async fn apply<State: Clone + Sync + 'static>(
         mut self,
-        engine: &Engine,
+        engine: &Engine<State>,
         arg: Pointer,
         func_type: Option<&Type>,
         arg_type: Option<&Type>,
@@ -367,50 +387,79 @@ impl OverloadedFn {
 }
 
 #[derive(Clone)]
-struct NativeImpl {
+struct NativeImpl<State: Clone + Sync + 'static> {
+    id: NativeId,
     name: Symbol,
     arity: usize,
     scheme: Scheme,
-    func: NativeCallable,
+    func: NativeCallable<State>,
     gas_cost: u64,
 }
 
-impl NativeImpl {
+impl<State: Clone + Sync + 'static> NativeImpl<State> {
     fn to_native_fn(&self, typ: Type) -> NativeFn {
-        NativeFn::new(
-            self.name.clone(),
-            self.arity,
-            typ,
-            self.func.clone(),
-            self.gas_cost,
-        )
+        NativeFn::new(self.id, self.name.clone(), self.arity, typ, self.gas_cost)
     }
 }
 
-#[derive(Default, Clone)]
-struct NativeRegistry {
-    entries: HashMap<Symbol, Vec<NativeImpl>>,
+#[derive(Clone)]
+struct NativeRegistry<State: Clone + Sync + 'static> {
+    next_id: NativeId,
+    entries: HashMap<Symbol, Vec<NativeImpl<State>>>,
+    by_id: HashMap<NativeId, NativeImpl<State>>,
 }
 
-impl NativeRegistry {
-    fn insert(&mut self, name: Symbol, imp: NativeImpl) -> Result<(), EngineError> {
+impl<State: Clone + Sync + 'static> NativeRegistry<State> {
+    fn insert(
+        &mut self,
+        name: Symbol,
+        arity: usize,
+        scheme: Scheme,
+        func: NativeCallable<State>,
+        gas_cost: u64,
+    ) -> Result<(), EngineError> {
         let entry = self.entries.entry(name.clone()).or_default();
-        if entry.iter().any(|existing| existing.scheme == imp.scheme) {
+        if entry.iter().any(|existing| existing.scheme == scheme) {
             return Err(EngineError::DuplicateImpl {
                 name,
-                typ: imp.scheme.typ.to_string(),
+                typ: scheme.typ.to_string(),
             });
         }
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        let imp = NativeImpl::<State> {
+            id,
+            name: name.clone(),
+            arity,
+            scheme,
+            func,
+            gas_cost,
+        };
+        self.by_id.insert(id, imp.clone());
         entry.push(imp);
         Ok(())
     }
 
-    fn get(&self, name: &Symbol) -> Option<&[NativeImpl]> {
+    fn get(&self, name: &Symbol) -> Option<&[NativeImpl<State>]> {
         self.entries.get(name).map(|v| v.as_slice())
     }
 
     fn has_name(&self, name: &Symbol) -> bool {
         self.entries.contains_key(name)
+    }
+
+    fn by_id(&self, id: NativeId) -> Option<&NativeImpl<State>> {
+        self.by_id.get(&id)
+    }
+}
+
+impl<State: Clone + Sync + 'static> Default for NativeRegistry<State> {
+    fn default() -> Self {
+        Self {
+            next_id: 0,
+            entries: HashMap::new(),
+            by_id: HashMap::new(),
+        }
     }
 }
 
@@ -495,9 +544,13 @@ impl TypeclassRegistry {
     }
 }
 
-pub struct Engine {
+pub struct Engine<State = ()>
+where
+    State: Clone + Sync + 'static,
+{
+    pub state: Arc<State>,
     env: Env,
-    natives: NativeRegistry,
+    natives: NativeRegistry<State>,
     typeclasses: TypeclassRegistry,
     types: TypeSystem,
     typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
@@ -506,9 +559,12 @@ pub struct Engine {
     heap: Heap,
 }
 
-impl Default for Engine {
+impl<State> Default for Engine<State>
+where
+    State: Clone + Sync + 'static + Default,
+{
     fn default() -> Self {
-        Self::new()
+        Self::new(State::default())
     }
 }
 
@@ -525,13 +581,13 @@ macro_rules! define_inject_fn_method {
     ($method:ident, $arity:literal, [$(($arg_ty:ident, $arg_name:ident, $idx:tt)),* $(,)?]) => {
         pub fn $method<F, R $(, $arg_ty)*>(&mut self, name: &str, f: F) -> Result<(), EngineError>
         where
-            F: Fn($($arg_ty),*) -> R + Send + Sync + 'static,
+            F: for<'a> Fn(&'a State, $($arg_ty),*) -> R + Send + Sync + 'static,
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType,)*
         {
             let name = normalize_name(name);
             let name_sym = name.clone();
-            let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| {
+            let func = Arc::new(move |engine: &Engine<State>, _typ: &Type, args: &[Pointer]| {
                 if args.len() != $arity {
                     return Err(EngineError::NativeArity {
                         name: name_sym.clone(),
@@ -540,7 +596,7 @@ macro_rules! define_inject_fn_method {
                     });
                 }
                 $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
-                f($($arg_name),*).into_pointer(engine.heap())
+                f(engine.state.as_ref(), $($arg_name),*).into_pointer(engine.heap())
             });
             let typ = native_fn_type!($($arg_ty),* ; R);
             let scheme = Scheme::new(vec![], vec![], typ);
@@ -557,16 +613,16 @@ macro_rules! define_inject_async_fn_method {
             f: F,
         ) -> Result<(), EngineError>
         where
-            F: Fn($($arg_ty),*) -> Fut + Send + Sync + 'static,
-            Fut: std::future::Future<Output = R> + Send + 'static,
+            F: for<'a> Fn(&'a State, $($arg_ty),*) -> Fut + Send + Sync + 'static,
+            Fut: std::future::Future<Output = R> + 'static,
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType,)*
         {
             let name = normalize_name(name);
             let name_sym = name.clone();
             let f = Arc::new(f);
-            let func: AsyncNativeCallable = Arc::new(
-                move |engine: &Engine, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
+            let func: AsyncNativeCallable<State> = Arc::new(
+                move |engine: &Engine<State>, _typ: Type, args: &[Pointer]| -> NativeFuture<'_> {
                     let f = f.clone();
                     let name_sym = name_sym.clone();
                     async move {
@@ -578,9 +634,11 @@ macro_rules! define_inject_async_fn_method {
                             });
                         }
                         $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
-                        f($($arg_name),*).await.into_pointer(engine.heap())
+                        f(engine.state.as_ref(), $($arg_name),*)
+                            .await
+                            .into_pointer(engine.heap())
                     }
-                    .boxed()
+                    .boxed_local()
                 },
             );
             let typ = native_fn_type!($($arg_ty),* ; R);
@@ -589,12 +647,15 @@ macro_rules! define_inject_async_fn_method {
         }
     };
 }
-
-impl Engine {
-    pub fn new() -> Self {
+impl<State> Engine<State>
+where
+    State: Clone + Sync + 'static,
+{
+    pub fn new(state: State) -> Self {
         Self {
+            state: Arc::new(state),
             env: Env::new(),
-            natives: NativeRegistry::default(),
+            natives: NativeRegistry::<State>::default(),
             typeclasses: TypeclassRegistry::default(),
             types: TypeSystem::new(),
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -608,11 +669,12 @@ impl Engine {
         self.types.supply.fresh(name)
     }
 
-    pub fn with_prelude() -> Result<Self, EngineError> {
+    pub fn with_prelude(state: State) -> Result<Self, EngineError> {
         let types = TypeSystem::with_prelude()?;
         let mut engine = Engine {
+            state: Arc::new(state),
             env: Env::new(),
-            natives: NativeRegistry::default(),
+            natives: NativeRegistry::<State>::default(),
             typeclasses: TypeclassRegistry::default(),
             types,
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -639,7 +701,7 @@ impl Engine {
     pub fn inject_tracing_log_functions(&mut self) -> Result<(), EngineError> {
         let string = Type::con("string", 0);
 
-        let make_scheme = |engine: &mut Engine| {
+        let make_scheme = |engine: &mut Engine<State>| {
             let a_tv = engine.types.supply.fresh(Some("a".into()));
             let a = Type::var(a_tv.clone());
             Scheme::new(
@@ -723,7 +785,7 @@ impl Engine {
                 log(&message);
                 engine.heap().alloc_string(message)
             }
-            .boxed()
+            .boxed_local()
         })
     }
 
@@ -743,8 +805,9 @@ impl Engine {
         let name = normalize_name(name);
         let typ = V::rex_type();
         let value = value.into_pointer(self.heap())?;
-        let func =
-            Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Pointer]| Ok(value.clone()));
+        let func = Arc::new(
+            move |_engine: &Engine<State>, _typ: &Type, _args: &[Pointer]| Ok(value.clone()),
+        );
         let scheme = Scheme::new(vec![], vec![], typ);
         self.register_native(name, scheme, 0, NativeCallable::Sync(func), 0)
     }
@@ -757,8 +820,9 @@ impl Engine {
     ) -> Result<(), EngineError> {
         let name = normalize_name(name);
         let value = self.heap().alloc_value(value)?;
-        let func =
-            Arc::new(move |_engine: &Engine, _typ: &Type, _args: &[Pointer]| Ok(value.clone()));
+        let func = Arc::new(
+            move |_engine: &Engine<State>, _typ: &Type, _args: &[Pointer]| Ok(value.clone()),
+        );
         let scheme = Scheme::new(vec![], vec![], typ);
         self.register_native(name, scheme, 0, NativeCallable::Sync(func), 0)
     }
@@ -873,15 +937,15 @@ impl Engine {
         f: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(CancellationToken) -> Fut + Send + Sync + 'static,
+        F: Fn(&State, CancellationToken) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = R> + Send + 'static,
         R: IntoPointer + RexType,
     {
         let name = normalize_name(name);
         let name_sym = name.clone();
         let f = Arc::new(f);
-        let func: AsyncNativeCallableCancellable = Arc::new(
-            move |engine: &Engine,
+        let func: AsyncNativeCallableCancellable<State> = Arc::new(
+            move |engine: &Engine<State>,
                   token: CancellationToken,
                   _typ: Type,
                   args: &[Pointer]|
@@ -896,9 +960,11 @@ impl Engine {
                             got: args.len(),
                         });
                     }
-                    f(token).await.into_pointer(engine.heap())
+                    f(engine.state.as_ref(), token)
+                        .await
+                        .into_pointer(engine.heap())
                 }
-                .boxed()
+                .boxed_local()
             },
         );
         let typ = R::rex_type();
@@ -912,7 +978,7 @@ impl Engine {
         f: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(CancellationToken, A) -> Fut + Send + Sync + 'static,
+        F: Fn(&State, CancellationToken, A) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = R> + Send + 'static,
         A: FromPointer + RexType,
         R: IntoPointer + RexType,
@@ -920,8 +986,8 @@ impl Engine {
         let name = normalize_name(name);
         let name_sym = name.clone();
         let f = Arc::new(f);
-        let func: AsyncNativeCallableCancellable = Arc::new(
-            move |engine: &Engine,
+        let func: AsyncNativeCallableCancellable<State> = Arc::new(
+            move |engine: &Engine<State>,
                   token: CancellationToken,
                   _typ: Type,
                   args: &[Pointer]|
@@ -937,9 +1003,11 @@ impl Engine {
                         });
                     }
                     let a = A::from_pointer(engine.heap(), &args[0])?;
-                    f(token, a).await.into_pointer(engine.heap())
+                    f(engine.state.as_ref(), token, a)
+                        .await
+                        .into_pointer(engine.heap())
                 }
-                .boxed()
+                .boxed_local()
             },
         );
         let typ = Type::fun(A::rex_type(), R::rex_type());
@@ -953,7 +1021,7 @@ impl Engine {
         f: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(CancellationToken, A, B) -> Fut + Send + Sync + 'static,
+        F: Fn(&State, CancellationToken, A, B) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = R> + Send + 'static,
         A: FromPointer + RexType,
         B: FromPointer + RexType,
@@ -962,8 +1030,8 @@ impl Engine {
         let name = normalize_name(name);
         let name_sym = name.clone();
         let f = Arc::new(f);
-        let func: AsyncNativeCallableCancellable = Arc::new(
-            move |engine: &Engine,
+        let func: AsyncNativeCallableCancellable<State> = Arc::new(
+            move |engine: &Engine<State>,
                   token: CancellationToken,
                   _typ: Type,
                   args: &[Pointer]|
@@ -980,9 +1048,11 @@ impl Engine {
                     }
                     let a = A::from_pointer(engine.heap(), &args[0])?;
                     let b = B::from_pointer(engine.heap(), &args[1])?;
-                    f(token, a, b).await.into_pointer(engine.heap())
+                    f(engine.state.as_ref(), token, a, b)
+                        .await
+                        .into_pointer(engine.heap())
                 }
-                .boxed()
+                .boxed_local()
             },
         );
         let typ = Type::fun(A::rex_type(), Type::fun(B::rex_type(), R::rex_type()));
@@ -998,12 +1068,13 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(&Engine, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static,
+        F: Fn(&Engine<State>, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static,
     {
         let name = normalize_name(name);
         let scheme = Scheme::new(vec![], vec![], typ);
-        let func =
-            Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| func(engine, args));
+        let func = Arc::new(
+            move |engine: &Engine<State>, _typ: &Type, args: &[Pointer]| func(engine, args),
+        );
         self.register_native(name, scheme, arity, NativeCallable::Sync(func), 0)
     }
 
@@ -1015,11 +1086,12 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(&Engine, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static,
+        F: Fn(&Engine<State>, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static,
     {
         let name = normalize_name(name);
-        let func =
-            Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| func(engine, args));
+        let func = Arc::new(
+            move |engine: &Engine<State>, _typ: &Type, args: &[Pointer]| func(engine, args),
+        );
         self.register_native(name, scheme, arity, NativeCallable::Sync(func), 0)
     }
 
@@ -1031,11 +1103,15 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(&Engine, &Type, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static,
+        F: Fn(&Engine<State>, &Type, &[Pointer]) -> Result<Pointer, EngineError>
+            + Send
+            + Sync
+            + 'static,
     {
         let name = normalize_name(name);
-        let func =
-            Arc::new(move |engine: &Engine, typ: &Type, args: &[Pointer]| func(engine, typ, args));
+        let func = Arc::new(
+            move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| func(engine, typ, args),
+        );
         self.register_native(name, scheme, arity, NativeCallable::Sync(func), 0)
     }
 
@@ -1047,7 +1123,10 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(&Engine, &Type, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static,
+        F: Fn(&Engine<State>, &Type, &[Pointer]) -> Result<Pointer, EngineError>
+            + Send
+            + Sync
+            + 'static,
     {
         self.inject_native_scheme_typed(name, scheme, arity, func)
     }
@@ -1061,11 +1140,15 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(&Engine, &Type, &[Pointer]) -> Result<Pointer, EngineError> + Send + Sync + 'static,
+        F: Fn(&Engine<State>, &Type, &[Pointer]) -> Result<Pointer, EngineError>
+            + Send
+            + Sync
+            + 'static,
     {
         let name = normalize_name(name);
-        let func =
-            Arc::new(move |engine: &Engine, typ: &Type, args: &[Pointer]| func(engine, typ, args));
+        let func = Arc::new(
+            move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| func(engine, typ, args),
+        );
         self.register_native(name, scheme, arity, NativeCallable::Sync(func), gas_cost)
     }
 
@@ -1077,10 +1160,14 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, Type, &'a [Pointer]) -> NativeFuture<'a> + Send + Sync + 'static,
+        F: for<'a> Fn(&'a Engine<State>, Type, &'a [Pointer]) -> NativeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
     {
         let name = normalize_name(name);
-        let func: AsyncNativeCallable = Arc::new(move |engine, typ, args| func(engine, typ, args));
+        let func: AsyncNativeCallable<State> =
+            Arc::new(move |engine, typ, args| func(engine, typ, args));
         self.register_native(name, scheme, arity, NativeCallable::Async(func), 0)
     }
 
@@ -1093,10 +1180,14 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, Type, &'a [Pointer]) -> NativeFuture<'a> + Send + Sync + 'static,
+        F: for<'a> Fn(&'a Engine<State>, Type, &'a [Pointer]) -> NativeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
     {
         let name = normalize_name(name);
-        let func: AsyncNativeCallable = Arc::new(move |engine, typ, args| func(engine, typ, args));
+        let func: AsyncNativeCallable<State> =
+            Arc::new(move |engine, typ, args| func(engine, typ, args));
         self.register_native(name, scheme, arity, NativeCallable::Async(func), gas_cost)
     }
 
@@ -1108,13 +1199,18 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
+        F: for<'a> Fn(
+                &'a Engine<State>,
+                CancellationToken,
+                Type,
+                &'a [Pointer],
+            ) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,
     {
         let name = normalize_name(name);
-        let func: AsyncNativeCallableCancellable =
+        let func: AsyncNativeCallableCancellable<State> =
             Arc::new(move |engine, token, typ, args| func(engine, token, typ, args));
         self.register_native(
             name,
@@ -1134,13 +1230,18 @@ impl Engine {
         func: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
+        F: for<'a> Fn(
+                &'a Engine<State>,
+                CancellationToken,
+                Type,
+                &'a [Pointer],
+            ) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,
     {
         let name = normalize_name(name);
-        let func: AsyncNativeCallableCancellable =
+        let func: AsyncNativeCallableCancellable<State> =
             Arc::new(move |engine, token, typ, args| func(engine, token, typ, args));
         self.register_native(
             name,
@@ -1163,9 +1264,11 @@ impl Engine {
         self.types.inject_adt(&adt);
         for (ctor, scheme) in adt.constructor_schemes() {
             let ctor_name = ctor.clone();
-            let func = Arc::new(move |engine: &Engine, _typ: &Type, args: &[Pointer]| {
-                engine.heap().alloc_adt(ctor_name.clone(), args.to_vec())
-            });
+            let func = Arc::new(
+                move |engine: &Engine<State>, _typ: &Type, args: &[Pointer]| {
+                    engine.heap().alloc_adt(ctor_name.clone(), args.to_vec())
+                },
+            );
             let arity = type_arity(&scheme.typ);
             self.register_native(ctor, scheme, arity, NativeCallable::Sync(func), 0)?;
         }
@@ -1309,7 +1412,7 @@ impl Engine {
         name: Symbol,
         scheme: Scheme,
         arity: usize,
-        func: NativeCallable,
+        func: NativeCallable<State>,
         gas_cost: u64,
     ) -> Result<(), EngineError> {
         let expected = type_arity(&scheme.typ);
@@ -1321,14 +1424,7 @@ impl Engine {
             });
         }
         self.register_type_scheme(&name, &scheme)?;
-        let imp = NativeImpl {
-            name: name.clone(),
-            arity,
-            scheme,
-            func,
-            gas_cost,
-        };
-        self.natives.insert(name, imp)
+        self.natives.insert(name, arity, scheme, func, gas_cost)
     }
 
     fn register_type_scheme(
@@ -1696,13 +1792,17 @@ impl Engine {
             .unwrap_or(false)
     }
 
-    fn resolve_native_impl(&self, name: &str, typ: &Type) -> Result<NativeImpl, EngineError> {
+    fn resolve_native_impl(
+        &self,
+        name: &str,
+        typ: &Type,
+    ) -> Result<NativeImpl<State>, EngineError> {
         let sym_name = sym(name);
         let impls = self
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<NativeImpl> = impls
+        let matches: Vec<NativeImpl<State>> = impls
             .iter()
             .filter(|imp| impl_matches_type(imp, typ))
             .cloned()
@@ -1718,6 +1818,13 @@ impl Engine {
                 typ: typ.to_string(),
             }),
         }
+    }
+
+    fn native_callable(&self, id: NativeId) -> Result<NativeCallable<State>, EngineError> {
+        self.natives
+            .by_id(id)
+            .map(|imp| imp.func.clone())
+            .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
     }
 
     pub(crate) async fn call_native_impl(
@@ -1741,7 +1848,7 @@ impl Engine {
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<NativeImpl> = impls
+        let matches: Vec<NativeImpl<State>> = impls
             .iter()
             .filter(|imp| impl_matches_type(imp, typ))
             .cloned()
@@ -1754,16 +1861,23 @@ impl Engine {
             1 => {
                 let imp = matches[0].clone();
                 let NativeFn {
+                    native_id,
                     name,
                     arity,
                     typ,
-                    func,
                     gas_cost,
                     applied,
                     applied_types,
                 } = imp.to_native_fn(typ.clone());
-                self.heap()
-                    .alloc_native(name, arity, typ, func, gas_cost, applied, applied_types)
+                self.heap().alloc_native(
+                    native_id,
+                    name,
+                    arity,
+                    typ,
+                    gas_cost,
+                    applied,
+                    applied_types,
+                )
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -1796,8 +1910,8 @@ fn normalize_name(name: &str) -> Symbol {
     sym(name)
 }
 
-fn default_ambiguous_types(
-    engine: &Engine,
+fn default_ambiguous_types<State: Clone + Sync + 'static>(
+    engine: &Engine<State>,
     typed: TypedExpr,
     mut preds: Vec<Predicate>,
 ) -> Result<(TypedExpr, Vec<Predicate>), EngineError> {
@@ -1937,8 +2051,8 @@ fn push_unique_type(out: &mut Vec<Type>, typ: Type) {
     }
 }
 
-fn choose_default_type(
-    engine: &Engine,
+fn choose_default_type<State: Clone + Sync + 'static>(
+    engine: &Engine<State>,
     preds: &[Predicate],
     candidates: &[Type],
 ) -> Result<Option<Type>, EngineError> {
@@ -2029,7 +2143,7 @@ fn split_fun(typ: &Type) -> Option<(Type, Type)> {
     }
 }
 
-fn impl_matches_type(imp: &NativeImpl, typ: &Type) -> bool {
+fn impl_matches_type<State: Clone + Sync + 'static>(imp: &NativeImpl<State>, typ: &Type) -> bool {
     let mut supply = TypeVarSupply::new();
     let (_preds, scheme_ty) = instantiate(&imp.scheme, &mut supply);
     unify(&scheme_ty, typ).is_ok()
@@ -2211,13 +2325,16 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
     }
 }
 
-#[async_recursion]
-async fn eval_typed_expr(
-    engine: &Engine,
+#[async_recursion(?Send)]
+async fn eval_typed_expr<State>(
+    engine: &Engine<State>,
     env: &Env,
     expr: &TypedExpr,
     gas: &mut GasMeter,
-) -> Result<Pointer, EngineError> {
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Sync + 'static,
+{
     check_cancelled(engine)?;
     let mut env = env.clone();
     let mut cur = expr;
@@ -2421,15 +2538,18 @@ async fn eval_typed_expr(
     }
 }
 
-#[async_recursion]
-pub(crate) async fn apply(
-    engine: &Engine,
+#[async_recursion(?Send)]
+pub(crate) async fn apply<State>(
+    engine: &Engine<State>,
     func: Pointer,
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
     gas: &mut GasMeter,
-) -> Result<Pointer, EngineError> {
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Sync + 'static,
+{
     let func_value = engine.heap().get(&func)?.as_ref().clone();
     match func_value {
         Value::Closure(Closure {
@@ -2572,7 +2692,7 @@ mod tests {
     }
 
     fn engine_with_arith() -> Engine {
-        Engine::with_prelude().unwrap()
+        Engine::with_prelude(()).unwrap()
     }
 
     fn unlimited_gas() -> GasMeter {
@@ -2582,7 +2702,7 @@ mod tests {
     #[tokio::test]
     async fn repl_persists_function_definitions() {
         let mut gas = unlimited_gas();
-        let mut engine = Engine::with_prelude().unwrap();
+        let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
         let mut state = ReplState::new();
 
@@ -2606,7 +2726,7 @@ mod tests {
     #[tokio::test]
     async fn repl_persists_import_aliases() {
         let mut gas = unlimited_gas();
-        let mut engine = Engine::with_prelude().unwrap();
+        let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
 
         let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex/examples/modules_basic");
@@ -2631,11 +2751,11 @@ mod tests {
     #[tokio::test]
     async fn eval_can_be_cancelled_while_waiting_on_async_native() {
         let expr = parse("stall");
-        let mut engine = Engine::with_prelude().unwrap();
+        let mut engine = Engine::with_prelude(()).unwrap();
 
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
         engine
-            .inject_async_fn0_cancellable("stall", move |token: crate::CancellationToken| {
+            .inject_async_fn0_cancellable("stall", move |_state: &(), token: CancellationToken| {
                 let started_tx = started_tx.clone();
                 async move {
                     let _ = started_tx.send(());
@@ -2646,35 +2766,53 @@ mod tests {
             .unwrap();
 
         let token = engine.cancellation_token();
+        let canceller = std::thread::spawn(move || {
+            let recv = started_rx.recv_timeout(std::time::Duration::from_secs(2));
+            assert!(recv.is_ok(), "stall native never started");
+            token.cancel();
+        });
+
         let mut gas = unlimited_gas();
-        let handle = tokio::spawn(async move { engine.eval(expr.as_ref(), &mut gas).await });
+        let res = engine.eval(expr.as_ref(), &mut gas).await;
+        let joined = canceller.join();
+        assert!(joined.is_ok(), "cancel thread panicked");
+        assert!(matches!(res, Err(EngineError::Cancelled)));
+    }
 
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        loop {
-            match started_rx.try_recv() {
-                Ok(()) => break,
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    assert!(
-                        std::time::Instant::now() < deadline,
-                        "stall native never started"
-                    );
-                    tokio::task::yield_now().await;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    panic!("stall native start signal dropped")
-                }
-            }
-        }
-        token.cancel();
+    #[tokio::test]
+    async fn eval_can_be_cancelled_while_waiting_on_non_cancellable_async_native() {
+        let expr = parse("stall");
+        let mut engine = Engine::with_prelude(()).unwrap();
 
-        let res = handle.await.unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
+        engine
+            .inject_async_fn0("stall", move |_state: &()| {
+                let started_tx = started_tx.clone();
+                async move {
+                    let _ = started_tx.send(());
+                    futures::future::pending::<i32>().await
+                }
+            })
+            .unwrap();
+
+        let token = engine.cancellation_token();
+        let canceller = std::thread::spawn(move || {
+            let recv = started_rx.recv_timeout(std::time::Duration::from_secs(2));
+            assert!(recv.is_ok(), "stall native never started");
+            token.cancel();
+        });
+
+        let mut gas = unlimited_gas();
+        let res = engine.eval(expr.as_ref(), &mut gas).await;
+        let joined = canceller.join();
+        assert!(joined.is_ok(), "cancel thread panicked");
         assert!(matches!(res, Err(EngineError::Cancelled)));
     }
 
     #[tokio::test]
     async fn native_per_impl_gas_cost_is_charged() {
         let expr = parse("foo");
-        let mut engine = Engine::with_prelude().unwrap();
+        let mut engine = Engine::with_prelude(()).unwrap();
         let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
         engine
             .inject_native_scheme_typed_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {

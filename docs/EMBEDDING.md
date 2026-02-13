@@ -38,13 +38,42 @@ let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-let mut engine = Engine::with_prelude()?;
+let mut engine = Engine::with_prelude(())?;
 engine.inject_decls(&program.decls)?;
 let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
 let value = engine
     .eval_with_gas(program.expr.as_ref(), &mut gas)
     .await?;
 println!("{value}");
+```
+
+## Engine State
+
+`Engine` is generic over host state: `Engine<State>`, where `State: Clone + Sync + 'static`.
+The state is stored as `engine.state: Arc<State>` and is shared across all injected functions.
+
+- Use `Engine::with_prelude(())?` if you do not need host state.
+- If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
+- `inject_fn*` / `inject_async_fn*` callbacks receive `&State` as their first parameter.
+- Pointer-level APIs like `inject_native*` still receive `&Engine<State>` so they can use heap/runtime internals.
+
+```rust
+use rex_engine::Engine;
+
+#[derive(Clone)]
+struct HostState {
+    user_id: String,
+    roles: Vec<String>,
+}
+
+let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+    user_id: "u-123".into(),
+    roles: vec!["admin".into(), "editor".into()],
+})?;
+
+engine.inject_fn1("have_role", |state, role: String| {
+    state.roles.iter().any(|r| r == &role)
+})?;
 ```
 
 ## Typecheck Without Evaluating
@@ -156,7 +185,7 @@ let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
-let mut engine = Engine::with_prelude()?;
+let mut engine = Engine::with_prelude(())?;
 engine.inject_decls(&program.decls)?;
 let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
 let value = engine
@@ -172,9 +201,9 @@ println!("{value}");
 ```rust
 use rex_engine::Engine;
 
-let mut engine = Engine::with_prelude()?;
+let mut engine = Engine::with_prelude(())?;
 engine.inject_value("answer", 42i32)?;
-engine.inject_fn1("inc", |x: i32| x + 1)?;
+engine.inject_fn1("inc", |_state, x: i32| x + 1)?;
 ```
 
 ### Async Natives
@@ -186,8 +215,8 @@ If your host functions are async, inject them with `inject_async_fn*` and evalua
 use rex_engine::Engine;
 use rex_util::{GasCosts, GasMeter};
 
-let mut engine = Engine::with_prelude()?;
-engine.inject_async_fn1("inc", |x: i32| async move { x + 1 })?;
+let mut engine = Engine::with_prelude(())?;
+engine.inject_async_fn1("inc", |_state, x: i32| async move { x + 1 })?;
 
 let tokens = rex_lexer::Token::tokenize("inc 1")?;
 let mut parser = rex_parser::Parser::new(tokens);
@@ -215,19 +244,19 @@ let expr = parser
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .expr;
 
-let mut engine = Engine::with_prelude()?;
-engine.inject_async_fn0_cancellable("stall", |token: CancellationToken| async move {
+let mut engine = Engine::with_prelude(())?;
+engine.inject_async_fn0_cancellable("stall", |_state, token: CancellationToken| async move {
     token.cancelled().await;
     0i32
 })?;
 
 let token = engine.cancellation_token();
+std::thread::spawn(move || {
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    token.cancel();
+});
 let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-let handle = tokio::spawn(async move { engine.eval_with_gas(expr.as_ref(), &mut gas).await });
-token.cancel();
-let res = handle
-    .await
-    .map_err(|_| EngineError::Internal("evaluation task panicked".into()))?;
+let res = engine.eval_with_gas(expr.as_ref(), &mut gas).await;
 assert!(matches!(res, Err(EngineError::Cancelled)));
 ```
 
@@ -269,7 +298,7 @@ enum Maybe<T> {
     Nothing,
 }
 
-let mut engine = Engine::with_prelude()?;
+let mut engine = Engine::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
 let expr = rex_parser::Parser::new(rex_lexer::Token::tokenize("Just 1")?)

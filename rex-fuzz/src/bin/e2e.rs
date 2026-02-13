@@ -31,7 +31,7 @@ async fn run_one(input: &[u8]) {
         return;
     }
 
-    let Ok(mut engine) = Engine::with_prelude() else {
+    let Ok(mut engine) = Engine::with_prelude(()) else {
         return;
     };
     if engine.inject_decls(&program.decls).is_err() {

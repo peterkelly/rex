@@ -16,7 +16,8 @@ use rex_ts::{Predicate, Type};
 use rex_util::{GasMeter, sha256_hex};
 use uuid::Uuid;
 
-use crate::{Engine, EngineError, Pointer};
+use crate::Engine;
+use crate::{EngineError, Pointer};
 
 mod resolvers;
 mod system;
@@ -1186,7 +1187,10 @@ fn parse_program_from_source(
     Ok(program)
 }
 
-impl Engine {
+impl<State> Engine<State>
+where
+    State: Clone + Sync + 'static,
+{
     pub fn add_resolver<F>(&mut self, name: impl Into<String>, f: F)
     where
         F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError>
@@ -1223,7 +1227,7 @@ impl Engine {
         Ok(())
     }
 
-    #[async_recursion]
+    #[async_recursion(?Send)]
     async fn alias_exports_for_decls(
         &mut self,
         decls: &[Decl],
@@ -1246,7 +1250,7 @@ impl Engine {
         Ok(alias_exports)
     }
 
-    #[async_recursion]
+    #[async_recursion(?Send)]
     async fn load_module_from_resolved(
         &mut self,
         resolved: ResolvedModule,

@@ -5,13 +5,15 @@ This crate evaluates Rex ASTs and supports host-native injection of functions an
 ## Quickstart
 
 ```rust
-use rex_engine::{Engine, Value};
+use rex_engine::Engine;
 use rex_lexer::Token;
 use rex_parser::Parser;
+use rex_util::{GasCosts, GasMeter};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine = Engine::with_prelude()?;
-    engine.inject_fn2("(+)", |x: i32, y: i32| -> i32 { x + y })?;
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut engine = Engine::with_prelude(())?;
+    engine.inject_fn2("(+)", |_state, x: i32, y: i32| -> i32 { x + y })?;
     engine.inject_value("answer", 42i32)?;
 
     let tokens = Token::tokenize("answer + 1")?;
@@ -19,9 +21,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = parser.parse_program().map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
-    let value = engine.eval(program.expr.as_ref())?;
+    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let value = engine
+        .eval_with_gas(program.expr.as_ref(), &mut gas)
+        .await?;
 
-    assert!(matches!(value, Value::I32(43)));
+    assert_eq!(engine.heap().pointer_as_i32(&value)?, 43);
     Ok(())
 }
 ```
@@ -37,9 +42,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 
+`Engine` is generic over host state (`Engine<State>`, where `State: Clone + Sync + 'static`).
+`inject_fn*` / `inject_async_fn*` callbacks receive `&State` as the first argument.
+Pointer-level APIs (`inject_native*`) receive `&Engine<State>` so they can access heap/runtime internals.
+
 ## Prelude
 
-`Engine::with_prelude()?` injects the standard runtime helpers:
+`Engine::with_prelude(())?` injects the standard runtime helpers. If you need host state, pass
+your state value instead: `Engine::with_prelude(state)?`.
 
 - **Constructors**: `Empty`, `Cons`, `Some`, `None`, `Ok`, `Err`
 - **Arithmetic**: `+`, `-`, `*`, `/`, `negate`, `zero`, `one`

@@ -10,7 +10,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
 
-    let mut engine = Engine::with_prelude()?;
+    let mut engine = Engine::with_prelude(())?;
     MyInnerStruct::inject_rex(&mut engine)?;
     MyStruct::inject_rex(&mut engine)?;
     Boxed::<i32>::inject_rex(&mut engine)?;
@@ -102,7 +102,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     // The proc-macro generates *both*:
     // - `RexType` for Rust values (e.g. `Maybe<i32>` -> `Maybe i32`)
     // - an `AdtDecl` with a type parameter `T` (so `Just` has scheme `a -> Maybe a`)
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
 
     // Build the ADT surface (params + variants) and sanity-check that it really uses a type var.
     let adt = Maybe::<i32>::rex_adt_decl(&mut engine).unwrap();
@@ -208,12 +208,12 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
     MyStruct::inject_rex(&mut engine).unwrap();
 
     engine
-        .inject_fn1("bump_y", |mut s: MyStruct| {
+        .inject_fn1("bump_y", |_engine, mut s: MyStruct| {
             s.y += 1;
             s
         })
@@ -248,7 +248,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
 
 #[tokio::test]
 async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     Shape::inject_rex(&mut engine).unwrap();
 
     engine
@@ -274,11 +274,11 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
 
 #[tokio::test]
 async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     Maybe::<i32>::inject_rex(&mut engine).unwrap();
 
     engine
-        .inject_fn1("unwrap_or_zero", |m: Maybe<i32>| match m {
+        .inject_fn1("unwrap_or_zero", |_engine, m: Maybe<i32>| match m {
             Maybe::Just(v) => v,
             Maybe::Nothing => 0,
         })

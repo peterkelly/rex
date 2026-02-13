@@ -536,7 +536,7 @@ mod tests {
               io.write_all 1 (process.stdout p)
         "#;
 
-        let mut engine = Engine::with_prelude().unwrap();
+        let mut engine = Engine::with_prelude(()).unwrap();
         inject_cli_prelude_engine(&mut engine).unwrap();
         engine.add_default_resolvers();
         let mut gas = unlimited_gas();
@@ -552,7 +552,7 @@ mod tests {
               (process.wait p, process.stdout p, process.stderr p)
         "#;
 
-        let mut engine = Engine::with_prelude().unwrap();
+        let mut engine = Engine::with_prelude(()).unwrap();
         inject_cli_prelude_engine(&mut engine).unwrap();
         engine.add_default_resolvers();
         let mut gas = unlimited_gas();

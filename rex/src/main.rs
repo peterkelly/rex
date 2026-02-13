@@ -242,7 +242,7 @@ async fn repl_loop(
     parser_limits: ParserLimits,
 ) -> Result<(), String> {
     let mut engine =
-        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
+        Engine::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
     cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
     engine.add_default_resolvers();
     for root in include {
@@ -369,7 +369,7 @@ struct RunSourceOpts {
 
 fn init_engine(include: &[String]) -> Result<Engine, String> {
     let mut engine =
-        Engine::with_prelude().map_err(|e| format!("failed to initialize engine: {e}"))?;
+        Engine::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
     cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| e.to_string())?;
     engine.add_default_resolvers();
     for root in include {

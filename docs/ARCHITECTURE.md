@@ -20,9 +20,10 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `TypeSystem::infer_typed` / `TypeSystem::infer` for type inference.
   - `TypeSystem::{infer_typed_with_stack_size,infer_with_stack_size}` for deeply nested programs.
 - `rex-engine`: runtime evaluator. Entry points:
-  - `Engine::with_prelude()?` to inject runtime constructors and builtin implementations.
+  - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `Engine::inject_decls(&program.decls)` to make user declarations available at runtime.
   - `Engine::eval_with_gas(&program.expr, &mut gas).await` to evaluate.
+  - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `inject_fn*` callbacks receive `&State`, while pointer-level `inject_native*` callbacks receive `&Engine<State>`.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
@@ -32,5 +33,5 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - **Typed evaluation**: `rex-engine` always evaluates a `TypedExpr`; it typechecks first (via `rex-ts`) and then evaluates. This keeps runtime behavior predictable and makes native-function dispatch type-directed.
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::with_prelude()?`
-  - typeclass method *bodies* (written in Rex) loaded from `rex-ts/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude()?`
+  - typeclass method *bodies* (written in Rex) loaded from `rex-ts/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
 - **Stack usage**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). The project exposes “large stack” entrypoints to keep the public API safe for production workloads without forcing every algorithm into an explicit stack machine.

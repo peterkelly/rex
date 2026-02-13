@@ -21,7 +21,7 @@ async fn assert_program_ok(name: &str, source: &str) {
     ts.infer(program.expr.as_ref())
         .unwrap_or_else(|err| panic!("{name}: type error: {err}"));
 
-    let mut engine = Engine::with_prelude().unwrap();
+    let mut engine = Engine::with_prelude(()).unwrap();
     engine
         .inject_decls(&program.decls)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
