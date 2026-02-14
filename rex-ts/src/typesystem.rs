@@ -2601,6 +2601,20 @@ fn collect_app_chain(expr: &Expr) -> (&Expr, Vec<&Expr>) {
     (cur, args)
 }
 
+fn narrow_overload_candidates(candidates: &[Type], arg_ty: &Type) -> Vec<Type> {
+    let mut out = Vec::new();
+    for candidate in candidates {
+        let Some((params, ret)) = decompose_fun(candidate, 1) else {
+            continue;
+        };
+        let param = &params[0];
+        if let Ok(s) = unify(param, arg_ty) {
+            out.push(ret.apply(&s));
+        }
+    }
+    out
+}
+
 fn infer_app_arg_type(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
@@ -2782,6 +2796,33 @@ fn infer_expr_type(
                 let (head, args) = collect_app_chain(expr);
                 let (mut preds, mut func_ty) =
                     infer_expr_type(unifier, supply, env, adts, known, head)?;
+                let mut overload_name = None;
+                let mut overload_candidates = if let Expr::Var(var) = head {
+                    if let Some(schemes) = env.lookup(&var.name) {
+                        if schemes.len() <= 1 {
+                            None
+                        } else {
+                            let mut candidates = Vec::new();
+                            for scheme in schemes {
+                                if !scheme.vars.is_empty() || !scheme.preds.is_empty() {
+                                    return Err(TypeError::AmbiguousOverload(var.name.clone()));
+                                }
+                                let scheme = apply_scheme_with_unifier(scheme, unifier);
+                                let (p, typ) = instantiate(&scheme, supply);
+                                if !p.is_empty() {
+                                    return Err(TypeError::AmbiguousOverload(var.name.clone()));
+                                }
+                                candidates.push(typ);
+                            }
+                            overload_name = Some(var.name.clone());
+                            Some(candidates)
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
                 for arg in args {
                     let arg_hint = match unifier.apply_type(&func_ty).as_ref() {
                         TypeKind::Fun(arg, _) => Some(arg.clone()),
@@ -2789,10 +2830,32 @@ fn infer_expr_type(
                     };
                     let (p_arg, arg_ty) =
                         infer_app_arg_type(unifier, supply, env, adts, known, arg_hint, arg)?;
-                    let res_ty = Type::var(supply.fresh(Some("r".into())));
+                    let arg_ty = unifier.apply_type(&arg_ty);
+                    if let Some(candidates) = overload_candidates.take() {
+                        let candidates = candidates
+                            .into_iter()
+                            .map(|t| unifier.apply_type(&t))
+                            .collect::<Vec<_>>();
+                        let narrowed = narrow_overload_candidates(&candidates, &arg_ty);
+                        if narrowed.is_empty()
+                            && let Some(name) = &overload_name
+                        {
+                            return Err(TypeError::AmbiguousOverload(name.clone()));
+                        }
+                        overload_candidates = Some(narrowed);
+                    }
+                    let res_ty = match overload_candidates.as_ref() {
+                        Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
+                        _ => Type::var(supply.fresh(Some("r".into()))),
+                    };
                     unifier.unify(&func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
                     preds.extend(p_arg);
-                    func_ty = unifier.apply_type(&res_ty);
+                    func_ty = match overload_candidates.as_ref() {
+                        Some(candidates) if candidates.len() == 1 => {
+                            unifier.apply_type(&candidates[0])
+                        }
+                        _ => unifier.apply_type(&res_ty),
+                    };
                 }
                 Ok((preds, func_ty))
             }
@@ -3191,6 +3254,14 @@ fn infer_expr(
                 let (head, args) = collect_app_chain(expr);
                 let (mut preds, mut func_ty, mut typed) =
                     infer_expr(unifier, supply, env, adts, known, head)?;
+                let mut overload_name = None;
+                let mut overload_candidates = match &typed.kind {
+                    TypedExprKind::Var { name, overloads } if !overloads.is_empty() => {
+                        overload_name = Some(name.clone());
+                        Some(overloads.clone())
+                    }
+                    _ => None,
+                };
                 for arg in args {
                     let arg_hint = match unifier.apply_type(&func_ty).as_ref() {
                         TypeKind::Fun(arg, _) => Some(arg.clone()),
@@ -3198,9 +3269,31 @@ fn infer_expr(
                     };
                     let (p_arg, arg_ty, typed_arg) =
                         infer_app_arg_typed(unifier, supply, env, adts, known, arg_hint, arg)?;
-                    let res_ty = Type::var(supply.fresh(Some("r".into())));
+                    let arg_ty = unifier.apply_type(&arg_ty);
+                    if let Some(candidates) = overload_candidates.take() {
+                        let candidates = candidates
+                            .into_iter()
+                            .map(|t| unifier.apply_type(&t))
+                            .collect::<Vec<_>>();
+                        let narrowed = narrow_overload_candidates(&candidates, &arg_ty);
+                        if narrowed.is_empty()
+                            && let Some(name) = &overload_name
+                        {
+                            return Err(TypeError::AmbiguousOverload(name.clone()));
+                        }
+                        overload_candidates = Some(narrowed);
+                    }
+                    let res_ty = match overload_candidates.as_ref() {
+                        Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
+                        _ => Type::var(supply.fresh(Some("r".into()))),
+                    };
                     unifier.unify(&func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
-                    let result_ty = unifier.apply_type(&res_ty);
+                    let result_ty = match overload_candidates.as_ref() {
+                        Some(candidates) if candidates.len() == 1 => {
+                            unifier.apply_type(&candidates[0])
+                        }
+                        _ => unifier.apply_type(&res_ty),
+                    };
                     preds.extend(p_arg);
                     typed = TypedExpr::new(
                         result_ty.clone(),
