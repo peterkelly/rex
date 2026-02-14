@@ -1543,6 +1543,42 @@ impl_tuple_traits!(A0, A1, A2, A3, A4, A5);
 impl_tuple_traits!(A0, A1, A2, A3, A4, A5, A6);
 impl_tuple_traits!(A0, A1, A2, A3, A4, A5, A6, A7);
 
+impl RexType for serde_json::Value {
+    fn rex_type() -> Type {
+        Type::con("serde_json::Value", 0)
+    }
+}
+
+impl IntoPointer for serde_json::Value {
+    fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
+        let json_string = serde_json::to_string(&self)
+            .map_err(|e| EngineError::Internal(format!("failed to serialize JSON: {}", e)))?;
+        let string_ptr = heap.alloc_string(json_string)?;
+        heap.alloc_adt(sym("serde_json::Value"), vec![string_ptr])
+    }
+}
+
+impl FromPointer for serde_json::Value {
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let (tag, args) = heap.pointer_as_adt(pointer)?;
+        if !sym_eq(&tag, "serde_json::Value") {
+            return Err(EngineError::NativeType {
+                expected: "serde_json::Value".into(),
+                got: heap.type_name(pointer)?.into(),
+            });
+        }
+        if args.len() != 1 {
+            return Err(EngineError::Internal(format!(
+                "serde_json::Value ADT should have 1 field, got {}",
+                args.len()
+            )));
+        }
+        let json_string = heap.pointer_as_string(&args[0])?;
+        serde_json::from_str(&json_string)
+            .map_err(|e| EngineError::Internal(format!("failed to deserialize JSON: {}", e)))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
