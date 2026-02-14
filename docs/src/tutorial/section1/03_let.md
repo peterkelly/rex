@@ -60,10 +60,8 @@ in
   sum [1, 2, 3, 4]
 ```
 
-:::{tip}
-If you’re coming from languages with `for` loops, think “write a recursive function + match on a
-list” in Rex.
-:::
+> **Tip:** If you’re coming from languages with `for` loops, think “write a recursive function + match on a
+> list” in Rex.
 
 ## Let-polymorphism (preview)
 

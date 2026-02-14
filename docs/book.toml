@@ -1,0 +1,34 @@
+[book]
+title = "Rex"
+authors = ["Rex contributors"]
+language = "en"
+src = "src"
+description = "Rex (short for Rush Expressions) is a strongly-typed functional DSL for defining workflows."
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "ayu"
+git-repository-url = "https://github.com/rushsteve1/rex"
+edit-url-template = "https://github.com/rushsteve1/rex/edit/master/docs/{path}"
+
+[output.html.playground]
+editable = false
+copyable = true
+line-numbers = true
+
+[output.html.search]
+enable = true
+limit-results = 30
+teaser-word-count = 30
+use-boolean-and = true
+boost-title = 2
+boost-hierarchy = 1
+boost-paragraph = 1
+expand = true
+
+[output.html.fold]
+enable = true
+level = 1

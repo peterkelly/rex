@@ -6,9 +6,7 @@ Rex programs are *one expression*, optionally preceded by top-level declarations
 - `class` / `instance` — type classes and instances
 - `fn` — top-level functions
 
-:::{note}
-This tutorial focuses on writing Rex code. If you want to embed Rex in Rust, see `docs/EMBEDDING.md`.
-:::
+> **Note:** This tutorial focuses on writing Rex code. If you want to embed Rex in Rust, see `docs/EMBEDDING.md`.
 
 ## Running Rex
 

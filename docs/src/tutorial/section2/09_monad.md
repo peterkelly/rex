@@ -60,6 +60,4 @@ bind (\x ->
 ) (Some 1)
 ```
 
-:::{tip}
-When your `bind` chains get hard to read, consider extracting the steps into named `let` bindings.
-:::
+> **Tip:** When your `bind` chains get hard to read, consider extracting the steps into named `let` bindings.

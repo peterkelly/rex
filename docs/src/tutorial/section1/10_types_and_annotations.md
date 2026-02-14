@@ -73,7 +73,5 @@ You’ll see `is` used in examples for two common reasons:
 1. To force a dictionary type (`Dict a`) instead of a specific record type.
 2. To disambiguate overloaded values (similar to adding a let-annotation).
 
-:::{warning}
-Use `is` when it helps clarity, but don’t overuse it: most of the time, simple `let` annotations are
-easier to read.
-:::
+> **Warning:** Use `is` when it helps clarity, but don’t overuse it: most of the time, simple `let` annotations are
+> easier to read.

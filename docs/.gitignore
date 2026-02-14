@@ -1,0 +1,13 @@
+# mdBook output
+book/
+book
+
+# Legacy Sphinx output
+_build/
+_static/
+_templates/
+
+# Python
+__pycache__/
+*.pyc
+.python/

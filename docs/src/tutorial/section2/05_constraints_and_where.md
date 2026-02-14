@@ -43,8 +43,6 @@ Constraints are comma-separated:
 fn demo : List i32 -> i32 where Foldable List, AdditiveMonoid i32 = \xs -> foldl (+) 0 xs
 ```
 
-:::{note}
-In many cases you don’t need to write constraints for concrete prelude types (`List`, `Option`,
-etc.) because the argument type already forces instance selection. `where` becomes more important
-when you want *polymorphic* constraints (e.g. “for any `f` with `Foldable f`”).
-:::
+> **Note:** In many cases you don’t need to write constraints for concrete prelude types (`List`, `Option`,
+> etc.) because the argument type already forces instance selection. `where` becomes more important
+> when you want *polymorphic* constraints (e.g. “for any `f` with `Foldable f`”).

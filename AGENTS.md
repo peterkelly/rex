@@ -35,9 +35,9 @@ computations and data manipulation.
 
 ## Key Files
 
-- `docs/ARCHITECTURE.md`: crate pipeline overview.
-- `docs/SPEC.md`: locked semantics; keep in sync with regression tests.
-- `docs/EMBEDDING.md`: embedding patterns and untrusted-code checklist.
+- `docs/src/ARCHITECTURE.md`: crate pipeline overview.
+- `docs/src/SPEC.md`: locked semantics; keep in sync with regression tests.
+- `docs/src/EMBEDDING.md`: embedding patterns and untrusted-code checklist.
 - `rex-ts/src/prelude_typeclasses.rex`: Rex implementations of typeclass methods.
 - `rex-ts/src/prelude.rs`: typeclass/instance injection + primop types.
 - `rex-engine/src/prelude.rs`: runtime implementations of primops and builtins.
@@ -72,12 +72,15 @@ If the server binary is not in `target/debug/`, set `rex.serverPath` to the `rex
 
 ## Docs
 
+Documentation is built with [mdBook](https://rust-lang.github.io/mdBook/):
+
 ```sh
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -r docs/requirements.txt
-make -C docs html
+cd docs
+mdbook build  # Output to docs/book/
+mdbook serve  # Serve at http://localhost:3000 with auto-reload
 ```
+
+Install mdBook: `cargo install mdbook`
 
 ## Commit messages
 
@@ -92,7 +95,7 @@ make -C docs html
 
 ## Semantics Changes
 
-- Update `docs/SPEC.md` when behavior changes.
+- Update `docs/src/SPEC.md` when behavior changes.
 - Adjust regression tests:
   - `rex/tests/spec_semantics.rs`
   - `rex/tests/record_update.rs`
@@ -108,4 +111,4 @@ make -C docs html
 ## Lockfiles
 
 - Committed: `Cargo.lock`, `rex-vscode/package-lock.json`.
-- Do not commit build artifacts under `target/`, `node_modules/`, or `docs/_build/`
+- Do not commit build artifacts under `target/`, `node_modules/`, or `docs/book/`

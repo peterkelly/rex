@@ -4,10 +4,8 @@ This page is a hands-on guide to defining your own instances for custom ADTs.
 
 We’ll build a tiny container type and give it `Functor`, `Applicative`, and `Monad` instances.
 
-:::{note}
-`Functor`, `Applicative`, and `Monad` are provided by the Rex prelude. The examples below assume
-those classes already exist (so we only write `type`/`instance`).
-:::
+> **Note:** `Functor`, `Applicative`, and `Monad` are provided by the Rex prelude. The examples below assume
+> those classes already exist (so we only write `type`/`instance`).
 
 ## Step 1: define a container ADT
 
