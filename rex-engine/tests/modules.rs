@@ -1,7 +1,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use rex_engine::{Engine, Pointer, Value};
+use futures::FutureExt;
+use rex_engine::{Engine, Module, Pointer, Value};
+use rex_ts::{Scheme, Type};
 use rex_util::GasMeter;
 use uuid::Uuid;
 
@@ -27,24 +31,40 @@ fn unlimited_gas() -> GasMeter {
     GasMeter::default()
 }
 
-async fn eval_module_file(
-    engine: &mut Engine,
+fn i32_type() -> Type {
+    Type::con("i32", 0)
+}
+
+fn i32_binop_scheme() -> Scheme {
+    Scheme::new(
+        vec![],
+        vec![],
+        Type::fun(i32_type(), Type::fun(i32_type(), i32_type())),
+    )
+}
+
+fn i32_value_scheme() -> Scheme {
+    Scheme::new(vec![], vec![], i32_type())
+}
+
+async fn eval_module_file<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
     path: &Path,
 ) -> Result<Pointer, rex_engine::EngineError> {
     let mut gas = unlimited_gas();
     engine.eval_module_file(path, &mut gas).await
 }
 
-async fn eval_snippet(
-    engine: &mut Engine,
+async fn eval_snippet<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
     source: &str,
 ) -> Result<Pointer, rex_engine::EngineError> {
     let mut gas = unlimited_gas();
     engine.eval_snippet(source, &mut gas).await
 }
 
-async fn eval_snippet_at(
-    engine: &mut Engine,
+async fn eval_snippet_at<State: Clone + Sync + 'static>(
+    engine: &mut Engine<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
 ) -> Result<Pointer, rex_engine::EngineError> {
@@ -109,6 +129,284 @@ async fn module_import_local_pub() {
             engine.heap().type_name(&value_ptr).unwrap()
         ),
     }
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_sync_and_async_exports() {
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    let mut module = Module::new("host.math");
+    module
+        .export("inc", |_state: &(), x: i32| -> i32 { x + 1 })
+        .unwrap();
+    module
+        .export_async("double_async", |_state: &(), x: i32| async move { x * 2 })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
+        import host.math (inc, double_async as d)
+        inc (d 20)
+"#,
+    )
+    .await
+    .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
+    match value {
+        Value::I32(v) => assert_eq!(v, 41),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        ),
+    }
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_native_pointer_exports_sync() {
+    let mut engine = Engine::with_prelude(true).unwrap();
+    engine.add_default_resolvers();
+
+    let mut module = Module::new("host.ptrsync");
+    module
+        .export_native(
+            "pick",
+            i32_binop_scheme(),
+            2,
+            |engine: &Engine<bool>, _: &Type, args: &[Pointer]| {
+                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+                args.get(idx)
+                    .cloned()
+                    .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+            },
+        )
+        .unwrap();
+    module
+        .export_native(
+            "heap_i32",
+            i32_value_scheme(),
+            0,
+            |engine: &Engine<bool>, _: &Type, _args| engine.heap().alloc_i32(123),
+        )
+        .unwrap();
+
+    let expected_type = i32_binop_scheme().typ.clone();
+    let typed_called = Arc::new(AtomicBool::new(false));
+    module
+        .export_native("pick_typed", i32_binop_scheme(), 2, {
+            let typed_called = Arc::clone(&typed_called);
+            move |engine: &Engine<bool>, typ: &Type, args: &[Pointer]| {
+                if typ == &expected_type {
+                    typed_called.store(true, Ordering::Relaxed);
+                }
+                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+                args.get(idx)
+                    .cloned()
+                    .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+            }
+        })
+        .unwrap();
+
+    engine.inject_module(module).unwrap();
+
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
+        import host.ptrsync (pick, pick_typed, heap_i32)
+        (pick 10 42, pick_typed 5 99, heap_i32)
+"#,
+    )
+    .await
+    .unwrap();
+
+    let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
+    let Value::Tuple(xs) = value else {
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
+    };
+    let xs = pvals!(engine, xs);
+    let got: Vec<i32> = xs
+        .into_iter()
+        .map(|(pointer, v)| match v {
+            Value::I32(n) => n,
+            _ => panic!(
+                "expected i32, got {}",
+                engine.heap().type_name(&pointer).unwrap()
+            ),
+        })
+        .collect();
+    assert_eq!(got, vec![42, 99, 123]);
+    assert!(typed_called.load(Ordering::Relaxed));
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_native_pointer_exports_async() {
+    let mut engine = Engine::with_prelude(true).unwrap();
+    engine.add_default_resolvers();
+
+    let mut module = Module::new("host.ptrasync");
+    module
+        .export_native_async(
+            "pick_async",
+            i32_binop_scheme(),
+            2,
+            |engine: &Engine<bool>, _: Type, args: Vec<Pointer>| {
+                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+                async move {
+                    args.get(idx)
+                        .cloned()
+                        .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+                }
+                .boxed_local()
+            },
+        )
+        .unwrap();
+    module
+        .export_native_async(
+            "heap_i32_async",
+            i32_value_scheme(),
+            0,
+            |engine: &Engine<bool>, _: Type, _args: Vec<Pointer>| {
+                async move { engine.heap().alloc_i32(77) }.boxed_local()
+            },
+        )
+        .unwrap();
+
+    let expected_type = i32_binop_scheme().typ.clone();
+    let typed_called = Arc::new(AtomicBool::new(false));
+    module
+        .export_native_async("pick_typed_async", i32_binop_scheme(), 2, {
+            let typed_called = Arc::clone(&typed_called);
+            move |engine: &Engine<bool>, typ: Type, args: Vec<Pointer>| {
+                let type_match = typ == expected_type;
+                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+                let typed_called = Arc::clone(&typed_called);
+                async move {
+                    if type_match {
+                        typed_called.store(true, Ordering::Relaxed);
+                    }
+                    args.get(idx)
+                        .cloned()
+                        .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+                }
+                .boxed_local()
+            }
+        })
+        .unwrap();
+
+    engine.inject_module(module).unwrap();
+
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
+        import host.ptrasync (pick_async, pick_typed_async as pta, heap_i32_async)
+        (pick_async 7 21, pta 1 2, heap_i32_async)
+"#,
+    )
+    .await
+    .unwrap();
+
+    let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
+    let Value::Tuple(xs) = value else {
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
+    };
+    let xs = pvals!(engine, xs);
+    let got: Vec<i32> = xs
+        .into_iter()
+        .map(|(pointer, v)| match v {
+            Value::I32(n) => n,
+            _ => panic!(
+                "expected i32, got {}",
+                engine.heap().type_name(&pointer).unwrap()
+            ),
+        })
+        .collect();
+    assert_eq!(got, vec![21, 2, 77]);
+    assert!(typed_called.load(Ordering::Relaxed));
+}
+
+#[test]
+fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
+    let mut module = Module::new("host.invalid");
+    let unary_scheme = Scheme::new(vec![], vec![], Type::fun(i32_type(), i32_type()));
+
+    let err = module
+        .export_native(
+            "bad",
+            unary_scheme,
+            2,
+            |_engine: &Engine<()>, _: &Type, _args: &[Pointer]| {
+                Err(rex_engine::EngineError::Internal("unused".into()))
+            },
+        )
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("does not accept 2 argument(s)"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_wildcard_import() {
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    let mut module = Module::new("host.ops");
+    module
+        .export("triple", |_state: &(), x: i32| -> i32 { x * 3 })
+        .unwrap();
+    module
+        .export("add", |_state: &(), a: i32, b: i32| -> i32 { a + b })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
+        import host.ops (*)
+        add (triple 10) 2
+"#,
+    )
+    .await
+    .unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
+    match value {
+        Value::I32(v) => assert_eq!(v, 32),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        ),
+    }
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_rejects_duplicate_module_name() {
+    let mut engine = engine_with_prelude();
+
+    let mut one = Module::new("host.dupe");
+    one.export("x", |_state: &(), x: i32| -> i32 { x }).unwrap();
+    engine.inject_module(one).unwrap();
+
+    let mut two = Module::new("host.dupe");
+    two.export("y", |_state: &(), x: i32| -> i32 { x }).unwrap();
+    let err = engine.inject_module(two).unwrap_err();
+    assert!(err.to_string().contains("already injected"));
 }
 
 #[tokio::test]

@@ -30,6 +30,6 @@ zero + 1
 
 ## Learn the rules
 
-Defaulting is specified precisely in `docs/SPEC.md` (“Defaulting”). If you hit an “ambiguous
+Defaulting is specified precisely in [Specification](../../SPEC.md) (“Defaulting”). If you hit an “ambiguous
 overload” error, that section explains why and how to resolve it.
 

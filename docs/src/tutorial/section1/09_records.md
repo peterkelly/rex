@@ -23,7 +23,7 @@ At the type level, record types are written with `:`:
 let p = { x = 1, y = 2 } in p.x
 ```
 
-Projection is accepted when the field is *definitely available* on the type (see `docs/SPEC.md`).
+Projection is accepted when the field is *definitely available* on the type (see [Specification](../../SPEC.md)).
 
 > **Tip:** If you get a “field not definitely available” type error, it usually means the typechecker can’t
 > prove which ADT variant you have. A `match` often fixes it.

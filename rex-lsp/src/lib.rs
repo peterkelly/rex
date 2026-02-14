@@ -1340,7 +1340,7 @@ fn hover_type_contents(uri: &Url, text: &str, position: Position) -> Option<Hove
         typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
         root_expr = method.body.as_ref();
     } else {
-        let (typed, _preds, _typ) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
+        let (typed, _preds, _) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
         typed_root = typed;
         root_expr = expr_with_fns.as_ref();
     }

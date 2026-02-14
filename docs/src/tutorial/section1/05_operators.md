@@ -29,7 +29,7 @@ This is why you can write `+` for both numbers *and* strings.
 
 ## Precedence
 
-Rex has a fixed precedence table (see `docs/LANGUAGE.md`). A good habit is to use parentheses
+Rex has a fixed precedence table (see [Language Reference](../../LANGUAGE.md)). A good habit is to use parentheses
 whenever you mix application with multiple infix operators.
 
 ```rex

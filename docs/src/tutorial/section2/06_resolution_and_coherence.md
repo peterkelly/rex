@@ -42,4 +42,4 @@ Fix it by forcing a type:
 let x: Option i32 = pure 1 in x
 ```
 
-For the exact rules, see `docs/SPEC.md` (“Type Classes: Coherence, Resolution, and Ambiguity”).
+For the exact rules, see [Specification](../../SPEC.md) (“Type Classes: Coherence, Resolution, and Ambiguity”).

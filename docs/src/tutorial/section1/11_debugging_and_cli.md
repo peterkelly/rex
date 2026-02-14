@@ -64,4 +64,4 @@ Typical fixes:
 - add `is` ascription: `(zero) is i32` (if you prefer expression ascription style)
 - use the value in a context that forces a type (e.g. `zero + 1`).
 
-The exact defaulting rules for numeric types are described in `docs/SPEC.md`.
+The exact defaulting rules for numeric types are described in [Specification](../../SPEC.md).

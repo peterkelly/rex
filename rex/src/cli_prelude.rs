@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use rex_ast::expr::{Symbol, sym};
-use rex_engine::{Engine, EngineError, FromPointer, Heap, Pointer, Value, virtual_export_name};
+use rex_engine::{
+    Engine, EngineError, FromPointer, Heap, Module, Pointer, Value, virtual_export_name,
+};
 use rex_ts::{Scheme, Type};
 use uuid::Uuid;
 
@@ -141,14 +143,14 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let i32_ty = Type::con("i32", 0);
     let u8_ty = Type::con("u8", 0);
     let array_u8 = array_type(u8_ty);
+    let mut module = Module::new("std.io");
 
-    let read_all_name = virtual_export_name("std.io", "read_all");
-    let read_all_sym = sym(&read_all_name);
-    engine.inject_native_scheme_typed_async(
-        &read_all_name,
+    let read_all_sym = sym("read_all");
+    module.export_native_async(
+        "read_all",
         Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), array_u8.clone())),
         1,
-        move |engine, _call_type, args| {
+        move |engine, _, args| {
             let read_all_sym = read_all_sym.clone();
             Box::pin(async move {
                 if args.len() != 1 {
@@ -175,17 +177,16 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    let write_all_name = virtual_export_name("std.io", "write_all");
-    let write_all_sym = sym(&write_all_name);
-    engine.inject_native_scheme_typed_async(
-        &write_all_name,
+    let write_all_sym = sym("write_all");
+    module.export_native_async(
+        "write_all",
         Scheme::new(
             vec![],
             vec![],
             Type::fun(i32_ty, Type::fun(array_u8, unit_type())),
         ),
         2,
-        move |engine, _call_type, args| {
+        move |engine, _, args| {
             let write_all_sym = write_all_sym.clone();
             Box::pin(async move {
                 if args.len() != 2 {
@@ -223,7 +224,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    Ok(())
+    engine.inject_module(module)
 }
 
 fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
@@ -233,19 +234,19 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let string = Type::con("string", 0);
     let i32_ty = Type::con("i32", 0);
     let list_string = Type::app(Type::con("List", 1), string.clone());
+    let mut module = Module::new("std.process");
     let opts = Type::record(vec![
         (sym("cmd"), string.clone()),
         (sym("args"), list_string),
     ]);
 
-    let spawn_name = virtual_export_name("std.process", "spawn");
-    let spawn_sym = sym(&spawn_name);
+    let spawn_sym = sym("spawn");
     let subprocess_ctor_for_spawn = subprocess_ctor.clone();
-    engine.inject_native_scheme_typed_async(
-        &spawn_name,
+    module.export_native_async(
+        "spawn",
         Scheme::new(vec![], vec![], Type::fun(opts, subprocess.clone())),
         1,
-        move |engine, _call_type, args| {
+        move |engine, _, args| {
             let spawn_sym = spawn_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_spawn.clone();
             Box::pin(async move {
@@ -353,14 +354,13 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    let wait_name = virtual_export_name("std.process", "wait");
-    let wait_sym = sym(&wait_name);
+    let wait_sym = sym("wait");
     let subprocess_ctor_for_wait = subprocess_ctor.clone();
-    engine.inject_native_scheme_typed_async(
-        &wait_name,
+    module.export_native_async(
+        "wait",
         Scheme::new(vec![], vec![], Type::fun(subprocess.clone(), i32_ty)),
         1,
-        move |engine, _call_type, args| {
+        move |engine, _, args| {
             let wait_sym = wait_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_wait.clone();
             Box::pin(async move {
@@ -422,18 +422,17 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    let stdout_name = virtual_export_name("std.process", "stdout");
-    let stdout_sym = sym(&stdout_name);
+    let stdout_sym = sym("stdout");
     let subprocess_ctor_for_stdout = subprocess_ctor.clone();
-    engine.inject_native_scheme_typed_async(
-        &stdout_name,
+    module.export_native_async(
+        "stdout",
         Scheme::new(
             vec![],
             vec![],
             Type::fun(subprocess.clone(), array_type(Type::con("u8", 0))),
         ),
         1,
-        move |engine, _call_type, args| {
+        move |engine, _, args| {
             let stdout_sym = stdout_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_stdout.clone();
             Box::pin(async move {
@@ -452,18 +451,17 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    let stderr_name = virtual_export_name("std.process", "stderr");
-    let stderr_sym = sym(&stderr_name);
+    let stderr_sym = sym("stderr");
     let subprocess_ctor_for_stderr = subprocess_ctor.clone();
-    engine.inject_native_scheme_typed_async(
-        &stderr_name,
+    module.export_native_async(
+        "stderr",
         Scheme::new(
             vec![],
             vec![],
             Type::fun(subprocess, array_type(Type::con("u8", 0))),
         ),
         1,
-        move |engine, _call_type, args| {
+        move |engine, _, args| {
             let stderr_sym = stderr_sym.clone();
             let subprocess_ctor = subprocess_ctor_for_stderr.clone();
             Box::pin(async move {
@@ -482,7 +480,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    Ok(())
+    engine.inject_module(module)
 }
 
 fn subprocess_id(heap: &Heap, pointer: &Pointer, tag: &Symbol) -> Result<Uuid, EngineError> {
@@ -537,8 +535,8 @@ mod tests {
         "#;
 
         let mut engine = Engine::with_prelude(()).unwrap();
-        inject_cli_prelude_engine(&mut engine).unwrap();
         engine.add_default_resolvers();
+        inject_cli_prelude_engine(&mut engine).unwrap();
         let mut gas = unlimited_gas();
         engine.eval_snippet(code, &mut gas).await.unwrap();
     }
@@ -553,8 +551,8 @@ mod tests {
         "#;
 
         let mut engine = Engine::with_prelude(()).unwrap();
-        inject_cli_prelude_engine(&mut engine).unwrap();
         engine.add_default_resolvers();
+        inject_cli_prelude_engine(&mut engine).unwrap();
         let mut gas = unlimited_gas();
         let value = engine.eval_snippet(code, &mut gas).await.unwrap();
         let value = engine

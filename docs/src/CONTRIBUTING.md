@@ -11,7 +11,7 @@ Rex is a Cargo workspace. The most important crates are:
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex types/values
 - `rex`: CLI binary
 
-Architecture overview: `docs/ARCHITECTURE.md`.
+Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Development
 

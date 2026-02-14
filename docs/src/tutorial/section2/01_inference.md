@@ -43,7 +43,7 @@ You’ll see errors when:
 - you call a type-class method with no applicable instance,
 - you use an overloaded value without enough type information (ambiguity).
 
-For details on ambiguity and defaulting, see `docs/SPEC.md`.
+For details on ambiguity and defaulting, see [Specification](../../SPEC.md).
 
 ## The most common “fixes”
 

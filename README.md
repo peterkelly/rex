@@ -38,12 +38,12 @@ This repo is a Cargo workspace. The key crates are:
 
 ## Docs
 
-- `docs/ARCHITECTURE.md`: crate pipeline and design notes
-- `docs/EMBEDDING.md`: embedding Rex in Rust (API patterns)
-- `docs/LANGUAGE.md`: language notes and examples
-- `docs/SPEC.md`: locked semantics (record update, coherence, defaulting)
-- `docs/CONTRIBUTING.md`: contributor workflow and repo policies
-- Production note (untrusted code): `docs/EMBEDDING.md` (“Running Untrusted Rex Code”)
+- [`docs/src/ARCHITECTURE.md`](docs/src/ARCHITECTURE.md): crate pipeline and design notes
+- [`docs/src/EMBEDDING.md`](docs/src/EMBEDDING.md): embedding Rex in Rust (API patterns)
+- [`docs/src/LANGUAGE.md`](docs/src/LANGUAGE.md): language notes and examples
+- [`docs/src/SPEC.md`](docs/src/SPEC.md): locked semantics (record update, coherence, defaulting)
+- [`docs/src/CONTRIBUTING.md`](docs/src/CONTRIBUTING.md): contributor workflow and repo policies
+- Production note (untrusted code): [`docs/src/EMBEDDING.md`](docs/src/EMBEDDING.md) (“Running Untrusted Rex Code”)
 
 Build the HTML docs (Sphinx + Shibuya):
 
@@ -117,6 +117,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Use `Engine::with_prelude(())?` when you do not need host state, or pass your own state value
 to `Engine::new(state)` / `Engine::with_prelude(state)` and access it in injected natives via
 the first callback parameter (`&State`) for `inject_fn*` / `inject_async_fn*`.
+
+For host-provided module namespaces, prefer `Module` + `inject_module`:
+
+```rust
+use rex_engine::{Engine, Module};
+
+let mut engine = Engine::with_prelude(())?;
+engine.add_default_resolvers();
+
+let mut math = Module::new("acme.math");
+math.export("inc", |_state: &(), x: i32| -> i32 { x + 1 })?;
+math.export_async("double_async", |_state: &(), x: i32| async move { x * 2 })?;
+engine.inject_module(math)?;
+```
+
+For runtime-defined module signatures/implementations, use
+`export_native` / `export_native_async` with an explicit `Scheme` + arity. Those
+callbacks receive `&Engine<State>` so they can access `engine.state` and allocate on
+`engine.heap()`.
 
 For deeply nested programs, prefer the large-stack entrypoints:
 
@@ -485,4 +504,4 @@ Rex ships with a small prelude of common helpers. The type system constrains the
 
 ## Contribute
 
-See `docs/ARCHITECTURE.md` for a high-level tour of the crates and the parsing → typing → evaluation pipeline.
+See [`docs/src/ARCHITECTURE.md`](docs/src/ARCHITECTURE.md) for a high-level tour of the crates and the parsing → typing → evaluation pipeline.

@@ -61,4 +61,4 @@ In `where` constraints, multi-parameter classes are written using a tuple:
 where Indexable (t, a) -> ...
 ```
 
-This matches the implementation model described in `docs/SPEC.md`.
+This matches the implementation model described in [Specification](../../SPEC.md).

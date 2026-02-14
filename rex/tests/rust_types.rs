@@ -28,7 +28,11 @@ async fn vec_from_value() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_vec", accept_vec).unwrap();
 
-    let result = eval_expr(&mut engine, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
+    let result = eval_expr(
+        &mut engine,
+        r#"accept_vec (prim_array_from_list [1, 2, 3])"#,
+    )
+    .await;
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -191,7 +195,11 @@ async fn result_from_value_primitives() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_result", accept_result).unwrap();
-    let result = eval_expr(&mut engine, r#"(accept_result (Ok 42), accept_result (Err "failed"))"#).await;
+    let result = eval_expr(
+        &mut engine,
+        r#"(accept_result (Ok 42), accept_result (Err "failed"))"#,
+    )
+    .await;
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -215,7 +223,11 @@ async fn result_from_value_different_primitives() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_result", accept_result).unwrap();
-    let result = eval_expr(&mut engine, r#"(accept_result (Ok 3.14), accept_result (Err 404))"#).await;
+    let result = eval_expr(
+        &mut engine,
+        r#"(accept_result (Ok 3.14), accept_result (Err 404))"#,
+    )
+    .await;
 
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -494,7 +506,11 @@ async fn serde_json_value_primitives() {
     engine.inject_value("num_val", json!(42)).unwrap();
     engine.inject_value("str_val", json!("hello")).unwrap();
 
-    let result = eval_expr(&mut engine, r#"accept_primitives null_val bool_val num_val str_val"#).await;
+    let result = eval_expr(
+        &mut engine,
+        r#"accept_primitives null_val bool_val num_val str_val"#,
+    )
+    .await;
 
     let heap = engine.heap();
     assert_pointer_eq!(

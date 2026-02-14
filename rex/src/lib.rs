@@ -3,8 +3,8 @@
 
 pub use rex_ast::expr::{Program, intern, sym};
 pub use rex_engine::{
-    Engine, EngineError, FromPointer, Heap, IntoPointer, Pointer, RexType, Value, closure_debug,
-    closure_eq, value_debug, value_display, value_eq,
+    AsyncHandler, Engine, EngineError, Export, FromPointer, Handler, Heap, IntoPointer, Module,
+    Pointer, RexType, Value, closure_debug, closure_eq, value_debug, value_display, value_eq,
 };
 pub use rex_lexer::Token;
 pub use rex_parser::{Parser, ParserLimits};

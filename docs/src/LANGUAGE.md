@@ -7,7 +7,7 @@ Rex is a small, strongly-typed functional DSL with:
 - Haskell-style type classes (including higher-kinded classes like `Functor`)
 
 This guide is meant for users and embedders. For locked/production-facing semantics and edge cases,
-see `docs/SPEC.md`.
+see [SPEC.md](SPEC.md).
 
 ## A Program
 
@@ -46,6 +46,10 @@ Semantics:
 - `import foo.bar (x, y as z)` imports selected exported values; `y` is bound locally as `z`.
 - Module alias imports and clause imports are mutually exclusive in one import declaration.
 - Only `pub` values are importable from another module.
+- If two imports introduce the same unqualified name (including via `(*)`), resolution fails with
+  a module error.
+- Importing a name that conflicts with a local top-level declaration is a module error.
+- Lexical bindings (`let`, lambda params, pattern bindings) can shadow imported names.
 
 Path resolution:
 
@@ -344,5 +348,5 @@ Example:
 zero
 ```
 
-With no other constraints, `zero` defaults to a concrete numeric type (see `docs/SPEC.md` for the
+With no other constraints, `zero` defaults to a concrete numeric type (see [SPEC.md](SPEC.md) for the
 exact algorithm and order).

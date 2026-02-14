@@ -47,6 +47,185 @@ let value = engine
 println!("{value}");
 ```
 
+## Inject Modules (Embedder Patterns)
+
+This is fully supported in `rex-engine`. You can compose module loading from:
+
+- default resolvers (`std.*`, local filesystem, optional remote feature)
+- include roots
+- custom resolvers (for DB/object-store/in-memory modules)
+
+### 1) Use Built-In Resolvers
+
+```rust
+use rex_engine::Engine;
+use rex_util::GasMeter;
+
+let mut engine = Engine::with_prelude(())?;
+engine.add_default_resolvers();
+engine.add_include_resolver("/opt/my-app/rex-modules")?;
+
+let mut gas = GasMeter::default();
+let value = engine
+    .eval_module_file("workflows/main.rex", &mut gas)
+    .await?;
+println!("{value}");
+```
+
+Notes:
+
+- local imports are resolved relative to the importing module path.
+- include roots are searched after local-relative imports.
+- type-only workflows can use `infer_module_file` with the same resolver setup.
+
+### 2) Inject In-Memory Rex Modules
+
+For host-managed modules, add a resolver that maps `module_name` to source text.
+
+```rust
+use rex_engine::{Engine, ModuleId, ResolveRequest, ResolvedModule};
+use rex_util::GasMeter;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+let mut engine = Engine::with_prelude(())?;
+engine.add_default_resolvers();
+
+let modules = Arc::new(HashMap::from([
+    (
+        "acme.math".to_string(),
+        "pub fn inc : i32 -> i32 = \\x -> x + 1".to_string(),
+    ),
+    (
+        "acme.main".to_string(),
+        "import acme.math (inc)\ninc 41".to_string(),
+    ),
+]));
+
+engine.add_resolver("host-map", {
+    let modules = modules.clone();
+    move |req: ResolveRequest| {
+        let Some(source) = modules.get(&req.module_name) else {
+            return Ok(None);
+        };
+        Ok(Some(ResolvedModule {
+            id: ModuleId::Virtual(format!("host:{}", req.module_name)),
+            source: source.clone(),
+        }))
+    }
+});
+
+let mut gas = GasMeter::default();
+let value = engine.eval_module_source(&modules["acme.main"], &mut gas).await?;
+println!("{value}");
+```
+
+### 3) Host-Provided Rust Functions, Exposed as Modules
+
+This is the common embedder case.
+
+Use `Module` + `Engine::inject_module(...)`:
+
+1. Create a `Module`.
+2. Add exports:
+   - typed exports with `export` / `export_async`
+   - runtime/native exports with `export_native` / `export_native_async`
+3. Inject it into the engine.
+
+```rust
+use rex_engine::{Engine, Module};
+use rex_util::GasMeter;
+
+let mut engine = Engine::with_prelude(())?;
+engine.add_default_resolvers();
+
+let mut math = Module::new("acme.math");
+math.export("inc", |_state: &(), x: i32| -> i32 { x + 1 })?;
+math.export_async("double_async", |_state: &(), x: i32| async move { x * 2 })?;
+engine.inject_module(math)?;
+
+let mut gas = GasMeter::default();
+let value = engine
+    .eval_snippet(
+        "import acme.math (inc, double_async as d)\ninc (d 20)",
+        &mut gas,
+    )
+    .await?;
+println!("{value}");
+```
+
+Internally this generates module declarations and injects host implementations under qualified
+module export symbols.
+
+If you need to construct exports separately (for example to build a module from plugin metadata),
+you can use:
+
+- `Export::from_handler` / `Export::from_async_handler` (typed handlers)
+- `Export::from_native` / `Export::from_native_async` (runtime pointer handlers)
+
+Then add them via `Module::add_export`.
+
+### 3a) Runtime-Defined Signatures (`Pointer` APIs)
+
+If your host determines function signatures/behavior at runtime, use the native module export
+APIs and provide an explicit `Scheme` + arity:
+
+- `Module::export_native`
+- `Module::export_native_async`
+
+These callbacks receive `&Engine<State>` (not just `&State`), so they can:
+
+- read state via `engine.state`
+- allocate new values via `engine.heap()`
+- inspect typed call information via the explicit `&Type` / `Type` callback parameter
+
+```rust
+use futures::FutureExt;
+use rex_engine::{Engine, Module, Pointer};
+use rex_ts::{Scheme, Type};
+
+let mut engine = Engine::with_prelude(())?;
+engine.add_default_resolvers();
+
+let mut m = Module::new("acme.dynamic");
+let scheme = Scheme::new(vec![], vec![], Type::fun(Type::con("i32", 0), Type::con("i32", 0)));
+
+m.export_native("id_ptr", scheme.clone(), 1, |_engine: &Engine<()>, _typ: &Type, args: &[Pointer]| {
+    Ok(args[0].clone())
+})?;
+
+m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::con("i32", 0)), 0, |engine: &Engine<()>, _typ: Type, _args: Vec<Pointer>| {
+    async move { engine.heap().alloc_i32(42) }.boxed_local()
+})?;
+
+engine.inject_module(m)?;
+```
+
+`Scheme` and arity must agree. Injection returns an error if the type does not accept the provided
+number of arguments.
+
+### 4) Custom Resolver Contract (Advanced)
+
+If you need dynamic/nonstandard module loading behavior, you can still use raw resolvers.
+
+Resolver contract:
+
+- return `Ok(Some(ResolvedModule { ... }))` when you can satisfy the module.
+- return `Ok(None)` to let the next resolver try.
+- return `Err(...)` for hard failures (invalid module payload, policy violations, etc.).
+
+### 5) Snippets That Import Relative Modules
+
+If you evaluate ad-hoc Rex snippets that contain imports, use `eval_snippet_at` (or
+`infer_snippet_at`) to provide an importer path anchor:
+
+```rust
+let mut gas = rex_util::GasMeter::default();
+let value = engine
+    .eval_snippet_at("import foo.bar as Bar\nBar.add 1 2", "/tmp/workflow/_snippet.rex", &mut gas)
+    .await?;
+```
+
 ## Engine State
 
 `Engine` is generic over host state: `Engine<State>`, where `State: Clone + Sync + 'static`.
@@ -55,7 +234,9 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
 - Use `Engine::with_prelude(())?` if you do not need host state.
 - If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
 - `inject_fn*` / `inject_async_fn*` callbacks receive `&State` as their first parameter.
-- Pointer-level APIs like `inject_native*` still receive `&Engine<State>` so they can use heap/runtime internals.
+- Pointer-level APIs (`inject_native*` and module `export_native*`) receive
+  `&Engine<State>` so
+  they can use heap/runtime internals and read `engine.state`.
 
 ```rust
 use rex_engine::Engine;
@@ -197,6 +378,9 @@ println!("{value}");
 ## Inject Native Values and Functions
 
 `rex-engine` is the boundary where Rust provides implementations for Rex values.
+
+For host-provided *modules*, prefer `Module` + `inject_module` (above). The direct injection APIs
+below are still useful for global values/functions that are not grouped under a module namespace.
 
 ```rust
 use rex_engine::Engine;
