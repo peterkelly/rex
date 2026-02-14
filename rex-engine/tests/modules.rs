@@ -81,16 +81,16 @@ async fn module_import_local_pub() {
     write_file(
         &module,
         r#"
-pub fn add x: i32 -> y: i32 -> i32 = x + y
-fn hidden x: i32 -> i32 = x + 1
-()
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        fn hidden x: i32 -> i32 = x + 1
+        ()
 "#,
     );
     write_file(
         &main,
         r#"
-import foo.bar as Bar
-Bar.add 1 2
+        import foo.bar as Bar
+        Bar.add 1 2
 "#,
     );
 
@@ -120,16 +120,16 @@ async fn module_import_rejects_private_access() {
     write_file(
         &module,
         r#"
-pub fn add x: i32 -> y: i32 -> i32 = x + y
-fn hidden x: i32 -> i32 = x + 1
-()
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        fn hidden x: i32 -> i32 = x + 1
+        ()
 "#,
     );
     write_file(
         &main,
         r#"
-import foo.bar as Bar
-Bar.hidden 1
+        import foo.bar as Bar
+        Bar.hidden 1
 "#,
     );
 
@@ -154,16 +154,16 @@ async fn module_import_include_roots() {
     write_file(
         &module,
         r#"
-pub fn inc x: i32 -> i32 = x + 1
-()
+        pub fn inc x: i32 -> i32 = x + 1
+        ()
 "#,
     );
 
     write_file(
         &main,
         r#"
-import lib.math as Math
-Math.inc 41
+        import lib.math as Math
+        Math.inc 41
 "#,
     );
 
@@ -192,8 +192,8 @@ async fn snippet_can_import_with_explicit_base() {
     write_file(
         &module,
         r#"
-pub fn add x: i32 -> y: i32 -> i32 = x + y
-()
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        ()
 "#,
     );
 
@@ -202,8 +202,8 @@ pub fn add x: i32 -> y: i32 -> i32 = x + y
     let value_ptr = eval_snippet_at(
         &mut engine,
         r#"
-import foo.bar as Bar
-Bar.add 20 22
+        import foo.bar as Bar
+        Bar.add 20 22
 "#,
         dir.join("_snippet.rex"),
     )
@@ -225,84 +225,266 @@ Bar.add 20 22
 }
 
 #[tokio::test]
+async fn module_import_wildcard_clause() {
+    let dir = temp_dir("module_import_wildcard_clause");
+    let main = dir.join("main.rex");
+    let module = dir.join("foo").join("bar.rex");
+
+    write_file(
+        &module,
+        r#"
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        pub fn triple x: i32 -> i32 = x * 3
+        fn hidden x: i32 -> i32 = x + 1
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import foo.bar (*)
+        add (triple 10) 2
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
+    match value {
+        Value::I32(v) => assert_eq!(v, 32),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        ),
+    }
+}
+
+#[tokio::test]
+async fn module_import_selected_clause_with_alias() {
+    let dir = temp_dir("module_import_selected_clause_with_alias");
+    let main = dir.join("main.rex");
+    let module = dir.join("foo").join("bar.rex");
+
+    write_file(
+        &module,
+        r#"
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        pub fn triple x: i32 -> i32 = x * 3
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import foo.bar (add, triple as t)
+        add (t 10) 2
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
+    let value = engine
+        .heap()
+        .get(&value_ptr)
+        .map(|value| value.as_ref().clone())
+        .unwrap();
+    match value {
+        Value::I32(v) => assert_eq!(v, 32),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        ),
+    }
+}
+
+#[tokio::test]
+async fn module_import_selected_clause_missing_export() {
+    let dir = temp_dir("module_import_selected_clause_missing_export");
+    let main = dir.join("main.rex");
+    let module = dir.join("foo").join("bar.rex");
+
+    write_file(
+        &module,
+        r#"
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import foo.bar (missing)
+        missing 1 2
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_selected_clause_duplicate_name() {
+    let dir = temp_dir("module_import_selected_clause_duplicate_name");
+    let main = dir.join("main.rex");
+    let left = dir.join("foo").join("left.rex");
+    let right = dir.join("foo").join("right.rex");
+
+    write_file(
+        &left,
+        r#"
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        ()
+"#,
+    );
+    write_file(
+        &right,
+        r#"
+        pub fn mul x: i32 -> y: i32 -> i32 = x * y
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import foo.left (add)
+        import foo.right (mul as add)
+        add 1 2
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("duplicate imported name `add`"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_selected_clause_conflicts_with_local() {
+    let dir = temp_dir("module_import_selected_clause_conflicts_with_local");
+    let main = dir.join("main.rex");
+    let module = dir.join("foo").join("bar.rex");
+
+    write_file(
+        &module,
+        r#"
+        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import foo.bar (add)
+        fn add x: i32 -> y: i32 -> i32 = x - y
+        add 10 2
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("conflicts with local declaration"), "{msg}");
+}
+
+#[tokio::test]
 async fn std_json_encode_decode_smoke() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let value_ptr = eval_snippet(
         &mut engine,
         r#"
-import std.json as Json
+        import std.json as Json
 
-let
-  b_ok =
-    match (Json.from_json (Json.to_json true))
-      when Ok b -> if b then 1 else 0
-      when Err _ -> -1,
+        let
+          b_ok =
+            match (Json.from_json (Json.to_json true))
+              when Ok b -> if b then 1 else 0
+              when Err _ -> -1,
 
-  n_ok =
-    match (Json.from_json (Json.to_json 123))
-      when Ok n -> if n == 123 then 1 else 0
-      when Err _ -> -1,
+          n_ok =
+            match (Json.from_json (Json.to_json 123))
+              when Ok n -> if n == 123 then 1 else 0
+              when Err _ -> -1,
 
-  opt_val =
-    match (Json.from_json (Json.to_json (Some 7)))
-      when Ok opt ->
-        (
-          match opt
-            when Some x -> x
-            when None -> -1
-        )
-      when Err _ -> -2,
+          opt_val =
+            match (Json.from_json (Json.to_json (Some 7)))
+              when Ok opt ->
+                (
+                  match opt
+                    when Some x -> x
+                    when None -> -1
+                )
+              when Err _ -> -2,
 
-  list_head =
-    match (Json.from_json (Json.to_json [1, 2, 3]))
-      when Ok xs ->
-        (
-          match xs
-            when [] -> -1
-            when x:rest -> x
-        )
-      when Err _ -> -2,
+          list_head =
+            match (Json.from_json (Json.to_json [1, 2, 3]))
+              when Ok xs ->
+                (
+                  match xs
+                    when [] -> -1
+                    when x:rest -> x
+                )
+              when Err _ -> -2,
 
-  arr0 =
-    let a = prim_array_from_list [4, 5] in
-    match (Json.from_json (Json.to_json a))
-      when Ok xs ->
-        let ys: Array i32 = xs in get 0 ys
-      when Err _ -> -1,
+          arr0 =
+            let a = prim_array_from_list [4, 5] in
+            match (Json.from_json (Json.to_json a))
+              when Ok xs ->
+                let ys: Array i32 = xs in get 0 ys
+              when Err _ -> -1,
 
-  dict_sum =
-    let d = ({a = 1, b = 2}) is Dict i32 in
-    match (Json.from_json (Json.to_json d))
-      when Ok d2 ->
-        (
-          match d2
-            when {a, b} -> a + b
-            when {} -> -1
-        )
-      when Err _ -> -2,
+          dict_sum =
+            let d = ({a = 1, b = 2}) is Dict i32 in
+            match (Json.from_json (Json.to_json d))
+              when Ok d2 ->
+                (
+                  match d2
+                    when {a, b} -> a + b
+                    when {} -> -1
+                )
+              when Err _ -> -2,
 
-  res_ok =
-    match (Json.from_json (Json.to_json (Ok 3)))
-      when Ok r ->
-        (
-          match r
-            when Ok x -> x
-            when Err _ -> -1
-        )
-      when Err _ -> -2,
+          res_ok =
+            match (Json.from_json (Json.to_json (Ok 3)))
+              when Ok r ->
+                (
+                  match r
+                    when Ok x -> x
+                    when Err _ -> -1
+                )
+              when Err _ -> -2,
 
-  res_err_ok =
-    match (Json.from_json (Json.to_json (Err "no")))
-      when Ok r ->
-        (
-          match r
-            when Err s -> if s == "no" then 1 else 0
-            when Ok _ -> 0
-        )
-      when Err _ -> -1
-in
-  (b_ok, n_ok, opt_val, list_head, arr0, dict_sum, res_ok, res_err_ok)
+          res_err_ok =
+            match (Json.from_json (Json.to_json (Err "no")))
+              when Ok r ->
+                (
+                  match r
+                    when Err s -> if s == "no" then 1 else 0
+                    when Ok _ -> 0
+                )
+              when Err _ -> -1
+        in
+          (b_ok, n_ok, opt_val, list_head, arr0, dict_sum, res_ok, res_err_ok)
 "#,
     )
     .await
@@ -340,30 +522,30 @@ async fn std_json_roundtrip_nested() {
     let value_ptr = eval_snippet(
         &mut engine,
         r#"
-import std.json as Json
+        import std.json as Json
 
-let
-  xs =
-    [ Some (Ok 1)
-    , None
-    , Some (Err "no")
-    , Some (Ok 42)
-    ],
+        let
+          xs =
+            [ Some (Ok 1)
+            , None
+            , Some (Err "no")
+            , Some (Ok 42)
+            ],
 
-  xs_ok =
-    match (Json.from_json (Json.to_json xs))
-      when Ok ys -> if ys == xs then 1 else 0
-      when Err _ -> -1,
+          xs_ok =
+            match (Json.from_json (Json.to_json xs))
+              when Ok ys -> if ys == xs then 1 else 0
+              when Err _ -> -1,
 
-  arr =
-    prim_array_from_list [Ok 1, Err "bad", Ok 3],
+          arr =
+            prim_array_from_list [Ok 1, Err "bad", Ok 3],
 
-  arr_ok =
-    match (Json.from_json (Json.to_json arr))
-      when Ok ys -> if ys == arr then 1 else 0
-      when Err _ -> -1
-in
-  (xs_ok, arr_ok)
+          arr_ok =
+            match (Json.from_json (Json.to_json arr))
+              when Ok ys -> if ys == arr then 1 else 0
+              when Err _ -> -1
+        in
+          (xs_ok, arr_ok)
 "#,
     )
     .await
@@ -401,36 +583,36 @@ async fn std_json_decode_errors_have_useful_messages() {
     let value_ptr = eval_snippet(
         &mut engine,
         r#"
-import std.json as Json
+        import std.json as Json
 
-let
-  both =
-    let v = Json.Object { ok = Json.Number (prim_to_f64 1), err = Json.String "bad" } in
-    match (Json.from_json v)
-      when Ok r -> let _r: Result i32 string = r in "unexpected ok"
-      when Err e -> e.message,
+        let
+          both =
+            let v = Json.Object { ok = Json.Number (prim_to_f64 1), err = Json.String "bad" } in
+            match (Json.from_json v)
+              when Ok r -> let _r: Result i32 string = r in "unexpected ok"
+              when Err e -> e.message,
 
-  neither =
-    let v = Json.Object {} in
-    match (Json.from_json v)
-      when Ok r -> let _r: Result i32 string = r in "unexpected ok"
-      when Err e -> e.message,
+          neither =
+            let v = Json.Object {} in
+            match (Json.from_json v)
+              when Ok r -> let _r: Result i32 string = r in "unexpected ok"
+              when Err e -> e.message,
 
-  wrong_kind =
-    let v = Json.Bool true in
-    match (Json.from_json v)
-      when Ok xs -> let _xs: List i32 = xs in "unexpected ok"
-      when Err e -> e.message,
+          wrong_kind =
+            let v = Json.Bool true in
+            match (Json.from_json v)
+              when Ok xs -> let _xs: List i32 = xs in "unexpected ok"
+              when Err e -> e.message,
 
-  bad_list_elem =
-    let v =
-      Json.Array (prim_array_from_list [Json.Number (prim_to_f64 1), Json.String "oops"])
-    in
-    match (Json.from_json v)
-      when Ok xs -> let _xs: List i32 = xs in "unexpected ok"
-      when Err e -> e.message
-in
-  (both, neither, wrong_kind, bad_list_elem)
+          bad_list_elem =
+            let v =
+              Json.Array (prim_array_from_list [Json.Number (prim_to_f64 1), Json.String "oops"])
+            in
+            match (Json.from_json v)
+              when Ok xs -> let _xs: List i32 = xs in "unexpected ok"
+              when Err e -> e.message
+        in
+          (both, neither, wrong_kind, bad_list_elem)
 "#,
     )
     .await
@@ -472,20 +654,20 @@ async fn std_json_numeric_decode_errors() {
     let value_ptr = eval_snippet(
         &mut engine,
         r#"
-import std.json as Json
+        import std.json as Json
 
-let
-  u8_overflow =
-    match (Json.from_json (Json.Number (prim_to_f64 256)))
-      when Ok n -> let _n: u8 = n in "unexpected ok"
-      when Err e -> e.message,
+        let
+          u8_overflow =
+            match (Json.from_json (Json.Number (prim_to_f64 256)))
+              when Ok n -> let _n: u8 = n in "unexpected ok"
+              when Err e -> e.message,
 
-  i32_fractional =
-    match (Json.from_json (Json.Number (prim_to_f64 1.5)))
-      when Ok n -> let _n: i32 = n in "unexpected ok"
-      when Err e -> e.message
-in
-  (u8_overflow, i32_fractional)
+          i32_fractional =
+            match (Json.from_json (Json.Number (prim_to_f64 1.5)))
+              when Ok n -> let _n: i32 = n in "unexpected ok"
+              when Err e -> e.message
+        in
+          (u8_overflow, i32_fractional)
 "#,
     )
     .await
@@ -525,22 +707,22 @@ async fn std_json_pretty_renders_valid_json() {
     let value_ptr = eval_snippet(
         &mut engine,
         r#"
-import std.json as Json
+        import std.json as Json
 
-let
-  v =
-    Json.Object {
-      a = Json.Number (prim_to_f64 1),
-      b = Json.String "a\"b\\c\n",
-      c =
-        Json.Array (prim_array_from_list [
-          Json.Null,
-          Json.Bool true,
-          Json.Number (prim_to_f64 (0.0 / 0.0))
-        ])
-    }
-in
-  pretty v
+        let
+          v =
+            Json.Object {
+              a = Json.Number (prim_to_f64 1),
+              b = Json.String "a\"b\\c\n",
+              c =
+                Json.Array (prim_array_from_list [
+                  Json.Null,
+                  Json.Bool true,
+                  Json.Number (prim_to_f64 (0.0 / 0.0))
+                ])
+            }
+        in
+          pretty v
 "#,
     )
     .await
@@ -583,40 +765,40 @@ async fn std_json_parse_and_from_string_roundtrip() {
     let value_ptr = eval_snippet(
         &mut engine,
         r#"
-import std.json as Json
+        import std.json as Json
 
-let
-  v =
-    Json.Object {
-      a = Json.Number (prim_to_f64 1),
-      b = Json.String "a\"b\\c\n",
-      c = Json.Array (prim_array_from_list [Json.Null, Json.Bool true])
-    },
+        let
+          v =
+            Json.Object {
+              a = Json.Number (prim_to_f64 1),
+              b = Json.String "a\"b\\c\n",
+              c = Json.Array (prim_array_from_list [Json.Null, Json.Bool true])
+            },
 
-  parsed_ok =
-    match (Json.parse (pretty v))
-      when Ok v2 -> if pretty v2 == pretty v then 1 else 0
-      when Err _ -> -1,
+          parsed_ok =
+            match (Json.parse (pretty v))
+              when Ok v2 -> if pretty v2 == pretty v then 1 else 0
+              when Err _ -> -1,
 
-  xs = [1, 2, 3],
-  s = Json.stringify (Json.to_json xs),
-  decoded_ok =
-    match (Json.parse s)
-      when Err _ -> -1
-      when Ok v0 ->
-        (
-          match (Json.from_json v0)
-            when Ok ys -> if ys == xs then 1 else 0
-            when Err _ -> -2
-        ),
+          xs = [1, 2, 3],
+          s = Json.stringify (Json.to_json xs),
+          decoded_ok =
+            match (Json.parse s)
+              when Err _ -> -1
+              when Ok v0 ->
+                (
+                  match (Json.from_json v0)
+                    when Ok ys -> if ys == xs then 1 else 0
+                    when Err _ -> -2
+                ),
 
-  bad_s = "{",
-  parse_err =
-    match (Json.parse bad_s)
-      when Ok _ -> 0
-      when Err e -> if e.message != "" then 1 else 0
-in
-  (parsed_ok, decoded_ok, parse_err)
+          bad_s = "{",
+          parse_err =
+            match (Json.parse bad_s)
+              when Ok _ -> 0
+              when Err e -> if e.message != "" then 1 else 0
+        in
+          (parsed_ok, decoded_ok, parse_err)
 "#,
     )
     .await

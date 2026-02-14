@@ -57,6 +57,13 @@ pub enum ModuleError {
         module: Symbol,
         export: Symbol,
     },
+    DuplicateImportedName {
+        name: Symbol,
+    },
+    ImportNameConflictsWithLocal {
+        module: Symbol,
+        name: Symbol,
+    },
     Lex {
         source: LexicalError,
     },
@@ -136,6 +143,15 @@ impl std::fmt::Display for ModuleError {
             ),
             ModuleError::MissingExport { module, export } => {
                 write!(f, "module `{module}` does not export `{export}`")
+            }
+            ModuleError::DuplicateImportedName { name } => {
+                write!(f, "duplicate imported name `{name}`")
+            }
+            ModuleError::ImportNameConflictsWithLocal { module, name } => {
+                write!(
+                    f,
+                    "imported name `{name}` from module `{module}` conflicts with local declaration"
+                )
             }
             ModuleError::Lex { source } => write!(f, "lex error: {source}"),
             ModuleError::LexInModule { module, source } => {

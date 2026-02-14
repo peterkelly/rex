@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use rex_ast::expr::{
-    Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
-    Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
+    Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl, ImportPath, InstanceDecl, Pattern,
+    Program, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
 };
 use rex_lexer::Token;
 use rex_parser::Parser as RexParser;
@@ -57,6 +57,69 @@ fn import_specifier(path: &ImportPath) -> String {
             } else {
                 url.clone()
             }
+        }
+    }
+}
+
+#[derive(Default)]
+struct ImportBindings {
+    alias_exports: HashMap<Symbol, ModuleExports>,
+    imported_values: HashMap<Symbol, Symbol>,
+}
+
+fn add_import_bindings(
+    out: &mut ImportBindings,
+    import: &ImportDecl,
+    exports: &ModuleExports,
+    forbidden_locals: &HashSet<Symbol>,
+    existing_imported: Option<&HashSet<Symbol>>,
+) -> Result<(), EngineError> {
+    let module_name = import.alias.clone();
+    let mut bind_local = |local_name: Symbol, target: Symbol| -> Result<(), EngineError> {
+        if forbidden_locals.contains(&local_name) {
+            return Err(crate::ModuleError::ImportNameConflictsWithLocal {
+                module: module_name.clone(),
+                name: local_name,
+            }
+            .into());
+        }
+        if let Some(existing) = existing_imported
+            && existing.contains(&local_name)
+        {
+            return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
+        }
+        if out.imported_values.contains_key(&local_name) {
+            return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
+        }
+        out.imported_values.insert(local_name, target);
+        Ok(())
+    };
+
+    match &import.clause {
+        None => {
+            out.alias_exports
+                .insert(import.alias.clone(), exports.clone());
+            Ok(())
+        }
+        Some(ImportClause::All) => {
+            for (export, target) in &exports.values {
+                bind_local(export.clone(), target.clone())?;
+            }
+            Ok(())
+        }
+        Some(ImportClause::Items(items)) => {
+            for item in items {
+                let Some(target) = exports.values.get(&item.name) else {
+                    return Err(crate::ModuleError::MissingExport {
+                        module: import.alias.clone(),
+                        export: item.name.clone(),
+                    }
+                    .into());
+                };
+                let local_name = item.alias.clone().unwrap_or_else(|| item.name.clone());
+                bind_local(local_name, target.clone())?;
+            }
+            Ok(())
         }
     }
 }
@@ -692,6 +755,7 @@ fn rewrite_import_uses_expr(
     expr: &Expr,
     bound: &mut HashSet<Symbol>,
     aliases: &HashMap<Symbol, ModuleExports>,
+    imported_values: &HashMap<Symbol, Symbol>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Expr {
     match expr {
@@ -719,12 +783,24 @@ fn rewrite_import_uses_expr(
                     base,
                     bound,
                     aliases,
+                    imported_values,
                     shadowed_values,
                 )),
                 field.clone(),
             )
         }
-        Expr::Var(v) => Expr::Var(v.clone()),
+        Expr::Var(v) => {
+            if alias_is_visible(&v.name, bound, shadowed_values)
+                && let Some(internal) = imported_values.get(&v.name)
+            {
+                Expr::Var(Var {
+                    span: v.span,
+                    name: internal.clone(),
+                })
+            } else {
+                Expr::Var(v.clone())
+            }
+        }
         Expr::Lam(span, scope, param, ann, constraints, body) => {
             bound.insert(param.name.clone());
             let out = Expr::Lam(
@@ -737,6 +813,7 @@ fn rewrite_import_uses_expr(
                     body,
                     bound,
                     aliases,
+                    imported_values,
                     shadowed_values,
                 )),
             );
@@ -748,6 +825,7 @@ fn rewrite_import_uses_expr(
                 val,
                 bound,
                 aliases,
+                imported_values,
                 shadowed_values,
             ));
             bound.insert(var.name.clone());
@@ -755,6 +833,7 @@ fn rewrite_import_uses_expr(
                 body,
                 bound,
                 aliases,
+                imported_values,
                 shadowed_values,
             ));
             bound.remove(&var.name);
@@ -778,6 +857,7 @@ fn rewrite_import_uses_expr(
                             def,
                             bound,
                             aliases,
+                            imported_values,
                             shadowed_values,
                         )),
                     )
@@ -787,6 +867,7 @@ fn rewrite_import_uses_expr(
                 body,
                 bound,
                 aliases,
+                imported_values,
                 shadowed_values,
             ));
             for name in &names {
@@ -799,6 +880,7 @@ fn rewrite_import_uses_expr(
                 scrutinee,
                 bound,
                 aliases,
+                imported_values,
                 shadowed_values,
             ));
             let mut renamed_arms = Vec::new();
@@ -812,6 +894,7 @@ fn rewrite_import_uses_expr(
                     arm_expr,
                     bound,
                     aliases,
+                    imported_values,
                     shadowed_values,
                 ));
                 for b in &binds {
@@ -825,14 +908,30 @@ fn rewrite_import_uses_expr(
             *span,
             elems
                 .iter()
-                .map(|e| Arc::new(rewrite_import_uses_expr(e, bound, aliases, shadowed_values)))
+                .map(|e| {
+                    Arc::new(rewrite_import_uses_expr(
+                        e,
+                        bound,
+                        aliases,
+                        imported_values,
+                        shadowed_values,
+                    ))
+                })
                 .collect(),
         ),
         Expr::List(span, elems) => Expr::List(
             *span,
             elems
                 .iter()
-                .map(|e| Arc::new(rewrite_import_uses_expr(e, bound, aliases, shadowed_values)))
+                .map(|e| {
+                    Arc::new(rewrite_import_uses_expr(
+                        e,
+                        bound,
+                        aliases,
+                        imported_values,
+                        shadowed_values,
+                    ))
+                })
                 .collect(),
         ),
         Expr::Dict(span, kvs) => Expr::Dict(
@@ -841,7 +940,13 @@ fn rewrite_import_uses_expr(
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        Arc::new(rewrite_import_uses_expr(v, bound, aliases, shadowed_values)),
+                        Arc::new(rewrite_import_uses_expr(
+                            v,
+                            bound,
+                            aliases,
+                            imported_values,
+                            shadowed_values,
+                        )),
                     )
                 })
                 .collect(),
@@ -852,6 +957,7 @@ fn rewrite_import_uses_expr(
                 base,
                 bound,
                 aliases,
+                imported_values,
                 shadowed_values,
             )),
             updates
@@ -859,25 +965,67 @@ fn rewrite_import_uses_expr(
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        Arc::new(rewrite_import_uses_expr(v, bound, aliases, shadowed_values)),
+                        Arc::new(rewrite_import_uses_expr(
+                            v,
+                            bound,
+                            aliases,
+                            imported_values,
+                            shadowed_values,
+                        )),
                     )
                 })
                 .collect(),
         ),
         Expr::App(span, f, x) => Expr::App(
             *span,
-            Arc::new(rewrite_import_uses_expr(f, bound, aliases, shadowed_values)),
-            Arc::new(rewrite_import_uses_expr(x, bound, aliases, shadowed_values)),
+            Arc::new(rewrite_import_uses_expr(
+                f,
+                bound,
+                aliases,
+                imported_values,
+                shadowed_values,
+            )),
+            Arc::new(rewrite_import_uses_expr(
+                x,
+                bound,
+                aliases,
+                imported_values,
+                shadowed_values,
+            )),
         ),
         Expr::Ite(span, c, t, e) => Expr::Ite(
             *span,
-            Arc::new(rewrite_import_uses_expr(c, bound, aliases, shadowed_values)),
-            Arc::new(rewrite_import_uses_expr(t, bound, aliases, shadowed_values)),
-            Arc::new(rewrite_import_uses_expr(e, bound, aliases, shadowed_values)),
+            Arc::new(rewrite_import_uses_expr(
+                c,
+                bound,
+                aliases,
+                imported_values,
+                shadowed_values,
+            )),
+            Arc::new(rewrite_import_uses_expr(
+                t,
+                bound,
+                aliases,
+                imported_values,
+                shadowed_values,
+            )),
+            Arc::new(rewrite_import_uses_expr(
+                e,
+                bound,
+                aliases,
+                imported_values,
+                shadowed_values,
+            )),
         ),
         Expr::Ann(span, e, t) => Expr::Ann(
             *span,
-            Arc::new(rewrite_import_uses_expr(e, bound, aliases, shadowed_values)),
+            Arc::new(rewrite_import_uses_expr(
+                e,
+                bound,
+                aliases,
+                imported_values,
+                shadowed_values,
+            )),
             t.clone(),
         ),
     }
@@ -886,6 +1034,7 @@ fn rewrite_import_uses_expr(
 fn rewrite_import_uses(
     program: &Program,
     aliases: &HashMap<Symbol, ModuleExports>,
+    imported_values: &HashMap<Symbol, Symbol>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Program {
     let decls = program
@@ -899,6 +1048,7 @@ fn rewrite_import_uses(
                     fd.body.as_ref(),
                     &mut bound,
                     aliases,
+                    imported_values,
                     shadowed_values,
                 ));
                 Decl::Fn(FnDecl {
@@ -921,6 +1071,7 @@ fn rewrite_import_uses(
                             m.body.as_ref(),
                             &mut bound,
                             aliases,
+                            imported_values,
                             shadowed_values,
                         ));
                         rex_ast::expr::InstanceMethodImpl {
@@ -947,6 +1098,7 @@ fn rewrite_import_uses(
         program.expr.as_ref(),
         &mut bound,
         aliases,
+        imported_values,
         shadowed_values,
     ));
     Program { decls, expr }
@@ -1228,26 +1380,34 @@ where
     }
 
     #[async_recursion(?Send)]
-    async fn alias_exports_for_decls(
+    async fn import_bindings_for_decls(
         &mut self,
         decls: &[Decl],
         importer: Option<ModuleId>,
+        forbidden_locals: &HashSet<Symbol>,
+        existing_imported: Option<&HashSet<Symbol>>,
         gas: &mut GasMeter,
-    ) -> Result<HashMap<Symbol, ModuleExports>, EngineError> {
-        let mut alias_exports = HashMap::new();
+    ) -> Result<ImportBindings, EngineError> {
+        let mut bindings = ImportBindings::default();
         for decl in decls {
-            let Decl::Import(ImportDecl { path, alias, .. }) = decl else {
+            let Decl::Import(import_decl) = decl else {
                 continue;
             };
-            let spec = import_specifier(path);
+            let spec = import_specifier(&import_decl.path);
             let imported = self.modules.resolve(ResolveRequest {
                 module_name: spec,
                 importer: importer.clone(),
             })?;
             let inst = self.load_module_from_resolved(imported, gas).await?;
-            alias_exports.insert(alias.clone(), inst.exports.clone());
+            add_import_bindings(
+                &mut bindings,
+                import_decl,
+                &inst.exports,
+                forbidden_locals,
+                existing_imported,
+            )?;
         }
-        Ok(alias_exports)
+        Ok(bindings)
     }
 
     #[async_recursion(?Send)]
@@ -1266,14 +1426,26 @@ where
         let program = parse_program_from_source(&resolved.source, Some(&resolved.id), Some(gas))?;
 
         // Resolve imports first so qualified names exist in the environment.
-        let alias_exports = self
-            .alias_exports_for_decls(&program.decls, Some(resolved.id.clone()), gas)
+        let local_values = decl_value_names(&program.decls);
+        let import_bindings = self
+            .import_bindings_for_decls(
+                &program.decls,
+                Some(resolved.id.clone()),
+                &local_values,
+                None,
+                gas,
+            )
             .await?;
 
         // Qualify local names, then rewrite `alias.foo` uses into internal symbols.
         let qualified = qualify_program(&program, &prefix);
-        validate_import_uses(&qualified, &alias_exports, None)?;
-        let rewritten = rewrite_import_uses(&qualified, &alias_exports, None);
+        validate_import_uses(&qualified, &import_bindings.alias_exports, None)?;
+        let rewritten = rewrite_import_uses(
+            &qualified,
+            &import_bindings.alias_exports,
+            &import_bindings.imported_values,
+            None,
+        );
 
         self.inject_decls(&rewritten.decls)?;
         let init_value = self.eval(rewritten.expr.as_ref(), gas).await?;
@@ -1336,23 +1508,29 @@ where
         loaded: &mut HashMap<ModuleId, ModuleExports>,
         loading: &mut HashSet<ModuleId>,
     ) -> Result<Program, EngineError> {
-        let mut alias_exports: HashMap<Symbol, ModuleExports> = HashMap::new();
+        let mut bindings = ImportBindings::default();
+        let local_values = decl_value_names(&program.decls);
         for decl in &program.decls {
-            let Decl::Import(ImportDecl { path, alias, .. }) = decl else {
+            let Decl::Import(import_decl) = decl else {
                 continue;
             };
-            let spec = import_specifier(path);
+            let spec = import_specifier(&import_decl.path);
             let imported = self.modules.resolve(ResolveRequest {
                 module_name: spec,
                 importer: importer.clone(),
             })?;
             let exports = self.load_module_types_from_resolved(imported, gas, loaded, loading)?;
-            alias_exports.insert(alias.clone(), exports);
+            add_import_bindings(&mut bindings, import_decl, &exports, &local_values, None)?;
         }
 
         let qualified = qualify_program(program, prefix);
-        validate_import_uses(&qualified, &alias_exports, None)?;
-        Ok(rewrite_import_uses(&qualified, &alias_exports, None))
+        validate_import_uses(&qualified, &bindings.alias_exports, None)?;
+        Ok(rewrite_import_uses(
+            &qualified,
+            &bindings.alias_exports,
+            &bindings.imported_values,
+            None,
+        ))
     }
 
     fn read_local_module_bytes(&self, path: &Path) -> Result<(ModuleId, Vec<u8>), EngineError> {
@@ -1542,16 +1720,33 @@ where
             hash: "repl".into(),
         });
 
-        let alias_exports = self
-            .alias_exports_for_decls(&program.decls, importer.clone(), gas)
+        let mut local_values = state.defined_values.clone();
+        local_values.extend(decl_value_names(&program.decls));
+        let existing_imported: HashSet<Symbol> = state.imported_values.keys().cloned().collect();
+        let import_bindings = self
+            .import_bindings_for_decls(
+                &program.decls,
+                importer.clone(),
+                &local_values,
+                Some(&existing_imported),
+                gas,
+            )
             .await?;
-        state.alias_exports.extend(alias_exports);
+        state.alias_exports.extend(import_bindings.alias_exports);
+        state
+            .imported_values
+            .extend(import_bindings.imported_values);
 
         let mut shadowed_values = state.defined_values.clone();
         shadowed_values.extend(decl_value_names(&program.decls));
 
         validate_import_uses(program, &state.alias_exports, Some(&shadowed_values))?;
-        let rewritten = rewrite_import_uses(program, &state.alias_exports, Some(&shadowed_values));
+        let rewritten = rewrite_import_uses(
+            program,
+            &state.alias_exports,
+            &state.imported_values,
+            Some(&shadowed_values),
+        );
 
         self.inject_decls(&rewritten.decls)?;
         state
@@ -1585,14 +1780,20 @@ where
             hash: "snippet".into(),
         });
 
-        let alias_exports = self
-            .alias_exports_for_decls(&program.decls, importer.clone(), gas)
+        let local_values = decl_value_names(&program.decls);
+        let import_bindings = self
+            .import_bindings_for_decls(&program.decls, importer.clone(), &local_values, None, gas)
             .await?;
 
         let prefix = format!("@snippet{}", Uuid::new_v4());
         let qualified = qualify_program(&program, &prefix);
-        validate_import_uses(&qualified, &alias_exports, None)?;
-        let rewritten = rewrite_import_uses(&qualified, &alias_exports, None);
+        validate_import_uses(&qualified, &import_bindings.alias_exports, None)?;
+        let rewritten = rewrite_import_uses(
+            &qualified,
+            &import_bindings.alias_exports,
+            &import_bindings.imported_values,
+            None,
+        );
 
         self.inject_decls(&rewritten.decls)?;
         self.eval(rewritten.expr.as_ref(), gas).await

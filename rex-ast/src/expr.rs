@@ -483,11 +483,25 @@ pub enum ImportPath {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ImportItem {
+    pub name: Symbol,
+    pub alias: Option<Symbol>,
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImportClause {
+    All,
+    Items(Vec<ImportItem>),
+}
+
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ImportDecl {
     pub span: Span,
     pub is_pub: bool,
     pub path: ImportPath,
     pub alias: Symbol,
+    pub clause: Option<ImportClause>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]

@@ -46,6 +46,7 @@ pub struct ModuleExports {
 #[derive(Clone, Default)]
 pub struct ReplState {
     pub(crate) alias_exports: HashMap<Symbol, ModuleExports>,
+    pub(crate) imported_values: HashMap<Symbol, Symbol>,
     pub(crate) defined_values: HashSet<Symbol>,
     pub(crate) importer_path: Option<PathBuf>,
 }

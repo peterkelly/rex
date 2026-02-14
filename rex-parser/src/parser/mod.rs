@@ -1,15 +1,15 @@
 //! Parser implementation for Rex.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     sync::Arc,
     vec,
 };
 
 use rex_ast::expr::{
-    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath,
-    InstanceDecl, InstanceMethodImpl, Pattern, Program, Scope, Symbol, TypeConstraint, TypeDecl,
-    TypeExpr, TypeVariant, Var, intern,
+    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl,
+    ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, Pattern, Program, Scope, Symbol,
+    TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var, intern,
 };
 use rex_lexer::{
     Token, Tokens,
@@ -2730,7 +2730,90 @@ impl Parser {
             }
         };
 
+        let clause = if matches!(self.current_token(), Token::ParenL(..)) {
+            self.next_token();
+            if matches!(self.current_token(), Token::Mul(..)) {
+                self.next_token();
+                let end = match self.current_token() {
+                    Token::ParenR(span, ..) => {
+                        self.next_token();
+                        span.end
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            format!("expected `)` got {}", token),
+                        ));
+                    }
+                };
+                span_end = span_end.max(end);
+                Some(ImportClause::All)
+            } else {
+                let mut items: Vec<ImportItem> = Vec::new();
+                let mut local_names: HashSet<Symbol> = HashSet::new();
+                loop {
+                    let (name, item_span) = self.parse_value_name()?;
+                    let mut item_end = item_span.end;
+                    let alias = if matches!(self.current_token(), Token::As(..)) {
+                        self.next_token();
+                        match self.current_token() {
+                            Token::Ident(alias, alias_span, ..) => {
+                                self.next_token();
+                                item_end = alias_span.end;
+                                Some(intern(&alias))
+                            }
+                            token => {
+                                return Err(ParserErr::new(
+                                    *token.span(),
+                                    format!("expected alias name got {}", token),
+                                ));
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    let local_name = alias.clone().unwrap_or_else(|| name.clone());
+                    if local_names.contains(&local_name) {
+                        return Err(ParserErr::new(
+                            Span::from_begin_end(item_span.begin, item_end),
+                            format!("duplicate imported name `{local_name}`"),
+                        ));
+                    }
+                    local_names.insert(local_name);
+                    items.push(ImportItem { name, alias });
+
+                    match self.current_token() {
+                        Token::Comma(..) => {
+                            self.next_token();
+                        }
+                        Token::ParenR(span, ..) => {
+                            self.next_token();
+                            span_end = span_end.max(span.end.max(item_end));
+                            break;
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected `,` or `)` got {}", token),
+                            ));
+                        }
+                    }
+                }
+                Some(ImportClause::Items(items))
+            }
+        } else {
+            None
+        };
+
         let alias = if matches!(self.current_token(), Token::As(..)) {
+            if clause.is_some() {
+                let span = *self.current_token().span();
+                return Err(ParserErr::new(
+                    span,
+                    "cannot combine `as <alias>` with import clause `(...)`".to_string(),
+                ));
+            }
             self.next_token();
             match self.current_token() {
                 Token::Ident(name, span, ..) => {
@@ -2746,12 +2829,14 @@ impl Parser {
                 }
             }
         } else {
-            default_alias.ok_or_else(|| {
-                ParserErr::new(
-                    Span::from_begin_end(span_begin, span_end),
-                    "import requires `as <alias>`".to_string(),
-                )
-            })?
+            default_alias
+                .or_else(|| clause.as_ref().map(|_| intern("_")))
+                .ok_or_else(|| {
+                    ParserErr::new(
+                        Span::from_begin_end(span_begin, span_end),
+                        "import requires `as <alias>`".to_string(),
+                    )
+                })?
         };
 
         self.skip_newlines();
@@ -2760,6 +2845,7 @@ impl Parser {
             is_pub,
             path,
             alias,
+            clause,
         })
     }
 
@@ -4555,6 +4641,57 @@ mod tests {
         ));
 
         assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_import_clause_all() {
+        let code = "import foo.bar (*)\n()";
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+        let Decl::Import(import) = &program.decls[0] else {
+            panic!("expected import decl");
+        };
+        assert_eq!(import.alias, intern("bar"));
+        assert!(matches!(import.clause, Some(ImportClause::All)));
+    }
+
+    #[test]
+    fn test_import_clause_items_with_alias() {
+        let code = "import foo.bar (x, y as z)\n()";
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+        let Decl::Import(import) = &program.decls[0] else {
+            panic!("expected import decl");
+        };
+        assert_eq!(import.alias, intern("bar"));
+        let Some(ImportClause::Items(items)) = &import.clause else {
+            panic!("expected import items");
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].name, intern("x"));
+        assert_eq!(items[0].alias, None);
+        assert_eq!(items[1].name, intern("y"));
+        assert_eq!(items[1].alias, Some(intern("z")));
+    }
+
+    #[test]
+    fn test_import_clause_rejects_module_alias_combo() {
+        let code = "import foo.bar (x) as Bar\n()";
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let err = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+        assert!(
+            err[0]
+                .message
+                .contains("cannot combine `as <alias>` with import clause")
+        );
+    }
+
+    #[test]
+    fn test_import_clause_rejects_duplicate_local_names() {
+        let code = "import foo.bar (x, y as x)\n()";
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let err = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+        assert!(err[0].message.contains("duplicate imported name `x`"));
     }
 
     #[test]

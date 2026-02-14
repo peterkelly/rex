@@ -2749,6 +2749,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repl_persists_imported_values() {
+        let mut gas = unlimited_gas();
+        let mut engine = Engine::with_prelude(()).unwrap();
+        engine.add_default_resolvers();
+
+        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex/examples/modules_basic");
+        engine.add_include_resolver(&examples).unwrap();
+
+        let mut state = ReplState::new();
+        let program1 = parse_program("import foo.bar (triple as t)\n()");
+        engine
+            .eval_repl_program(&program1, &mut state, &mut gas)
+            .await
+            .unwrap();
+
+        let program2 = parse_program("t 10");
+        let v2 = engine
+            .eval_repl_program(&program2, &mut state, &mut gas)
+            .await
+            .unwrap();
+        let expected = engine.heap().alloc_i32(30).unwrap();
+        assert!(crate::pointer_eq(engine.heap(), &v2, &expected).unwrap());
+    }
+
+    #[tokio::test]
     async fn eval_can_be_cancelled_while_waiting_on_async_native() {
         let expr = parse("stall");
         let mut engine = Engine::with_prelude(()).unwrap();

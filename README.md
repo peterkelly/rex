@@ -63,6 +63,12 @@ Run a file:
 cargo run -p rex -- run rex/examples/record_update.rex
 ```
 
+Run the advanced module import example:
+
+```sh
+cargo run -p rex -- run rex/examples/modules_advanced/main.rex
+```
+
 Run inline code:
 
 ```sh
@@ -179,6 +185,11 @@ assert_eq!(point, Point { x: 1, y: 2 });
   - Literals: booleans, integers, floats, strings, UUIDs, datetimes.
   - Collections: tuples `(e1, e2)`, lists `[e1, e2]`, dictionaries `{ key = value }`.
   - Functions and control flow: lambdas `\x y -> body` (also accepts `λ` and `→`), let-in bindings `let x = e1, y = e2 in body`, and conditionals `if cond then a else b`.
+- Top-level module imports:
+  - `import foo.bar as Bar` (qualified access like `Bar.add`)
+  - `import foo.bar (*)` (import all exported values)
+  - `import foo.bar (x, y as z)` (import selected exports, with optional rename)
+  - Local import paths resolve relative to the importing file; leading `super` segments walk up directories.
 
 ## Type Classes
 

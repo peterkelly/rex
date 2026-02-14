@@ -20,6 +20,40 @@ Regression tests live in:
   - binary `C t a` is `Predicate { class: C, typ: (t, a) }`
   - etc.
 
+## Module Imports
+
+### Syntax
+
+Top-level imports support three forms:
+
+```rex
+import foo.bar as Bar
+import foo.bar (*)
+import foo.bar (x, y, z as q)
+```
+
+Rules:
+
+- `import <module> as <Alias>` imports the module namespace and requires qualified access
+  (`Alias.member`).
+- `import <module> (*)` imports all exported values into unqualified scope.
+- `import <module> (x, y as z)` imports selected exported values into unqualified scope.
+- `as <Alias>` on the module and `(...)` import clauses are mutually exclusive.
+
+### Visibility and Exports
+
+Only exported (`pub`) values are importable through `(*)` and item clauses.
+
+- Missing requested exports are module errors.
+- Private (non-`pub`) values are not importable.
+
+### Name Binding and Conflicts
+
+- Imported unqualified names participate in lexical shadowing.
+- Lexically bound names (lambda params, `let` vars, pattern bindings) shadow imported names.
+- Importing a name that conflicts with a local top-level declaration is a module error.
+- Importing the same unqualified name more than once (including via aliasing) is a module error.
+
 ## Record Projection
 
 ### Syntax

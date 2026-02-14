@@ -13,7 +13,7 @@ see `docs/SPEC.md`.
 
 A Rex program consists of:
 
-- zero or more declarations (`type`, `class`, `instance`, `fn`)
+- zero or more declarations (`type`, `class`, `instance`, `fn`, `import`)
 - followed by a single expression (the program result)
 
 Example:
@@ -26,6 +26,32 @@ let
 in
   map inc xs
 ```
+
+## Modules and Imports
+
+Rex modules are `.rex` files. Imports are top-level declarations.
+
+Supported forms:
+
+```rex
+import foo.bar as Bar
+import foo.bar (*)
+import foo.bar (x, y as z)
+```
+
+Semantics:
+
+- `import foo.bar as Bar` imports a module alias; use qualified access (`Bar.name`).
+- `import foo.bar (*)` imports all exported values into local unqualified scope.
+- `import foo.bar (x, y as z)` imports selected exported values; `y` is bound locally as `z`.
+- Module alias imports and clause imports are mutually exclusive in one import declaration.
+- Only `pub` values are importable from another module.
+
+Path resolution:
+
+- `foo.bar` resolves to `foo/bar.rex`.
+- Local module paths resolve relative to the importing file.
+- Leading `super` path segments walk up directories (for example `super.core.calc`).
 
 ## Lexical Structure
 
