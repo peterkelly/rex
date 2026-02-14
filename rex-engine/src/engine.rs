@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
-use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
 use async_recursion::async_recursion;
@@ -68,6 +67,52 @@ type AsyncNativeCallableCancellable<State> = Arc<
 type ExportInjector<State> =
     Box<dyn FnOnce(&mut Engine<State>, &str) -> Result<(), EngineError> + Send + 'static>;
 
+struct NativeRegistration<State: Clone + Sync + 'static> {
+    scheme: Scheme,
+    arity: usize,
+    callable: NativeCallable<State>,
+    gas_cost: u64,
+}
+
+impl<State: Clone + Sync + 'static> NativeRegistration<State> {
+    fn sync(scheme: Scheme, arity: usize, func: SyncNativeCallable<State>, gas_cost: u64) -> Self {
+        Self {
+            scheme,
+            arity,
+            callable: NativeCallable::Sync(func),
+            gas_cost,
+        }
+    }
+
+    fn r#async(
+        scheme: Scheme,
+        arity: usize,
+        func: AsyncNativeCallable<State>,
+        gas_cost: u64,
+    ) -> Self {
+        Self {
+            scheme,
+            arity,
+            callable: NativeCallable::Async(func),
+            gas_cost,
+        }
+    }
+
+    fn async_cancellable(
+        scheme: Scheme,
+        arity: usize,
+        func: AsyncNativeCallableCancellable<State>,
+        gas_cost: u64,
+    ) -> Self {
+        Self {
+            scheme,
+            arity,
+            callable: NativeCallable::AsyncCancellable(func),
+            gas_cost,
+        }
+    }
+}
+
 pub trait Handler<State: Clone + Sync + 'static, Sig>: Send + Sync + 'static {
     fn declaration(export_name: &str) -> String;
     fn declaration_for(&self, export_name: &str) -> String {
@@ -86,30 +131,10 @@ pub trait AsyncHandler<State: Clone + Sync + 'static, Sig>: Send + Sync + 'stati
 }
 
 #[derive(Debug, Clone, Copy)]
-struct NativeTypedSig;
+struct NativeCallableSig;
 
 #[derive(Debug, Clone, Copy)]
-struct NativeTypedAsyncSig;
-
-struct NativeTypedHandlerFn<State, F>
-where
-    State: Clone + Sync + 'static,
-{
-    scheme: Scheme,
-    arity: usize,
-    handler: F,
-    _state: PhantomData<fn() -> State>,
-}
-
-struct NativeTypedAsyncHandlerFn<State, F>
-where
-    State: Clone + Sync + 'static,
-{
-    scheme: Scheme,
-    arity: usize,
-    handler: F,
-    _state: PhantomData<fn() -> State>,
-}
+struct AsyncNativeCallableSig;
 
 pub struct Export<State: Clone + Sync + 'static> {
     pub name: String,
@@ -121,23 +146,33 @@ impl<State> Export<State>
 where
     State: Clone + Sync + 'static,
 {
-    pub fn from_handler<Sig, H>(name: impl Into<String>, handler: H) -> Result<Self, EngineError>
-    where
-        H: Handler<State, Sig>,
-    {
+    fn from_injector(
+        name: impl Into<String>,
+        declaration: String,
+        injector: ExportInjector<State>,
+    ) -> Result<Self, EngineError> {
         let name = name.into();
         if name.trim().is_empty() {
             return Err(EngineError::Internal("export name cannot be empty".into()));
         }
         let normalized = normalize_name(&name).to_string();
-        let declaration = handler.declaration_for(&normalized);
-        let injector: ExportInjector<State> =
-            Box::new(move |engine, qualified_name| handler.inject(engine, qualified_name));
         Ok(Self {
             name: normalized,
             declaration,
             injector,
         })
+    }
+
+    pub fn from_handler<Sig, H>(name: impl Into<String>, handler: H) -> Result<Self, EngineError>
+    where
+        H: Handler<State, Sig>,
+    {
+        let name = name.into();
+        let normalized = normalize_name(&name).to_string();
+        let declaration = handler.declaration_for(&normalized);
+        let injector: ExportInjector<State> =
+            Box::new(move |engine, qualified_name| handler.inject(engine, qualified_name));
+        Self::from_injector(name, declaration, injector)
     }
 
     pub fn from_async_handler<Sig, H>(
@@ -148,18 +183,11 @@ where
         H: AsyncHandler<State, Sig>,
     {
         let name = name.into();
-        if name.trim().is_empty() {
-            return Err(EngineError::Internal("export name cannot be empty".into()));
-        }
         let normalized = normalize_name(&name).to_string();
         let declaration = handler.declaration_for(&normalized);
         let injector: ExportInjector<State> =
             Box::new(move |engine, qualified_name| handler.inject_async(engine, qualified_name));
-        Ok(Self {
-            name: normalized,
-            declaration,
-            injector,
-        })
+        Self::from_injector(name, declaration, injector)
     }
 
     pub fn from_native<F>(
@@ -175,13 +203,11 @@ where
             + 'static,
     {
         validate_native_export_scheme(&scheme, arity)?;
-        let wrapped = NativeTypedHandlerFn::<State, F> {
-            scheme,
-            arity,
-            handler,
-            _state: PhantomData,
-        };
-        Self::from_handler::<NativeTypedSig, _>(name, wrapped)
+        let handler = Arc::new(handler);
+        let func: SyncNativeCallable<State> = Arc::new(
+            move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| handler(engine, typ, args),
+        );
+        Self::from_handler::<NativeCallableSig, _>(name, (scheme, arity, func))
     }
 
     pub fn from_native_async<F>(
@@ -197,13 +223,13 @@ where
             + 'static,
     {
         validate_native_export_scheme(&scheme, arity)?;
-        let wrapped = NativeTypedAsyncHandlerFn::<State, F> {
-            scheme,
-            arity,
-            handler,
-            _state: PhantomData,
-        };
-        Self::from_async_handler::<NativeTypedAsyncSig, _>(name, wrapped)
+        let handler = Arc::new(handler);
+        let func: AsyncNativeCallable<State> = Arc::new(move |engine, typ, args| {
+            let args = args.to_vec();
+            let handler = Arc::clone(&handler);
+            handler(engine, typ, args)
+        });
+        Self::from_async_handler::<AsyncNativeCallableSig, _>(name, (scheme, arity, func))
     }
 }
 
@@ -342,21 +368,12 @@ fn validate_native_export_scheme(scheme: &Scheme, arity: usize) -> Result<(), En
     Ok(())
 }
 
-fn native_export_declaration(
-    export_name: &str,
-    scheme: &Scheme,
-    arity: usize,
-) -> Result<String, EngineError> {
-    let _ = native_export_arg_types(scheme, arity)?;
-    Ok(declaration_line_from_scheme(export_name, scheme))
-}
-
 macro_rules! define_handler_impl {
-    ($trait_name:ident, $inject_method:ident, [] ; $sig:ty) => {
-        impl<State, F, R> $trait_name<State, $sig> for F
+    ([] ; $arity:literal ; $sig:ty) => {
+        impl<State, F, R> Handler<State, $sig> for F
         where
             State: Clone + Sync + 'static,
-            F: for<'a> Fn(&'a State) -> R + Send + Sync + 'static,
+            F: for<'a> Fn(&'a State) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoPointer + RexType,
         {
             fn declaration(export_name: &str) -> String {
@@ -368,15 +385,31 @@ macro_rules! define_handler_impl {
                 engine: &mut Engine<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
-                engine.$inject_method(export_name, self)
+                let name_sym = normalize_name(export_name);
+                let func: SyncNativeCallable<State> = Arc::new(
+                    move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
+                        if args.len() != $arity {
+                            return Err(EngineError::NativeArity {
+                                name: name_sym.clone(),
+                                expected: $arity,
+                                got: args.len(),
+                            });
+                        }
+                        let value = self(engine.state.as_ref())?;
+                        value.into_pointer(engine.heap())
+                    },
+                );
+                let scheme = Scheme::new(vec![], vec![], R::rex_type());
+                let registration = NativeRegistration::sync(scheme, $arity, func, 0);
+                engine.register_native_registration(export_name, registration)
             }
         }
     };
-    ($trait_name:ident, $inject_method:ident, [$(($arg_ty:ident, $arg_name:ident)),+] ; $sig:ty) => {
-        impl<State, F, R, $($arg_ty),+> $trait_name<State, $sig> for F
+    ([ $(($arg_ty:ident, $arg_name:ident, $idx:tt)),+ ] ; $arity:literal ; $sig:ty) => {
+        impl<State, F, R, $($arg_ty),+> Handler<State, $sig> for F
         where
             State: Clone + Sync + 'static,
-            F: for<'a> Fn(&'a State, $($arg_ty),+) -> R + Send + Sync + 'static,
+            F: for<'a> Fn(&'a State, $($arg_ty),+) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType),+
         {
@@ -390,19 +423,58 @@ macro_rules! define_handler_impl {
                 engine: &mut Engine<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
-                engine.$inject_method(export_name, self)
+                let name_sym = normalize_name(export_name);
+                let func: SyncNativeCallable<State> = Arc::new(
+                    move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
+                        if args.len() != $arity {
+                            return Err(EngineError::NativeArity {
+                                name: name_sym.clone(),
+                                expected: $arity,
+                                got: args.len(),
+                            });
+                        }
+                        $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
+                        let value = self(engine.state.as_ref(), $($arg_name),+)?;
+                        value.into_pointer(engine.heap())
+                    },
+                );
+                let typ = native_fn_type!($($arg_ty),+ ; R);
+                let scheme = Scheme::new(vec![], vec![], typ);
+                let registration = NativeRegistration::sync(scheme, $arity, func, 0);
+                engine.register_native_registration(export_name, registration)
             }
         }
     };
 }
 
+impl<State> Handler<State, NativeCallableSig> for (Scheme, usize, SyncNativeCallable<State>)
+where
+    State: Clone + Sync + 'static,
+{
+    fn declaration(_export_name: &str) -> String {
+        unreachable!("native callable handlers use declaration_for")
+    }
+
+    fn declaration_for(&self, export_name: &str) -> String {
+        let (scheme, _, _) = self;
+        declaration_line_from_scheme(export_name, scheme)
+    }
+
+    fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError> {
+        let (scheme, arity, func) = self;
+        validate_native_export_scheme(&scheme, arity)?;
+        let registration = NativeRegistration::sync(scheme, arity, func, 0);
+        engine.register_native_registration(export_name, registration)
+    }
+}
+
 macro_rules! define_async_handler_impl {
-    ($inject_method:ident, [] ; $sig:ty) => {
+    ([] ; $arity:literal ; $sig:ty) => {
         impl<State, F, Fut, R> AsyncHandler<State, $sig> for F
         where
             State: Clone + Sync + 'static,
             F: for<'a> Fn(&'a State) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = R> + 'static,
+            Fut: Future<Output = Result<R, EngineError>> + 'static,
             R: IntoPointer + RexType,
         {
             fn declaration(export_name: &str) -> String {
@@ -414,16 +486,38 @@ macro_rules! define_async_handler_impl {
                 engine: &mut Engine<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
-                engine.$inject_method(export_name, self)
+                let f = Arc::new(self);
+                let name_sym = normalize_name(export_name);
+                let func: AsyncNativeCallable<State> = Arc::new(
+                    move |engine: &Engine<State>, _: Type, args: &[Pointer]| -> NativeFuture<'_> {
+                        let f = Arc::clone(&f);
+                        let name_sym = name_sym.clone();
+                        async move {
+                            if args.len() != $arity {
+                                return Err(EngineError::NativeArity {
+                                    name: name_sym.clone(),
+                                    expected: $arity,
+                                    got: args.len(),
+                                });
+                            }
+                            let value = f(engine.state.as_ref()).await?;
+                            value.into_pointer(engine.heap())
+                        }
+                        .boxed_local()
+                    },
+                );
+                let scheme = Scheme::new(vec![], vec![], R::rex_type());
+                let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
+                engine.register_native_registration(export_name, registration)
             }
         }
     };
-    ($inject_method:ident, [$(($arg_ty:ident, $arg_name:ident)),+] ; $sig:ty) => {
+    ([ $(($arg_ty:ident, $arg_name:ident, $idx:tt)),+ ] ; $arity:literal ; $sig:ty) => {
         impl<State, F, Fut, R, $($arg_ty),+> AsyncHandler<State, $sig> for F
         where
             State: Clone + Sync + 'static,
             F: for<'a> Fn(&'a State, $($arg_ty),+) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = R> + 'static,
+            Fut: Future<Output = Result<R, EngineError>> + 'static,
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType),+
         {
@@ -437,58 +531,48 @@ macro_rules! define_async_handler_impl {
                 engine: &mut Engine<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
-                engine.$inject_method(export_name, self)
+                let f = Arc::new(self);
+                let name_sym = normalize_name(export_name);
+                let func: AsyncNativeCallable<State> = Arc::new(
+                    move |engine: &Engine<State>, _: Type, args: &[Pointer]| -> NativeFuture<'_> {
+                        let f = Arc::clone(&f);
+                        let name_sym = name_sym.clone();
+                        async move {
+                            if args.len() != $arity {
+                                return Err(EngineError::NativeArity {
+                                    name: name_sym.clone(),
+                                    expected: $arity,
+                                    got: args.len(),
+                                });
+                            }
+                            $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
+                            let value = f(engine.state.as_ref(), $($arg_name),+).await?;
+                            value.into_pointer(engine.heap())
+                        }
+                        .boxed_local()
+                    },
+                );
+                let typ = native_fn_type!($($arg_ty),+ ; R);
+                let scheme = Scheme::new(vec![], vec![], typ);
+                let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
+                engine.register_native_registration(export_name, registration)
             }
         }
     };
 }
 
-impl<State, F> Handler<State, NativeTypedSig> for NativeTypedHandlerFn<State, F>
+impl<State> AsyncHandler<State, AsyncNativeCallableSig>
+    for (Scheme, usize, AsyncNativeCallable<State>)
 where
     State: Clone + Sync + 'static,
-    F: for<'a> Fn(&'a Engine<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
-        + Send
-        + Sync
-        + 'static,
 {
     fn declaration(_export_name: &str) -> String {
-        panic!("Native handlers must be constructed with Export::from_native")
+        unreachable!("native async callable handlers use declaration_for")
     }
 
     fn declaration_for(&self, export_name: &str) -> String {
-        match native_export_declaration(export_name, &self.scheme, self.arity) {
-            Ok(decl) => decl,
-            Err(err) => panic!("native export scheme arity must be valid: {err}"),
-        }
-    }
-
-    fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError> {
-        let scheme = self.scheme;
-        let arity = self.arity;
-        let handler = self.handler;
-        engine.export_native(export_name, scheme, arity, move |engine, typ, args| {
-            handler(engine, typ, args)
-        })
-    }
-}
-
-impl<State, F> AsyncHandler<State, NativeTypedAsyncSig> for NativeTypedAsyncHandlerFn<State, F>
-where
-    State: Clone + Sync + 'static,
-    F: for<'a> Fn(&'a Engine<State>, Type, Vec<Pointer>) -> NativeFuture<'a>
-        + Send
-        + Sync
-        + 'static,
-{
-    fn declaration(_export_name: &str) -> String {
-        panic!("Native async handlers must be constructed with Export::from_native_async")
-    }
-
-    fn declaration_for(&self, export_name: &str) -> String {
-        match native_export_declaration(export_name, &self.scheme, self.arity) {
-            Ok(decl) => decl,
-            Err(err) => panic!("native export scheme arity must be valid: {err}"),
-        }
+        let (scheme, _, _) = self;
+        declaration_line_from_scheme(export_name, scheme)
     }
 
     fn inject_async(
@@ -496,14 +580,10 @@ where
         engine: &mut Engine<State>,
         export_name: &str,
     ) -> Result<(), EngineError> {
-        let scheme = self.scheme;
-        let arity = self.arity;
-        let handler = Arc::new(self.handler);
-        engine.export_native_async(export_name, scheme, arity, move |engine, typ, args| {
-            let args = args.to_vec();
-            let handler = Arc::clone(&handler);
-            handler(engine, typ, args)
-        })
+        let (scheme, arity, func) = self;
+        validate_native_export_scheme(&scheme, arity)?;
+        let registration = NativeRegistration::r#async(scheme, arity, func, 0);
+        engine.register_native_registration(export_name, registration)
     }
 }
 
@@ -1022,133 +1102,44 @@ macro_rules! native_fn_type {
     };
 }
 
-macro_rules! define_inject_fn_method {
-    ($method:ident, $arity:literal, [$(($arg_ty:ident, $arg_name:ident, $idx:tt)),* $(,)?]) => {
-        fn $method<F, R $(, $arg_ty)*>(&mut self, name: &str, f: F) -> Result<(), EngineError>
-        where
-            F: for<'a> Fn(&'a State, $($arg_ty),*) -> R + Send + Sync + 'static,
-            R: IntoPointer + RexType,
-            $($arg_ty: FromPointer + RexType,)*
-        {
-            let name = normalize_name(name);
-            let name_sym = name.clone();
-            let func = Arc::new(move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
-                if args.len() != $arity {
-                    return Err(EngineError::NativeArity {
-                        name: name_sym.clone(),
-                        expected: $arity,
-                        got: args.len(),
-                    });
-                }
-                $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
-                f(engine.state.as_ref(), $($arg_name),*).into_pointer(engine.heap())
-            });
-            let typ = native_fn_type!($($arg_ty),* ; R);
-            let scheme = Scheme::new(vec![], vec![], typ);
-            self.register_native(name, scheme, $arity, NativeCallable::Sync(func), 0)
-        }
-    };
-}
-
-macro_rules! define_inject_async_fn_method {
-    ($method:ident, $arity:literal, [$(($arg_ty:ident, $arg_name:ident, $idx:tt)),* $(,)?]) => {
-        fn $method<F, Fut, R $(, $arg_ty)*>(
-            &mut self,
-            name: &str,
-            f: F,
-        ) -> Result<(), EngineError>
-        where
-            F: for<'a> Fn(&'a State, $($arg_ty),*) -> Fut + Send + Sync + 'static,
-            Fut: std::future::Future<Output = R> + 'static,
-            R: IntoPointer + RexType,
-            $($arg_ty: FromPointer + RexType,)*
-        {
-            let name = normalize_name(name);
-            let name_sym = name.clone();
-            let f = Arc::new(f);
-            let func: AsyncNativeCallable<State> = Arc::new(
-                move |engine: &Engine<State>, _: Type, args: &[Pointer]| -> NativeFuture<'_> {
-                    let f = f.clone();
-                    let name_sym = name_sym.clone();
-                    async move {
-                        if args.len() != $arity {
-                            return Err(EngineError::NativeArity {
-                                name: name_sym.clone(),
-                                expected: $arity,
-                                got: args.len(),
-                            });
-                        }
-                        $(let $arg_name = $arg_ty::from_pointer(engine.heap(), &args[$idx])?;)*
-                        f(engine.state.as_ref(), $($arg_name),*)
-                            .await
-                            .into_pointer(engine.heap())
-                    }
-                    .boxed_local()
-                },
-            );
-            let typ = native_fn_type!($($arg_ty),* ; R);
-            let scheme = Scheme::new(vec![], vec![], typ);
-            self.register_native(name, scheme, $arity, NativeCallable::Async(func), 0)
-        }
-    };
-}
-
-define_handler_impl!(Handler, inject_fn0, [] ; fn() -> R);
-define_handler_impl!(Handler, inject_fn1, [(A, a)] ; fn(A) -> R);
-define_handler_impl!(Handler, inject_fn2, [(A, a), (B, b)] ; fn(A, B) -> R);
-define_handler_impl!(Handler, inject_fn3, [(A, a), (B, b), (C, c)] ; fn(A, B, C) -> R);
+define_handler_impl!([] ; 0 ; fn() -> R);
+define_handler_impl!([(A, a, 0)] ; 1 ; fn(A) -> R);
+define_handler_impl!([(A, a, 0), (B, b, 1)] ; 2 ; fn(A, B) -> R);
+define_handler_impl!([(A, a, 0), (B, b, 1), (C, c, 2)] ; 3 ; fn(A, B, C) -> R);
 define_handler_impl!(
-    Handler,
-    inject_fn4,
-    [(A, a), (B, b), (C, c), (D, d)] ; fn(A, B, C, D) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3)] ; 4 ; fn(A, B, C, D) -> R
 );
 define_handler_impl!(
-    Handler,
-    inject_fn5,
-    [(A, a), (B, b), (C, c), (D, d), (E, e)] ; fn(A, B, C, D, E) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4)] ; 5 ; fn(A, B, C, D, E) -> R
 );
 define_handler_impl!(
-    Handler,
-    inject_fn6,
-    [(A, a), (B, b), (C, c), (D, d), (E, e), (G, g)] ; fn(A, B, C, D, E, G) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5)] ; 6 ; fn(A, B, C, D, E, G) -> R
 );
 define_handler_impl!(
-    Handler,
-    inject_fn7,
-    [(A, a), (B, b), (C, c), (D, d), (E, e), (G, g), (H, h)] ; fn(A, B, C, D, E, G, H) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6)] ; 7 ; fn(A, B, C, D, E, G, H) -> R
 );
 define_handler_impl!(
-    Handler,
-    inject_fn8,
-    [(A, a), (B, b), (C, c), (D, d), (E, e), (G, g), (H, h), (I, i)] ; fn(A, B, C, D, E, G, H, I) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6), (I, i, 7)] ; 8 ; fn(A, B, C, D, E, G, H, I) -> R
 );
 
-define_async_handler_impl!(inject_async_fn0, [] ; fn() -> R);
-define_async_handler_impl!(inject_async_fn1, [(A, a)] ; fn(A) -> R);
-define_async_handler_impl!(inject_async_fn2, [(A, a), (B, b)] ; fn(A, B) -> R);
+define_async_handler_impl!([] ; 0 ; fn() -> R);
+define_async_handler_impl!([(A, a, 0)] ; 1 ; fn(A) -> R);
+define_async_handler_impl!([(A, a, 0), (B, b, 1)] ; 2 ; fn(A, B) -> R);
+define_async_handler_impl!([(A, a, 0), (B, b, 1), (C, c, 2)] ; 3 ; fn(A, B, C) -> R);
 define_async_handler_impl!(
-    inject_async_fn3,
-    [(A, a), (B, b), (C, c)] ; fn(A, B, C) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3)] ; 4 ; fn(A, B, C, D) -> R
 );
 define_async_handler_impl!(
-    inject_async_fn4,
-    [(A, a), (B, b), (C, c), (D, d)] ; fn(A, B, C, D) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4)] ; 5 ; fn(A, B, C, D, E) -> R
 );
 define_async_handler_impl!(
-    inject_async_fn5,
-    [(A, a), (B, b), (C, c), (D, d), (E, e)] ; fn(A, B, C, D, E) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5)] ; 6 ; fn(A, B, C, D, E, G) -> R
 );
 define_async_handler_impl!(
-    inject_async_fn6,
-    [(A, a), (B, b), (C, c), (D, d), (E, e), (G, g)] ; fn(A, B, C, D, E, G) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6)] ; 7 ; fn(A, B, C, D, E, G, H) -> R
 );
 define_async_handler_impl!(
-    inject_async_fn7,
-    [(A, a), (B, b), (C, c), (D, d), (E, e), (G, g), (H, h)] ; fn(A, B, C, D, E, G, H) -> R
-);
-define_async_handler_impl!(
-    inject_async_fn8,
-    [(A, a), (B, b), (C, c), (D, d), (E, e), (G, g), (H, h), (I, i)] ; fn(A, B, C, D, E, G, H, I) -> R
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6), (I, i, 7)] ; 8 ; fn(A, B, C, D, E, G, H, I) -> R
 );
 
 impl<State> Engine<State>
@@ -1358,6 +1349,21 @@ where
         injector(self, &name)
     }
 
+    fn register_native_registration(
+        &mut self,
+        export_name: &str,
+        registration: NativeRegistration<State>,
+    ) -> Result<(), EngineError> {
+        let NativeRegistration {
+            scheme,
+            arity,
+            callable,
+            gas_cost,
+        } = registration;
+        let name = normalize_name(export_name);
+        self.register_native(name, scheme, arity, callable, gas_cost)
+    }
+
     pub fn export<Sig, H>(&mut self, name: impl Into<String>, handler: H) -> Result<(), EngineError>
     where
         H: Handler<State, Sig>,
@@ -1389,12 +1395,7 @@ where
             + Sync
             + 'static,
     {
-        let name = normalize_name(&name.into());
-        let handler = Arc::new(handler);
-        let func = Arc::new(
-            move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| handler(engine, typ, args),
-        );
-        self.register_native(name, scheme, arity, NativeCallable::Sync(func), 0)
+        self.export_native_with_gas_cost(name, scheme, arity, 0, handler)
     }
 
     pub fn export_native_async<F>(
@@ -1410,13 +1411,7 @@ where
             + Sync
             + 'static,
     {
-        let name = normalize_name(&name.into());
-        let handler = Arc::new(handler);
-        let func: AsyncNativeCallable<State> = Arc::new(move |engine, typ, args| {
-            let handler = Arc::clone(&handler);
-            handler(engine, typ, args.to_vec())
-        });
-        self.register_native(name, scheme, arity, NativeCallable::Async(func), 0)
+        self.export_native_async_with_gas_cost(name, scheme, arity, 0, handler)
     }
 
     pub fn export_value<V: IntoPointer + RexType>(
@@ -1424,13 +1419,13 @@ where
         name: &str,
         value: V,
     ) -> Result<(), EngineError> {
-        let name = normalize_name(name);
         let typ = V::rex_type();
         let value = value.into_pointer(self.heap())?;
-        let func =
+        let func: SyncNativeCallable<State> =
             Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value.clone()));
         let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 0, NativeCallable::Sync(func), 0)
+        let registration = NativeRegistration::sync(scheme, 0, func, 0);
+        self.register_native_registration(name, registration)
     }
 
     pub fn export_value_typed(
@@ -1439,117 +1434,13 @@ where
         typ: Type,
         value: Value,
     ) -> Result<(), EngineError> {
-        let name = normalize_name(name);
         let value = self.heap().alloc_value(value)?;
-        let func =
+        let func: SyncNativeCallable<State> =
             Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value.clone()));
         let scheme = Scheme::new(vec![], vec![], typ);
-        self.register_native(name, scheme, 0, NativeCallable::Sync(func), 0)
+        let registration = NativeRegistration::sync(scheme, 0, func, 0);
+        self.register_native_registration(name, registration)
     }
-
-    define_inject_fn_method!(inject_fn0, 0, []);
-    define_inject_fn_method!(inject_fn1, 1, [(A, a, 0)]);
-    define_inject_fn_method!(inject_fn2, 2, [(A, a, 0), (B, b, 1)]);
-    define_inject_fn_method!(inject_fn3, 3, [(A, a, 0), (B, b, 1), (C, c, 2)]);
-    define_inject_fn_method!(inject_fn4, 4, [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3)]);
-    define_inject_fn_method!(
-        inject_fn5,
-        5,
-        [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4)]
-    );
-    define_inject_fn_method!(
-        inject_fn6,
-        6,
-        [
-            (A, a, 0),
-            (B, b, 1),
-            (C, c, 2),
-            (D, d, 3),
-            (E, e, 4),
-            (G, g, 5)
-        ]
-    );
-    define_inject_fn_method!(
-        inject_fn7,
-        7,
-        [
-            (A, a, 0),
-            (B, b, 1),
-            (C, c, 2),
-            (D, d, 3),
-            (E, e, 4),
-            (G, g, 5),
-            (H, h, 6)
-        ]
-    );
-    define_inject_fn_method!(
-        inject_fn8,
-        8,
-        [
-            (A, a, 0),
-            (B, b, 1),
-            (C, c, 2),
-            (D, d, 3),
-            (E, e, 4),
-            (G, g, 5),
-            (H, h, 6),
-            (I, i, 7)
-        ]
-    );
-
-    define_inject_async_fn_method!(inject_async_fn0, 0, []);
-    define_inject_async_fn_method!(inject_async_fn1, 1, [(A, a, 0)]);
-    define_inject_async_fn_method!(inject_async_fn2, 2, [(A, a, 0), (B, b, 1)]);
-    define_inject_async_fn_method!(inject_async_fn3, 3, [(A, a, 0), (B, b, 1), (C, c, 2)]);
-    define_inject_async_fn_method!(
-        inject_async_fn4,
-        4,
-        [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3)]
-    );
-    define_inject_async_fn_method!(
-        inject_async_fn5,
-        5,
-        [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4)]
-    );
-    define_inject_async_fn_method!(
-        inject_async_fn6,
-        6,
-        [
-            (A, a, 0),
-            (B, b, 1),
-            (C, c, 2),
-            (D, d, 3),
-            (E, e, 4),
-            (G, g, 5)
-        ]
-    );
-    define_inject_async_fn_method!(
-        inject_async_fn7,
-        7,
-        [
-            (A, a, 0),
-            (B, b, 1),
-            (C, c, 2),
-            (D, d, 3),
-            (E, e, 4),
-            (G, g, 5),
-            (H, h, 6)
-        ]
-    );
-    define_inject_async_fn_method!(
-        inject_async_fn8,
-        8,
-        [
-            (A, a, 0),
-            (B, b, 1),
-            (C, c, 2),
-            (D, d, 3),
-            (E, e, 4),
-            (G, g, 5),
-            (H, h, 6),
-            (I, i, 7)
-        ]
-    );
 
     pub fn export_native_with_gas_cost<F>(
         &mut self,
@@ -1565,12 +1456,14 @@ where
             + Sync
             + 'static,
     {
-        let name = normalize_name(&name.into());
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
         let handler = Arc::new(handler);
-        let func = Arc::new(
+        let func: SyncNativeCallable<State> = Arc::new(
             move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| handler(engine, typ, args),
         );
-        self.register_native(name, scheme, arity, NativeCallable::Sync(func), gas_cost)
+        let registration = NativeRegistration::sync(scheme, arity, func, gas_cost);
+        self.register_native_registration(&name, registration)
     }
 
     pub fn export_native_async_with_gas_cost<F>(
@@ -1587,13 +1480,15 @@ where
             + Sync
             + 'static,
     {
-        let name = normalize_name(&name.into());
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
         let handler = Arc::new(handler);
         let func: AsyncNativeCallable<State> = Arc::new(move |engine, typ, args| {
             let handler = Arc::clone(&handler);
             handler(engine, typ, args.to_vec())
         });
-        self.register_native(name, scheme, arity, NativeCallable::Async(func), gas_cost)
+        let registration = NativeRegistration::r#async(scheme, arity, func, gas_cost);
+        self.register_native_registration(&name, registration)
     }
 
     pub fn export_native_async_cancellable<F>(
@@ -1636,17 +1531,13 @@ where
             + Sync
             + 'static,
     {
-        let name = normalize_name(&name.into());
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
         let handler = Arc::new(handler);
         let func: AsyncNativeCallableCancellable<State> =
             Arc::new(move |engine, token, typ, args| handler(engine, token, typ, args));
-        self.register_native(
-            name,
-            scheme,
-            arity,
-            NativeCallable::AsyncCancellable(func),
-            gas_cost,
-        )
+        let registration = NativeRegistration::async_cancellable(scheme, arity, func, gas_cost);
+        self.register_native_registration(&name, registration)
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
@@ -3217,7 +3108,7 @@ mod tests {
                 let started_tx = started_tx.clone();
                 async move {
                     let _ = started_tx.send(());
-                    futures::future::pending::<i32>().await
+                    futures::future::pending::<Result<i32, EngineError>>().await
                 }
             })
             .unwrap();

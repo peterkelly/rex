@@ -132,6 +132,11 @@ Use `Module` + `Engine::inject_module(...)`:
    - runtime/native exports with `export_native` / `export_native_async`
 3. Inject it into the engine.
 
+`export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
+`Err(...)`, evaluation fails with that engine error.
+`export_async` handlers follow the same rule, but return
+`Future<Output = Result<T, EngineError>>`.
+
 ```rust
 use rex_engine::{Engine, Module};
 use rex_util::GasMeter;
@@ -140,8 +145,8 @@ let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
 let mut math = Module::new("acme.math");
-math.export("inc", |_state: &(), x: i32| -> i32 { x + 1 })?;
-math.export_async("double_async", |_state: &(), x: i32| async move { x * 2 })?;
+math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
+math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
 engine.inject_module(math)?;
 
 let mut gas = GasMeter::default();
@@ -201,8 +206,8 @@ m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::con("i32
 engine.inject_module(m)?;
 ```
 
-`Scheme` and arity must agree. Injection returns an error if the type does not accept the provided
-number of arguments.
+`Scheme` and arity must agree. Registration returns an error if the type does not accept the
+provided number of arguments.
 
 ### 4) Custom Resolver Contract (Advanced)
 
@@ -253,7 +258,7 @@ let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
 })?;
 
 engine.export("have_role", |state, role: String| {
-    state.roles.iter().any(|r| r == &role)
+    Ok(state.roles.iter().any(|r| r == &role))
 })?;
 ```
 
@@ -344,7 +349,7 @@ assert_eq!(ty.to_string(), "i32");
 ### Evaluate: Inject Decls into `Engine`
 
 ```rust
-use rex_engine::Engine;
+use rex_engine::{Engine, EngineError};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_util::{GasCosts, GasMeter};
@@ -387,7 +392,7 @@ use rex_engine::Engine;
 
 let mut engine = Engine::with_prelude(())?;
 engine.export_value("answer", 42i32)?;
-engine.export("inc", |_state, x: i32| x + 1)?;
+engine.export("inc", |_state, x: i32| { Ok(x + 1) })?;
 ```
 
 ### Async Natives
@@ -400,7 +405,7 @@ use rex_engine::Engine;
 use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
-engine.export_async("inc", |_state, x: i32| async move { x + 1 })?;
+engine.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
 
 let tokens = rex_lexer::Token::tokenize("inc 1")?;
 let mut parser = rex_parser::Parser::new(tokens);

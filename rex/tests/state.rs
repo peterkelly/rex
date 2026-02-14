@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rex::{Engine, GasMeter, Parser, Token};
+use rex::{Engine, EngineError, GasMeter, Parser, Token};
 
 #[derive(Clone)]
 struct HostState {
@@ -9,20 +9,20 @@ struct HostState {
     roles: Vec<String>,
 }
 
-fn current_user_id(state: &HostState) -> String {
-    state.user_id.clone()
+fn current_user_id(state: &HostState) -> Result<String, EngineError> {
+    Ok(state.user_id.clone())
 }
 
-fn is_admin(state: &HostState) -> bool {
-    state.is_admin
+fn is_admin(state: &HostState) -> Result<bool, EngineError> {
+    Ok(state.is_admin)
 }
 
-fn have_role(state: &HostState, role: String) -> bool {
-    state.roles.iter().any(|r| r == &role)
+fn have_role(state: &HostState, role: String) -> Result<bool, EngineError> {
+    Ok(state.roles.iter().any(|r| r == &role))
 }
 
-async fn have_role_async(state: HostState, role: String) -> bool {
-    state.roles.iter().any(|r| r == &role)
+async fn have_role_async(state: HostState, role: String) -> Result<bool, EngineError> {
+    Ok(state.roles.iter().any(|r| r == &role))
 }
 
 fn parse(code: &str) -> Arc<rex_ast::expr::Expr> {

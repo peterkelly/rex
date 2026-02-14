@@ -639,47 +639,43 @@ pub(crate) fn inject_equality_ops<State: Clone + Sync + 'static>(
 ) -> Result<(), EngineError> {
     // Equality primitives are monomorphic overloads (same name, different
     // concrete types), matching the numeric `prim_add` style.
-    engine.export("prim_eq", |_: &State, a: bool, b: bool| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: bool, b: bool| -> bool { a != b })?;
+    engine.export("prim_eq", |_: &State, a: bool, b: bool| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: bool, b: bool| Ok(a != b))?;
 
-    engine.export("prim_eq", |_: &State, a: u8, b: u8| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: u8, b: u8| -> bool { a != b })?;
-    engine.export("prim_eq", |_: &State, a: u16, b: u16| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: u16, b: u16| -> bool { a != b })?;
-    engine.export("prim_eq", |_: &State, a: u32, b: u32| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: u32, b: u32| -> bool { a != b })?;
-    engine.export("prim_eq", |_: &State, a: u64, b: u64| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: u64, b: u64| -> bool { a != b })?;
+    engine.export("prim_eq", |_: &State, a: u8, b: u8| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: u8, b: u8| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: u16, b: u16| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: u16, b: u16| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: u32, b: u32| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: u32, b: u32| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: u64, b: u64| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: u64, b: u64| Ok(a != b))?;
 
-    engine.export("prim_eq", |_: &State, a: i8, b: i8| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: i8, b: i8| -> bool { a != b })?;
-    engine.export("prim_eq", |_: &State, a: i16, b: i16| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: i16, b: i16| -> bool { a != b })?;
-    engine.export("prim_eq", |_: &State, a: i32, b: i32| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: i32, b: i32| -> bool { a != b })?;
-    engine.export("prim_eq", |_: &State, a: i64, b: i64| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: i64, b: i64| -> bool { a != b })?;
+    engine.export("prim_eq", |_: &State, a: i8, b: i8| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: i8, b: i8| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: i16, b: i16| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: i16, b: i16| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: i32, b: i32| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: i32, b: i32| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: i64, b: i64| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: i64, b: i64| Ok(a != b))?;
 
-    engine.export("prim_eq", |_: &State, a: f32, b: f32| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: f32, b: f32| -> bool { a != b })?;
-    engine.export("prim_eq", |_: &State, a: f64, b: f64| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: f64, b: f64| -> bool { a != b })?;
+    engine.export("prim_eq", |_: &State, a: f32, b: f32| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: f32, b: f32| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: f64, b: f64| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: f64, b: f64| Ok(a != b))?;
 
-    engine.export("prim_eq", |_: &State, a: String, b: String| -> bool {
-        a == b
-    })?;
-    engine.export("prim_ne", |_: &State, a: String, b: String| -> bool {
-        a != b
-    })?;
-    engine.export("prim_eq", |_: &State, a: Uuid, b: Uuid| -> bool { a == b })?;
-    engine.export("prim_ne", |_: &State, a: Uuid, b: Uuid| -> bool { a != b })?;
+    engine.export("prim_eq", |_: &State, a: String, b: String| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: String, b: String| Ok(a != b))?;
+    engine.export("prim_eq", |_: &State, a: Uuid, b: Uuid| Ok(a == b))?;
+    engine.export("prim_ne", |_: &State, a: Uuid, b: Uuid| Ok(a != b))?;
     engine.export(
         "prim_eq",
-        |_: &State, a: DateTime<Utc>, b: DateTime<Utc>| -> bool { a == b },
+        |_: &State, a: DateTime<Utc>, b: DateTime<Utc>| Ok(a == b),
     )?;
     engine.export(
         "prim_ne",
-        |_: &State, a: DateTime<Utc>, b: DateTime<Utc>| -> bool { a != b },
+        |_: &State, a: DateTime<Utc>, b: DateTime<Utc>| Ok(a != b),
     )?;
 
     // Array equality must respect `Eq a`. We can't express the loop without a
@@ -775,84 +771,76 @@ pub(crate) fn inject_order_ops<State: Clone + Sync + 'static>(
 
     // Integer and string comparisons can be injected as direct typed natives,
     // with no runtime type switching.
-    engine.export("prim_lt", |_: &State, a: u8, b: u8| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: u8, b: u8| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: u8, b: u8| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: u8, b: u8| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: u8, b: u8| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: u8, b: u8| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: u8, b: u8| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: u8, b: u8| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: u8, b: u8| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: u8, b: u8| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: u16, b: u16| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: u16, b: u16| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: u16, b: u16| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: u16, b: u16| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: u16, b: u16| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: u16, b: u16| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: u16, b: u16| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: u16, b: u16| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: u16, b: u16| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: u16, b: u16| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: u32, b: u32| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: u32, b: u32| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: u32, b: u32| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: u32, b: u32| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: u32, b: u32| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: u32, b: u32| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: u32, b: u32| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: u32, b: u32| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: u32, b: u32| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: u32, b: u32| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: u64, b: u64| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: u64, b: u64| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: u64, b: u64| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: u64, b: u64| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: u64, b: u64| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: u64, b: u64| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: u64, b: u64| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: u64, b: u64| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: u64, b: u64| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: u64, b: u64| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: i8, b: i8| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: i8, b: i8| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: i8, b: i8| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: i8, b: i8| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: i8, b: i8| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: i8, b: i8| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: i8, b: i8| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: i8, b: i8| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: i8, b: i8| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: i8, b: i8| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: i16, b: i16| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: i16, b: i16| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: i16, b: i16| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: i16, b: i16| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: i16, b: i16| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: i16, b: i16| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: i16, b: i16| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: i16, b: i16| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: i16, b: i16| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: i16, b: i16| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: i32, b: i32| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: i32, b: i32| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: i32, b: i32| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: i32, b: i32| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: i32, b: i32| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: i32, b: i32| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: i32, b: i32| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: i32, b: i32| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: i32, b: i32| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: i32, b: i32| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: i64, b: i64| -> bool { a < b })?;
-    engine.export("prim_le", |_: &State, a: i64, b: i64| -> bool { a <= b })?;
-    engine.export("prim_gt", |_: &State, a: i64, b: i64| -> bool { a > b })?;
-    engine.export("prim_ge", |_: &State, a: i64, b: i64| -> bool { a >= b })?;
-    engine.export("prim_cmp", |_: &State, a: i64, b: i64| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: i64, b: i64| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: i64, b: i64| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: i64, b: i64| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: i64, b: i64| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: i64, b: i64| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
-    engine.export("prim_lt", |_: &State, a: String, b: String| -> bool {
-        a < b
-    })?;
-    engine.export("prim_le", |_: &State, a: String, b: String| -> bool {
-        a <= b
-    })?;
-    engine.export("prim_gt", |_: &State, a: String, b: String| -> bool {
-        a > b
-    })?;
-    engine.export("prim_ge", |_: &State, a: String, b: String| -> bool {
-        a >= b
-    })?;
-    engine.export("prim_cmp", |_: &State, a: String, b: String| -> i32 {
-        cmp_to_i32(a.cmp(&b))
+    engine.export("prim_lt", |_: &State, a: String, b: String| Ok(a < b))?;
+    engine.export("prim_le", |_: &State, a: String, b: String| Ok(a <= b))?;
+    engine.export("prim_gt", |_: &State, a: String, b: String| Ok(a > b))?;
+    engine.export("prim_ge", |_: &State, a: String, b: String| Ok(a >= b))?;
+    engine.export("prim_cmp", |_: &State, a: String, b: String| {
+        Ok(cmp_to_i32(a.cmp(&b)))
     })?;
 
     // Floats: preserve the existing “NaN is a type error” semantics.
@@ -973,45 +961,21 @@ pub(crate) fn inject_order_ops<State: Clone + Sync + 'static>(
 pub(crate) fn inject_pretty_ops<State: Clone + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
-    engine.export("prim_pretty", |_: &State, x: bool| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: u8| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: u16| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: u32| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: u64| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: i8| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: i16| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: i32| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: i64| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: f32| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: f64| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: String| -> String { x })?;
-    engine.export("prim_pretty", |_: &State, x: Uuid| -> String {
-        x.to_string()
-    })?;
-    engine.export("prim_pretty", |_: &State, x: DateTime<Utc>| -> String {
-        x.to_string()
+    engine.export("prim_pretty", |_: &State, x: bool| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: u8| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: u16| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: u32| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: u64| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: i8| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: i16| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: i32| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: i64| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: f32| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: f64| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: String| Ok(x))?;
+    engine.export("prim_pretty", |_: &State, x: Uuid| Ok(x.to_string()))?;
+    engine.export("prim_pretty", |_: &State, x: DateTime<Utc>| {
+        Ok(x.to_string())
     })?;
     Ok(())
 }
@@ -1019,8 +983,8 @@ pub(crate) fn inject_pretty_ops<State: Clone + Sync + 'static>(
 pub(crate) fn inject_boolean_ops<State: Clone + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
-    engine.export("(&&)", |_: &State, a: bool, b: bool| -> bool { a && b })?;
-    engine.export("(||)", |_: &State, a: bool, b: bool| -> bool { a || b })?;
+    engine.export("(&&)", |_: &State, a: bool, b: bool| Ok(a && b))?;
+    engine.export("(||)", |_: &State, a: bool, b: bool| Ok(a || b))?;
     Ok(())
 }
 
@@ -1053,69 +1017,69 @@ pub(crate) fn inject_numeric_ops<State: Clone + Sync + 'static>(
     engine.export_value("prim_one", 1.0f64)?;
 
     // Addition
-    engine.export("prim_add", |_: &State, a: u8, b: u8| -> u8 { a + b })?;
-    engine.export("prim_add", |_: &State, a: u16, b: u16| -> u16 { a + b })?;
-    engine.export("prim_add", |_: &State, a: u32, b: u32| -> u32 { a + b })?;
-    engine.export("prim_add", |_: &State, a: u64, b: u64| -> u64 { a + b })?;
-    engine.export("prim_add", |_: &State, a: i8, b: i8| -> i8 { a + b })?;
-    engine.export("prim_add", |_: &State, a: i16, b: i16| -> i16 { a + b })?;
-    engine.export("prim_add", |_: &State, a: i32, b: i32| -> i32 { a + b })?;
-    engine.export("prim_add", |_: &State, a: i64, b: i64| -> i64 { a + b })?;
-    engine.export("prim_add", |_: &State, a: f32, b: f32| -> f32 { a + b })?;
-    engine.export("prim_add", |_: &State, a: f64, b: f64| -> f64 { a + b })?;
-    engine.export("prim_add", |_: &State, a: String, b: String| -> String {
-        format!("{}{}", a, b)
+    engine.export("prim_add", |_: &State, a: u8, b: u8| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: u16, b: u16| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: u32, b: u32| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: u64, b: u64| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: i8, b: i8| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: i16, b: i16| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: i32, b: i32| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: i64, b: i64| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: f32, b: f32| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: f64, b: f64| Ok(a + b))?;
+    engine.export("prim_add", |_: &State, a: String, b: String| {
+        Ok(format!("{}{}", a, b))
     })?;
 
     // Subtraction and negation
-    engine.export("prim_sub", |_: &State, a: i8, b: i8| -> i8 { a - b })?;
-    engine.export("prim_sub", |_: &State, a: i16, b: i16| -> i16 { a - b })?;
-    engine.export("prim_sub", |_: &State, a: i32, b: i32| -> i32 { a - b })?;
-    engine.export("prim_sub", |_: &State, a: i64, b: i64| -> i64 { a - b })?;
-    engine.export("prim_sub", |_: &State, a: f32, b: f32| -> f32 { a - b })?;
-    engine.export("prim_sub", |_: &State, a: f64, b: f64| -> f64 { a - b })?;
-    engine.export("prim_negate", |_: &State, a: i8| -> i8 { -a })?;
-    engine.export("prim_negate", |_: &State, a: i16| -> i16 { -a })?;
-    engine.export("prim_negate", |_: &State, a: i32| -> i32 { -a })?;
-    engine.export("prim_negate", |_: &State, a: i64| -> i64 { -a })?;
-    engine.export("prim_negate", |_: &State, a: f32| -> f32 { -a })?;
-    engine.export("prim_negate", |_: &State, a: f64| -> f64 { -a })?;
+    engine.export("prim_sub", |_: &State, a: i8, b: i8| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: i16, b: i16| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: i32, b: i32| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: i64, b: i64| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: f32, b: f32| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: f64, b: f64| Ok(a - b))?;
+    engine.export("prim_negate", |_: &State, a: i8| Ok(-a))?;
+    engine.export("prim_negate", |_: &State, a: i16| Ok(-a))?;
+    engine.export("prim_negate", |_: &State, a: i32| Ok(-a))?;
+    engine.export("prim_negate", |_: &State, a: i64| Ok(-a))?;
+    engine.export("prim_negate", |_: &State, a: f32| Ok(-a))?;
+    engine.export("prim_negate", |_: &State, a: f64| Ok(-a))?;
 
     // Multiplication and division
-    engine.export("prim_mul", |_: &State, a: u8, b: u8| -> u8 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: u16, b: u16| -> u16 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: u32, b: u32| -> u32 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: u64, b: u64| -> u64 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: i8, b: i8| -> i8 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: i16, b: i16| -> i16 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: i32, b: i32| -> i32 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: i64, b: i64| -> i64 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: f32, b: f32| -> f32 { a * b })?;
-    engine.export("prim_mul", |_: &State, a: f64, b: f64| -> f64 { a * b })?;
-    engine.export("prim_div", |_: &State, a: f32, b: f32| -> f32 { a / b })?;
-    engine.export("prim_div", |_: &State, a: f64, b: f64| -> f64 { a / b })?;
+    engine.export("prim_mul", |_: &State, a: u8, b: u8| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: u16, b: u16| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: u32, b: u32| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: u64, b: u64| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: i8, b: i8| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: i16, b: i16| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: i32, b: i32| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: i64, b: i64| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: f32, b: f32| Ok(a * b))?;
+    engine.export("prim_mul", |_: &State, a: f64, b: f64| Ok(a * b))?;
+    engine.export("prim_div", |_: &State, a: f32, b: f32| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: f64, b: f64| Ok(a / b))?;
 
     // Remainder
-    engine.export("prim_mod", |_: &State, a: u8, b: u8| -> u8 { a % b })?;
-    engine.export("prim_mod", |_: &State, a: u16, b: u16| -> u16 { a % b })?;
-    engine.export("prim_mod", |_: &State, a: u32, b: u32| -> u32 { a % b })?;
-    engine.export("prim_mod", |_: &State, a: u64, b: u64| -> u64 { a % b })?;
-    engine.export("prim_mod", |_: &State, a: i8, b: i8| -> i8 { a % b })?;
-    engine.export("prim_mod", |_: &State, a: i16, b: i16| -> i16 { a % b })?;
-    engine.export("prim_mod", |_: &State, a: i32, b: i32| -> i32 { a % b })?;
-    engine.export("prim_mod", |_: &State, a: i64, b: i64| -> i64 { a % b })?;
+    engine.export("prim_mod", |_: &State, a: u8, b: u8| Ok(a % b))?;
+    engine.export("prim_mod", |_: &State, a: u16, b: u16| Ok(a % b))?;
+    engine.export("prim_mod", |_: &State, a: u32, b: u32| Ok(a % b))?;
+    engine.export("prim_mod", |_: &State, a: u64, b: u64| Ok(a % b))?;
+    engine.export("prim_mod", |_: &State, a: i8, b: i8| Ok(a % b))?;
+    engine.export("prim_mod", |_: &State, a: i16, b: i16| Ok(a % b))?;
+    engine.export("prim_mod", |_: &State, a: i32, b: i32| Ok(a % b))?;
+    engine.export("prim_mod", |_: &State, a: i64, b: i64| Ok(a % b))?;
 
     // Numeric conversions (used by `std.json`).
-    engine.export("prim_to_f64", |_: &State, x: u8| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: u16| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: u32| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: u64| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: i8| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: i16| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: i32| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: i64| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: f32| -> f64 { x as f64 })?;
-    engine.export("prim_to_f64", |_: &State, x: f64| -> f64 { x })?;
+    engine.export("prim_to_f64", |_: &State, x: u8| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: u16| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: u32| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: u64| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: i8| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: i16| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: i32| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: i64| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: f32| Ok(x as f64))?;
+    engine.export("prim_to_f64", |_: &State, x: f64| Ok(x))?;
 
     // f64 -> Option <number> conversions (used by `std.json`).
     // - reject NaN/±inf

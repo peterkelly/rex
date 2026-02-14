@@ -1,6 +1,7 @@
+use futures::FutureExt;
 use rex_ast::expr::sym_eq;
 use rex_engine::{Engine, EngineError, Value, assert_pointer_eq};
-use rex_ts::TypeError;
+use rex_ts::{Scheme, Type, TypeError};
 use rex_util::{GasCosts, GasMeter};
 use std::sync::Arc;
 
@@ -118,7 +119,7 @@ async fn eval_native_injection() {
     let expr = parse("inc 1");
     let mut engine = Engine::with_prelude(()).unwrap();
     engine
-        .export_async("inc", |_: &(), x: i32| async move { x + 1 })
+        .export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
         .unwrap();
 
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
@@ -143,31 +144,35 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("f0", |_: &()| 0i32).unwrap();
-    engine.export("f1", |_: &(), a: i32| a).unwrap();
-    engine.export("f2", |_: &(), a: i32, b: i32| a + b).unwrap();
+    engine.export("f0", |_: &()| Ok(0i32)).unwrap();
+    engine.export("f1", |_: &(), a: i32| Ok(a)).unwrap();
     engine
-        .export("f3", |_: &(), a: i32, b: i32, c: i32| a + b + c)
+        .export("f2", |_: &(), a: i32, b: i32| Ok(a + b))
         .unwrap();
     engine
-        .export("f4", |_: &(), a: i32, b: i32, c: i32, d: i32| a + b + c + d)
+        .export("f3", |_: &(), a: i32, b: i32, c: i32| Ok(a + b + c))
+        .unwrap();
+    engine
+        .export("f4", |_: &(), a: i32, b: i32, c: i32, d: i32| {
+            Ok(a + b + c + d)
+        })
         .unwrap();
     engine
         .export("f5", |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| {
-            a + b + c + d + e
+            Ok(a + b + c + d + e)
         })
         .unwrap();
     engine
         .export(
             "f6",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| a + b + c + d + e + g,
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| Ok(a + b + c + d + e + g),
         )
         .unwrap();
     engine
         .export(
             "f7",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| {
-                a + b + c + d + e + g + h
+                Ok(a + b + c + d + e + g + h)
             },
         )
         .unwrap();
@@ -175,7 +180,7 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         .export(
             "f8",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
-                a + b + c + d + e + g + h + i
+                Ok(a + b + c + d + e + g + h + i)
             },
         )
         .unwrap();
@@ -216,35 +221,36 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export_async("af0", |_: &()| async { 0i32 }).unwrap();
     engine
-        .export_async("af1", |_: &(), a: i32| async move { a })
+        .export_async("af0", |_: &()| async { Ok(0i32) })
         .unwrap();
     engine
-        .export_async("af2", |_: &(), a: i32, b: i32| async move { a + b })
+        .export_async("af1", |_: &(), a: i32| async move { Ok(a) })
         .unwrap();
     engine
-        .export_async(
-            "af3",
-            |_: &(), a: i32, b: i32, c: i32| async move { a + b + c },
-        )
+        .export_async("af2", |_: &(), a: i32, b: i32| async move { Ok(a + b) })
+        .unwrap();
+    engine
+        .export_async("af3", |_: &(), a: i32, b: i32, c: i32| async move {
+            Ok(a + b + c)
+        })
         .unwrap();
     engine
         .export_async("af4", |_: &(), a: i32, b: i32, c: i32, d: i32| async move {
-            a + b + c + d
+            Ok(a + b + c + d)
         })
         .unwrap();
     engine
         .export_async(
             "af5",
-            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| async move { a + b + c + d + e },
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| async move { Ok(a + b + c + d + e) },
         )
         .unwrap();
     engine
         .export_async(
             "af6",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move {
-                a + b + c + d + e + g
+                Ok(a + b + c + d + e + g)
             },
         )
         .unwrap();
@@ -252,7 +258,7 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         .export_async(
             "af7",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
-                a + b + c + d + e + g + h
+                Ok(a + b + c + d + e + g + h)
             },
         )
         .unwrap();
@@ -260,7 +266,7 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         .export_async(
             "af8",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
-                a + b + c + d + e + g + h + i
+                Ok(a + b + c + d + e + g + h + i)
             },
         )
         .unwrap();
@@ -456,9 +462,9 @@ async fn eval_type_annotation_mismatch() {
 #[tokio::test]
 async fn eval_sync_native_injection() {
     let mut engine = Engine::new(());
-    engine.export("zero", |_: &()| -> u32 { 0u32 }).unwrap();
+    engine.export("zero", |_: &()| Ok(0u32)).unwrap();
     engine
-        .export("(+)", |_: &(), x: u32, y: u32| -> u32 { x + y })
+        .export("(+)", |_: &(), x: u32, y: u32| Ok(x + y))
         .unwrap();
     engine.export_value("one", 1u32).unwrap();
 
@@ -469,6 +475,75 @@ async fn eval_sync_native_injection() {
     let expr = parse("zero");
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_u32(0).unwrap());
+}
+
+#[tokio::test]
+async fn eval_export_err_is_evaluation_failure() {
+    let mut engine = Engine::new(());
+    engine
+        .export("fail", |_: &()| {
+            Err::<i32, _>(EngineError::Custom("boom".into()))
+        })
+        .unwrap();
+
+    let expr = parse("fail");
+    match eval_expr(&mut engine, expr.as_ref()).await {
+        Err(EngineError::Custom(msg)) => assert_eq!(msg, "boom"),
+        Err(other) => panic!("expected custom error, got {other:?}"),
+        Ok(_) => panic!("expected evaluation failure"),
+    }
+}
+
+#[test]
+fn engine_export_native_rejects_invalid_arity_scheme_pair() {
+    let mut engine = Engine::new(());
+    let unary_scheme = Scheme::new(
+        vec![],
+        vec![],
+        Type::fun(Type::con("i32", 0), Type::con("i32", 0)),
+    );
+
+    let err = engine
+        .export_native(
+            "bad",
+            unary_scheme,
+            2,
+            |_engine: &Engine<()>, _: &Type, _args| {
+                Err(rex_engine::EngineError::Internal("unused".into()))
+            },
+        )
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("does not accept 2 argument(s)"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
+    let mut engine = Engine::new(());
+    let unary_scheme = Scheme::new(
+        vec![],
+        vec![],
+        Type::fun(Type::con("i32", 0), Type::con("i32", 0)),
+    );
+
+    let err = engine
+        .export_native_async(
+            "bad_async",
+            unary_scheme,
+            2,
+            |_engine: &Engine<()>, _: Type, _args| {
+                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed_local()
+            },
+        )
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("does not accept 2 argument(s)"),
+        "unexpected error: {msg}"
+    );
 }
 
 #[tokio::test]

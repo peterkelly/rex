@@ -138,10 +138,13 @@ async fn module_injected_from_rust_sync_and_async_exports() {
 
     let mut module = Module::new("host.math");
     module
-        .export("inc", |_state: &(), x: i32| -> i32 { x + 1 })
+        .export("inc", |_state: &(), x: i32| Ok(x + 1))
         .unwrap();
     module
-        .export_async("double_async", |_state: &(), x: i32| async move { x * 2 })
+        .export_async(
+            "double_async",
+            |_state: &(), x: i32| async move { Ok(x * 2) },
+        )
         .unwrap();
     engine.inject_module(module).unwrap();
 
@@ -253,12 +256,8 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     engine.add_default_resolvers();
 
     let mut module = Module::new("host.over");
-    module
-        .export("id", |_state: &(), x: i32| -> i32 { x })
-        .unwrap();
-    module
-        .export("id", |_state: &(), x: String| -> String { x })
-        .unwrap();
+    module.export("id", |_state: &(), x: i32| Ok(x)).unwrap();
+    module.export("id", |_state: &(), x: String| Ok(x)).unwrap();
     engine.inject_module(module).unwrap();
 
     let value_ptr = eval_snippet(
@@ -407,6 +406,28 @@ fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
     );
 }
 
+#[test]
+fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
+    let mut module = Module::new("host.invalid.async");
+    let unary_scheme = Scheme::new(vec![], vec![], Type::fun(i32_type(), i32_type()));
+
+    let err = module
+        .export_native_async(
+            "bad_async",
+            unary_scheme,
+            2,
+            |_engine: &Engine<()>, _: Type, _args: Vec<Pointer>| {
+                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed_local()
+            },
+        )
+        .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("does not accept 2 argument(s)"),
+        "unexpected error: {msg}"
+    );
+}
+
 #[tokio::test]
 async fn module_injected_from_rust_wildcard_import() {
     let mut engine = engine_with_prelude();
@@ -414,10 +435,10 @@ async fn module_injected_from_rust_wildcard_import() {
 
     let mut module = Module::new("host.ops");
     module
-        .export("triple", |_state: &(), x: i32| -> i32 { x * 3 })
+        .export("triple", |_state: &(), x: i32| Ok(x * 3))
         .unwrap();
     module
-        .export("add", |_state: &(), a: i32, b: i32| -> i32 { a + b })
+        .export("add", |_state: &(), a: i32, b: i32| Ok(a + b))
         .unwrap();
     engine.inject_module(module).unwrap();
 
@@ -449,11 +470,11 @@ async fn module_injected_from_rust_rejects_duplicate_module_name() {
     let mut engine = engine_with_prelude();
 
     let mut one = Module::new("host.dupe");
-    one.export("x", |_state: &(), x: i32| -> i32 { x }).unwrap();
+    one.export("x", |_state: &(), x: i32| Ok(x)).unwrap();
     engine.inject_module(one).unwrap();
 
     let mut two = Module::new("host.dupe");
-    two.export("y", |_state: &(), x: i32| -> i32 { x }).unwrap();
+    two.export("y", |_state: &(), x: i32| Ok(x)).unwrap();
     let err = engine.inject_module(two).unwrap_err();
     assert!(err.to_string().contains("already injected"));
 }

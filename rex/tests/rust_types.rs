@@ -1,4 +1,6 @@
-use rex::{Engine, FromPointer, GasCosts, GasMeter, Parser, Pointer, Token, Type, sym};
+use rex::{
+    Engine, EngineError, FromPointer, GasCosts, GasMeter, Parser, Pointer, Token, Type, sym,
+};
 use rex_engine::assert_pointer_eq;
 use rex_proc_macro::Rex;
 use serde_json::json;
@@ -21,8 +23,8 @@ fn infer_type(engine: &mut Engine<()>, expr: &str) -> Type {
 
 #[tokio::test]
 async fn vec_from_value() {
-    fn accept_vec(_state: &(), items: Vec<i32>) -> String {
-        format!("accept_vec: {:?}", items)
+    fn accept_vec(_state: &(), items: Vec<i32>) -> Result<String, EngineError> {
+        Ok(format!("accept_vec: {:?}", items))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -45,8 +47,8 @@ async fn vec_from_value() {
 
 #[tokio::test]
 async fn vec_to_value() {
-    fn return_vec(_state: &(), input: String) -> Vec<i32> {
-        (0..input.len()).map(|i| i as i32).collect()
+    fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
+        Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -71,8 +73,8 @@ async fn vec_to_value() {
 
 #[tokio::test]
 async fn vec_rex_type() {
-    fn return_vec(_state: &(), input: String) -> Vec<i32> {
-        (0..input.len()).map(|i| i as i32).collect()
+    fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
+        Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -101,8 +103,8 @@ async fn option_prelude() {
 
 #[tokio::test]
 async fn option_from_value() {
-    fn accept_opt(_state: &(), opt: Option<i32>) -> String {
-        format!("accept_opt: {:?}", opt)
+    fn accept_opt(_state: &(), opt: Option<i32>) -> Result<String, EngineError> {
+        Ok(format!("accept_opt: {:?}", opt))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -124,12 +126,12 @@ async fn option_from_value() {
 
 #[tokio::test]
 async fn option_into_value() {
-    fn return_opt(_state: &(), s: String) -> Option<i32> {
-        if s.is_empty() {
+    fn return_opt(_state: &(), s: String) -> Result<Option<i32>, EngineError> {
+        Ok(if s.is_empty() {
             None
         } else {
             Some(s.len() as i32)
-        }
+        })
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -151,12 +153,12 @@ async fn option_into_value() {
 
 #[tokio::test]
 async fn option_rex_type() {
-    fn return_opt(_state: &(), s: String) -> Option<i32> {
-        if s.is_empty() {
+    fn return_opt(_state: &(), s: String) -> Result<Option<i32>, EngineError> {
+        Ok(if s.is_empty() {
             None
         } else {
             Some(s.len() as i32)
-        }
+        })
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -189,8 +191,8 @@ async fn result_prelude() {
 
 #[tokio::test]
 async fn result_from_value_primitives() {
-    fn accept_result(_state: &(), res: Result<i32, String>) -> String {
-        format!("accept_result: {:?}", res)
+    fn accept_result(_state: &(), res: Result<i32, String>) -> Result<String, EngineError> {
+        Ok(format!("accept_result: {:?}", res))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -217,8 +219,8 @@ async fn result_from_value_primitives() {
 
 #[tokio::test]
 async fn result_from_value_different_primitives() {
-    fn accept_result(_state: &(), res: Result<f32, i32>) -> String {
-        format!("accept_result: {:?}", res)
+    fn accept_result(_state: &(), res: Result<f32, i32>) -> Result<String, EngineError> {
+        Ok(format!("accept_result: {:?}", res))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -245,12 +247,12 @@ async fn result_from_value_different_primitives() {
 
 #[tokio::test]
 async fn result_into_value_primitives() {
-    fn return_result(_state: &(), s: String) -> Result<i32, String> {
-        if s.is_empty() {
+    fn return_result(_state: &(), s: String) -> Result<Result<i32, String>, EngineError> {
+        Ok(if s.is_empty() {
             Err("empty string".to_string())
         } else {
             Ok(s.len() as i32)
-        }
+        })
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -276,12 +278,12 @@ async fn result_into_value_primitives() {
 
 #[tokio::test]
 async fn result_rex_type() {
-    fn return_result(_state: &(), s: String) -> Result<i32, String> {
-        if s.is_empty() {
+    fn return_result(_state: &(), s: String) -> Result<Result<i32, String>, EngineError> {
+        Ok(if s.is_empty() {
             Err("empty string".to_string())
         } else {
             Ok(s.len() as i32)
-        }
+        })
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -311,11 +313,11 @@ struct ErrorInfo {
 
 #[tokio::test]
 async fn result_from_value_custom_types() {
-    fn accept_result(_state: &(), res: Result<Point, ErrorInfo>) -> String {
-        match res {
+    fn accept_result(_state: &(), res: Result<Point, ErrorInfo>) -> Result<String, EngineError> {
+        Ok(match res {
             Ok(p) => format!("Ok: Point({}, {})", p.x, p.y),
             Err(e) => format!("Err: {} (code {})", e.message, e.code),
-        }
+        })
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -347,15 +349,15 @@ async fn result_from_value_custom_types() {
 
 #[tokio::test]
 async fn result_into_value_custom_types() {
-    fn return_result(_state: &(), flag: bool) -> Result<Point, ErrorInfo> {
-        if flag {
+    fn return_result(_state: &(), flag: bool) -> Result<Result<Point, ErrorInfo>, EngineError> {
+        Ok(if flag {
             Ok(Point { x: 100, y: 200 })
         } else {
             Err(ErrorInfo {
                 code: 500,
                 message: "server error".to_string(),
             })
-        }
+        })
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -384,15 +386,15 @@ async fn result_into_value_custom_types() {
 
 #[tokio::test]
 async fn serde_json_value_into_pointer() {
-    fn return_json(_state: &(), key: String) -> serde_json::Value {
-        json!({
+    fn return_json(_state: &(), key: String) -> Result<serde_json::Value, EngineError> {
+        Ok(json!({
             "key": key,
             "count": 42,
             "nested": {
                 "array": [1, 2, 3],
                 "flag": true
             }
-        })
+        }))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -413,12 +415,12 @@ async fn serde_json_value_into_pointer() {
 
 #[tokio::test]
 async fn serde_json_value_from_pointer() {
-    fn accept_json(_state: &(), value: serde_json::Value) -> String {
-        format!(
+    fn accept_json(_state: &(), value: serde_json::Value) -> Result<String, EngineError> {
+        Ok(format!(
             "key={}, count={}",
             value["key"].as_str().unwrap_or(""),
             value["count"].as_i64().unwrap_or(0)
-        )
+        ))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -440,8 +442,8 @@ async fn serde_json_value_from_pointer() {
 
 #[tokio::test]
 async fn serde_json_value_roundtrip() {
-    fn roundtrip(_state: &(), value: serde_json::Value) -> serde_json::Value {
-        value
+    fn roundtrip(_state: &(), value: serde_json::Value) -> Result<serde_json::Value, EngineError> {
+        Ok(value)
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -467,8 +469,8 @@ async fn serde_json_value_roundtrip() {
 
 #[tokio::test]
 async fn serde_json_value_rex_type() {
-    fn return_json(_state: &(), _input: String) -> serde_json::Value {
-        json!({"test": "value"})
+    fn return_json(_state: &(), _input: String) -> Result<serde_json::Value, EngineError> {
+        Ok(json!({"test": "value"}))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -486,14 +488,14 @@ async fn serde_json_value_primitives() {
         boolean: serde_json::Value,
         number: serde_json::Value,
         string: serde_json::Value,
-    ) -> String {
-        format!(
+    ) -> Result<String, EngineError> {
+        Ok(format!(
             "null={}, bool={}, num={}, str={}",
             null.is_null(),
             boolean.as_bool().unwrap(),
             number.as_i64().unwrap(),
             string.as_str().unwrap()
-        )
+        ))
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();

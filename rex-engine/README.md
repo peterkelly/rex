@@ -13,7 +13,7 @@ use rex_util::{GasCosts, GasMeter};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = Engine::with_prelude(())?;
-    engine.export("(+)", |_state, x: i32, y: i32| -> i32 { x + y })?;
+    engine.export("(+)", |_state, x: i32, y: i32| { Ok(x + y) })?;
     engine.export_value("answer", 42i32)?;
 
     let tokens = Token::tokenize("answer + 1")?;
@@ -44,8 +44,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 
 `Engine` is generic over host state (`Engine<State>`, where `State: Clone + Sync + 'static`).
-`export` / `export_async` callbacks receive `&State` as the first argument.
+`export` callbacks receive `&State` as the first argument and must return `Result<T, EngineError>`;
+returning `Err(...)` fails evaluation.
+`export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`;
+returning `Err(...)` fails evaluation.
 Pointer-level APIs (`export_native*`) receive `&Engine<State>` so they can access heap/runtime internals.
+`export_native*` validates `Scheme`/arity compatibility during registration.
 
 ## Prelude
 
