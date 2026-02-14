@@ -118,7 +118,7 @@ async fn eval_native_injection() {
     let expr = parse("inc 1");
     let mut engine = Engine::with_prelude(()).unwrap();
     engine
-        .inject_async_fn1("inc", |_engine, x: i32| async move { x + 1 })
+        .export_async("inc", |_: &(), x: i32| async move { x + 1 })
         .unwrap();
 
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
@@ -143,42 +143,38 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn0("f0", |_engine| 0i32).unwrap();
-    engine.inject_fn1("f1", |_engine, a: i32| a).unwrap();
+    engine.export("f0", |_: &()| 0i32).unwrap();
+    engine.export("f1", |_: &(), a: i32| a).unwrap();
+    engine.export("f2", |_: &(), a: i32, b: i32| a + b).unwrap();
     engine
-        .inject_fn2("f2", |_engine, a: i32, b: i32| a + b)
+        .export("f3", |_: &(), a: i32, b: i32, c: i32| a + b + c)
         .unwrap();
     engine
-        .inject_fn3("f3", |_engine, a: i32, b: i32, c: i32| a + b + c)
+        .export("f4", |_: &(), a: i32, b: i32, c: i32, d: i32| a + b + c + d)
         .unwrap();
     engine
-        .inject_fn4("f4", |_engine, a: i32, b: i32, c: i32, d: i32| {
-            a + b + c + d
-        })
-        .unwrap();
-    engine
-        .inject_fn5("f5", |_engine, a: i32, b: i32, c: i32, d: i32, e: i32| {
+        .export("f5", |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| {
             a + b + c + d + e
         })
         .unwrap();
     engine
-        .inject_fn6(
+        .export(
             "f6",
-            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| a + b + c + d + e + g,
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| a + b + c + d + e + g,
         )
         .unwrap();
     engine
-        .inject_fn7(
+        .export(
             "f7",
-            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| {
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| {
                 a + b + c + d + e + g + h
             },
         )
         .unwrap();
     engine
-        .inject_fn8(
+        .export(
             "f8",
-            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
                 a + b + c + d + e + g + h + i
             },
         )
@@ -220,53 +216,50 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
+    engine.export_async("af0", |_: &()| async { 0i32 }).unwrap();
     engine
-        .inject_async_fn0("af0", |_engine| async { 0i32 })
+        .export_async("af1", |_: &(), a: i32| async move { a })
         .unwrap();
     engine
-        .inject_async_fn1("af1", |_engine, a: i32| async move { a })
+        .export_async("af2", |_: &(), a: i32, b: i32| async move { a + b })
         .unwrap();
     engine
-        .inject_async_fn2("af2", |_engine, a: i32, b: i32| async move { a + b })
-        .unwrap();
-    engine
-        .inject_async_fn3(
+        .export_async(
             "af3",
-            |_engine, a: i32, b: i32, c: i32| async move { a + b + c },
+            |_: &(), a: i32, b: i32, c: i32| async move { a + b + c },
         )
         .unwrap();
     engine
-        .inject_async_fn4(
-            "af4",
-            |_engine, a: i32, b: i32, c: i32, d: i32| async move { a + b + c + d },
-        )
+        .export_async("af4", |_: &(), a: i32, b: i32, c: i32, d: i32| async move {
+            a + b + c + d
+        })
         .unwrap();
     engine
-        .inject_async_fn5(
+        .export_async(
             "af5",
-            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32| async move { a + b + c + d + e },
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| async move { a + b + c + d + e },
         )
         .unwrap();
     engine
-        .inject_async_fn6(
+        .export_async(
             "af6",
-            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move {
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move {
                 a + b + c + d + e + g
             },
         )
         .unwrap();
     engine
-        .inject_async_fn7(
+        .export_async(
             "af7",
-            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
                 a + b + c + d + e + g + h
             },
         )
         .unwrap();
     engine
-        .inject_async_fn8(
+        .export_async(
             "af8",
-            |_engine, a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
+            |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
                 a + b + c + d + e + g + h + i
             },
         )
@@ -463,13 +456,11 @@ async fn eval_type_annotation_mismatch() {
 #[tokio::test]
 async fn eval_sync_native_injection() {
     let mut engine = Engine::new(());
+    engine.export("zero", |_: &()| -> u32 { 0u32 }).unwrap();
     engine
-        .inject_fn0("zero", |_engine| -> u32 { 0u32 })
+        .export("(+)", |_: &(), x: u32, y: u32| -> u32 { x + y })
         .unwrap();
-    engine
-        .inject_fn2("(+)", |_engine, x: u32, y: u32| -> u32 { x + y })
-        .unwrap();
-    engine.inject_value("one", 1u32).unwrap();
+    engine.export_value("one", 1u32).unwrap();
 
     let expr = parse("one + one");
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
@@ -1081,7 +1072,7 @@ async fn eval_result_filter_pipeline() {
 #[tokio::test]
 async fn eval_array_combinators() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_value("arr", vec![1i32, 2i32, 3i32]).unwrap();
+    engine.export_value("arr", vec![1i32, 2i32, 3i32]).unwrap();
     let expr = parse(
         r#"
         let

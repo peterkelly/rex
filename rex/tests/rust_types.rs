@@ -26,7 +26,7 @@ async fn vec_from_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("accept_vec", accept_vec).unwrap();
+    engine.export("accept_vec", accept_vec).unwrap();
 
     let result = eval_expr(
         &mut engine,
@@ -50,7 +50,7 @@ async fn vec_to_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_vec", return_vec).unwrap();
+    engine.export("return_vec", return_vec).unwrap();
 
     let result = eval_expr(&mut engine, r#"return_vec "hello""#).await;
 
@@ -76,7 +76,7 @@ async fn vec_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_vec", return_vec).unwrap();
+    engine.export("return_vec", return_vec).unwrap();
 
     let ty = infer_type(&mut engine, r#"return_vec "hello""#);
     assert_eq!(ty, Type::app(Type::con("Array", 1), Type::con("i32", 0)));
@@ -106,7 +106,7 @@ async fn option_from_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("accept_opt", accept_opt).unwrap();
+    engine.export("accept_opt", accept_opt).unwrap();
     let result = eval_expr(&mut engine, r#"(accept_opt (Some 4), accept_opt None)"#).await;
 
     let heap = engine.heap();
@@ -133,7 +133,7 @@ async fn option_into_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_opt", return_opt).unwrap();
+    engine.export("return_opt", return_opt).unwrap();
     let result = eval_expr(&mut engine, r#"(return_opt "hello", return_opt "")"#).await;
 
     let heap = engine.heap();
@@ -160,7 +160,7 @@ async fn option_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_opt", return_opt).unwrap();
+    engine.export("return_opt", return_opt).unwrap();
 
     let ty = infer_type(&mut engine, r#"return_opt "hello""#);
     assert_eq!(ty, Type::app(Type::con("Option", 1), Type::con("i32", 0)));
@@ -194,7 +194,7 @@ async fn result_from_value_primitives() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("accept_result", accept_result).unwrap();
+    engine.export("accept_result", accept_result).unwrap();
     let result = eval_expr(
         &mut engine,
         r#"(accept_result (Ok 42), accept_result (Err "failed"))"#,
@@ -222,7 +222,7 @@ async fn result_from_value_different_primitives() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("accept_result", accept_result).unwrap();
+    engine.export("accept_result", accept_result).unwrap();
     let result = eval_expr(
         &mut engine,
         r#"(accept_result (Ok 3.14), accept_result (Err 404))"#,
@@ -254,7 +254,7 @@ async fn result_into_value_primitives() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_result", return_result).unwrap();
+    engine.export("return_result", return_result).unwrap();
     let result = eval_expr(&mut engine, r#"(return_result "hello", return_result "")"#).await;
 
     let heap = engine.heap();
@@ -285,7 +285,7 @@ async fn result_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_result", return_result).unwrap();
+    engine.export("return_result", return_result).unwrap();
 
     let ty = infer_type(&mut engine, r#"return_result "hello""#);
     assert_eq!(
@@ -321,7 +321,7 @@ async fn result_from_value_custom_types() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Point::inject_rex(&mut engine).unwrap();
     ErrorInfo::inject_rex(&mut engine).unwrap();
-    engine.inject_fn1("accept_result", accept_result).unwrap();
+    engine.export("accept_result", accept_result).unwrap();
 
     let result = eval_expr(
         &mut engine,
@@ -361,7 +361,7 @@ async fn result_into_value_custom_types() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Point::inject_rex(&mut engine).unwrap();
     ErrorInfo::inject_rex(&mut engine).unwrap();
-    engine.inject_fn1("return_result", return_result).unwrap();
+    engine.export("return_result", return_result).unwrap();
 
     let result = eval_expr(&mut engine, r#"(return_result true, return_result false)"#).await;
 
@@ -396,7 +396,7 @@ async fn serde_json_value_into_pointer() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_json", return_json).unwrap();
+    engine.export("return_json", return_json).unwrap();
 
     let result = eval_expr(&mut engine, r#"return_json "test_key""#).await;
 
@@ -422,9 +422,9 @@ async fn serde_json_value_from_pointer() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("accept_json", accept_json).unwrap();
+    engine.export("accept_json", accept_json).unwrap();
     engine
-        .inject_value("test_json", json!({"key": "manual_key", "count": 99}))
+        .export_value("test_json", json!({"key": "manual_key", "count": 99}))
         .unwrap();
 
     let result = eval_expr(&mut engine, r#"accept_json test_json"#).await;
@@ -445,7 +445,7 @@ async fn serde_json_value_roundtrip() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("roundtrip", roundtrip).unwrap();
+    engine.export("roundtrip", roundtrip).unwrap();
 
     let original = json!({
         "string": "hello",
@@ -456,7 +456,7 @@ async fn serde_json_value_roundtrip() {
         "array": [1, 2, 3],
         "object": {"nested": "value"}
     });
-    engine.inject_value("test_json", original.clone()).unwrap();
+    engine.export_value("test_json", original.clone()).unwrap();
 
     let result = eval_expr(&mut engine, r#"roundtrip test_json"#).await;
 
@@ -472,7 +472,7 @@ async fn serde_json_value_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_fn1("return_json", return_json).unwrap();
+    engine.export("return_json", return_json).unwrap();
 
     let ty = infer_type(&mut engine, r#"return_json "test""#);
     assert_eq!(ty, Type::con("serde_json::Value", 0));
@@ -498,13 +498,13 @@ async fn serde_json_value_primitives() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine
-        .inject_fn4("accept_primitives", accept_primitives)
+        .export("accept_primitives", accept_primitives)
         .unwrap();
 
-    engine.inject_value("null_val", json!(null)).unwrap();
-    engine.inject_value("bool_val", json!(true)).unwrap();
-    engine.inject_value("num_val", json!(42)).unwrap();
-    engine.inject_value("str_val", json!("hello")).unwrap();
+    engine.export_value("null_val", json!(null)).unwrap();
+    engine.export_value("bool_val", json!(true)).unwrap();
+    engine.export_value("num_val", json!(42)).unwrap();
+    engine.export_value("str_val", json!("hello")).unwrap();
 
     let result = eval_expr(
         &mut engine,

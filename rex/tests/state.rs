@@ -43,11 +43,9 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    engine
-        .inject_fn0("current_user_id", current_user_id)
-        .unwrap();
-    engine.inject_fn0("is_admin", is_admin).unwrap();
-    engine.inject_fn1("have_role", have_role).unwrap();
+    engine.export("current_user_id", current_user_id).unwrap();
+    engine.export("is_admin", is_admin).unwrap();
+    engine.export("have_role", have_role).unwrap();
 
     let expr = parse("(current_user_id, is_admin, have_role \"admin\", have_role \"viewer\")");
     let mut gas = unlimited_gas();
@@ -71,7 +69,7 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     .unwrap();
 
     engine
-        .inject_async_fn1("have_role_async", |state: &HostState, role: String| {
+        .export_async("have_role_async", |state: &HostState, role: String| {
             have_role_async(state.clone(), role)
         })
         .unwrap();

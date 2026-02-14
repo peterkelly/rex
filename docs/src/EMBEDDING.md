@@ -233,8 +233,8 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
 
 - Use `Engine::with_prelude(())?` if you do not need host state.
 - If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
-- `inject_fn*` / `inject_async_fn*` callbacks receive `&State` as their first parameter.
-- Pointer-level APIs (`inject_native*` and module `export_native*`) receive
+- `export` / `export_async` callbacks receive `&State` as their first parameter.
+- Pointer-level APIs (`export_native*`) receive
   `&Engine<State>` so
   they can use heap/runtime internals and read `engine.state`.
 
@@ -252,7 +252,7 @@ let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
     roles: vec!["admin".into(), "editor".into()],
 })?;
 
-engine.inject_fn1("have_role", |state, role: String| {
+engine.export("have_role", |state, role: String| {
     state.roles.iter().any(|r| r == &role)
 })?;
 ```
@@ -386,13 +386,13 @@ below are still useful for global values/functions that are not grouped under a 
 use rex_engine::Engine;
 
 let mut engine = Engine::with_prelude(())?;
-engine.inject_value("answer", 42i32)?;
-engine.inject_fn1("inc", |_state, x: i32| x + 1)?;
+engine.export_value("answer", 42i32)?;
+engine.export("inc", |_state, x: i32| x + 1)?;
 ```
 
 ### Async Natives
 
-If your host functions are async, inject them with `inject_async_fn*` and evaluate with
+If your host functions are async, inject them with `export_async` and evaluate with
 `Engine::eval_with_gas`.
 
 ```rust
@@ -400,7 +400,7 @@ use rex_engine::Engine;
 use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
-engine.inject_async_fn1("inc", |_state, x: i32| async move { x + 1 })?;
+engine.export_async("inc", |_state, x: i32| async move { x + 1 })?;
 
 let tokens = rex_lexer::Token::tokenize("inc 1")?;
 let mut parser = rex_parser::Parser::new(tokens);
@@ -418,7 +418,9 @@ Async natives can be cancelled. Cancellation is cooperative: you get a `Cancella
 trigger it from another thread/task, and the engine will stop evaluation with `EngineError::Cancelled`.
 
 ```rust
+use futures::FutureExt;
 use rex_engine::{CancellationToken, Engine, EngineError};
+use rex_ts::{Scheme, Type};
 use rex_util::{GasCosts, GasMeter};
 
 let tokens = rex_lexer::Token::tokenize("stall")?;
@@ -429,10 +431,19 @@ let expr = parser
     .expr;
 
 let mut engine = Engine::with_prelude(())?;
-engine.inject_async_fn0_cancellable("stall", |_state, token: CancellationToken| async move {
-    token.cancelled().await;
-    0i32
-})?;
+let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
+engine.export_native_async_cancellable(
+    "stall",
+    scheme,
+    0,
+    |engine, token: CancellationToken, _, _args| {
+        async move {
+            token.cancelled().await;
+            engine.heap().alloc_i32(0)
+        }
+        .boxed_local()
+    },
+)?;
 
 let token = engine.cancellation_token();
 std::thread::spawn(move || {

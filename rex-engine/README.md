@@ -13,8 +13,8 @@ use rex_util::{GasCosts, GasMeter};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = Engine::with_prelude(())?;
-    engine.inject_fn2("(+)", |_state, x: i32, y: i32| -> i32 { x + y })?;
-    engine.inject_value("answer", 42i32)?;
+    engine.export("(+)", |_state, x: i32, y: i32| -> i32 { x + y })?;
+    engine.export_value("answer", 42i32)?;
 
     let tokens = Token::tokenize("answer + 1")?;
     let mut parser = Parser::new(tokens);
@@ -33,9 +33,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Injection API
 
-- `inject_value(name, value)`: inject a constant value (numbers, strings, arrays, etc.).
-- `inject_fn0`, `inject_fn1`, `inject_fn2`: inject native functions with 0–2 args.
-- `inject_native`: inject an arbitrary native function with explicit arity and access to raw `Value` slices.
+- `export_value(name, value)`: inject a constant value (numbers, strings, arrays, etc.).
+- `export(name, handler)`: inject a typed native function.
+- `export_async(name, handler)`: inject a typed async native function.
+- `export_native` / `export_native_async`: inject pointer-level natives with explicit `Scheme` + arity.
 - `adt_decl` + `inject_adt`: declare and register ADT constructors (mirrors `type` declarations).
 - `inject_class`: register a type class (mirrors `class` declarations).
 - `inject_instance`: register a type class instance in the checker (mirrors `instance` declarations).
@@ -43,8 +44,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 
 `Engine` is generic over host state (`Engine<State>`, where `State: Clone + Sync + 'static`).
-`inject_fn*` / `inject_async_fn*` callbacks receive `&State` as the first argument.
-Pointer-level APIs (`inject_native*`) receive `&Engine<State>` so they can access heap/runtime internals.
+`export` / `export_async` callbacks receive `&State` as the first argument.
+Pointer-level APIs (`export_native*`) receive `&Engine<State>` so they can access heap/runtime internals.
 
 ## Prelude
 
@@ -59,7 +60,7 @@ your state value instead: `Engine::with_prelude(state)?`.
 - **Collection combinators** (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
 - **Option/Result helpers**: `is_some`, `is_none`, `is_ok`, `is_err`
 
-List literals are evaluated to the `Empty`/`Cons` ADT constructors (stored as `Value::Adt`). Arrays are host-native `Value::Array` values injected from Rust (e.g., by passing `Vec<T>` to `inject_value`) and participate in the same collection combinators via type classes.
+List literals are evaluated to the `Empty`/`Cons` ADT constructors (stored as `Value::Adt`). Arrays are host-native `Value::Array` values injected from Rust (e.g., by passing `Vec<T>` to `export_value`) and participate in the same collection combinators via type classes.
 
 ## Type Defaults
 

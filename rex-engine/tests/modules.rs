@@ -248,6 +248,55 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
 }
 
 #[tokio::test]
+async fn module_injected_from_rust_allows_overloaded_export_names() {
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    let mut module = Module::new("host.over");
+    module
+        .export("id", |_state: &(), x: i32| -> i32 { x })
+        .unwrap();
+    module
+        .export("id", |_state: &(), x: String| -> String { x })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let value_ptr = eval_snippet(
+        &mut engine,
+        r#"
+        import host.over (id)
+        (id 7, id "ok")
+"#,
+    )
+    .await
+    .unwrap();
+
+    let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
+    let Value::Tuple(xs) = value else {
+        panic!(
+            "expected tuple, got {}",
+            engine.heap().type_name(&value_ptr).unwrap()
+        );
+    };
+    let xs = pvals!(engine, xs);
+    assert_eq!(xs.len(), 2);
+    match &xs[0].1 {
+        Value::I32(n) => assert_eq!(*n, 7),
+        _ => panic!(
+            "expected i32, got {}",
+            engine.heap().type_name(&xs[0].0).unwrap()
+        ),
+    }
+    match &xs[1].1 {
+        Value::String(s) => assert_eq!(s, "ok"),
+        _ => panic!(
+            "expected string, got {}",
+            engine.heap().type_name(&xs[1].0).unwrap()
+        ),
+    }
+}
+
+#[tokio::test]
 async fn module_injected_from_rust_native_pointer_exports_async() {
     let mut engine = Engine::with_prelude(true).unwrap();
     engine.add_default_resolvers();

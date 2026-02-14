@@ -212,7 +212,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     MyStruct::inject_rex(&mut engine).unwrap();
 
     engine
-        .inject_fn1("bump_y", |_engine, mut s: MyStruct| {
+        .export("bump_y", |_: &(), mut s: MyStruct| {
             s.y += 1;
             s
         })
@@ -224,7 +224,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     assert_eq!(bumped.y, 43);
 
     engine
-        .inject_value(
+        .export_value(
             "const_struct",
             MyStruct {
                 x: false,
@@ -251,7 +251,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     Shape::inject_rex(&mut engine).unwrap();
 
     engine
-        .inject_value("shape", Shape::Rectangle(3, 4))
+        .export_value("shape", Shape::Rectangle(3, 4))
         .unwrap();
 
     let tokens = Token::tokenize(
@@ -277,7 +277,7 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     Maybe::<i32>::inject_rex(&mut engine).unwrap();
 
     engine
-        .inject_fn1("unwrap_or_zero", |_engine, m: Maybe<i32>| match m {
+        .export("unwrap_or_zero", |_: &(), m: Maybe<i32>| match m {
             Maybe::Just(v) => v,
             Maybe::Nothing => 0,
         })

@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 `Engine` is generic over host state (`Engine<State>`, where `State: Clone + Sync + 'static`).
 Use `Engine::with_prelude(())?` when you do not need host state, or pass your own state value
 to `Engine::new(state)` / `Engine::with_prelude(state)` and access it in injected natives via
-the first callback parameter (`&State`) for `inject_fn*` / `inject_async_fn*`.
+the first callback parameter (`&State`) for `export` / `export_async`.
 
 For host-provided module namespaces, prefer `Module` + `inject_module`:
 

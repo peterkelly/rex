@@ -23,7 +23,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `Engine::inject_decls(&program.decls)` to make user declarations available at runtime.
   - `Engine::eval_with_gas(&program.expr, &mut gas).await` to evaluate.
-  - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `inject_fn*` callbacks receive `&State`, while pointer-level APIs (`inject_native*` and module `export_native*`) receive `&Engine<State>`.
+  - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export`/`export_async` callbacks receive `&State`, while pointer-level APIs (`export_native*`) receive `&Engine<State>`.
   - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
