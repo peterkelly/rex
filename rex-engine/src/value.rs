@@ -1429,6 +1429,50 @@ where
     }
 }
 
+impl<T: IntoPointer, E: IntoPointer> IntoPointer for Result<T, E> {
+    fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
+        match self {
+            Ok(v) => {
+                let ptr = v.into_pointer(heap)?;
+                heap.alloc_adt(sym("Ok"), vec![ptr])
+            }
+            Err(e) => {
+                let ptr = e.into_pointer(heap)?;
+                heap.alloc_adt(sym("Err"), vec![ptr])
+            }
+        }
+    }
+}
+
+impl<T: RexType, E: RexType> RexType for Result<T, E> {
+    fn rex_type() -> Type {
+        Type::app(
+            Type::app(Type::con("Result", 2), E::rex_type()),
+            T::rex_type(),
+        )
+    }
+}
+
+impl<T, E> FromPointer for Result<T, E>
+where
+    T: FromPointer,
+    E: FromPointer,
+{
+    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let (tag, args) = heap.pointer_as_adt(pointer)?;
+        if sym_eq(&tag, "Ok") && args.len() == 1 {
+            return Ok(Ok(T::from_pointer(heap, &args[0])?));
+        }
+        if sym_eq(&tag, "Err") && args.len() == 1 {
+            return Ok(Err(E::from_pointer(heap, &args[0])?));
+        }
+        Err(EngineError::NativeType {
+            expected: "result".into(),
+            got: heap.type_name(pointer)?.into(),
+        })
+    }
+}
+
 impl RexType for () {
     fn rex_type() -> Type {
         Type::tuple(vec![])
