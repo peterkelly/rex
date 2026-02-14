@@ -307,7 +307,7 @@ async fn repl_loop(
         };
         let mut parser = RexParser::new(tokens);
         parser.set_limits(parser_limits);
-        let program = match parser.parse_program_with_gas(&mut gas) {
+        let program = match parser.parse_program(&mut gas) {
             Ok(p) => p,
             Err(errs) => {
                 let incomplete =
@@ -401,7 +401,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     let mut parser = RexParser::new(tokens);
     parser.set_limits(parser_limits);
     let program = parser
-        .parse_program_with_gas(&mut gas)
+        .parse_program(&mut gas)
         .map_err(|errs| format_parse_errors(&errs))?;
 
     if emit_ast || emit_type {
@@ -522,7 +522,7 @@ mod tests {
 
         let costs = GasCosts::sensible_defaults();
         let mut gas = GasMeter::unlimited(costs);
-        let program = parser.parse_program_with_gas(&mut gas).expect("parse");
+        let program = parser.parse_program(&mut gas).expect("parse");
 
         let ty_json = infer_type_json(source, None, &[], &mut gas).expect("infer");
         let ast_out = emit_json(&program, true, None).expect("emit ast");

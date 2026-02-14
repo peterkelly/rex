@@ -22,7 +22,7 @@ use rex_ts::{
     Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr, TypedExprKind, instantiate,
     unify,
 };
-use rex_util::sha256_hex;
+use rex_util::{GasMeter, sha256_hex};
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
@@ -77,7 +77,7 @@ fn tokenize_and_parse(text: &str) -> std::result::Result<(Tokens, Program), Toke
     let tokens = Token::tokenize(text).map_err(TokenizeOrParseError::Lex)?;
     let mut parser = Parser::new(tokens.clone());
     let program = parser
-        .parse_program()
+        .parse_program(&mut GasMeter::default())
         .map_err(TokenizeOrParseError::Parse)?;
     Ok((tokens, program))
 }

@@ -24,7 +24,7 @@ fn engine_with_prelude() -> Engine {
 }
 
 fn unlimited_gas() -> GasMeter {
-    GasMeter::unlimited(GasCosts::sensible_defaults())
+    GasMeter::default()
 }
 
 async fn eval_module_file(

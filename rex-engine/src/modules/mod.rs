@@ -1174,8 +1174,8 @@ fn parse_program_from_source(
     })?;
     let mut parser = RexParser::new(tokens);
     let program = match gas {
-        Some(gas) => parser.parse_program_with_gas(gas),
-        None => parser.parse_program(),
+        Some(gas) => parser.parse_program(gas),
+        None => parser.parse_program(&mut GasMeter::default()),
     }
     .map_err(|errs| match context {
         Some(id) => EngineError::from(crate::ModuleError::ParseInModule {

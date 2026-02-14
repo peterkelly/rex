@@ -12,7 +12,7 @@ async fn assert_program_ok(name: &str, source: &str) {
     let tokens = Token::tokenize(source).unwrap_or_else(|err| panic!("{name}: lex error: {err}"));
     let mut parser = Parser::new(tokens);
     let program = parser
-        .parse_program()
+        .parse_program(&mut GasMeter::default())
         .unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)));
 
     let mut ts = TypeSystem::with_prelude().unwrap();
@@ -25,7 +25,7 @@ async fn assert_program_ok(name: &str, source: &str) {
     engine
         .inject_decls(&program.decls)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let _value = engine
         .eval(program.expr.as_ref(), &mut gas)
         .await

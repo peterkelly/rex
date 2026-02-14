@@ -13,7 +13,7 @@ use rex_ts::{
     TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails,
     instantiate, unify,
 };
-use rex_util::{GasCosts, GasMeter};
+use rex_util::GasMeter;
 
 use crate::modules::ModuleSystem;
 use crate::prelude::{
@@ -767,7 +767,7 @@ where
                 let (arg_ty, _ret_ty) = split_fun(&call_type)
                     .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
                 let pretty_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
-                let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+                let mut gas = GasMeter::default();
                 let pretty_ptr = engine
                     .resolve_class_method(&sym("pretty"), &pretty_ty, &mut gas)
                     .await?;
@@ -1750,21 +1750,21 @@ where
             let value = self.heap().get(&ptr)?;
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+                    let mut gas = GasMeter::default();
                     native.call_zero(self, &mut gas).await
                 }
                 _ => Ok(ptr),
             }
         } else if self.types.class_methods.contains_key(name) {
-            let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+            let mut gas = GasMeter::default();
             self.resolve_class_method(name, typ, &mut gas).await
         } else {
-            let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+            let mut gas = GasMeter::default();
             let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
             let value = self.heap().get(&pointer)?;
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+                    let mut gas = GasMeter::default();
                     native.call_zero(self, &mut gas).await
                 }
                 _ => Ok(pointer),
@@ -2676,12 +2676,12 @@ mod tests {
 
     fn parse(code: &str) -> Arc<Expr> {
         let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
-        parser.parse_program().unwrap().expr
+        parser.parse_program(&mut GasMeter::default()).unwrap().expr
     }
 
     fn parse_program(code: &str) -> rex_ast::expr::Program {
         let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
-        parser.parse_program().unwrap()
+        parser.parse_program(&mut GasMeter::default()).unwrap()
     }
 
     fn strip_span(mut err: TypeError) -> TypeError {
@@ -2696,7 +2696,7 @@ mod tests {
     }
 
     fn unlimited_gas() -> GasMeter {
-        GasMeter::unlimited(GasCosts::sensible_defaults())
+        GasMeter::default()
     }
 
     #[tokio::test]

@@ -27,11 +27,11 @@ async fn have_role_async(state: HostState, role: String) -> bool {
 
 fn parse(code: &str) -> Arc<rex_ast::expr::Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().expr
+    parser.parse_program(&mut GasMeter::default()).unwrap().expr
 }
 
 fn unlimited_gas() -> GasMeter {
-    GasMeter::unlimited(GasCosts::sensible_defaults())
+    GasMeter::default()
 }
 
 #[tokio::test]

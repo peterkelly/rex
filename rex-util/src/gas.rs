@@ -75,6 +75,12 @@ impl GasMeter {
     }
 }
 
+impl Default for GasMeter {
+    fn default() -> Self {
+        Self::unlimited(GasCosts::default())
+    }
+}
+
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 #[error("out of gas (needed {needed}, remaining {remaining})")]
 pub struct OutOfGas {
@@ -88,5 +94,28 @@ impl fmt::Display for GasMeter {
             None => write!(f, "GasMeter(unlimited)"),
             Some(r) => write!(f, "GasMeter(remaining={r})"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gas_meter_default_is_unlimited() {
+        let meter = GasMeter::default();
+        assert_eq!(meter.remaining(), None);
+        assert_eq!(
+            meter.costs.parse_token,
+            GasCosts::sensible_defaults().parse_token
+        );
+    }
+
+    #[test]
+    fn gas_meter_default_uses_default_costs() {
+        let meter = GasMeter::default();
+        let expected = GasMeter::default();
+        assert_eq!(meter.remaining(), expected.remaining());
+        assert_eq!(meter.costs.eval_node, expected.costs.eval_node);
     }
 }

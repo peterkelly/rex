@@ -14,8 +14,8 @@ async fn vec_from_value() {
     let expr = r#"accept_vec (prim_array_from_list [1, 2, 3])"#;
 
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -43,8 +43,8 @@ async fn vec_to_value() {
     let expr = r#"return_vec "hello""#;
 
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -89,8 +89,8 @@ async fn option_prelude() {
     let expr = r#"(Some 4, None)"#;
     let mut engine = Engine::with_prelude(()).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -115,8 +115,8 @@ async fn option_from_value() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_opt", accept_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -146,8 +146,8 @@ async fn option_into_value() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("return_opt", return_opt).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -189,8 +189,8 @@ async fn result_prelude() {
     let expr = r#"(Ok 42, Err "error")"#;
     let mut engine = Engine::with_prelude(()).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(
@@ -219,8 +219,8 @@ async fn result_from_value_primitives() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_result", accept_result).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -247,8 +247,8 @@ async fn result_from_value_different_primitives() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("accept_result", accept_result).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -279,8 +279,8 @@ async fn result_into_value_primitives() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_fn1("return_result", return_result).unwrap();
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -360,8 +360,8 @@ async fn result_from_value_custom_types() {
         )
     "#;
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();
@@ -397,8 +397,8 @@ async fn result_into_value_custom_types() {
 
     let expr = r#"(return_result true, return_result false)"#;
     let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
     let result = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let heap = engine.heap();

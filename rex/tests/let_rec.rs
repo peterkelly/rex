@@ -6,10 +6,10 @@ use rex_engine::assert_pointer_eq;
 async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_decls(&program.decls)?;
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let pointer = engine.eval(program.expr.as_ref(), &mut gas).await?;
     let heap = engine.into_heap();
     Ok((heap, pointer))
@@ -18,7 +18,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
 fn type_of(code: &str) -> Type {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let mut ts = TypeSystem::with_prelude().unwrap();
     ts.inject_decls(&program.decls).unwrap();
     let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();

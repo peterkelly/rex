@@ -88,6 +88,7 @@ make -C docs html
 - Rest of the commit message should contain a summary of the changes, beginning with the reasons
   why the changes were made.
 - When making a commit, leave untracked files untouched
+- **IMPORTANT**: Only create commits when explicitly requested by the user. Do not commit automatically after completing tasks.
 
 ## Semantics Changes
 

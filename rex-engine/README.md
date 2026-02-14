@@ -18,10 +18,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tokens = Token::tokenize("answer + 1")?;
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|errs| {
+    let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let value = engine
         .eval_with_gas(program.expr.as_ref(), &mut gas)
         .await?;

@@ -11,7 +11,7 @@ fn parse_program(code: &str) -> Result<rex_ast::expr::Program, Vec<rex_parser::e
     let tokens = Token::tokenize(code).expect("lexer should not panic");
     let mut parser = Parser::new(tokens);
     parser.set_limits(ParserLimits::safe_defaults());
-    parser.parse_program()
+    parser.parse_program(&mut GasMeter::default())
 }
 
 async fn compile_err(code: &str) -> EngineError {
@@ -23,7 +23,7 @@ async fn compile_err(code: &str) -> EngineError {
     if let Err(e) = engine.inject_decls(&program.decls) {
         return e;
     }
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     match engine.eval(program.expr.as_ref(), &mut gas).await {
         Ok(v) => {
             let value_type = engine.heap().type_name(&v).unwrap_or("<invalid pointer>");

@@ -14,7 +14,7 @@ fn run_one(input: &[u8]) {
     let mut parser = Parser::new(tokens);
     parser.set_limits(parser_limits_from_env());
     let mut gas = gas_meter_from_env(120_000);
-    let _ = parser.parse_program_with_gas(&mut gas);
+    let _ = parser.parse_program(&mut gas);
 }
 
 fn main() -> Result<(), FuzzError> {

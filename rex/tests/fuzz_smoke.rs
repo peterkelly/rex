@@ -57,7 +57,7 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
 
         let mut parser = Parser::new(tokens);
         parser.set_limits(ParserLimits::safe_defaults());
-        let program = match parser.parse_program_with_gas(&mut gas) {
+        let program = match parser.parse_program(&mut gas) {
             Ok(p) => p,
             Err(_) => continue,
         };

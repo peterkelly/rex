@@ -16,7 +16,7 @@ async fn run_one(input: &[u8]) {
     let mut parser = Parser::new(tokens);
     parser.set_limits(parser_limits_from_env());
 
-    let program = match parser.parse_program_with_gas(&mut gas) {
+    let program = match parser.parse_program(&mut gas) {
         Ok(p) => p,
         Err(_) => return,
     };

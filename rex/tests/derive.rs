@@ -8,7 +8,7 @@ use std::collections::HashMap;
 async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut engine = Engine::with_prelude(())?;
     MyInnerStruct::inject_rex(&mut engine)?;
@@ -18,7 +18,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
     Shape::inject_rex(&mut engine)?;
 
     engine.inject_decls(&program.decls)?;
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let pointer = engine.eval(program.expr.as_ref(), &mut gas).await?;
     let heap = engine.into_heap();
     Ok((heap, pointer))
@@ -153,12 +153,12 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser
-        .parse_program()
+        .parse_program(&mut GasMeter::default())
         .map_err(|errs| format!("parse error: {errs:?}"))
         .unwrap();
 
     engine.inject_decls(&program.decls).unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let v_ptr = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let v = engine
         .heap()
@@ -206,7 +206,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut engine = Engine::with_prelude(()).unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
@@ -219,7 +219,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         })
         .unwrap();
 
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let v_ptr = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let bumped = MyStruct::from_pointer(engine.heap(), &v_ptr).unwrap();
     assert_eq!(bumped.y, 43);
@@ -240,7 +240,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         .unwrap();
     let tokens = Token::tokenize("const_struct.y").unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let v = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(heap, v, heap.alloc_i32(100).unwrap());
@@ -264,9 +264,9 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let v = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let heap = engine.heap();
     assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
@@ -286,8 +286,8 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
 
     let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
+    let program = parser.parse_program(&mut gas).unwrap();
     let v_ptr = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     let v = engine
         .heap()

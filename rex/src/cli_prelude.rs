@@ -523,7 +523,7 @@ mod tests {
     use super::*;
 
     fn unlimited_gas() -> GasMeter {
-        GasMeter::unlimited(GasCosts::sensible_defaults())
+        GasMeter::default()
     }
 
     #[tokio::test]

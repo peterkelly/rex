@@ -94,11 +94,11 @@ use rex_util::{GasCosts, GasMeter};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokens = Token::tokenize(r#"let x = 1 + 2 in x * 3"#)?;
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+    let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
     let mut engine = Engine::with_prelude(())?;
     engine.inject_decls(&program.decls)?;
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let value = engine
         .eval_with_gas(program.expr.as_ref(), &mut gas)
         .await?;
@@ -159,9 +159,9 @@ Point::inject_rex(&mut engine)?;
 
 let tokens = rex_lexer::Token::tokenize("Point { x = 1, y = 2 }")?;
 let program = rex_parser::Parser::new(tokens)
-    .parse_program()
+    .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("{errs:?}"))?;
-let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let mut gas = GasMeter::default();
 let value = engine
     .eval_with_gas(program.expr.as_ref(), &mut gas)
     .await?;

@@ -4,14 +4,14 @@ async fn eval_to_string(code: &str) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     let program = parser
-        .parse_program()
+        .parse_program(&mut GasMeter::default())
         .map_err(|errs| format!("parse error: {errs:?}"))?;
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     let pointer = engine
         .eval(program.expr.as_ref(), &mut gas)
         .await

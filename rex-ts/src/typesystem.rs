@@ -4138,12 +4138,12 @@ mod tests {
 
     fn parse_expr(code: &str) -> std::sync::Arc<rex_ast::expr::Expr> {
         let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
-        parser.parse_program().unwrap().expr
+        parser.parse_program(&mut GasMeter::default()).unwrap().expr
     }
 
     fn parse_program(code: &str) -> rex_ast::expr::Program {
         let mut parser = rex_parser::Parser::new(rex_lexer::Token::tokenize(code).unwrap());
-        parser.parse_program().unwrap()
+        parser.parse_program(&mut GasMeter::default()).unwrap()
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::engine::{apply as apply_pointer, binary_arg_types};
 use crate::value::{Heap, Pointer, list_to_vec};
 use crate::virtual_export_name;
 use crate::{EngineError, FromPointer, IntoPointer, OverloadedFn, Value};
-use rex_util::{GasCosts, GasMeter};
+use rex_util::GasMeter;
 
 fn values_to_ptrs<T: IntoPointer>(
     heap: &Heap,
@@ -32,7 +32,7 @@ async fn invoke_pointer_fn<State: Clone + Sync + 'static>(
     func_ty: Option<&Type>,
     arg_ty: Option<&Type>,
 ) -> Result<Pointer, EngineError> {
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+    let mut gas = GasMeter::default();
     apply_pointer(engine, func, arg, func_ty, arg_ty, &mut gas).await
 }
 

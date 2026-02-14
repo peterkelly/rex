@@ -36,11 +36,11 @@ use rex_util::{GasCosts, GasMeter};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
 engine.inject_decls(&program.decls)?;
-let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let mut gas = GasMeter::default();
 let value = engine
     .eval_with_gas(program.expr.as_ref(), &mut gas)
     .await?;
@@ -85,7 +85,7 @@ use rex_ts::TypeSystem;
 
 let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut ts = TypeSystem::with_prelude()?;
 for decl in &program.decls {
@@ -142,7 +142,7 @@ size [1, 2, 3]
 
 let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut ts = TypeSystem::with_prelude()?;
 for decl in &program.decls {
@@ -183,11 +183,11 @@ instance Size (List t)
 
 let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
 engine.inject_decls(&program.decls)?;
-let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let mut gas = GasMeter::default();
 let value = engine
     .eval_with_gas(program.expr.as_ref(), &mut gas)
     .await?;
@@ -221,9 +221,9 @@ engine.inject_async_fn1("inc", |_state, x: i32| async move { x + 1 })?;
 let tokens = rex_lexer::Token::tokenize("inc 1")?;
 let mut parser = rex_parser::Parser::new(tokens);
 let program = parser
-    .parse_program()
+    .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?;
-let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let mut gas = GasMeter::default();
 let v = engine.eval_with_gas(program.expr.as_ref(), &mut gas).await?;
 println!("{v}");
 ```
@@ -240,7 +240,7 @@ use rex_util::{GasCosts, GasMeter};
 let tokens = rex_lexer::Token::tokenize("stall")?;
 let mut parser = rex_parser::Parser::new(tokens);
 let expr = parser
-    .parse_program()
+    .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .expr;
 
@@ -255,7 +255,7 @@ std::thread::spawn(move || {
     std::thread::sleep(std::time::Duration::from_millis(10));
     token.cancel();
 });
-let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let mut gas = GasMeter::default();
 let res = engine.eval_with_gas(expr.as_ref(), &mut gas).await;
 assert!(matches!(res, Err(EngineError::Cancelled)));
 ```
@@ -264,7 +264,7 @@ assert!(matches!(res, Err(EngineError::Cancelled)));
 
 To defend against untrusted/large programs, you can run the pipeline with a gas budget:
 
-- `Parser::parse_program_with_gas`
+- `Parser::parse_program`
 - `TypeSystem::infer_with_gas` / `infer_typed_with_gas`
 - `Engine::eval_with_gas`
 
@@ -277,7 +277,7 @@ use rex_parser::{Parser, ParserLimits};
 
 let mut parser = Parser::new(rex_lexer::Token::tokenize("(((1)))")?);
 parser.set_limits(ParserLimits::safe_defaults());
-let program = parser.parse_program()?;
+let program = parser.parse_program(&mut GasMeter::default())?;
 ```
 
 ## Bridge Rust Types with `#[derive(Rex)]`
@@ -302,10 +302,10 @@ let mut engine = Engine::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
 let expr = rex_parser::Parser::new(rex_lexer::Token::tokenize("Just 1")?)
-    .parse_program()
+    .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .expr;
-let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
+let mut gas = GasMeter::default();
 let v = engine.eval_with_gas(expr.as_ref(), &mut gas).await?;
 assert_eq!(Maybe::<i32>::from_value(&v, "v")?, Maybe::Just(1));
 ```

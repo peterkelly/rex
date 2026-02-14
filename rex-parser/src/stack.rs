@@ -2,6 +2,7 @@ use std::thread;
 
 use rex_ast::expr::Program;
 use rex_lexer::span::Span;
+use rex_util::GasMeter;
 
 use crate::{Parser, error::ParserErr};
 
@@ -16,7 +17,7 @@ pub fn parse_program_with_stack_size(
         .stack_size(stack_size)
         .spawn(move || {
             let mut parser = parser;
-            parser.parse_program()
+            parser.parse_program(&mut GasMeter::default())
         })
         .map_err(|e| {
             vec![ParserErr::new(
