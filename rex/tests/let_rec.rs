@@ -1,6 +1,4 @@
-use rex::{
-    Engine, EngineError, GasCosts, GasMeter, Heap, Parser, Pointer, Token, Type, TypeSystem, Value,
-};
+use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeSystem, Value};
 use rex_engine::assert_pointer_eq;
 
 async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {

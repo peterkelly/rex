@@ -1,4 +1,4 @@
-use rex::{Engine, GasCosts, GasMeter, Parser, Token};
+use rex::{Engine, GasMeter, Parser, Token};
 
 #[tokio::test]
 async fn record_update_end_to_end() {

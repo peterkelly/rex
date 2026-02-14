@@ -48,7 +48,7 @@ computations and data manipulation.
 cargo test
 REX_FUZZ_ITERS=2000 cargo test -p rex --test fuzz_smoke
 cargo fmt
-cargo clippy
+cargo cargo clippy --tests
 ```
 
 ## CLI Usage

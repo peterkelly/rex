@@ -1,4 +1,4 @@
-use rex::{Engine, EngineError, GasCosts, GasMeter, Parser, ParserLimits, Token, TypeError};
+use rex::{Engine, EngineError, GasMeter, Parser, ParserLimits, Token, TypeError};
 
 fn strip_span(mut err: TypeError) -> TypeError {
     while let TypeError::Spanned { error, .. } = err {

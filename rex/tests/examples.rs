@@ -1,4 +1,4 @@
-use rex::{Engine, GasCosts, GasMeter, Parser, Token, TypeSystem};
+use rex::{Engine, GasMeter, Parser, Token, TypeSystem};
 
 fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");

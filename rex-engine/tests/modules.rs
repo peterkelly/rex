@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use rex_engine::{Engine, Pointer, Value};
-use rex_util::{GasCosts, GasMeter};
+use rex_util::GasMeter;
 use uuid::Uuid;
 
 fn temp_dir(name: &str) -> PathBuf {

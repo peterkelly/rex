@@ -1,6 +1,5 @@
 use rex::{
-    Engine, EngineError, GasCosts, GasMeter, Heap, Parser, Pointer, Token, Type, TypeError,
-    TypeSystem, Value,
+    Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeError, TypeSystem, Value,
 };
 
 fn strip_type_span(mut err: TypeError) -> TypeError {

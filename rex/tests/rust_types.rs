@@ -409,8 +409,8 @@ async fn result_into_value_custom_types() {
     let ok_ptr = &tuple_ptrs[0];
     let err_ptr = &tuple_ptrs[1];
 
-    let ok_result = <Result<Point, ErrorInfo>>::from_pointer(&heap, ok_ptr).unwrap();
-    let err_result = <Result<Point, ErrorInfo>>::from_pointer(&heap, err_ptr).unwrap();
+    let ok_result = <Result<Point, ErrorInfo>>::from_pointer(heap, ok_ptr).unwrap();
+    let err_result = <Result<Point, ErrorInfo>>::from_pointer(heap, err_ptr).unwrap();
 
     assert_eq!(ok_result, Ok(Point { x: 100, y: 200 }));
     assert_eq!(

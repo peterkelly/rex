@@ -518,7 +518,7 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 #[cfg(test)]
 mod tests {
     use rex_engine::{Engine, assert_pointer_eq};
-    use rex_util::{GasCosts, GasMeter};
+    use rex_util::GasMeter;
 
     use super::*;
 

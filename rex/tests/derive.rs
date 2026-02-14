@@ -1,6 +1,5 @@
 use rex::{
-    Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Parser, Pointer, Rex, RexType,
-    Token, Value,
+    Engine, EngineError, FromPointer, GasMeter, Heap, Parser, Pointer, Rex, RexType, Token, Value,
 };
 use rex_engine::assert_pointer_eq;
 use std::collections::HashMap;

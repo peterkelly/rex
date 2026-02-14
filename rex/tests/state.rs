@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rex::{Engine, GasCosts, GasMeter, Parser, Token};
+use rex::{Engine, GasMeter, Parser, Token};
 
 #[derive(Clone)]
 struct HostState {

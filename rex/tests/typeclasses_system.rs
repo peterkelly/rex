@@ -1,4 +1,4 @@
-use rex::{Engine, GasCosts, GasMeter, Parser, Token, value_display};
+use rex::{Engine, GasMeter, Parser, Token, value_display};
 
 async fn eval_to_string(code: &str) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
