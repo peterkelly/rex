@@ -598,6 +598,11 @@ async function initRepls() {
     requestAnimationFrame(() => fitEditorToContent(editor, editorNode));
     bindDiagnostics(editor, monaco, wasm);
     setRunState(root, false);
+    const fallback = root.previousElementSibling;
+    if (fallback && fallback.tagName === "PRE" && fallback.querySelector("code.language-rex")) {
+      fallback.style.display = "none";
+      fallback.setAttribute("aria-hidden", "true");
+    }
 
     toggleButton.addEventListener("click", () => {
       const state = rexRuns.get(root);
@@ -720,9 +725,13 @@ fn is_interactive_rex_fence(spec: &str) -> bool {
 }
 
 fn render_repl_widget(code: &str, runtime_script_src: &str) -> String {
-    let encoded = hex_encode(code.trim_end_matches('\n'));
+    let source = code.trim_end_matches('\n');
+    let encoded = hex_encode(source);
     format!(
-        r#"<div class="rex-repl" data-rex-repl data-rex-source-hex="{encoded}"></div>
+        r#"````rex
+{source}
+````
+<div class="rex-repl" data-rex-repl data-rex-source-hex="{encoded}"></div>
 <script type="module" src="{runtime_script_src}"></script>"#
     )
 }

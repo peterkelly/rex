@@ -587,6 +587,11 @@ async function initRepls() {
     requestAnimationFrame(() => fitEditorToContent(editor, editorNode));
     bindDiagnostics(editor, monaco, wasm);
     setRunState(root, false);
+    const fallback = root.previousElementSibling;
+    if (fallback && fallback.tagName === "PRE" && fallback.querySelector("code.language-rex")) {
+      fallback.style.display = "none";
+      fallback.setAttribute("aria-hidden", "true");
+    }
 
     toggleButton.addEventListener("click", () => {
       const state = rexRuns.get(root);
