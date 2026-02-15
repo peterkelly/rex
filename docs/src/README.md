@@ -24,8 +24,8 @@ in
 
 This documentation is organized into several sections:
 
-- **[Tutorial](tutorial/README.md)** — A guided walk-through of writing Rex code
-- **[Demos](demos/README.md)** — Interactive algorithm demos
+- **[Tutorial](tutorial/)** — A guided walk-through of writing Rex code
+- **[Demos](demos/)** — Interactive algorithm demos
 - **[Language Reference](LANGUAGE.md)** — Compact reference for Rex syntax and features
 - **[Specification](SPEC.md)** — Locked semantics and edge cases
 - **[Architecture](ARCHITECTURE.md)** — System architecture and design

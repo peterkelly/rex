@@ -8,6 +8,6 @@ If you want a compact reference instead, see the [Language Reference](../LANGUAG
 
 The tutorial is divided into three sections:
 
-- **[Section 1 — Basics](section1/README.md)** — Core language features and syntax
-- **[Section 2 — Advanced Topics](section2/README.md)** — Type system, polymorphism, and typeclasses
-- **[Section 3 — Worked Examples](section3/README.md)** — Practical examples and patterns
+- **[Section 1 — Basics](section1/)** — Core language features and syntax
+- **[Section 2 — Advanced Topics](section2/)** — Type system, polymorphism, and typeclasses
+- **[Section 3 — Worked Examples](section3/)** — Practical examples and patterns
