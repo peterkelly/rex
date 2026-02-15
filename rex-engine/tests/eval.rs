@@ -333,9 +333,8 @@ fn eval_deep_list_does_not_overflow() {
                 .unwrap();
             runtime.block_on(async move {
                 let tokens = rex_lexer::Token::tokenize(&code).unwrap();
-                let program = rex_parser::Parser::new(tokens)
-                    .parse_program_with_stack_size(128 * 1024 * 1024)
-                    .unwrap();
+                let mut parser = rex_parser::Parser::new(tokens);
+                let program = parser.parse_program(&mut GasMeter::default()).unwrap();
                 let expr = program.expr;
                 let mut engine = Engine::with_prelude(()).unwrap();
                 let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();

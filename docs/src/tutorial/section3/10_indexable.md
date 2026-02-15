@@ -12,7 +12,7 @@ Learn how to pull elements out of common containers with a single API:
 
 Example uses:
 
-```rex
+```rex,interactive
 ( get 0 [10, 20, 30] , get 2 ["a", "b", "c"] ) -- returns (10, "c")
 ```
 
@@ -23,7 +23,7 @@ Example uses:
 
 ## A more guided example
 
-```rex
+```rex,interactive
 let
   xs = [10, 20, 30],
   first = get 0 xs,

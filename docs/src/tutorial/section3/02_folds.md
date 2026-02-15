@@ -27,7 +27,7 @@ Read it as:
 
 ## Sum a list
 
-```rex
+```rex,interactive
 foldl (+) 0 [1, 2, 3, 4]
 ```
 
@@ -39,7 +39,7 @@ foldl (+) 0 [1, 2, 3, 4]
 
 ### The same thing, spelled out
 
-```rex
+```rex,interactive
 let
   step = \acc x -> acc + x
 in
@@ -50,7 +50,7 @@ When debugging, spelling out `step` makes it easier to reason about types.
 
 ## Build a string
 
-```rex
+```rex,interactive
 let
   step = \out x ->
     if out == "" then x else out + ", " + x
@@ -66,7 +66,7 @@ Modify this to wrap the output in brackets: `"[a, b, c]"`.
 
 You can compute list length by ignoring elements and incrementing a counter:
 
-```rex
+```rex,interactive
 foldl (\n _ -> n + 1) 0 [10, 20, 30, 40]
 ```
 

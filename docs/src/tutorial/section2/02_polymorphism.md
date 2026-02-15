@@ -7,7 +7,7 @@ definitions are generic”.
 
 ## A polymorphic helper
 
-```rex
+```rex,interactive
 let id = \x -> x in
   (id 1, id true, id "hi")
 ```
@@ -16,7 +16,7 @@ let id = \x -> x in
 
 Inside a lambda body, parameters are monomorphic unless you explicitly abstract:
 
-```rex
+```rex,interactive
 \f ->
   let x = f 1 in
     f x
@@ -28,7 +28,7 @@ If `f` were required to work at multiple unrelated types, that would be rejected
 
 If you want something reusable, `let`-bind it at the outer level:
 
-```rex
+```rex,interactive
 let
   id = \x -> x,
   use = \x -> (id x, id x)

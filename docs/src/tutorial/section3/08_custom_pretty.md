@@ -14,7 +14,7 @@ We’ll build it up in layers:
 3. add a structured type (`Point`)
 4. (optional) add a container instance (`List a`)
 
-```rex
+```rex,interactive
 class Pretty a
   pretty : a -> string
 
@@ -38,7 +38,7 @@ and try `pretty [Point { x = 1, y = 2 }]`.
 
 Here is the list instance from the repo example, with commentary:
 
-```rex
+```rex,interactive
 class Pretty a
   pretty : a -> string
 

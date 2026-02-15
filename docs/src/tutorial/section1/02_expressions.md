@@ -6,7 +6,7 @@ This page introduces the “everyday” expression forms you’ll use constantly
 
 ## Literals
 
-```rex
+```rex,interactive
 ( true
 , false
 , 123
@@ -29,13 +29,13 @@ If you need to force a different numeric type, you can use an annotation (covere
 
 Rex supports negative integer literals:
 
-```rex
+```rex,interactive
 -420
 ```
 
 When you’re unsure about parsing, you can always write subtraction explicitly:
 
-```rex
+```rex,interactive
 0 - 1
 ```
 
@@ -43,7 +43,7 @@ When you’re unsure about parsing, you can always write subtraction explicitly:
 
 `if` is an expression and must have an `else`:
 
-```rex
+```rex,interactive
 let x = 10 in
   if x < 0 then "neg" else "non-neg"
 ```
@@ -52,7 +52,7 @@ let x = 10 in
 
 `if` requires both branches and they must have the same type:
 
-```rex
+```rex,interactive
 -- Not OK: the branches disagree ("string" vs "i32")
 if true then "yes" else 0
 ```
@@ -61,7 +61,7 @@ if true then "yes" else 0
 
 Comparisons are ordinary functions (usually from the prelude type classes):
 
-```rex
+```rex,interactive
 ( 1 == 2
 , 1 != 2
 , 1 < 2
@@ -75,7 +75,7 @@ If you try to compare a type without an `Eq` / `Ord` instance, typechecking will
 
 String concatenation uses `+` (via `AdditiveMonoid string`):
 
-```rex
+```rex,interactive
 "Rex " + "rocks"
 ```
 
@@ -85,7 +85,7 @@ Because `+` is type-class-based, the same syntax also works for numeric addition
 
 When in doubt, add parentheses—especially when mixing application and infix operators:
 
-```rex
+```rex,interactive
 let f = \x -> x + 1 in
   f (1 + 2)
 ```

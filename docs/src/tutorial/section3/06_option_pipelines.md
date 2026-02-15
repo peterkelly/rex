@@ -17,7 +17,7 @@ Then rewrite it in three styles:
 
 ## Applicative: apply a wrapped function
 
-```rex
+```rex,interactive
 ap (Some ((*) 2)) (Some 21)
 ```
 
@@ -25,7 +25,7 @@ If either side is `None`, the result is `None`.
 
 ## Monad: sequence steps with `bind`
 
-```rex
+```rex,interactive
 let
   step1 = \x -> if x < 0 then None else Some (x + 1),
   step2 = \x -> Some (x * 2)
@@ -37,7 +37,7 @@ in
 
 If you have many steps, name them:
 
-```rex
+```rex,interactive
 let
   run = \x -> bind step2 (bind step1 x)
 in
@@ -49,7 +49,7 @@ in
 `bind` is convenience. Under the hood, it’s the same “if None, stop” flow you would write with
 `match`:
 
-```rex
+```rex,interactive
 let
   step1 = \x -> if x < 0 then None else Some (x + 1),
   step2 = \x -> Some (x * 2)

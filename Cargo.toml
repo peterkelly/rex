@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["rex", "rex-ast", "rex-engine", "rex-fuzz", "rex-lexer", "rex-lsp", "rex-parser", "rex-proc-macro", "rex-ts", "rex-util"]
+members = ["rex", "rex-ast", "rex-engine", "rex-fuzz", "rex-lexer", "rex-lsp", "rex-mdbook", "rex-parser", "rex-proc-macro", "rex-ts", "rex-util", "rex-wasm"]
 
 [workspace.dependencies]
 # External dependencies
@@ -23,7 +23,7 @@ tokio = "1"
 tower-lsp = "0.20"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "js"] }
 
 # Internal dependencies
 rex-ast = { path = "rex-ast" }

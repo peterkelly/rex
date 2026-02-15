@@ -6,7 +6,7 @@ Rex supports several lightweight data shapes.
 
 Tuples group fixed-position values:
 
-```rex
+```rex,interactive
 (1, "hi", true)
 ```
 
@@ -15,7 +15,7 @@ like `.0` and `.1`.
 
 ### Indexing tuples with `.`
 
-```rex
+```rex,interactive
 let t = (1, "hi", true) in t.1 -- returns "hi"
 ```
 
@@ -23,13 +23,13 @@ let t = (1, "hi", true) in t.1 -- returns "hi"
 
 List literals use square brackets:
 
-```rex
+```rex,interactive
 [1, 2, 3]
 ```
 
 Under the hood, lists are a prelude ADT `List a` with constructors `Empty` and `Cons`.
 
-```rex
+```rex,interactive
 match [1, 2, 3]
   when Empty -> 0
   when Cons h t -> h
@@ -39,7 +39,7 @@ match [1, 2, 3]
 
 Rex also supports list-pattern sugar:
 
-```rex
+```rex,interactive
 match [1, 2, 3]
   when [] -> 0
   when [x] -> x
@@ -50,7 +50,7 @@ match [1, 2, 3]
 
 Dictionary literals use braces:
 
-```rex
+```rex,interactive
 { a = 1, b = 2 }
 ```
 
@@ -58,7 +58,7 @@ These are “record-like” values. Depending on context they may be treated as 
 (`{ a: i32, b: i32 }`) or as a dictionary-like value; either way, you can project fields when the
 field is known to exist:
 
-```rex
+```rex,interactive
 let r = { a = 1, b = 2 } in r.a
 ```
 
@@ -67,7 +67,7 @@ let r = { a = 1, b = 2 } in r.a
 If you want a polymorphic “dictionary” (instead of a specific record type), use type ascription
 with `is`:
 
-```rex
+```rex,interactive
 ({ a = 1, b = 2 }) is Dict i32
 ```
 
@@ -75,7 +75,7 @@ with `is`:
 
 Dictionary patterns check for key presence and bind those keys to variables:
 
-```rex
+```rex,interactive
 let d = ({ a = 1, b = 2 }) is Dict i32 in
 match d
   when {a, b} -> a + b

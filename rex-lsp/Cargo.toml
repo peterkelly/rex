@@ -4,13 +4,16 @@ version = "4.0.0"
 edition = "2024"
 
 [dependencies]
-tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
-tower-lsp = { workspace = true }
+lsp-types = "0.94"
 rex-lexer = { workspace = true }
 rex-ast = { workspace = true }
 rex-parser = { workspace = true }
 rex-ts = { workspace = true }
 rex-util = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
+tower-lsp = { workspace = true }
 
 [lints]
 workspace = true

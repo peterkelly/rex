@@ -1,6 +1,6 @@
 # Section 3 — Worked Examples
 
-These examples are meant to be copied into a `.rex` file and run.
+These examples are interactive in the docs: edit and run them directly on each page.
 
 > **Tip:** You can also run many examples inline with:
 >
@@ -8,7 +8,7 @@ These examples are meant to be copied into a `.rex` file and run.
 > cargo run -p rex -- run -c '<paste rex expression here>'
 > ```
 >
-> For multi-line examples, copying into a `.rex` file is usually easier.
+> For larger multi-line experiments, saving to a `.rex` file is often easier.
 
 ## Chapters
 

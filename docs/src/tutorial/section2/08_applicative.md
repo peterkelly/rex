@@ -2,7 +2,7 @@
 
 An `Applicative` is a `Functor` that can inject values and apply wrapped functions:
 
-```rex
+```rex,interactive
 class Applicative f <= Functor f
   pure : a -> f a
   ap : f (a -> b) -> f a -> f b
@@ -13,13 +13,13 @@ container”.
 
 ## `pure`
 
-```rex
+```rex,interactive
 pure 1
 ```
 
 The type depends on context. For example, this forces `Option`:
 
-```rex
+```rex,interactive
 let x: Option i32 = pure 1 in x
 ```
 
@@ -27,19 +27,19 @@ let x: Option i32 = pure 1 in x
 
 Because functions are curried, you can apply step-by-step. For `Option`:
 
-```rex
+```rex,interactive
 ap (ap (pure (\x y -> x + y)) (Some 1)) (Some 2)
 ```
 
 ## `ap` with `Option`
 
-```rex
+```rex,interactive
 ap (Some ((+) 1)) (Some 41)
 ```
 
 If either side is “missing”, the result is missing:
 
-```rex
+```rex,interactive
 ( ap None (Some 1)
 , ap (Some ((+) 1)) None
 )
@@ -49,6 +49,6 @@ If either side is “missing”, the result is missing:
 
 You can build up multi-argument computations by applying step-by-step:
 
-```rex
+```rex,interactive
 ap (ap (pure (\x y -> x + y)) (Some 1)) (Some 2)
 ```

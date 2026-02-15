@@ -7,7 +7,7 @@ dictionary resolution.
 
 ## Defining a class
 
-```rex
+```rex,interactive
 class Size a
   size : a -> i32
 ```
@@ -18,7 +18,7 @@ Method signatures can mention the class parameter `a` and any other types in sco
 
 You may also see:
 
-```rex
+```rex,interactive
 class Size a where
   size : a -> i32
 ```
@@ -27,7 +27,7 @@ Both forms are accepted.
 
 ## Operators as methods
 
-```rex
+```rex,interactive
 class Eq a
   == : a -> a -> bool
   != : a -> a -> bool
@@ -37,7 +37,7 @@ class Eq a
 
 Superclasses use `<=` (read “requires”):
 
-```rex
+```rex,interactive
 class Ord a <= Eq a
   < : a -> a -> bool
 ```
@@ -50,14 +50,14 @@ Some prelude classes logically take multiple type parameters, such as `Indexable
 
 In Rex source you write:
 
-```rex
+```rex,interactive
 class Indexable t a
   get : i32 -> t -> a
 ```
 
 In `where` constraints, multi-parameter classes are written using a tuple:
 
-```rex
+```rex,interactive
 where Indexable (t, a) -> ...
 ```
 

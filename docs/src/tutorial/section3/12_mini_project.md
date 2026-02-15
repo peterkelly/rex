@@ -13,7 +13,7 @@ Build a small “workflow” in Rex:
 This is a pattern you can scale up: each step is a function returning a `Result`, and you connect
 steps with `bind`.
 
-```rex
+```rex,interactive
 type User = User { name: string, age: i32 }
 
 let
@@ -36,7 +36,7 @@ in
 
 Instead of strings, define an error ADT:
 
-```rex
+```rex,interactive
 type UserError = NegativeAge | EmptyName
 type User = User { name: string, age: i32 }
 

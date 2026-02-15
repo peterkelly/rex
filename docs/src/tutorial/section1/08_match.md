@@ -11,7 +11,7 @@ Use `match` to branch on the shape of values.
 
 ## Matching ADTs
 
-```rex
+```rex,interactive
 type Maybe a = Just a | Nothing
 
 let fromMaybe = \d m ->
@@ -26,7 +26,7 @@ Rex checks matches for exhaustiveness on ADTs and reports missing constructors.
 
 You’ll often see compact “inline” matches in examples:
 
-```rex
+```rex,interactive
 match (Some 1)
   when Some x -> x
   when None -> 0
@@ -36,7 +36,7 @@ match (Some 1)
 
 Wildcards:
 
-```rex
+```rex,interactive
 match [1, 2, 3]
   when Empty -> 0
   when Cons _ _ -> 1
@@ -44,7 +44,7 @@ match [1, 2, 3]
 
 List patterns:
 
-```rex
+```rex,interactive
 match [1, 2]
   when [] -> 0
   when [x] -> x
@@ -53,7 +53,7 @@ match [1, 2]
 
 Cons patterns:
 
-```rex
+```rex,interactive
 match [1, 2, 3]
   when h:t -> h
   when [] -> 0
@@ -61,7 +61,7 @@ match [1, 2, 3]
 
 Record patterns on record-carrying constructors:
 
-```rex
+```rex,interactive
 type Point = Point { x: i32, y: i32 }
 
 match Point { x = 1, y = 2 }
@@ -70,7 +70,7 @@ match Point { x = 1, y = 2 }
 
 Dict key presence patterns:
 
-```rex
+```rex,interactive
 let d = ({ a = 1, b = 2 }) is Dict i32 in
 match d
   when {a, b} -> a + b
@@ -82,7 +82,7 @@ match d
 
 Arms can use `->` or `→`:
 
-```rex
+```rex,interactive
 match true
   when true → 1
   when false -> 0

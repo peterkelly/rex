@@ -48,8 +48,7 @@ async fn let_rec_mutual_even_odd() {
     let (heap, pointer) = eval(
         r#"
 let rec
-  even = \n -> if n == 0 then true else odd (n - 1)
-and
+  even = \n -> if n == 0 then true else odd (n - 1),
   odd = \n -> if n == 0 then false else even (n - 1)
 in
   (even 10, odd 10, even 11, odd 11)
@@ -71,10 +70,8 @@ async fn let_rec_mutual_three_function_group() {
     let (heap, pointer) = eval(
         r#"
 let rec
-  step0 = \n -> if n == 0 then 0 else step1 (n - 1)
-and
-  step1 = \n -> if n == 0 then 1 else step2 (n - 1)
-and
+  step0 = \n -> if n == 0 then 0 else step1 (n - 1),
+  step1 = \n -> if n == 0 then 1 else step2 (n - 1),
   step2 = \n -> if n == 0 then 2 else step0 (n - 1)
 in
   (step0 3, step1 3, step2 3)
@@ -122,7 +119,7 @@ async fn let_rec_allows_self_referential_data_cycles() {
 
 #[tokio::test]
 async fn let_rec_allows_mutual_data_cycles() {
-    let (heap, pointer) = eval("let rec a = Cons 1 b and b = Cons 2 a in (a, b)")
+    let (heap, pointer) = eval("let rec a = Cons 1 b, b = Cons 2 a in (a, b)")
         .await
         .unwrap();
     let tuple = heap.get(&pointer).unwrap();

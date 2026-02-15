@@ -7,7 +7,7 @@ those constraints in type signatures (for `fn`) and in `where` clauses (commonly
 
 This example is from `rex/examples/type_classes.rex`:
 
-```rex
+```rex,interactive
 let
   use_classes = \ (x: t) (y: f a) (z: a) where Indexable (t, a), Foldable f ->
     let
@@ -29,7 +29,7 @@ Notes:
 
 Top-level functions can also have a `where` clause:
 
-```rex
+```rex,interactive
 fn sum_list : List i32 -> i32 where Foldable List = \xs -> foldl (+) 0 xs
 ```
 
@@ -39,7 +39,7 @@ Constraints appear after the type signature and before `=`.
 
 Constraints are comma-separated:
 
-```rex
+```rex,interactive
 fn demo : List i32 -> i32 where Foldable List, AdditiveMonoid i32 = \xs -> foldl (+) 0 xs
 ```
 

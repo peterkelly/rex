@@ -19,13 +19,17 @@ use uuid::Uuid;
 use crate::Engine;
 use crate::{EngineError, Pointer};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod filesystem;
 mod resolvers;
 mod system;
 mod types;
 
-#[cfg(feature = "github-imports")]
+#[cfg(not(target_arch = "wasm32"))]
+pub use filesystem::{default_local_resolver, include_resolver};
+#[cfg(all(not(target_arch = "wasm32"), feature = "github-imports"))]
 pub use resolvers::default_github_resolver;
-pub use resolvers::{default_local_resolver, default_stdlib_resolver, include_resolver};
+pub use resolvers::default_stdlib_resolver;
 pub use system::ResolverFn;
 pub use types::virtual_export_name;
 pub use types::{
@@ -1356,14 +1360,18 @@ where
     pub fn add_default_resolvers(&mut self) {
         self.modules
             .add_resolver("stdlib", default_stdlib_resolver());
+
+        #[cfg(not(target_arch = "wasm32"))]
         self.modules.add_resolver("local", default_local_resolver());
-        #[cfg(feature = "github-imports")]
+
+        #[cfg(all(not(target_arch = "wasm32"), feature = "github-imports"))]
         {
             self.modules
                 .add_resolver("remote", default_github_resolver());
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn add_include_resolver(&mut self, root: impl AsRef<Path>) -> Result<(), EngineError> {
         let canon =
             root.as_ref()
@@ -1377,6 +1385,11 @@ where
             include_resolver(canon),
         );
         Ok(())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn add_include_resolver(&mut self, _root: impl AsRef<Path>) -> Result<(), EngineError> {
+        Err(EngineError::UnsupportedExpr)
     }
 
     #[async_recursion(?Send)]

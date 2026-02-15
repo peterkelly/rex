@@ -22,8 +22,9 @@ pub use modules::{
 };
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
 pub use value::{
-    Closure, FromPointer, Heap, IntoPointer, Pointer, RexType, Value, ValueRef, closure_debug,
-    closure_eq, pointer_eq, value_debug, value_display, value_eq,
+    Closure, FromPointer, Heap, IntoPointer, Pointer, RexType, Value, ValueDisplayOptions,
+    ValueRef, closure_debug, closure_eq, pointer_eq, value_debug, value_display,
+    value_display_with, value_eq,
 };
 
 #[macro_export]

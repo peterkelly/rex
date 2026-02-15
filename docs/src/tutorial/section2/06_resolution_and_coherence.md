@@ -13,7 +13,7 @@ Rex rejects such overlaps per class.
 
 Rex can keep an overloaded *function value* around and resolve it later when you apply it:
 
-```rex
+```rex,interactive
 let f = map ((+) 1) in
   ( f [1, 2, 3]
   , f (Some 41)
@@ -38,7 +38,7 @@ For example, `pure 1` is ambiguous by itself because it could be `List i32`, `Op
 
 Fix it by forcing a type:
 
-```rex
+```rex,interactive
 let x: Option i32 = pure 1 in x
 ```
 

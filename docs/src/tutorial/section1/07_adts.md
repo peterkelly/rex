@@ -7,13 +7,13 @@ etc.
 
 ## Simple ADT
 
-```rex
+```rex,interactive
 type Maybe a = Just a | Nothing
 ```
 
 Constructors are values:
 
-```rex
+```rex,interactive
 (Just 1, Nothing)
 ```
 
@@ -21,7 +21,7 @@ Constructors are values:
 
 Defining an ADT is only half the story; consuming it is done with pattern matching:
 
-```rex
+```rex,interactive
 let
   fromMaybe = \d m ->
     match m
@@ -33,7 +33,7 @@ in
 
 ## Constructors with multiple fields
 
-```rex
+```rex,interactive
 type Pair a b = Pair a b
 
 Pair 1 "hi"
@@ -46,7 +46,7 @@ constructors instead because they self-document field names.
 
 Variants can carry a record payload:
 
-```rex
+```rex,interactive
 type User = User { name: string, age: i32 }
 
 User { name = "Ada", age = 36 }
@@ -58,7 +58,7 @@ This style works well with field projection and update (covered later).
 
 You can define sum types with multiple constructors, including recursive ones:
 
-```rex
+```rex,interactive
 type Tree
   = Leaf { value: i32 }
   | Node { left: Tree, right: Tree }

@@ -6,13 +6,13 @@ Operators like `+` and `==` are just functions with infix syntax.
 
 Parentheses turn an operator into a function value:
 
-```rex
+```rex,interactive
 (+) 1 2
 ```
 
 This enables partial application:
 
-```rex
+```rex,interactive
 map ((*) 2) [1, 2, 3]
 ```
 
@@ -32,7 +32,7 @@ This is why you can write `+` for both numbers *and* strings.
 Rex has a fixed precedence table (see [Language Reference](../../LANGUAGE.md)). A good habit is to use parentheses
 whenever you mix application with multiple infix operators.
 
-```rex
+```rex,interactive
 (1 + 2) * 3
 ```
 
@@ -40,6 +40,6 @@ whenever you mix application with multiple infix operators.
 
 `x.field` is *field projection syntax*, not an operator you can partially apply:
 
-```rex
+```rex,interactive
 let u = { name = "Ada" } in u.name
 ```

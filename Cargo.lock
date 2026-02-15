@@ -826,6 +826,7 @@ dependencies = [
 name = "rex-lsp"
 version = "4.0.0"
 dependencies = [
+ "lsp-types",
  "rex-ast",
  "rex-lexer",
  "rex-parser",
@@ -833,6 +834,13 @@ dependencies = [
  "rex-util",
  "tokio",
  "tower-lsp",
+]
+
+[[package]]
+name = "rex-mdbook"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
@@ -874,6 +882,22 @@ name = "rex-util"
 version = "4.0.0"
 dependencies = [
  "thiserror",
+]
+
+[[package]]
+name = "rex-wasm"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "rex-ast",
+ "rex-engine",
+ "rex-lexer",
+ "rex-lsp",
+ "rex-parser",
+ "rex-ts",
+ "rex-util",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

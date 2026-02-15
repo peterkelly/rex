@@ -15,13 +15,13 @@ Build a tiny “Maybe” API:
 
 ## Define an ADT
 
-```rex
+```rex,interactive
 type Maybe a = Just a | Nothing
 ```
 
 ## Use it
 
-```rex
+```rex,interactive
 let
   fromMaybe = \d m ->
     match m
@@ -39,7 +39,7 @@ Try adding a function `mapMaybe` that applies a function to `Just x` and leaves 
 
 ## A worked `mapMaybe`
 
-```rex
+```rex,interactive
 type Maybe a = Just a | Nothing
 
 let
@@ -57,7 +57,7 @@ in
 
 There’s no special “isJust” operator — you write it with `match`:
 
-```rex
+```rex,interactive
 type Maybe a = Just a | Nothing
 
 let

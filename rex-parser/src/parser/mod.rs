@@ -314,6 +314,37 @@ impl Parser {
         Ok(end_idx)
     }
 
+    fn find_dedent_end(&self, start_idx: usize, base_indent: usize) -> Result<usize, ParserErr> {
+        let mut depth = 0usize;
+        let mut end_idx = start_idx;
+        for i in start_idx..self.tokens.len() {
+            let tok = &self.tokens[i];
+            match tok {
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                Token::WhitespaceNewline(..) if depth == 0 => {
+                    let mut j = i + 1;
+                    while j < self.tokens.len()
+                        && matches!(self.tokens[j], Token::WhitespaceNewline(..))
+                    {
+                        j += 1;
+                    }
+                    if j >= self.tokens.len() {
+                        return Ok(i);
+                    }
+                    if self.tokens[j].span().begin.column <= base_indent {
+                        return Ok(i);
+                    }
+                }
+                _ => {}
+            }
+            end_idx = i + 1;
+        }
+        Ok(end_idx)
+    }
+
     fn paren_group_has_top_level_comma(&self, paren_start: usize) -> bool {
         let mut depth = 0usize;
         for i in (paren_start + 1)..self.tokens.len() {
@@ -556,103 +587,102 @@ impl Parser {
         Ok(program)
     }
 
-    pub fn parse_program_with_stack_size(
-        self,
-        stack_size: usize,
-    ) -> Result<Program, Vec<ParserErr>> {
-        crate::stack::parse_program_with_stack_size(self, stack_size)
-    }
-
     fn parse_expr(&mut self) -> Result<Expr, ParserErr> {
-        let lhs_expr = self.parse_unary_expr()?;
-        self.parse_binary_expr(lhs_expr)
+        let span = *self.current_token().span();
+        self.with_nesting(span, |this| {
+            let lhs_expr = this.parse_unary_expr()?;
+            this.parse_binary_expr(lhs_expr)
+        })
     }
 
     fn parse_binary_expr(&mut self, lhs_expr: Expr) -> Result<Expr, ParserErr> {
-        let lhs_expr_span = lhs_expr.span();
+        let span = *lhs_expr.span();
+        self.with_nesting(span, move |this| {
+            let lhs_expr_span = lhs_expr.span();
 
-        // Get the next token.
-        let token = match self.current_token() {
-            // Having no next token should finish the parsing of the binary
-            // expression.
-            Token::Eof(..) => return Ok(lhs_expr),
-            token => token,
-        };
-        let prec = token.precedence();
+            // Get the next token.
+            let token = match this.current_token() {
+                // Having no next token should finish the parsing of the binary
+                // expression.
+                Token::Eof(..) => return Ok(lhs_expr),
+                token => token,
+            };
+            let prec = token.precedence();
 
-        // Parse the binary operator.
-        let operator = match token {
-            Token::Add(..) => Operator::Add,
-            Token::And(..) => Operator::And,
-            Token::Concat(..) => Operator::Concat,
-            Token::Div(..) => Operator::Div,
-            Token::Eq(..) => Operator::Eq,
-            Token::Ne(..) => Operator::Ne,
-            Token::Ge(..) => Operator::Ge,
-            Token::Gt(..) => Operator::Gt,
-            Token::Le(..) => Operator::Le,
-            Token::Lt(..) => Operator::Lt,
-            Token::Mod(..) => Operator::Mod,
-            Token::Mul(..) => Operator::Mul,
-            Token::Or(..) => Operator::Or,
-            Token::Sub(..) => Operator::Sub,
-            _ => {
-                return Ok(lhs_expr);
-            }
-        };
-        let operator_span = token.span();
+            // Parse the binary operator.
+            let operator = match token {
+                Token::Add(..) => Operator::Add,
+                Token::And(..) => Operator::And,
+                Token::Concat(..) => Operator::Concat,
+                Token::Div(..) => Operator::Div,
+                Token::Eq(..) => Operator::Eq,
+                Token::Ne(..) => Operator::Ne,
+                Token::Ge(..) => Operator::Ge,
+                Token::Gt(..) => Operator::Gt,
+                Token::Le(..) => Operator::Le,
+                Token::Lt(..) => Operator::Lt,
+                Token::Mod(..) => Operator::Mod,
+                Token::Mul(..) => Operator::Mul,
+                Token::Or(..) => Operator::Or,
+                Token::Sub(..) => Operator::Sub,
+                _ => {
+                    return Ok(lhs_expr);
+                }
+            };
+            let operator_span = token.span();
 
-        // We have now decided that this token can be parsed so we consume it.
-        self.next_token();
+            // We have now decided that this token can be parsed so we consume it.
+            this.next_token();
 
-        // Parse the next part of this binary expression.
-        let rhs_expr = self.parse_unary_expr()?;
-        let rhs_expr_span = *rhs_expr.span();
+            // Parse the next part of this binary expression.
+            let rhs_expr = this.parse_unary_expr()?;
+            let rhs_expr_span = *rhs_expr.span();
 
-        let next_binary_expr_takes_precedence = match self.current_token() {
-            // No more tokens
-            Token::Eof(..) => false,
-            // Next token has lower precedence
-            token if prec > token.precedence() => false,
-            // Next token has the same precedence
-            token if prec == token.precedence() => match token {
-                // But it is left-associative
-                Token::Add(..)
-                | Token::And(..)
-                | Token::Concat(..)
-                | Token::Div(..)
-                | Token::Mul(..)
-                | Token::Mod(..)
-                | Token::Or(..)
-                | Token::Sub(..) => false,
-                // But it is right-associative
+            let next_binary_expr_takes_precedence = match this.current_token() {
+                // No more tokens
+                Token::Eof(..) => false,
+                // Next token has lower precedence
+                token if prec > token.precedence() => false,
+                // Next token has the same precedence
+                token if prec == token.precedence() => match token {
+                    // But it is left-associative
+                    Token::Add(..)
+                    | Token::And(..)
+                    | Token::Concat(..)
+                    | Token::Div(..)
+                    | Token::Mul(..)
+                    | Token::Mod(..)
+                    | Token::Or(..)
+                    | Token::Sub(..) => false,
+                    // But it is right-associative
+                    _ => true,
+                },
+                // Next token has higher precedence
                 _ => true,
-            },
-            // Next token has higher precedence
-            _ => true,
-        };
+            };
 
-        let rhs_expr = if next_binary_expr_takes_precedence {
-            self.parse_binary_expr(rhs_expr)?
-        } else {
-            rhs_expr
-        };
+            let rhs_expr = if next_binary_expr_takes_precedence {
+                this.parse_binary_expr(rhs_expr)?
+            } else {
+                rhs_expr
+            };
 
-        let inner_span = Span::from_begin_end(lhs_expr_span.begin, operator_span.end);
-        let outer_span = Span::from_begin_end(lhs_expr_span.begin, rhs_expr_span.end);
+            let inner_span = Span::from_begin_end(lhs_expr_span.begin, operator_span.end);
+            let outer_span = Span::from_begin_end(lhs_expr_span.begin, rhs_expr_span.end);
 
-        self.parse_binary_expr(Expr::App(
-            outer_span,
-            Arc::new(Expr::App(
-                inner_span,
-                Arc::new(Expr::Var(Var::with_span(
-                    *operator_span,
-                    operator.to_string(),
-                ))),
-                Arc::new(lhs_expr),
-            )),
-            Arc::new(rhs_expr),
-        ))
+            this.parse_binary_expr(Expr::App(
+                outer_span,
+                Arc::new(Expr::App(
+                    inner_span,
+                    Arc::new(Expr::Var(Var::with_span(
+                        *operator_span,
+                        operator.to_string(),
+                    ))),
+                    Arc::new(lhs_expr),
+                )),
+                Arc::new(rhs_expr),
+            ))
+        })
     }
 
     fn parse_unary_expr(&mut self) -> Result<Expr, ParserErr> {
@@ -1351,14 +1381,14 @@ impl Parser {
                 bindings.push((var, ann, def));
 
                 match self.current_token() {
-                    Token::AndKw(..) | Token::Comma(..) => {
+                    Token::Comma(..) => {
                         self.next_token();
                     }
                     Token::In(..) => break,
                     token => {
                         return Err(ParserErr::new(
                             *token.span(),
-                            format!("expected `and` or `in` got {}", token),
+                            format!("expected `,` or `in` got {}", token),
                         ));
                     }
                 }
@@ -2021,9 +2051,9 @@ impl Parser {
             // `=`
             self.expect_assign()?;
 
-            // Parse a body expression, delimited by newline (unless inside parens/brackets/braces).
+            // Parse a body expression until dedent back to the function's indentation.
             let body_start = self.token_cursor;
-            let body_end = self.find_same_line_end(body_start)?;
+            let body_end = self.find_dedent_end(body_start, span_begin.column)?;
             let body_expr = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
             self.token_cursor = body_end;
             let body = Arc::new(body_expr);
@@ -2950,16 +2980,19 @@ impl Parser {
     }
 
     fn parse_type_fun(&mut self) -> Result<TypeExpr, ParserErr> {
-        let lhs = self.parse_type_app()?;
-        match self.current_token() {
-            Token::ArrowR(..) => {
-                self.next_token();
-                let rhs = self.parse_type_fun()?;
-                let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
-                Ok(TypeExpr::Fun(span, Box::new(lhs), Box::new(rhs)))
+        let span = *self.current_token().span();
+        self.with_nesting(span, |this| {
+            let lhs = this.parse_type_app()?;
+            match this.current_token() {
+                Token::ArrowR(..) => {
+                    this.next_token();
+                    let rhs = this.parse_type_fun()?;
+                    let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
+                    Ok(TypeExpr::Fun(span, Box::new(lhs), Box::new(rhs)))
+                }
+                _ => Ok(lhs),
             }
-            _ => Ok(lhs),
-        }
+        })
     }
 
     fn parse_type_app(&mut self) -> Result<TypeExpr, ParserErr> {
@@ -3138,14 +3171,17 @@ impl Parser {
     }
 
     fn parse_pattern_cons(&mut self) -> Result<Pattern, ParserErr> {
-        let mut lhs = self.parse_pattern_app()?;
-        while let Token::Colon(..) = self.current_token() {
-            self.next_token();
-            let rhs = self.parse_pattern_cons()?;
-            let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
-            lhs = Pattern::Cons(span, Box::new(lhs), Box::new(rhs));
-        }
-        Ok(lhs)
+        let span = *self.current_token().span();
+        self.with_nesting(span, |this| {
+            let mut lhs = this.parse_pattern_app()?;
+            while let Token::Colon(..) = this.current_token() {
+                this.next_token();
+                let rhs = this.parse_pattern_cons()?;
+                let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
+                lhs = Pattern::Cons(span, Box::new(lhs), Box::new(rhs));
+            }
+            Ok(lhs)
+        })
     }
 
     fn parse_pattern_app(&mut self) -> Result<Pattern, ParserErr> {
@@ -3712,6 +3748,61 @@ mod tests {
     }
 
     #[test]
+    fn test_max_nesting_binary_chain() {
+        let code = std::iter::repeat_n("1", 12).collect::<Vec<_>>().join(" + ");
+        let mut parser = Parser::new(Token::tokenize(&code).unwrap());
+        parser.set_limits(ParserLimits {
+            max_nesting: Some(5),
+        });
+
+        let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
+            "expected a max-nesting parse error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn test_max_nesting_type_fun_chain() {
+        let ty_chain = std::iter::repeat_n("a", 12)
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        let code = format!("let t: {ty_chain} = x in t");
+        let mut parser = Parser::new(Token::tokenize(&code).unwrap());
+        parser.set_limits(ParserLimits {
+            max_nesting: Some(5),
+        });
+
+        let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
+            "expected a max-nesting parse error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn test_max_nesting_cons_pattern_chain() {
+        let pattern = (1..=12)
+            .map(|i| format!("x{i}"))
+            .collect::<Vec<_>>()
+            .join(" : ");
+        let code = format!("match xs when {pattern} -> xs");
+        let mut parser = Parser::new(Token::tokenize(&code).unwrap());
+        parser.set_limits(ParserLimits {
+            max_nesting: Some(5),
+        });
+
+        let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
+            "expected a max-nesting parse error, got: {errs:?}"
+        );
+    }
+
+    #[test]
     fn test_add() {
         let mut parser = Parser::new(Token::tokenize("1 + 2").unwrap());
         let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
@@ -3847,6 +3938,31 @@ mod tests {
                 assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "i32"));
                 assert!(fd.constraints.is_empty());
                 assert!(!matches!(fd.body.as_ref(), Expr::Lam(..)));
+            }
+            other => panic!("expected fn decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_fn_sig_multiline_lambda() {
+        let code = r#"
+        fn f : i32 -> i32 = \x ->
+          x + 1
+        f 1
+        "#;
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+        assert_eq!(program.decls.len(), 1);
+        match &program.decls[0] {
+            Decl::Fn(fd) => {
+                assert_eq!(fd.name.name, intern("f"));
+                assert_eq!(fd.params.len(), 1);
+                assert_eq!(fd.params[0].0.name, intern("x"));
+                assert!(matches!(
+                    fd.params[0].1,
+                    TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
+                ));
+                assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "i32"));
             }
             other => panic!("expected fn decl, got {other:?}"),
         }
@@ -4349,7 +4465,7 @@ mod tests {
 
     #[test]
     fn test_let_rec_mutual_bindings() {
-        let expr = parse("let rec even = \\n -> odd n and odd = \\n -> even n in (even 0, odd 1)");
+        let expr = parse("let rec even = \\n -> odd n, odd = \\n -> even n in (even 0, odd 1)");
         match expr.as_ref() {
             Expr::LetRec(_, bindings, body) => {
                 assert_eq!(bindings.len(), 2);
@@ -4360,6 +4476,19 @@ mod tests {
                 assert!(matches!(body.as_ref(), Expr::Tuple(..)));
             }
             other => panic!("expected let rec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_and_is_ident() {
+        let expr = parse("let and = 1 in and");
+        match expr.as_ref() {
+            Expr::Let(_, var, _, def, body) => {
+                assert_eq!(var.name.as_ref(), "and");
+                assert_expr_eq!(def.clone(), u!(1); ignore span);
+                assert_expr_eq!(body.clone(), v!("and"); ignore span);
+            }
+            other => panic!("expected let, got {other:?}"),
         }
     }
 

@@ -44,8 +44,7 @@ async fn factorial_let_rec() {
 async fn mutual_even_odd_let_rec() {
     let expr = r#"
         let rec
-          even = \n -> if n == 0 then true else odd (n - 1)
-        and
+          even = \n -> if n == 0 then true else odd (n - 1),
           odd = \n -> if n == 0 then false else even (n - 1)
         in
           (even 10, odd 10, even 11, odd 11)
@@ -54,11 +53,20 @@ async fn mutual_even_odd_let_rec() {
 }
 
 #[tokio::test]
+async fn mutual_even_odd_top_level_fn_decls() {
+    let expr = r#"
+        fn even (n: i32) -> bool = if n == 0 then true else odd (n - 1)
+        fn odd (n: i32) -> bool = if n == 0 then false else even (n - 1)
+        (even 10, odd 10, even 11, odd 11)
+    "#;
+    assert_even_odd_tuple(expr).await;
+}
+
+#[tokio::test]
 async fn mutual_list_cycle_let_rec() {
     let expr = r#"
         let rec
-          a = Cons 1 b
-        and
+          a = Cons 1 b,
           b = Cons 2 a
         in
         match b

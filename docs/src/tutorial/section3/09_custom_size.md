@@ -7,7 +7,7 @@ This mirrors `rex/examples/typeclasses_custom_size.rex`.
 Use a type class to define a common “size” operation across different data types, without
 hard-coding the type at every call site.
 
-```rex
+```rex,interactive
 class Size a
   size : a -> i32
 
@@ -36,7 +36,7 @@ size (Blob { bytes = [1, 2, 3, 4] })
 
 Once you have a class, you can write functions that work for *any* type that has an instance:
 
-```rex
+```rex,interactive
 class Size a
   size : a -> i32
 

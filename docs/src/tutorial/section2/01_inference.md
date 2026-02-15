@@ -8,7 +8,7 @@ and what kinds of help work best.
 
 ## A simple inference example
 
-```rex
+```rex,interactive
 \x -> x
 ```
 
@@ -24,7 +24,7 @@ cargo run -p rex -- run --emit-type -c '\\x -> x'
 
 ## Inference plus operators
 
-```rex
+```rex,interactive
 \x -> x + 1
 ```
 

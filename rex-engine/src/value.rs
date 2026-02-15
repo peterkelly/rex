@@ -661,6 +661,44 @@ impl Value {
 type PointerKey = (u64, u32, u32);
 type PointerPairKey = (PointerKey, PointerKey);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ValueDisplayOptions {
+    pub include_numeric_suffixes: bool,
+    pub strip_internal_snippet_qualifiers: bool,
+}
+
+impl Default for ValueDisplayOptions {
+    fn default() -> Self {
+        Self::docs()
+    }
+}
+
+impl ValueDisplayOptions {
+    pub fn unsanitized() -> Self {
+        Self {
+            include_numeric_suffixes: true,
+            strip_internal_snippet_qualifiers: false,
+        }
+    }
+
+    pub fn docs() -> Self {
+        Self {
+            include_numeric_suffixes: false,
+            strip_internal_snippet_qualifiers: true,
+        }
+    }
+}
+
+fn maybe_strip_snippet_qualifier(name: &str, opts: ValueDisplayOptions) -> String {
+    if !opts.strip_internal_snippet_qualifiers || !name.starts_with("@snippet") {
+        return name.to_string();
+    }
+    if let Some((_, tail)) = name.rsplit_once('.') {
+        return tail.to_string();
+    }
+    name.to_string()
+}
+
 fn pointer_key(pointer: &Pointer) -> PointerKey {
     (pointer.heap_id, pointer.index, pointer.generation)
 }
@@ -688,13 +726,14 @@ fn pointer_display_inner(
     heap: &Heap,
     pointer: &Pointer,
     active: &mut HashSet<PointerKey>,
+    opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     let key = pointer_key(pointer);
     if !active.insert(key) {
         return Ok(format!("<cycle:{}:{}>", pointer.index, pointer.generation));
     }
     let value = heap.get(pointer)?;
-    let out = value_display_inner(heap, &value, active);
+    let out = value_display_inner(heap, &value, active, opts);
     active.remove(&key);
     out
 }
@@ -816,33 +855,94 @@ fn value_display_inner(
     heap: &Heap,
     value: &Value,
     active: &mut HashSet<PointerKey>,
+    opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     Ok(match value {
         Value::Bool(v) => v.to_string(),
-        Value::U8(v) => format!("{v}u8"),
-        Value::U16(v) => format!("{v}u16"),
-        Value::U32(v) => format!("{v}u32"),
-        Value::U64(v) => format!("{v}u64"),
-        Value::I8(v) => format!("{v}i8"),
-        Value::I16(v) => format!("{v}i16"),
-        Value::I32(v) => format!("{v}i32"),
-        Value::I64(v) => format!("{v}i64"),
-        Value::F32(v) => format!("{v}f32"),
-        Value::F64(v) => format!("{v}f64"),
+        Value::U8(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}u8")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::U16(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}u16")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::U32(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}u32")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::U64(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}u64")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::I8(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}i8")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::I16(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}i16")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::I32(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}i32")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::I64(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}i64")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::F32(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}f32")
+            } else {
+                v.to_string()
+            }
+        }
+        Value::F64(v) => {
+            if opts.include_numeric_suffixes {
+                format!("{v}f64")
+            } else {
+                v.to_string()
+            }
+        }
         Value::String(v) => format!("{v:?}"),
         Value::Uuid(v) => v.to_string(),
         Value::DateTime(v) => v.to_string(),
         Value::Tuple(values) => {
             let items = values
                 .iter()
-                .map(|pointer| pointer_display_inner(heap, pointer, active))
+                .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
                 .collect::<Result<Vec<_>, _>>()?;
             format!("({})", items.join(", "))
         }
         Value::Array(values) => {
             let items = values
                 .iter()
-                .map(|pointer| pointer_display_inner(heap, pointer, active))
+                .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
                 .collect::<Result<Vec<_>, _>>()?;
             format!("<array {}>", items.join(", "))
         }
@@ -855,7 +955,7 @@ fn value_display_inner(
                     Ok(format!(
                         "{} = {}",
                         name,
-                        pointer_display_inner(heap, pointer, active)?
+                        pointer_display_inner(heap, pointer, active, opts)?
                     ))
                 })
                 .collect::<Result<Vec<_>, EngineError>>()?;
@@ -865,13 +965,13 @@ fn value_display_inner(
             if let Some(values) = list_to_vec_opt(heap, value)? {
                 let items = values
                     .iter()
-                    .map(|pointer| pointer_display_inner(heap, pointer, active))
+                    .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
                     .collect::<Result<Vec<_>, _>>()?;
                 format!("[{}]", items.join(", "))
             } else {
-                let mut rendered = vec![name.to_string()];
+                let mut rendered = vec![maybe_strip_snippet_qualifier(name.as_ref(), opts)];
                 for pointer in args {
-                    rendered.push(pointer_display_inner(heap, pointer, active)?);
+                    rendered.push(pointer_display_inner(heap, pointer, active, opts)?);
                 }
                 rendered.join(" ")
             }
@@ -889,8 +989,16 @@ pub fn value_debug(heap: &Heap, value: &Value) -> Result<String, EngineError> {
 }
 
 pub fn value_display(heap: &Heap, value: &Value) -> Result<String, EngineError> {
+    value_display_with(heap, value, ValueDisplayOptions::default())
+}
+
+pub fn value_display_with(
+    heap: &Heap,
+    value: &Value,
+    opts: ValueDisplayOptions,
+) -> Result<String, EngineError> {
     let mut active = HashSet::new();
-    value_display_inner(heap, value, &mut active)
+    value_display_inner(heap, value, &mut active, opts)
 }
 
 pub fn closure_debug(heap: &Heap, closure: &Closure) -> Result<String, EngineError> {
@@ -1647,5 +1755,44 @@ mod tests {
             .pointer_as_i32(&pointer)
             .expect("i32 pointer should decode");
         assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn value_display_default_keeps_suffixes_and_names() {
+        let heap = Heap::new();
+        let got_num = value_display(&heap, &Value::I32(2)).expect("display i32");
+        assert_eq!(got_num, "2");
+
+        let got_ctor =
+            value_display(&heap, &Value::Adt(sym("@snippetabc.A"), vec![])).expect("display adt");
+        assert_eq!(got_ctor, "A");
+    }
+
+    #[test]
+    fn value_display_unsanitized_keeps_suffixes_and_names() {
+        let heap = Heap::new();
+        let opts = ValueDisplayOptions::unsanitized();
+        let got_num = value_display_with(&heap, &Value::I32(2), opts).expect("display i32");
+        assert_eq!(got_num, "2i32");
+
+        let got_ctor = value_display_with(&heap, &Value::Adt(sym("@snippetabc.A"), vec![]), opts)
+            .expect("display adt");
+        assert_eq!(got_ctor, "@snippetabc.A");
+    }
+
+    #[test]
+    fn value_display_docs_mode_strips_internal_noise() {
+        let heap = Heap::new();
+        let opts = ValueDisplayOptions::docs();
+        let got_num = value_display_with(&heap, &Value::I32(2), opts).expect("display i32 docs");
+        assert_eq!(got_num, "2");
+
+        let got_ctor = value_display_with(&heap, &Value::Adt(sym("@snippetabc.A"), vec![]), opts)
+            .expect("display adt docs");
+        assert_eq!(got_ctor, "A");
+
+        let got_non_snippet = value_display_with(&heap, &Value::Adt(sym("pkg.A"), vec![]), opts)
+            .expect("display non-snippet adt docs");
+        assert_eq!(got_non_snippet, "pkg.A");
     }
 }

@@ -2,7 +2,7 @@
 
 The prelude defines:
 
-```rex
+```rex,interactive
 class Functor f
   map : (a -> b) -> f a -> f b
 ```
@@ -14,7 +14,7 @@ good fit for `map`.
 
 ## Mapping over lists
 
-```rex
+```rex,interactive
 map ((*) 2) [1, 2, 3]
 ```
 
@@ -24,7 +24,7 @@ Each element is transformed independently; list length stays the same.
 
 ## Mapping over `Option`
 
-```rex
+```rex,interactive
 ( map ((+) 1) (Some 41)
 , map ((+) 1) None
 )
@@ -34,7 +34,7 @@ Each element is transformed independently; list length stays the same.
 
 ## Mapping over `Result`
 
-```rex
+```rex,interactive
 ( map ((*) 2) (Ok 21)
 , map ((*) 2) (Err "boom")
 )
@@ -46,7 +46,7 @@ Each element is transformed independently; list length stays the same.
 
 Instead of branching on shapes early, keep your code “in the functor”:
 
-```rex
+```rex,interactive
 let inc = \x -> x + 1 in
   map inc (Some 1)
 ```

@@ -8,7 +8,7 @@ This page is about the “tools” you use to make types explicit when inference
 
 Examples of primitive and constructed types:
 
-```rex
+```rex,interactive
 -- bool, i32, f32, string
 -- (a, b) for tuples
 -- List a, Option a, Result a e (prelude)
@@ -16,13 +16,13 @@ Examples of primitive and constructed types:
 
 Function types are right-associative:
 
-```rex
+```rex,interactive
 i32 -> i32 -> i32
 ```
 
 means:
 
-```rex
+```rex,interactive
 i32 -> (i32 -> i32)
 ```
 
@@ -30,25 +30,25 @@ i32 -> (i32 -> i32)
 
 Record types use `:`:
 
-```rex
+```rex,interactive
 { x: i32, y: i32 }
 ```
 
 Record values use `=`:
 
-```rex
+```rex,interactive
 { x = 1, y = 2 }
 ```
 
 ## Let annotations
 
-```rex
+```rex,interactive
 let x: i32 = 1 in x
 ```
 
 ## Lambda parameter annotations
 
-```rex
+```rex,interactive
 \(x: i32) -> x + 1
 ```
 
@@ -56,7 +56,7 @@ let x: i32 = 1 in x
 
 You can also annotate via a let-binding when you want to force a particular type:
 
-```rex
+```rex,interactive
 let xs: List i32 = [1, 2, 3] in xs
 ```
 
@@ -64,7 +64,7 @@ let xs: List i32 = [1, 2, 3] in xs
 
 Rex also supports an expression-level “ascription” form:
 
-```rex
+```rex,interactive
 ({ a = 1, b = 2 }) is Dict i32
 ```
 

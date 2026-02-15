@@ -18,7 +18,7 @@ A Rex program consists of:
 
 Example:
 
-```rex
+```rex,interactive
 fn inc : i32 -> i32 = \x -> x + 1
 
 let
@@ -33,7 +33,7 @@ Rex modules are `.rex` files. Imports are top-level declarations.
 
 Supported forms:
 
-```rex
+```rex,interactive
 import foo.bar as Bar
 import foo.bar (*)
 import foo.bar (x, y as z)
@@ -87,7 +87,7 @@ The lambda syntax is `\x -> expr`. Some docs/examples may also use Unicode `λ` 
 
 Application is left-associative: `f x y` parses as `(f x) y`.
 
-```rex
+```rex,interactive
 let add = \x y -> x + y in add 1 2
 ```
 
@@ -95,7 +95,7 @@ let add = \x y -> x + y in add 1 2
 
 Let binds one or more definitions and then evaluates a body:
 
-```rex
+```rex,interactive
 let
   x = 1 + 2,
   y = 3
@@ -105,19 +105,35 @@ in
 
 Let bindings are polymorphic (HM “let-generalization”):
 
-```rex
+```rex,interactive
 let id = \x -> x in (id 1, id true, id "hi")
 ```
 
+### Recursive Let (`let rec`)
+
+Use `let rec` for self-recursive and mutually-recursive bindings.
+
+```rex,interactive
+let rec
+  even = \n -> if n == 0 then true else odd (n - 1),
+  odd = \n -> if n == 0 then false else even (n - 1)
+in
+  (even 10, odd 11)
+```
+
+Notes:
+
+- Bindings in `let rec` are separated by commas.
+
 ### If-Then-Else
 
-```rex
+```rex,interactive
 if 1 < 2 then "ok" else "no"
 ```
 
 ### Tuples, Lists, Dictionaries
 
-```rex
+```rex,interactive
 (1, "hi", true)
 [1, 2, 3]
 { a = 1, b = 2 }
@@ -133,7 +149,7 @@ Notes:
 
 `match` performs structural matching with one or more `when` arms:
 
-```rex
+```rex,interactive
 match xs
   when Empty -> 0
   when Cons h t -> h
@@ -179,13 +195,13 @@ Functions are right-associative: `a -> b -> c` means `a -> (b -> c)`.
 
 Define an ADT with `type`:
 
-```rex
+```rex,interactive
 type Maybe a = Just a | Nothing
 ```
 
 Constructors are values (functions) in the prelude environment:
 
-```rex
+```rex,interactive
 Just 1
 Nothing
 ```
@@ -194,7 +210,7 @@ Nothing
 
 ADT variants can carry a record payload:
 
-```rex
+```rex,interactive
 type User = User { name: string, age: i32 }
 
 let u: User = User { name = "Ada", age = 36 } in u
@@ -204,13 +220,13 @@ let u: User = User { name = "Ada", age = 36 } in u
 
 Annotate let bindings, lambda parameters, and function declarations:
 
-```rex
+```rex,interactive
 let x: i32 = 1 in x
 ```
 
 Annotations can mention ADTs and prelude types:
 
-```rex
+```rex,interactive
 let xs: List i32 = [1, 2, 3] in xs
 ```
 
@@ -229,7 +245,7 @@ Projection and update are valid when the field is *definitely available* on the 
 
 Example (multi-variant refinement via `match`):
 
-```rex
+```rex,interactive
 type Sum = A { x: i32 } | B { x: i32 }
 
 let s: Sum = A { x = 1 } in
@@ -244,29 +260,42 @@ match s
 
 Top-level functions are declared with an explicit type signature and a value (typically a lambda):
 
-```rex
+```rex,interactive
 fn add : i32 -> i32 -> i32 = \x y -> x + y
+```
+
+Top-level `fn` declarations are mutually recursive, so they can refer to each other in the same
+module:
+
+```rex,interactive
+fn even : i32 -> bool = \n ->
+  if n == 0 then true else odd (n - 1)
+
+fn odd : i32 -> bool = \n ->
+  if n == 0 then false else even (n - 1)
+
+even 10
 ```
 
 ### Type Classes (`class`)
 
 Type classes declare overloaded operations. Method signatures live in the class:
 
-```rex
+```rex,interactive
 class Size a
   size : a -> i32
 ```
 
 Methods can be operators (use parentheses to refer to them as values if needed):
 
-```rex
+```rex,interactive
 class Eq a
   == : a -> a -> bool
 ```
 
 Superclasses use `<=` (read “requires”):
 
-```rex
+```rex,interactive
 class Ord a <= Eq a
   < : a -> a -> bool
 ```
@@ -275,7 +304,7 @@ class Ord a <= Eq a
 
 Instances attach method implementations to a concrete head type, optionally with constraints:
 
-```rex
+```rex,interactive
 class Size a
   size : a -> i32
 
@@ -288,7 +317,7 @@ instance Size (List t)
 
 Instance contexts use `<=`:
 
-```rex
+```rex,interactive
 class Pretty a
   pretty : a -> string
 
@@ -324,7 +353,7 @@ Rex ships a prelude that provides common abstractions and instances. Highlights:
 
 Example: `Functor` across different container types:
 
-```rex
+```rex,interactive
 ( map ((*) 2) [1, 2, 3]
 , map ((+) 1) (Some 41)
 , map ((*) 2) (Ok 21)
@@ -333,7 +362,7 @@ Example: `Functor` across different container types:
 
 Example: `Indexable`:
 
-```rex
+```rex,interactive
 get 0 [10, 20, 30]
 ```
 
@@ -344,7 +373,7 @@ This matters for expressions like `zero` where no concrete type is otherwise for
 
 Example:
 
-```rex
+```rex,interactive
 zero
 ```
 

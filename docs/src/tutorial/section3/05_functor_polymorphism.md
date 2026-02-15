@@ -7,7 +7,7 @@ This demonstrates deferred resolution of a `Functor` method value.
 Understand why one definition of `f` can work for lists, options, and results, and how to avoid
 ambiguity when working with overloaded methods.
 
-```rex
+```rex,interactive
 let f = map ((+) 1) in
   ( f [1, 2, 3]
   , f (Some 41)
@@ -24,7 +24,7 @@ the `Functor` instance until you apply `f` to a concrete container.
 
 Start by binding the method value:
 
-```rex
+```rex,interactive
 let f = map ((+) 1) in f
 ```
 
@@ -32,7 +32,7 @@ At this point, `f` is still a function, so Rex can keep it “overloaded”.
 
 Now apply it to a list:
 
-```rex
+```rex,interactive
 let f = map ((+) 1) in f [1, 2, 3]
 ```
 
@@ -45,7 +45,7 @@ Some overloaded values are ambiguous if you don’t force a type. For example, `
 
 Fix it by forcing a type:
 
-```rex
+```rex,interactive
 let x: Option i32 = pure 1 in x
 ```
 

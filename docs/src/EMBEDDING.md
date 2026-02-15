@@ -510,10 +510,10 @@ let v = engine.eval_with_gas(expr.as_ref(), &mut gas).await?;
 assert_eq!(Maybe::<i32>::from_value(&v, "v")?, Maybe::Just(1));
 ```
 
-## Stack Size Entry Points
+## Depth Limits
 
-Some workloads (very deep nesting) can overflow the default thread stack. The project exposes
-“large stack” entry points:
+Some workloads (very deep nesting) can exhaust parser/typechecker recursion depth. Prefer bounded
+limits for untrusted code:
 
-- `rex_parser::Parser::parse_program_with_stack_size`
-- `rex_ts::TypeSystem::infer_with_stack_size`
+- `rex_parser::ParserLimits::safe_defaults`
+- `rex_ts::TypeSystemLimits::safe_defaults`

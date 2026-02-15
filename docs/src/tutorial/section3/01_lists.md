@@ -19,7 +19,7 @@ increment).
 
 ## Double everything
 
-```rex
+```rex,interactive
 map ((*) 2) [1, 2, 3, 4]
 ```
 
@@ -32,7 +32,7 @@ map ((*) 2) [1, 2, 3, 4]
 
 The one-liner above is idiomatic, but while learning it helps to name each step:
 
-```rex
+```rex,interactive
 let
   xs = [1, 2, 3, 4],
   doubled = map ((*) 2) xs
@@ -46,7 +46,7 @@ This style also makes it easier to debug by temporarily returning an intermediat
 
 Filtering needs a predicate `a -> bool`. Let’s define one:
 
-```rex
+```rex,interactive
 let
   is_even = \x -> (x % 2) == 0
 in
@@ -55,7 +55,7 @@ in
 
 Now combine `filter` and `map`:
 
-```rex
+```rex,interactive
 let
   xs = [1, 2, 3, 4, 5, 6],
   is_even = \x -> (x % 2) == 0
@@ -67,7 +67,7 @@ in
 
 Try changing the predicate to keep odd numbers instead:
 
-```rex
+```rex,interactive
 let is_odd = \x -> (x % 2) != 0 in filter is_odd [1, 2, 3, 4, 5, 6]
 ```
 
@@ -76,7 +76,7 @@ let is_odd = \x -> (x % 2) != 0 in filter is_odd [1, 2, 3, 4, 5, 6]
 Because application is left-associative, nesting calls without parentheses does not do what you
 want. Prefer:
 
-```rex
+```rex,interactive
 map ((+) 1) (filter is_even xs)
 ```
 

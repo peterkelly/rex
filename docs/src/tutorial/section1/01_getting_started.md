@@ -31,7 +31,7 @@ you’ll get a parse/type/eval error (often with a span).
 
 Even with declarations, the program result is the final expression:
 
-```rex
+```rex,interactive
 fn inc : i32 -> i32 = \x -> x + 1
 
 let xs = [1, 2, 3] in
@@ -48,14 +48,14 @@ The program above:
 
 Line comments start with `--`:
 
-```rex
+```rex,interactive
 -- This is a comment
 1 + 2
 ```
 
 Block comments use `{- ... -}` and can nest:
 
-```rex
+```rex,interactive
 {- Outer
    {- Inner -}
 -}
@@ -66,7 +66,7 @@ true
 
 Most whitespace is insignificant, but some constructs are easiest to read in “layout style”:
 
-```rex
+```rex,interactive
 let
   x = 1,
   y = 2
@@ -79,14 +79,14 @@ multi-line layout tends to be easier to debug.
 
 Type-class and instance method blocks are also written by indentation:
 
-```rex
+```rex,interactive
 class Size a
   size : a -> i32
 ```
 
 You may also see the optional `where` keyword in class/instance headers:
 
-```rex
+```rex,interactive
 class Size a where
   size : a -> i32
 ```
@@ -97,7 +97,7 @@ Both forms are accepted.
 
 Create a file `hello.rex`:
 
-```rex
+```rex,interactive
 let
   greet = \name -> "hello, " + name
 in

@@ -11,7 +11,7 @@ Model a `User` record, read its fields, and produce an updated copy.
 
 ## Step 1: define and update
 
-```rex
+```rex,interactive
 type User = User { name: string, age: i32 }
 
 let
@@ -29,7 +29,7 @@ in
 
 ## Step 2: update multiple fields
 
-```rex
+```rex,interactive
 type User = User { name: string, age: i32 }
 
 let
@@ -49,7 +49,7 @@ in
 Projection/update is only allowed when a field is *definitely available* on the type. With a
 multi-variant ADT, you often refine it with `match` first:
 
-```rex
+```rex,interactive
 type Sum = A { x: i32 } | B { x: i32 }
 
 let s: Sum = A { x = 1 } in

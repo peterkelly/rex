@@ -7,19 +7,19 @@ Records are key/value structures with named fields. Rex supports:
 
 At the value level, “record” literals are written like dicts:
 
-```rex
+```rex,interactive
 { x = 1, y = 2 }
 ```
 
 At the type level, record types are written with `:`:
 
-```rex
+```rex,interactive
 { x: i32, y: i32 }
 ```
 
 ## Projection
 
-```rex
+```rex,interactive
 let p = { x = 1, y = 2 } in p.x
 ```
 
@@ -30,14 +30,14 @@ Projection is accepted when the field is *definitely available* on the type (see
 
 ## Update
 
-```rex
+```rex,interactive
 let p = { x = 1, y = 2 } in
   { p with { x = p.x + 10 } }
 ```
 
 Updates can set multiple fields at once:
 
-```rex
+```rex,interactive
 let p = { x = 1, y = 2 } in
   { p with { x = 100, y = 200 } }
 ```
@@ -46,7 +46,7 @@ let p = { x = 1, y = 2 } in
 
 This is a common pattern:
 
-```rex
+```rex,interactive
 type Sum = A { x: i32 } | B { x: i32 }
 
 let s: Sum = A { x = 1 } in

@@ -39,7 +39,6 @@ impl Precedence {
 #[serde(rename_all = "lowercase")]
 pub enum Token {
     // Reserved keywords
-    AndKw(Span),
     As(Span),
     Class(Span),
     Declare(Span),
@@ -162,9 +161,7 @@ impl Token {
             // etc. Keep the match chain and the regex in sync.
             let token =
                 // Reserved keywords
-                if capture.name("AndKw").is_some() {
-                    Token::AndKw(span)
-                } else if capture.name("As").is_some() {
+                if capture.name("As").is_some() {
                     Token::As(span)
                 } else if capture.name("Class").is_some() {
                     Token::Class(span)
@@ -359,7 +356,6 @@ impl Token {
         let compiled = TOKEN_REGEX.get_or_init(|| {
             regex::Regex::from_str(concat!(
                 // Reserved keywords (with word boundaries)
-                r"(?P<AndKw>\band\b)|",
                 r"(?P<As>\bas\b)|",
                 r"(?P<Class>\bclass\b)|",
                 r"(?P<Declare>\bdeclare\b)|",
@@ -469,7 +465,6 @@ impl Spanned for Token {
 
         match self {
             // Reserved keywords
-            AndKw(span, ..) => span,
             As(span, ..) => span,
             Class(span, ..) => span,
             Declare(span, ..) => span,
@@ -553,7 +548,6 @@ impl Spanned for Token {
 
         match self {
             // Reserved keywords
-            AndKw(span, ..) => span,
             As(span, ..) => span,
             Class(span, ..) => span,
             Declare(span, ..) => span,
@@ -639,7 +633,6 @@ impl Display for Token {
 
         match self {
             // Reserved keywords
-            AndKw(..) => write!(f, "and"),
             As(..) => write!(f, "as"),
             Class(..) => write!(f, "class"),
             Declare(..) => write!(f, "declare"),

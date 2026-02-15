@@ -26,7 +26,7 @@ Regression tests live in:
 
 Top-level imports support three forms:
 
-```rex
+```rex,interactive
 import foo.bar as Bar
 import foo.bar (*)
 import foo.bar (x, y, z as q)
@@ -54,13 +54,45 @@ Only exported (`pub`) values are importable through `(*)` and item clauses.
 - Importing a name that conflicts with a local top-level declaration is a module error.
 - Importing the same unqualified name more than once (including via aliasing) is a module error.
 
+## Let Rec Bindings
+
+### Syntax
+
+Recursive bindings use `let rec` with comma-separated entries:
+
+```rex,interactive
+let rec
+  a = ...,
+  b = ...
+in
+  body
+```
+
+Rules:
+
+- `let rec` entries are separated by commas.
+- `let rec` bindings must bind variables (not arbitrary patterns).
+
+## Top-Level `fn` Recursion
+
+Top-level `fn` declarations are mutually recursive within a module.
+
+This means:
+
+- A top-level `fn` may reference itself.
+- A top-level `fn` may reference other top-level `fn` declarations in the same module, regardless of
+  declaration order.
+
+Operationally, top-level `fn` recursion follows the same fixed-point semantics as recursive
+bindings in `let rec`, but at declaration scope.
+
 ## Record Projection
 
 ### Syntax
 
 Field projection is an expression:
 
-```rex
+```rex,interactive
 base.field
 ```
 
@@ -94,7 +126,7 @@ non-record-like value.
 
 Record update is an expression:
 
-```rex
+```rex,interactive
 { base with { field1 = e1, field2 = e2 } }
 ```
 
@@ -123,7 +155,7 @@ The typechecker refines “which constructor is known” via two mechanisms:
 
 This enables the common pattern:
 
-```rex
+```rex,interactive
 type Sum = A { x: i32 } | B { x: i32 }
 
 let s: Sum = A { x = 1 } in
@@ -189,7 +221,7 @@ Regression: `spec_typeclass_method_value_without_type_is_ambiguous` (`rex/tests/
 If a class method is used as a *function value*, the engine may defer instance selection until the
 function is applied with concrete argument types. This supports idioms like:
 
-```rex
+```rex,interactive
 let f = map ((+) 1) in
   ( f [1, 2, 3]
   , f (Some 41)
@@ -255,7 +287,7 @@ If no candidate satisfies all predicates, `α` remains ambiguous.
 Example: `zero` (type `α` with `AdditiveMonoid α`) defaults to `f32` when no other concrete type is
 present:
 
-```rex
+```rex,interactive
 zero
 ```
 
@@ -264,6 +296,6 @@ Regression: `spec_defaulting_picks_a_concrete_type_for_numeric_classes` (`rex/te
 Example: adding an `i32` literal causes `i32` to become an earlier candidate, so defaulting picks
 `i32`:
 
-```rex
+```rex,interactive
 let _ = 1 in zero
 ```

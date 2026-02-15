@@ -11,8 +11,8 @@ use rex_ast::expr::{
 };
 use rex_ts::{
     AdtDecl, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type, TypeError, TypeKind,
-    TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails,
-    instantiate, unify,
+    TypeSystem, TypeSystemLimits, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst,
+    entails, instantiate, unify,
 };
 use rex_util::GasMeter;
 
@@ -1183,6 +1183,10 @@ where
         Ok(engine)
     }
 
+    pub fn set_type_system_limits(&mut self, limits: TypeSystemLimits) {
+        self.types.set_limits(limits);
+    }
+
     pub fn into_heap(self) -> Heap {
         self.heap
     }
@@ -1581,57 +1585,98 @@ where
     }
 
     pub fn inject_fn_decl(&mut self, decl: &FnDecl) -> Result<(), EngineError> {
-        // First, register the generalized scheme in the type environment so
-        // later declarations (including instance method bodies) can typecheck.
-        self.types.inject_fn_decl(decl).map_err(EngineError::Type)?;
+        self.inject_fn_decls(std::slice::from_ref(decl))
+    }
 
-        // Then, evaluate the lowered lambda and stash the runtime value in the
-        // global environment. This makes function values visible to instance
-        // methods without relying on call-site environments.
-        let mut lam_body = decl.body.clone();
-        for (idx, (param, ann)) in decl.params.iter().enumerate().rev() {
-            let lam_constraints = if idx == 0 {
-                decl.constraints.clone()
-            } else {
-                Vec::new()
-            };
-            let span = param.span;
-            lam_body = Arc::new(Expr::Lam(
-                span,
-                Scope::new_sync(),
-                param.clone(),
-                Some(ann.clone()),
-                lam_constraints,
-                lam_body,
-            ));
+    pub fn inject_fn_decls(&mut self, decls: &[FnDecl]) -> Result<(), EngineError> {
+        if decls.is_empty() {
+            return Ok(());
         }
 
-        let typed = self.type_check(lam_body.as_ref())?;
-        let (param_ty, _ret_ty) =
-            split_fun(&typed.typ).ok_or_else(|| EngineError::NotCallable(typed.typ.to_string()))?;
-        let TypedExprKind::Lam { param, body } = &typed.kind else {
-            return Err(EngineError::Internal(
-                "fn declaration did not lower to lambda".into(),
-            ));
-        };
-        let ptr = self.heap().alloc_closure(
-            self.env.clone(),
-            param.clone(),
-            param_ty,
-            typed.typ.clone(),
-            Arc::new(body.as_ref().clone()),
-        )?;
-        self.env = self.env.extend(decl.name.name.clone(), ptr);
+        // Register declared types first so bodies can typecheck mutually-recursively.
+        self.types
+            .inject_fn_decls(decls)
+            .map_err(EngineError::Type)?;
+
+        // Build a recursive runtime environment with placeholders, then fill each slot.
+        let mut env_rec = self.env.clone();
+        let mut slots = Vec::with_capacity(decls.len());
+        for decl in decls {
+            let placeholder = self.heap().alloc_uninitialized(decl.name.name.clone())?;
+            env_rec = env_rec.extend(decl.name.name.clone(), placeholder.clone());
+            slots.push(placeholder);
+        }
+
+        let saved_env = self.env.clone();
+        self.env = env_rec.clone();
+
+        let result: Result<(), EngineError> = (|| {
+            for (decl, slot) in decls.iter().zip(slots.iter()) {
+                let mut lam_body = decl.body.clone();
+                for (idx, (param, ann)) in decl.params.iter().enumerate().rev() {
+                    let lam_constraints = if idx == 0 {
+                        decl.constraints.clone()
+                    } else {
+                        Vec::new()
+                    };
+                    let span = param.span;
+                    lam_body = Arc::new(Expr::Lam(
+                        span,
+                        Scope::new_sync(),
+                        param.clone(),
+                        Some(ann.clone()),
+                        lam_constraints,
+                        lam_body,
+                    ));
+                }
+
+                let typed = self.type_check(lam_body.as_ref())?;
+                let (param_ty, _ret_ty) = split_fun(&typed.typ)
+                    .ok_or_else(|| EngineError::NotCallable(typed.typ.to_string()))?;
+                let TypedExprKind::Lam { param, body } = &typed.kind else {
+                    return Err(EngineError::Internal(
+                        "fn declaration did not lower to lambda".into(),
+                    ));
+                };
+                let ptr = self.heap().alloc_closure(
+                    self.env.clone(),
+                    param.clone(),
+                    param_ty,
+                    typed.typ.clone(),
+                    Arc::new(body.as_ref().clone()),
+                )?;
+                let value = self.heap().get(&ptr)?;
+                self.heap().overwrite(slot, value.as_ref().clone())?;
+            }
+            Ok(())
+        })();
+
+        if result.is_err() {
+            self.env = saved_env;
+            return result;
+        }
+
+        self.env = env_rec;
         Ok(())
     }
 
     pub fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+        let mut pending_fns: Vec<FnDecl> = Vec::new();
         for decl in decls {
+            if let Decl::Fn(fd) = decl {
+                pending_fns.push(fd.clone());
+                continue;
+            }
+            if !pending_fns.is_empty() {
+                self.inject_fn_decls(&pending_fns)?;
+                pending_fns.clear();
+            }
+
             match decl {
                 Decl::Type(ty) => self.inject_type_decl(ty)?,
                 Decl::Class(class_decl) => self.inject_class_decl(class_decl)?,
                 Decl::Instance(inst_decl) => self.inject_instance_decl(inst_decl)?,
-                Decl::Fn(fd) => self.inject_fn_decl(fd)?,
+                Decl::Fn(..) => {}
                 Decl::DeclareFn(df) => {
                     self.types
                         .inject_declare_fn_decl(df)
@@ -1639,6 +1684,9 @@ where
                 }
                 Decl::Import(..) => {}
             }
+        }
+        if !pending_fns.is_empty() {
+            self.inject_fn_decls(&pending_fns)?;
         }
         Ok(())
     }

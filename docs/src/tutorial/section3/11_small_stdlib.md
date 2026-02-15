@@ -7,7 +7,7 @@ It’s common to build small helpers with `let` and reuse them.
 Practice building tiny “glue” functions that keep your code readable, especially when composing
 many operations.
 
-```rex
+```rex,interactive
 let
   compose = \f g x -> f (g x),
   inc = \x -> x + 1,
@@ -25,7 +25,7 @@ Write `double_then_inc` and confirm it produces a different result.
 
 Sometimes it’s clearer to read left-to-right:
 
-```rex
+```rex,interactive
 let
   pipe = \x f -> f x,
   pipe2 = \x f g -> g (f x),

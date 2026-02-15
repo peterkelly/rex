@@ -2,7 +2,7 @@
 
 Some numeric-like prelude operations (such as `zero`) only require type-class constraints:
 
-```rex
+```rex,interactive
 zero
 ```
 
@@ -18,13 +18,13 @@ you likely need to force a type.
 
 When you want a specific type, annotate it:
 
-```rex
+```rex,interactive
 let z: i32 = zero in z
 ```
 
 Another common fix is to use the value in a way that forces a type:
 
-```rex
+```rex,interactive
 zero + 1
 ```
 

@@ -137,27 +137,30 @@ For runtime-defined module signatures/implementations, use
 callbacks receive `&Engine<State>` so they can access `engine.state` and allocate on
 `engine.heap()`.
 
-For deeply nested programs, prefer the large-stack entrypoints:
+For deeply nested programs, keep parser/typechecker depth bounded with limits:
 
-- `rex_parser::Parser::parse_program_with_stack_size`
-- `rex_ts::TypeSystem::infer_with_stack_size`
+- `rex_parser::ParserLimits::safe_defaults`
+- `rex_ts::TypeSystemLimits::safe_defaults`
 
 ### Type Inference
 
 ```rust
 use rex_lexer::Token;
 use rex_parser::Parser;
-use rex_ts::TypeSystem;
+use rex_ts::{TypeSystem, TypeSystemLimits};
+use rex_util::GasMeter;
 
 let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
-let program = Parser::new(tokens)
-    .parse_program_with_stack_size(rex_parser::DEFAULT_STACK_SIZE_BYTES)
+let mut parser = Parser::new(tokens);
+let program = parser
+    .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("{errs:?}"))?;
 
 let mut ts = TypeSystem::with_prelude()?;
+ts.set_limits(TypeSystemLimits::safe_defaults());
 // If you parsed type/class/instance/function decls, inject them before inference:
 // for decl in &program.decls { ... }
-let (_preds, ty) = ts.infer_with_stack_size(program.expr.as_ref(), rex_ts::DEFAULT_STACK_SIZE_BYTES)?;
+let (_preds, ty) = ts.infer(program.expr.as_ref())?;
 println!("{ty}");
 ```
 

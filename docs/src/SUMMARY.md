@@ -45,6 +45,21 @@
     - [Small Standard Library](tutorial/section3/11_small_stdlib.md)
     - [Mini Project](tutorial/section3/12_mini_project.md)
 
+# Demos
+
+- [Demo Index](demos/README.md)
+  - [Factorial](demos/factorial.md)
+  - [Fibonacci](demos/fibonacci.md)
+  - [Merge Sort](demos/merge_sort.md)
+  - [Binary Search Tree](demos/binary_search_tree.md)
+  - [Expression Evaluator](demos/expression_evaluator.md)
+  - [Dijkstra Lite](demos/dijkstra_lite.md)
+  - [0/1 Knapsack](demos/knapsack_01.md)
+  - [Union-Find](demos/union_find.md)
+  - [Prefix Parser + Evaluator](demos/prefix_parser.md)
+  - [Topological Sort](demos/topological_sort.md)
+  - [N-Queens](demos/n_queens.md)
+
 # Reference
 
 - [Language Reference](LANGUAGE.md)
@@ -53,3 +68,4 @@
 - [Memory Management](MEMORY_MANAGEMENT.md)
 - [Embedding](EMBEDDING.md)
 - [Contributing](CONTRIBUTING.md)
+- [LLMs](LLMS.md)

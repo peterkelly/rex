@@ -4,13 +4,13 @@ Functions are values. The most common way to write one is a lambda.
 
 ## Lambdas
 
-```rex
+```rex,interactive
 \x -> x + 1
 ```
 
 Lambdas can take multiple arguments:
 
-```rex
+```rex,interactive
 \x y -> x + y
 ```
 
@@ -20,7 +20,7 @@ Rex also accepts the Unicode spellings `λ` and `→`.
 
 You can annotate parameters when you need to force a specific type:
 
-```rex
+```rex,interactive
 \(x: i32) -> x + 1
 ```
 
@@ -28,13 +28,13 @@ You can annotate parameters when you need to force a specific type:
 
 Function application is left-associative:
 
-```rex
+```rex,interactive
 f x y
 ```
 
 is parsed as:
 
-```rex
+```rex,interactive
 (f x) y
 ```
 
@@ -42,7 +42,7 @@ This is why parentheses are important when an argument is itself an application.
 
 ## Functions returning functions (currying)
 
-```rex
+```rex,interactive
 let add = \x -> (\y -> x + y) in
   (add 1) 2
 ```
@@ -51,7 +51,7 @@ let add = \x -> (\y -> x + y) in
 
 Because functions are curried, you can supply fewer arguments to get a new function back:
 
-```rex
+```rex,interactive
 let add1 = (+) 1 in add1 41
 ```
 
@@ -59,27 +59,39 @@ let add1 = (+) 1 in add1 41
 
 Top-level functions require an explicit type signature:
 
-```rex
+```rex,interactive
 fn add : i32 -> i32 -> i32 = \x y -> x + y
 ```
 
 This declares a function that takes an `i32` and returns another function `i32 -> i32`.
 
+Top-level `fn` declarations are mutually recursive, so they can reference each other:
+
+```rex,interactive
+fn even : i32 -> bool = \n ->
+  if n == 0 then true else odd (n - 1)
+
+fn odd : i32 -> bool = \n ->
+  if n == 0 then false else even (n - 1)
+
+even 10
+```
+
 ### Legacy `fn` header forms
 
 The parser still accepts older forms that put parameter names/types in the header:
 
-```rex
+```rex,interactive
 fn inc (x: i32) -> i32 = x + 1
 ```
 
-```rex
+```rex,interactive
 fn inc x: i32 -> i32 = x + 1
 ```
 
 For multiple parameters, the “named arrows” form looks like:
 
-```rex
+```rex,interactive
 fn add x: i32 -> y: i32 -> i32 = x + y
 ```
 
@@ -87,7 +99,7 @@ fn add x: i32 -> y: i32 -> i32 = x + y
 
 Top-level functions can also have type-class constraints:
 
-```rex
+```rex,interactive
 fn sum_list : List i32 -> i32 where Foldable List = \xs -> foldl (+) 0 xs
 ```
 

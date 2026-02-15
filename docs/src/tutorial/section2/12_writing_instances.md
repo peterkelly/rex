@@ -9,7 +9,7 @@ We’ll build a tiny container type and give it `Functor`, `Applicative`, and `M
 
 ## Step 1: define a container ADT
 
-```rex
+```rex,interactive
 type Box a = Box a
 ```
 
@@ -17,7 +17,7 @@ This is a single-variant ADT that “wraps” a value.
 
 ## Step 2: make it a Functor
 
-```rex
+```rex,interactive
 instance Functor Box where
   map = \f bx ->
     match bx
@@ -26,13 +26,13 @@ instance Functor Box where
 
 Now you can:
 
-```rex
+```rex,interactive
 map ((+) 1) (Box 41)
 ```
 
 ## Step 3: make it an Applicative
 
-```rex
+```rex,interactive
 instance Applicative Box <= Functor Box where
   pure = \x -> Box x
   ap = \bf bx ->
@@ -42,13 +42,13 @@ instance Applicative Box <= Functor Box where
 
 Try:
 
-```rex
+```rex,interactive
 ap (Box ((*) 2)) (Box 21)
 ```
 
 ## Step 4: make it a Monad
 
-```rex
+```rex,interactive
 instance Monad Box <= Applicative Box where
   bind = \f bx ->
     match bx
@@ -57,7 +57,7 @@ instance Monad Box <= Applicative Box where
 
 Try:
 
-```rex
+```rex,interactive
 bind (\x -> Box (x + 1)) (Box 41)
 ```
 

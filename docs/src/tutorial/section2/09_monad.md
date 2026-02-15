@@ -4,7 +4,7 @@ Monads are about *sequencing* computations where the next step depends on the pr
 
 In Rex, the core monad operation is `bind`:
 
-```rex
+```rex,interactive
 class Monad m <= Applicative m
   bind : (a -> m b) -> m a -> m b
 ```
@@ -15,7 +15,7 @@ If you come from Haskell: Rex’s `bind` corresponds to `(>>=)` but with the arg
 
 ## `Option` as a Monad
 
-```rex
+```rex,interactive
 let
   safe_inc = \x -> Some (x + 1),
   step = \x -> bind safe_inc x
@@ -25,7 +25,7 @@ in
 
 More realistically, you inline the next step:
 
-```rex
+```rex,interactive
 bind (\x -> Some (x + 1)) (Some 41)
 ```
 
@@ -38,7 +38,7 @@ With `Option`, monadic sequencing means “stop early if something is missing”
 
 `Result a e` is useful for short-circuiting on the first `Err`:
 
-```rex
+```rex,interactive
 let
   ok = Ok 1,
   boom = Err "boom"
@@ -52,7 +52,7 @@ in
 
 Rex doesn’t require special syntax. You can write sequencing explicitly with `bind` and lambdas:
 
-```rex
+```rex,interactive
 bind (\x ->
   bind (\y ->
     pure (x + y)

@@ -7,6 +7,11 @@ use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
+use lsp_types::{
+    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol,
+    GotoDefinitionResponse, Hover, HoverContents, Location, MarkupContent, MarkupKind, Position,
+    Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
+};
 use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
     Symbol, TypeDecl, TypeExpr, Var, intern,
@@ -23,16 +28,20 @@ use rex_ts::{
     unify,
 };
 use rex_util::{GasMeter, sha256_hex};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::RwLock;
+#[cfg(not(target_arch = "wasm32"))]
 use tower_lsp::jsonrpc::Result;
+#[cfg(not(target_arch = "wasm32"))]
 use tower_lsp::lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionOptions, CompletionParams, CompletionResponse,
-    Diagnostic, DiagnosticSeverity, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverContents,
-    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
-    Location, MarkupContent, MarkupKind, MessageType, OneOf, Position, Range, ServerCapabilities,
-    ServerInfo, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
+    CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
+    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
+    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, HoverParams,
+    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType,
+    OneOf, ReferenceParams, RenameParams, ServerCapabilities, ServerInfo,
+    TextDocumentSyncCapability, TextDocumentSyncKind,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 const MAX_DIAGNOSTICS: usize = 50;
@@ -73,6 +82,26 @@ fn clear_parse_cache(uri: &Url) {
     cache.remove(uri);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn uri_to_file_path(uri: &Url) -> Option<PathBuf> {
+    uri.to_file_path().ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn uri_to_file_path(_uri: &Url) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn url_from_file_path(path: &std::path::Path) -> Option<Url> {
+    Url::from_file_path(path).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn url_from_file_path(_path: &std::path::Path) -> Option<Url> {
+    None
+}
+
 fn tokenize_and_parse(text: &str) -> std::result::Result<(Tokens, Program), TokenizeOrParseError> {
     let tokens = Token::tokenize(text).map_err(TokenizeOrParseError::Lex)?;
     let mut parser = Parser::new(tokens.clone());
@@ -110,8 +139,10 @@ fn tokenize_and_parse_cached(
 
 #[derive(Clone)]
 struct ImportModuleInfo {
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     path: Option<PathBuf>,
     value_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>, // field -> internal name
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     export_defs: HashMap<String, Span>,
 }
 
@@ -169,19 +200,32 @@ fn inject_program_decls(
 ) -> std::result::Result<InjectedDecls, TsTypeError> {
     let mut instances = Vec::new();
     let mut prepared_target = None;
+    let mut pending_non_instances: Vec<Decl> = Vec::new();
+
+    let flush_non_instances =
+        |ts: &mut TypeSystem, pending: &mut Vec<Decl>| -> std::result::Result<(), TsTypeError> {
+            if pending.is_empty() {
+                return Ok(());
+            }
+            ts.inject_decls(pending)?;
+            pending.clear();
+            Ok(())
+        };
 
     for (idx, decl) in program.decls.iter().enumerate() {
         match decl {
             Decl::Instance(inst_decl) => {
+                flush_non_instances(ts, &mut pending_non_instances)?;
                 let prepared = ts.inject_instance_decl(inst_decl)?;
                 if want_prepared_instance.is_some_and(|want| want == idx) {
                     prepared_target = Some(prepared.clone());
                 }
                 instances.push((idx, prepared));
             }
-            _ => ts.inject_decl(decl)?,
+            _ => pending_non_instances.push(decl.clone()),
         }
     }
+    flush_non_instances(ts, &mut pending_non_instances)?;
 
     Ok((instances, prepared_target))
 }
@@ -593,7 +637,7 @@ fn prepare_program_with_imports(
     let mut ts = TypeSystem::with_prelude().map_err(|e| format!("failed to build prelude: {e}"))?;
     let mut diagnostics = Vec::new();
 
-    let importer = uri.to_file_path().ok();
+    let importer = uri_to_file_path(uri);
 
     let mut imports: HashMap<rex_ast::expr::Symbol, ImportModuleInfo> = HashMap::new();
 
@@ -926,9 +970,7 @@ fn completion_exports_for_module_alias(
     let source = if let Some(source) = rex_util::stdlib_source(&module_name) {
         source.to_string()
     } else {
-        let importer = uri
-            .to_file_path()
-            .map_err(|_| "not a file uri".to_string())?;
+        let importer = uri_to_file_path(uri).ok_or_else(|| "not a file uri".to_string())?;
         let Some(base_dir) = importer.parent() else {
             return Ok(Vec::new());
         };
@@ -964,11 +1006,13 @@ fn completion_exports_for_module_alias(
     Ok(exports.into_iter().collect())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct RexServer {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl RexServer {
     fn new(client: Client) -> Self {
         Self {
@@ -1002,6 +1046,7 @@ impl RexServer {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[tower_lsp::async_trait]
 impl LanguageServer for RexServer {
     async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
@@ -1016,6 +1061,10 @@ impl LanguageServer for RexServer {
                     ..CompletionOptions::default()
                 }),
                 definition_provider: Some(OneOf::Left(true)),
+                references_provider: Some(OneOf::Left(true)),
+                rename_provider: Some(OneOf::Left(true)),
+                document_symbol_provider: Some(OneOf::Left(true)),
+                document_formatting_provider: Some(OneOf::Left(true)),
                 ..ServerCapabilities::default()
             },
             server_info: Some(ServerInfo {
@@ -1164,6 +1213,84 @@ impl LanguageServer for RexServer {
         };
         Ok(response)
     }
+
+    async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let include_declaration = params.context.include_declaration;
+        let text = { self.documents.read().await.get(&uri).cloned() };
+
+        let Some(text) = text else {
+            return Ok(None);
+        };
+
+        let uri_for_job = uri.clone();
+        let text_for_job = text;
+        let refs = match tokio::task::spawn_blocking(move || {
+            references_for_source(&uri_for_job, &text_for_job, position, include_declaration)
+        })
+        .await
+        {
+            Ok(items) => items,
+            Err(err) => {
+                self.client
+                    .log_message(MessageType::ERROR, format!("references failed: {err}"))
+                    .await;
+                Vec::new()
+            }
+        };
+        Ok(Some(refs))
+    }
+
+    async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let new_name = params.new_name;
+        let text = { self.documents.read().await.get(&uri).cloned() };
+
+        let Some(text) = text else {
+            return Ok(None);
+        };
+
+        let uri_for_job = uri.clone();
+        let text_for_job = text;
+        let edit = match tokio::task::spawn_blocking(move || {
+            rename_for_source(&uri_for_job, &text_for_job, position, &new_name)
+        })
+        .await
+        {
+            Ok(edit) => edit,
+            Err(err) => {
+                self.client
+                    .log_message(MessageType::ERROR, format!("rename failed: {err}"))
+                    .await;
+                None
+            }
+        };
+        Ok(edit)
+    }
+
+    async fn document_symbol(
+        &self,
+        params: DocumentSymbolParams,
+    ) -> Result<Option<DocumentSymbolResponse>> {
+        let uri = params.text_document.uri;
+        let text = { self.documents.read().await.get(&uri).cloned() };
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        let symbols = document_symbols_for_source(&uri, &text);
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
+    }
+
+    async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
+        let uri = params.text_document.uri;
+        let text = { self.documents.read().await.get(&uri).cloned() };
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        Ok(format_edits_for_source(&text))
+    }
 }
 
 fn goto_definition_response(
@@ -1190,7 +1317,7 @@ fn goto_definition_response(
         if let Some(info) = imports.get(&alias_sym)
             && let Some(span) = info.export_defs.get(&field)
             && let Some(path) = info.path.as_ref()
-            && let Ok(module_uri) = Url::from_file_path(path)
+            && let Some(module_uri) = url_from_file_path(path)
         {
             return Some(GotoDefinitionResponse::Scalar(Location {
                 uri: module_uri,
@@ -1245,6 +1372,453 @@ fn goto_definition_response(
         uri: uri.clone(),
         range: span_to_range(target_span),
     }))
+}
+
+fn range_to_span(range: Range) -> Span {
+    Span::new(
+        (range.start.line + 1) as usize,
+        (range.start.character + 1) as usize,
+        (range.end.line + 1) as usize,
+        (range.end.character + 1) as usize,
+    )
+}
+
+fn pattern_bindings_with_spans(pat: &Pattern, out: &mut Vec<(String, Span)>) {
+    match pat {
+        Pattern::Var(var) => out.push((var.name.to_string(), var.span)),
+        Pattern::Named(_, _, args) => {
+            for arg in args {
+                pattern_bindings_with_spans(arg, out);
+            }
+        }
+        Pattern::Tuple(_, elems) | Pattern::List(_, elems) => {
+            for elem in elems {
+                pattern_bindings_with_spans(elem, out);
+            }
+        }
+        Pattern::Cons(_, head, tail) => {
+            pattern_bindings_with_spans(head, out);
+            pattern_bindings_with_spans(tail, out);
+        }
+        Pattern::Dict(_, fields) => {
+            for (_, pat) in fields {
+                pattern_bindings_with_spans(pat, out);
+            }
+        }
+        Pattern::Wildcard(..) => {}
+    }
+}
+
+fn collect_references_in_expr(
+    expr: &Expr,
+    ident: &str,
+    target_span: Span,
+    uri: &Url,
+    top_level_defs: &HashMap<String, Span>,
+    scope: &mut Vec<(String, Span)>,
+    out: &mut Vec<Location>,
+) {
+    match expr {
+        Expr::Var(var) => {
+            if var.name.as_ref() != ident {
+                return;
+            }
+            let resolved = scope
+                .iter()
+                .rev()
+                .find_map(|(name, span)| (name == ident).then_some(*span))
+                .or_else(|| top_level_defs.get(ident).copied());
+            if resolved.is_some_and(|span| span == target_span) {
+                out.push(Location {
+                    uri: uri.clone(),
+                    range: span_to_range(var.span),
+                });
+            }
+        }
+        Expr::Let(_, var, _ann, def, body) => {
+            collect_references_in_expr(def, ident, target_span, uri, top_level_defs, scope, out);
+            scope.push((var.name.to_string(), var.span));
+            collect_references_in_expr(body, ident, target_span, uri, top_level_defs, scope, out);
+            scope.pop();
+        }
+        Expr::LetRec(_, bindings, body) => {
+            let base_len = scope.len();
+            for (var, _ann, _def) in bindings {
+                scope.push((var.name.to_string(), var.span));
+            }
+            for (_var, _ann, def) in bindings {
+                collect_references_in_expr(
+                    def,
+                    ident,
+                    target_span,
+                    uri,
+                    top_level_defs,
+                    scope,
+                    out,
+                );
+            }
+            collect_references_in_expr(body, ident, target_span, uri, top_level_defs, scope, out);
+            scope.truncate(base_len);
+        }
+        Expr::Lam(_, _scope, param, _ann, _constraints, body) => {
+            scope.push((param.name.to_string(), param.span));
+            collect_references_in_expr(body, ident, target_span, uri, top_level_defs, scope, out);
+            scope.pop();
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            collect_references_in_expr(
+                scrutinee,
+                ident,
+                target_span,
+                uri,
+                top_level_defs,
+                scope,
+                out,
+            );
+            for (pat, arm) in arms {
+                let base_len = scope.len();
+                let mut binds = Vec::new();
+                pattern_bindings_with_spans(pat, &mut binds);
+                scope.extend(binds);
+                collect_references_in_expr(
+                    arm,
+                    ident,
+                    target_span,
+                    uri,
+                    top_level_defs,
+                    scope,
+                    out,
+                );
+                scope.truncate(base_len);
+            }
+        }
+        Expr::App(_, fun, arg) => {
+            collect_references_in_expr(fun, ident, target_span, uri, top_level_defs, scope, out);
+            collect_references_in_expr(arg, ident, target_span, uri, top_level_defs, scope, out);
+        }
+        Expr::Project(_, base, _) => {
+            collect_references_in_expr(base, ident, target_span, uri, top_level_defs, scope, out);
+        }
+        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+            for elem in elems {
+                collect_references_in_expr(
+                    elem,
+                    ident,
+                    target_span,
+                    uri,
+                    top_level_defs,
+                    scope,
+                    out,
+                );
+            }
+        }
+        Expr::Dict(_, entries) => {
+            for value in entries.values() {
+                collect_references_in_expr(
+                    value,
+                    ident,
+                    target_span,
+                    uri,
+                    top_level_defs,
+                    scope,
+                    out,
+                );
+            }
+        }
+        Expr::RecordUpdate(_, base, updates) => {
+            collect_references_in_expr(base, ident, target_span, uri, top_level_defs, scope, out);
+            for value in updates.values() {
+                collect_references_in_expr(
+                    value,
+                    ident,
+                    target_span,
+                    uri,
+                    top_level_defs,
+                    scope,
+                    out,
+                );
+            }
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            collect_references_in_expr(cond, ident, target_span, uri, top_level_defs, scope, out);
+            collect_references_in_expr(
+                then_expr,
+                ident,
+                target_span,
+                uri,
+                top_level_defs,
+                scope,
+                out,
+            );
+            collect_references_in_expr(
+                else_expr,
+                ident,
+                target_span,
+                uri,
+                top_level_defs,
+                scope,
+                out,
+            );
+        }
+        Expr::Ann(_, inner, _) => {
+            collect_references_in_expr(inner, ident, target_span, uri, top_level_defs, scope, out);
+        }
+        Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..) => {}
+    }
+}
+
+fn references_for_source(
+    uri: &Url,
+    text: &str,
+    position: Position,
+    include_declaration: bool,
+) -> Vec<Location> {
+    let Ok((tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return Vec::new();
+    };
+    let Some((ident, _token_span)) = ident_token_at_position(&tokens, position) else {
+        return Vec::new();
+    };
+
+    let Some(def_response) = goto_definition_response(uri, text, position) else {
+        return Vec::new();
+    };
+    let GotoDefinitionResponse::Scalar(def_location) = def_response else {
+        return Vec::new();
+    };
+    if def_location.uri != *uri {
+        return Vec::new();
+    }
+    let target_span = range_to_span(def_location.range);
+
+    let index = index_decl_spans(&program, &tokens);
+    let mut top_level_defs = index.fn_defs;
+    top_level_defs.extend(index.ctor_defs);
+
+    let mut refs = Vec::new();
+    if include_declaration {
+        refs.push(def_location);
+    }
+    let expr = program.expr_with_fns();
+    collect_references_in_expr(
+        expr.as_ref(),
+        &ident,
+        target_span,
+        uri,
+        &top_level_defs,
+        &mut Vec::new(),
+        &mut refs,
+    );
+    refs.sort_by_key(|location| {
+        (
+            location.range.start.line,
+            location.range.start.character,
+            location.range.end.line,
+            location.range.end.character,
+        )
+    });
+    refs.dedup_by(|a, b| a.range == b.range && a.uri == b.uri);
+    refs
+}
+
+fn rename_for_source(
+    uri: &Url,
+    text: &str,
+    position: Position,
+    new_name: &str,
+) -> Option<WorkspaceEdit> {
+    if !is_ident_like(new_name) {
+        return None;
+    }
+    let refs = references_for_source(uri, text, position, true);
+    if refs.is_empty() {
+        return None;
+    }
+    let edits: Vec<TextEdit> = refs
+        .into_iter()
+        .map(|location| TextEdit {
+            range: location.range,
+            new_text: new_name.to_string(),
+        })
+        .collect();
+    let mut changes = HashMap::new();
+    changes.insert(uri.clone(), edits);
+    Some(WorkspaceEdit {
+        changes: Some(changes),
+        document_changes: None,
+        change_annotations: None,
+    })
+}
+
+#[allow(deprecated)]
+fn symbol_for_decl(decl: &Decl) -> Option<DocumentSymbol> {
+    match decl {
+        Decl::Type(td) => Some(DocumentSymbol {
+            name: td.name.to_string(),
+            detail: Some("type".to_string()),
+            kind: SymbolKind::ENUM,
+            tags: None,
+            deprecated: None,
+            range: span_to_range(td.span),
+            selection_range: span_to_range(td.span),
+            children: Some(
+                td.variants
+                    .iter()
+                    .map(|variant| DocumentSymbol {
+                        name: variant.name.to_string(),
+                        detail: Some("variant".to_string()),
+                        kind: SymbolKind::ENUM_MEMBER,
+                        tags: None,
+                        deprecated: None,
+                        range: span_to_range(td.span),
+                        selection_range: span_to_range(td.span),
+                        children: None,
+                    })
+                    .collect(),
+            ),
+        }),
+        Decl::Fn(fd) => Some(DocumentSymbol {
+            name: fd.name.name.to_string(),
+            detail: Some("fn".to_string()),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            deprecated: None,
+            range: span_to_range(fd.span),
+            selection_range: span_to_range(fd.name.span),
+            children: None,
+        }),
+        Decl::DeclareFn(df) => Some(DocumentSymbol {
+            name: df.name.name.to_string(),
+            detail: Some("declare fn".to_string()),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            deprecated: None,
+            range: span_to_range(df.span),
+            selection_range: span_to_range(df.name.span),
+            children: None,
+        }),
+        Decl::Import(id) => Some(DocumentSymbol {
+            name: id.alias.to_string(),
+            detail: Some("import".to_string()),
+            kind: SymbolKind::MODULE,
+            tags: None,
+            deprecated: None,
+            range: span_to_range(id.span),
+            selection_range: span_to_range(id.span),
+            children: None,
+        }),
+        Decl::Class(cd) => Some(DocumentSymbol {
+            name: cd.name.to_string(),
+            detail: Some("class".to_string()),
+            kind: SymbolKind::INTERFACE,
+            tags: None,
+            deprecated: None,
+            range: span_to_range(cd.span),
+            selection_range: span_to_range(cd.span),
+            children: Some(
+                cd.methods
+                    .iter()
+                    .map(|method| DocumentSymbol {
+                        name: method.name.to_string(),
+                        detail: Some("method".to_string()),
+                        kind: SymbolKind::METHOD,
+                        tags: None,
+                        deprecated: None,
+                        range: span_to_range(cd.span),
+                        selection_range: span_to_range(cd.span),
+                        children: None,
+                    })
+                    .collect(),
+            ),
+        }),
+        Decl::Instance(id) => Some(DocumentSymbol {
+            name: format!("instance {}", id.class),
+            detail: Some("instance".to_string()),
+            kind: SymbolKind::OBJECT,
+            tags: None,
+            deprecated: None,
+            range: span_to_range(id.span),
+            selection_range: span_to_range(id.span),
+            children: Some(
+                id.methods
+                    .iter()
+                    .map(|method| DocumentSymbol {
+                        name: method.name.to_string(),
+                        detail: Some("method".to_string()),
+                        kind: SymbolKind::METHOD,
+                        tags: None,
+                        deprecated: None,
+                        range: span_to_range(*method.body.span()),
+                        selection_range: span_to_range(*method.body.span()),
+                        children: None,
+                    })
+                    .collect(),
+            ),
+        }),
+    }
+}
+
+fn document_symbols_for_source(uri: &Url, text: &str) -> Vec<DocumentSymbol> {
+    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return Vec::new();
+    };
+    program.decls.iter().filter_map(symbol_for_decl).collect()
+}
+
+fn full_document_range(text: &str) -> Range {
+    let mut line = 0u32;
+    let mut col = 0u32;
+    for ch in text.chars() {
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    Range {
+        start: Position {
+            line: 0,
+            character: 0,
+        },
+        end: Position {
+            line,
+            character: col,
+        },
+    }
+}
+
+fn format_source(text: &str) -> String {
+    let mut out = String::new();
+    let mut first = true;
+    for line in text.lines() {
+        if !first {
+            out.push('\n');
+        }
+        first = false;
+        out.push_str(line.trim_end());
+    }
+    if text.ends_with('\n') || !out.is_empty() {
+        out.push('\n');
+    }
+    out
+}
+
+fn format_edits_for_source(text: &str) -> Option<Vec<TextEdit>> {
+    let formatted = format_source(text);
+    if formatted == text {
+        return None;
+    }
+    Some(vec![TextEdit {
+        range: full_document_range(text),
+        new_text: formatted,
+    }])
 }
 
 fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
@@ -1824,7 +2398,7 @@ fn push_type_diagnostics(
     let (instances, _prepared_target) = match inject_program_decls(&mut ts, &program, None) {
         Ok(v) => v,
         Err(err) => {
-            push_ts_error(err, diagnostics);
+            push_ts_error(err, diagnostics, None, Some(&ts));
             return;
         }
     };
@@ -1832,27 +2406,154 @@ fn push_type_diagnostics(
     // Typecheck instance method bodies too, so errors inside the instance show
     // up as diagnostics.
     for (decl_idx, prepared) in instances {
+        if diagnostics.len() >= MAX_DIAGNOSTICS {
+            break;
+        }
         let Decl::Instance(inst_decl) = &program.decls[decl_idx] else {
             continue;
         };
         for method in &inst_decl.methods {
             if let Err(err) = ts.typecheck_instance_method(&prepared, method) {
-                push_ts_error(err, diagnostics);
-                return;
+                push_ts_error(err, diagnostics, Some(method.body.as_ref()), Some(&ts));
+                if diagnostics.len() >= MAX_DIAGNOSTICS {
+                    break;
+                }
             }
         }
     }
 
     if let Err(err) = ts.infer(program.expr.as_ref()) {
-        push_ts_error(err, diagnostics);
+        push_ts_error(err, diagnostics, Some(program.expr.as_ref()), Some(&ts));
     }
 }
 
-fn push_ts_error(err: TsTypeError, diagnostics: &mut Vec<Diagnostic>) {
-    let (span, message) = match err {
-        TsTypeError::Spanned { span, error } => (span, error.to_string()),
+fn unknown_var_name(err: &TsTypeError) -> Option<Symbol> {
+    match err {
+        TsTypeError::UnknownVar(name) => Some(name.clone()),
+        TsTypeError::Spanned { error, .. } => unknown_var_name(error),
+        _ => None,
+    }
+}
+
+fn collect_unbound_var_spans(
+    expr: &Expr,
+    target: &Symbol,
+    bound: &mut Vec<Symbol>,
+    out: &mut Vec<Span>,
+) {
+    match expr {
+        Expr::Var(var) => {
+            if var.name == *target && !bound.iter().any(|name| name == &var.name) {
+                out.push(var.span);
+            }
+        }
+        Expr::App(_, fun, arg) => {
+            collect_unbound_var_spans(fun, target, bound, out);
+            collect_unbound_var_spans(arg, target, bound, out);
+        }
+        Expr::Project(_, base, _) => {
+            collect_unbound_var_spans(base, target, bound, out);
+        }
+        Expr::Lam(_, _scope, param, _ann, _constraints, body) => {
+            bound.push(param.name.clone());
+            collect_unbound_var_spans(body, target, bound, out);
+            bound.pop();
+        }
+        Expr::Let(_, var, _ann, def, body) => {
+            collect_unbound_var_spans(def, target, bound, out);
+            bound.push(var.name.clone());
+            collect_unbound_var_spans(body, target, bound, out);
+            bound.pop();
+        }
+        Expr::LetRec(_, bindings, body) => {
+            let base_len = bound.len();
+            for (var, _ann, _def) in bindings {
+                bound.push(var.name.clone());
+            }
+            for (_var, _ann, def) in bindings {
+                collect_unbound_var_spans(def, target, bound, out);
+            }
+            collect_unbound_var_spans(body, target, bound, out);
+            bound.truncate(base_len);
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            collect_unbound_var_spans(cond, target, bound, out);
+            collect_unbound_var_spans(then_expr, target, bound, out);
+            collect_unbound_var_spans(else_expr, target, bound, out);
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            collect_unbound_var_spans(scrutinee, target, bound, out);
+            for (pat, arm) in arms {
+                let base_len = bound.len();
+                let mut pat_bindings = Vec::new();
+                collect_pattern_bindings(pat, &mut pat_bindings);
+                bound.extend(pat_bindings);
+                collect_unbound_var_spans(arm, target, bound, out);
+                bound.truncate(base_len);
+            }
+        }
+        Expr::Ann(_, inner, _) => {
+            collect_unbound_var_spans(inner, target, bound, out);
+        }
+        Expr::Tuple(_, items) | Expr::List(_, items) => {
+            for item in items {
+                collect_unbound_var_spans(item, target, bound, out);
+            }
+        }
+        Expr::Dict(_, kvs) | Expr::RecordUpdate(_, _, kvs) => {
+            for expr in kvs.values() {
+                collect_unbound_var_spans(expr, target, bound, out);
+            }
+            if let Expr::RecordUpdate(_, base, _) = expr {
+                collect_unbound_var_spans(base, target, bound, out);
+            }
+        }
+        Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..) => {}
+    }
+}
+
+fn push_ts_error(
+    err: TsTypeError,
+    diagnostics: &mut Vec<Diagnostic>,
+    expr: Option<&Expr>,
+    ts: Option<&TypeSystem>,
+) {
+    let unknown_target = unknown_var_name(&err);
+    let (span, message) = match &err {
+        TsTypeError::Spanned { span, error } => (*span, error.to_string()),
         other => (Span::default(), other.to_string()),
     };
+
+    if let (Some(target), Some(expr), Some(ts)) = (unknown_target, expr, ts)
+        && ts.env.lookup(&target).is_none()
+    {
+        let mut spans = Vec::new();
+        collect_unbound_var_spans(expr, &target, &mut Vec::new(), &mut spans);
+        spans.sort_unstable_by_key(|s| (s.begin.line, s.begin.column, s.end.line, s.end.column));
+        spans.dedup();
+        if !spans.is_empty() {
+            for unbound_span in spans {
+                if diagnostics.len() >= MAX_DIAGNOSTICS {
+                    break;
+                }
+                diagnostics.push(Diagnostic {
+                    range: span_to_range(unbound_span),
+                    severity: Some(DiagnosticSeverity::ERROR),
+                    message: message.clone(),
+                    source: Some("rex-ts".to_string()),
+                    ..Diagnostic::default()
+                });
+            }
+            return;
+        }
+    }
+
     diagnostics.push(Diagnostic {
         range: span_to_range(span),
         severity: Some(DiagnosticSeverity::ERROR),
@@ -3434,6 +4135,92 @@ fn is_word_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_'
 }
 
+fn in_memory_doc_uri() -> Url {
+    match Url::parse("inmemory:///docs.rex") {
+        Ok(url) => url,
+        Err(_) => panic!("static in-memory URI must parse"),
+    }
+}
+
+pub fn diagnostics_for_source(source: &str) -> Vec<Diagnostic> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    diagnostics_from_text(&uri, source)
+}
+
+pub fn completion_for_source(source: &str, line: u32, character: u32) -> Vec<CompletionItem> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    completion_items(&uri, source, Position { line, character })
+}
+
+pub fn hover_for_source(source: &str, line: u32, character: u32) -> Option<Hover> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    let position = Position { line, character };
+    let contents = hover_type_contents(&uri, source, position).or_else(|| {
+        let word = word_at_position(source, position)?;
+        hover_contents(&word)
+    })?;
+    Some(Hover {
+        contents,
+        range: None,
+    })
+}
+
+pub fn references_for_source_public(
+    source: &str,
+    line: u32,
+    character: u32,
+    include_declaration: bool,
+) -> Vec<Location> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    references_for_source(
+        &uri,
+        source,
+        Position { line, character },
+        include_declaration,
+    )
+}
+
+pub fn rename_for_source_public(
+    source: &str,
+    line: u32,
+    character: u32,
+    new_name: &str,
+) -> Option<WorkspaceEdit> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    rename_for_source(&uri, source, Position { line, character }, new_name)
+}
+
+pub fn document_symbols_for_source_public(source: &str) -> Vec<DocumentSymbol> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    document_symbols_for_source(&uri, source)
+}
+
+pub fn format_for_source_public(source: &str) -> Option<Vec<TextEdit>> {
+    format_edits_for_source(source)
+}
+
+pub fn goto_definition_for_source(source: &str, line: u32, character: u32) -> Option<Location> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    let pos = Position { line, character };
+    let response = goto_definition_response(&uri, source, pos)?;
+    match response {
+        GotoDefinitionResponse::Scalar(location) => Some(location),
+        GotoDefinitionResponse::Array(locations) => locations.into_iter().next(),
+        GotoDefinitionResponse::Link(links) => links.into_iter().next().map(|link| Location {
+            uri: link.target_uri,
+            range: link.target_range,
+        }),
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn run_stdio() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -3460,5 +4247,75 @@ process.wait p
 
         let diags = diagnostics_from_text(&uri, text);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn reports_all_unknown_var_usages() {
+        let text = r#"
+let
+  f = \x -> missing + x
+in
+  missing + (f missing)
+"#;
+
+        let diags = diagnostics_for_source(text);
+        let missing_diags = diags
+            .iter()
+            .filter(|d| d.message.contains("unbound variable") && d.message.contains("missing"))
+            .count();
+        assert_eq!(missing_diags, 3, "diagnostics: {diags:#?}");
+    }
+
+    #[test]
+    fn references_find_all_usages() {
+        let text = r#"
+let
+  x = 1
+in
+  x + x
+"#;
+        let refs = references_for_source_public(text, 4, 2, true);
+        assert_eq!(refs.len(), 3, "refs: {refs:#?}");
+    }
+
+    #[test]
+    fn rename_returns_workspace_edit() {
+        let text = r#"
+let
+  x = 1
+in
+  x + x
+"#;
+        let edit = rename_for_source_public(text, 4, 2, "value").expect("rename edit");
+        let changes = edit.changes.expect("changes map");
+        let uri = Url::parse("inmemory:///docs.rex").expect("uri");
+        let edits = changes.get(&uri).expect("uri edits");
+        assert_eq!(edits.len(), 3, "edits: {edits:#?}");
+    }
+
+    #[test]
+    fn document_symbols_returns_top_level_items() {
+        let text = r#"
+type T = A | B
+fn f : i32 -> i32 = \x -> x + 1
+let x = 0 in f x
+"#;
+        let symbols = document_symbols_for_source_public(text);
+        assert!(
+            symbols.iter().any(|s| s.name == "T"),
+            "symbols: {symbols:#?}"
+        );
+        assert!(
+            symbols.iter().any(|s| s.name == "f"),
+            "symbols: {symbols:#?}"
+        );
+    }
+
+    #[test]
+    fn formatter_returns_text_edit() {
+        let text = "let x = 1   \n";
+        let edits = format_for_source_public(text).expect("format edits");
+        assert_eq!(edits.len(), 1);
+        assert_eq!(edits[0].new_text, "let x = 1\n");
     }
 }
