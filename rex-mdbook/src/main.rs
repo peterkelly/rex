@@ -782,10 +782,8 @@ fn rewrite_book(book: &mut Value, runtime_script_src: &str) {
                 if let Some(content_value) = map.get_mut("content")
                     && let Some(content) = content_value.as_str()
                 {
-                    *content_value = Value::String(rewrite_interactive_blocks(
-                        content,
-                        runtime_script_src,
-                    ));
+                    *content_value =
+                        Value::String(rewrite_interactive_blocks(content, runtime_script_src));
                 }
                 for child in map.values_mut() {
                     walk(child, runtime_script_src);

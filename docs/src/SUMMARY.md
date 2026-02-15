@@ -60,6 +60,10 @@
   - [Topological Sort](demos/topological_sort.md)
   - [N-Queens](demos/n_queens.md)
 
+# Built-ins
+
+- [Built-in types & functions](PRELUDE.md)
+
 # Reference
 
 - [Language Reference](LANGUAGE.md)

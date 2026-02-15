@@ -1,0 +1,90 @@
+# key<TAB>description
+# keys:
+# - type:<type name>
+# - class:<class name>
+# - fn:<function name>
+type:Array	Fixed-size indexed sequence.
+type:Dict	Dictionary/record-like mapping from field labels to values.
+type:List	Immutable singly linked list.
+type:Option	Optional value (`Some` or `None`).
+type:Result	Result value (`Ok` or `Err`) for success/failure flows.
+type:bool	Boolean truth value.
+type:datetime	UTC timestamp value.
+type:f32	32-bit floating-point number.
+type:f64	64-bit floating-point number.
+type:i16	16-bit signed integer.
+type:i32	32-bit signed integer.
+type:i64	64-bit signed integer.
+type:i8	8-bit signed integer.
+type:string	UTF-8 string value.
+type:u16	16-bit unsigned integer.
+type:u32	32-bit unsigned integer.
+type:u64	64-bit unsigned integer.
+type:u8	8-bit unsigned integer.
+type:uuid	UUID value.
+class:AdditiveGroup	Types supporting additive inverse and subtraction.
+class:AdditiveMonoid	Types with additive identity and associative addition.
+class:Alternative	Applicative types with a fallback choice operation.
+class:Applicative	Functors that can lift values and apply wrapped functions.
+class:Eq	Types supporting equality/inequality comparison.
+class:Field	Types supporting division in addition to ring operations.
+class:Filterable	Functors supporting filtering and partial mapping.
+class:Foldable	Containers that can be reduced with folds.
+class:Functor	Type constructors that support structure-preserving mapping.
+class:Indexable	Containers that support indexed element access.
+class:Integral	Integral numeric types supporting modulo.
+class:Monad	Applicatives supporting dependent sequencing (`bind`).
+class:MultiplicativeMonoid	Types with multiplicative identity and associative multiplication.
+class:Ord	Types with total ordering comparisons.
+class:Pretty	Types that can be converted to user-facing strings.
+class:Ring	Types supporting additive group plus multiplication.
+class:Semiring	Types supporting additive and multiplicative monoid operations.
+class:Sequence	Ordered containers with slicing/zipping operations.
+fn:!=	Inequality comparison.
+fn:%	Remainder/modulo operation.
+fn:&&	Boolean conjunction.
+fn:*	Multiplication.
+fn:+	Addition (or concatenation for strings).
+fn:-	Subtraction.
+fn:/	Division.
+fn:<	Less-than comparison.
+fn:<=	Less-than-or-equal comparison.
+fn:==	Equality comparison.
+fn:>	Greater-than comparison.
+fn:>=	Greater-than-or-equal comparison.
+fn:Cons	Construct a non-empty list from head and tail.
+fn:Empty	The empty list constructor.
+fn:Err	Construct a failed `Result`.
+fn:None	The empty `Option` constructor.
+fn:Ok	Construct a successful `Result`.
+fn:Some	Construct a present `Option` value.
+fn:ap	Apply wrapped functions to wrapped values.
+fn:bind	Monadic flat-map/sequencing operation.
+fn:cmp	Three-way comparison returning negative/zero/positive `i32`.
+fn:count	Count elements in a foldable container.
+fn:filter	Keep elements that satisfy a predicate.
+fn:filter_map	Map and drop missing results in one pass.
+fn:fold	Left-style fold over a container.
+fn:foldl	Strict left fold.
+fn:foldr	Right fold.
+fn:get	Get an element by index.
+fn:is_err	Check whether a `Result` is `Err`.
+fn:is_none	Check whether an `Option` is `None`.
+fn:is_ok	Check whether a `Result` is `Ok`.
+fn:is_some	Check whether an `Option` is `Some`.
+fn:map	Apply a function to each value inside a functor.
+fn:max	Maximum element by ordering.
+fn:mean	Arithmetic mean over numeric foldables.
+fn:min	Minimum element by ordering.
+fn:negate	Additive inverse.
+fn:one	Multiplicative identity.
+fn:or_else	Provide an alternative container value.
+fn:pretty	Render a value as a human-readable string.
+fn:pure	Lift a plain value into an applicative context.
+fn:skip	Drop the first `n` elements.
+fn:sum	Sum all elements in a foldable container.
+fn:take	Keep only the first `n` elements.
+fn:unzip	Split a container of pairs into a pair of containers.
+fn:zero	Additive identity.
+fn:zip	Pair elements from two containers by position.
+fn:||	Boolean disjunction.
