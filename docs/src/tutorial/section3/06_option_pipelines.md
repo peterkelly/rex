@@ -69,9 +69,46 @@ in
 - Use `ap` when you have independent optional pieces and want to apply a function if all exist.
 - Use `bind` when the next step depends on the previous result.
 
-## Exercises
+## Worked examples
 
-1. Modify `step1` to also fail when `x == 0`.
-2. Write `add2opt : Option i32 -> Option i32 -> Option i32` using `ap` and `pure (\x y -> x + y)`.
-3. Use `filter_map` to validate values in a list into an `Option` and keep only the successful
-   ones.
+### Example: fail `step1` on `x == 0` too
+
+Problem: update `step1` so non-positive input fails.
+
+```rex,interactive
+let
+  step1 = \x ->
+    if x < 0 then None else
+    if x == 0 then None else
+      Some (x + 1)
+in
+  (step1 10, step1 0, step1 (0 - 1))
+```
+
+Why this works: the additional guard handles zero before success.
+
+### Example: `add2opt` via `ap` and `pure`
+
+Problem: add two optional integers when both are present.
+
+```rex,interactive
+let
+  add2opt = \ox oy -> ap (ap (pure (\x y -> x + y)) ox) oy
+in
+  (add2opt (Some 1) (Some 2), add2opt None (Some 2))
+```
+
+Why this works: `pure` lifts the function, then each `ap` applies one argument inside `Option`.
+
+### Example: validate list values with `filter_map`
+
+Problem: keep only non-negative values and increment them.
+
+```rex,interactive
+let
+  validate = \x -> if x < 0 then None else Some (x + 1)
+in
+  filter_map validate [3, (0 - 1), 0, 5]
+```
+
+Why this works: `filter_map` drops `None` results and unwraps `Some` values into the output list.

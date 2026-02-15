@@ -86,8 +86,46 @@ in
 
 over trying to “read it as English” without grouping.
 
-## Exercises
+## Worked examples
 
-1. Write `triple_then_keep_big` that triples each element, then keeps only elements greater than 10.
-2. Write a predicate `between lo hi x` and use it with `filter`.
-3. Replace `((+) 1)` with a named helper `inc` defined via `let`.
+### Example: `triple_then_keep_big`
+
+Problem: triple each element, then keep only elements greater than `10`.
+
+```rex,interactive
+let
+  xs = [1, 2, 3, 4, 5],
+  tripled = map ((*) 3) xs
+in
+  filter (\x -> x > 10) tripled
+```
+
+Why this works: `map ((*) 3)` transforms each element first, then `filter` keeps only values that
+pass the predicate.
+
+### Example: `between lo hi x` with `filter`
+
+Problem: keep only values in an inclusive range.
+
+```rex,interactive
+let
+  between = \lo hi x -> x >= lo && x <= hi
+in
+  filter (between 3 5) [1, 2, 3, 4, 5, 6]
+```
+
+Why this works: `between 3 5` is a predicate function `i32 -> bool`, which is exactly what
+`filter` expects.
+
+### Example: naming `inc` in `let`
+
+Problem: replace `((+) 1)` with a named helper.
+
+```rex,interactive
+let
+  inc = \x -> x + 1
+in
+  map inc [1, 2, 3, 4]
+```
+
+Why this works: `inc` has type `i32 -> i32`, so it can be passed directly to `map`.

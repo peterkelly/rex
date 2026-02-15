@@ -58,8 +58,53 @@ match s
   when B {x} -> { s with { x = x + 2 } }
 ```
 
-## Exercises
+## Worked examples
 
-1. Write `birthday : User -> User` and apply it twice.
-2. Add a field `admin: bool` and write `promote : User -> User` that sets it to true.
-3. Add a third constructor `C { x: i32 }` to `Sum` and update the match.
+### Example: `birthday` applied twice
+
+Problem: define `birthday : User -> User` and apply it two times.
+
+```rex,interactive
+type User = User { name: string, age: i32 }
+
+let
+  birthday = \u -> { u with { age = u.age + 1 } },
+  u0: User = User { name = "Ada", age = 36 },
+  u2 = birthday (birthday u0)
+in
+  (u0.age, u2.age)
+```
+
+Why this works: each `birthday` call returns a new `User` with `age` incremented by one.
+
+### Example: add `admin` and `promote`
+
+Problem: add a boolean field and set it to `true`.
+
+```rex,interactive
+type User = User { name: string, age: i32, admin: bool }
+
+let
+  promote = \u -> { u with { admin = true } },
+  u0: User = User { name = "Ada", age = 36, admin = false }
+in
+  promote u0
+```
+
+Why this works: record update changes only `admin`, preserving other fields.
+
+### Example: add constructor `C` and update the match
+
+Problem: extend `Sum` with `C { x: i32 }` and keep updates valid.
+
+```rex,interactive
+type Sum = A { x: i32 } | B { x: i32 } | C { x: i32 }
+
+let s: Sum = C { x = 1 } in
+match s
+  when A {x} -> { s with { x = x + 1 } }
+  when B {x} -> { s with { x = x + 2 } }
+  when C {x} -> { s with { x = x + 3 } }
+```
+
+Why this works: each arm refines `s` to a definite constructor, so the update is type-safe.

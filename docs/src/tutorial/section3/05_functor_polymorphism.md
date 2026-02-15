@@ -49,9 +49,35 @@ Fix it by forcing a type:
 let x: Option i32 = pure 1 in x
 ```
 
-## Exercises
+## Worked examples
 
-1. Replace `Ok 21` with `Err "boom"` and observe that `map` does not change the error.
-2. Create `g = map (\x -> x * x)` and apply it to a list and an option.
-3. Try writing `pure 1` without a type annotation and see the error; then fix it with an
-   annotation.
+### Example: mapping over `Err`
+
+Problem: verify that `map` does not change the error branch.
+
+```rex,interactive
+map ((+) 1) (Err "boom")
+```
+
+Why this works: `Functor (Result e)` maps only the `Ok` value, leaving `Err` unchanged.
+
+### Example: one `g`, list and option
+
+Problem: define `g = map (\x -> x * x)` once and apply it to multiple containers.
+
+```rex,interactive
+let g = map (\x -> x * x) in
+  (g [1, 2, 3], g (Some 4))
+```
+
+Why this works: instance resolution for `map` is deferred until each concrete call site.
+
+### Example: fixing ambiguous `pure 1`
+
+Problem: choose a concrete container for `pure 1`.
+
+```rex,interactive
+let x: Option i32 = pure 1 in x
+```
+
+Why this works: the annotation forces `pure` to use the `Applicative Option` instance.

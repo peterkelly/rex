@@ -40,7 +40,33 @@ in
 implementation). If you need safe indexing (returning `Option`/`Result`), write it with `match` on
 your container type (e.g. `[]` vs `x:xs` for lists).
 
-## Exercises
+## Worked examples
 
-1. Write `head : List a -> Option a` using `match` (`[]` vs `x:xs`).
-2. Use `get` to read elements out of a list `[100, 200, 300, 400]`.
+### Example: `head : List a -> Option a`
+
+Problem: return the first list element safely.
+
+```rex,interactive
+let
+  head = \xs ->
+    match xs
+      when [] -> None
+      when x:_ -> Some x
+in
+  (head [] is Option i32, head [10, 20, 30])
+```
+
+Why this works: pattern matching handles empty and non-empty shapes explicitly.
+
+### Example: `get` on a larger list
+
+Problem: read specific indices from `[100, 200, 300, 400]`.
+
+```rex,interactive
+let
+  xs = [100, 200, 300, 400]
+in
+  (get 0 xs, get 2 xs, get 3 xs)
+```
+
+Why this works: `Indexable (List a, a)` provides `get` for list element access.

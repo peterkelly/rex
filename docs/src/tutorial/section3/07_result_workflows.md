@@ -47,8 +47,50 @@ Use `bind` when your function returns another `Result` (and might fail):
 bind (\x -> if x < 0 then Err "negative" else Ok x) (Ok 1)
 ```
 
-## Exercises
+## Worked examples
 
-1. Change `step2` to fail when the value is too large.
-2. Define a custom error ADT instead of using strings (e.g. `type Err = Negative | TooLarge`).
-3. Write a helper `and_then` as a synonym for `bind` to make your code read more like English.
+### Example: fail `step2` when value is too large
+
+Problem: make the second step return `Err` above a threshold.
+
+```rex,interactive
+let
+  step1 = \x -> if x < 0 then Err "negative" else Ok (x + 1),
+  step2 = \x -> if x > 20 then Err "too-large" else Ok (x * 2),
+  run = \x -> bind step2 (bind step1 x)
+in
+  (run (Ok 10), run (Ok 25))
+```
+
+Why this works: `bind` short-circuits on either error source, including the new `step2` condition.
+
+### Example: custom error ADT
+
+Problem: replace string errors with structured errors.
+
+```rex,interactive
+type Err = Negative | TooLarge
+
+let
+  step1 = \x -> if x < 0 then Err Negative else Ok (x + 1),
+  step2 = \x -> if x > 20 then Err TooLarge else Ok (x * 2),
+  run = \x -> bind step2 (bind step1 x)
+in
+  (run (Ok 10), run (Ok 25), run (Ok (0 - 1)))
+```
+
+Why this works: error constructors carry precise machine-readable failure categories.
+
+### Example: `and_then` synonym
+
+Problem: define a helper that reads like “then”.
+
+```rex,interactive
+let
+  and_then = \mx f -> bind f mx,
+  safe_inc = \x -> if x < 0 then Err "negative" else Ok (x + 1)
+in
+  and_then (Ok 1) safe_inc
+```
+
+Why this works: `and_then` is just argument-reordered `bind`, so behavior is identical.

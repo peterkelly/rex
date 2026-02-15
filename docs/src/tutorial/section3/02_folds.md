@@ -58,9 +58,21 @@ in
   foldl step "" ["a", "b", "c"]
 ```
 
-### Exercise
+### Worked example: bracketed join
 
-Modify this to wrap the output in brackets: `"[a, b, c]"`.
+Problem: join strings with commas and wrap the result in brackets.
+
+```rex,interactive
+let
+  step = \out x ->
+    if out == "" then x else out + ", " + x,
+  joined = foldl step "" ["a", "b", "c"]
+in
+  "[" + joined + "]"
+```
+
+Why this works: the fold builds `"a, b, c"` from left to right, then the final expression adds the
+outer brackets.
 
 ## Using folds to compute “length”
 
@@ -77,8 +89,40 @@ Both are fine. Rules of thumb:
 - Use `foldl` when you’re “reducing” to a single value (sum, count, join).
 - Use explicit `match` recursion when you need more complex control flow.
 
-## Exercises
+## Worked examples
 
-1. Write `product` using `foldl` and `(*)` starting from `1`.
-2. Write `all` that checks whether all booleans in a list are true.
-3. Write `any` that checks whether any booleans in a list are true.
+### Example: `product` with `foldl`
+
+Problem: multiply all numbers in a list, starting from `1`.
+
+```rex,interactive
+foldl (*) 1 [2, 3, 4]
+```
+
+Why this works: `1` is the multiplicative identity, so each element is accumulated by multiplication.
+
+### Example: `all` over booleans
+
+Problem: check whether every boolean in a list is `true`.
+
+```rex,interactive
+let
+  all = \xs -> foldl (\acc x -> acc && x) true xs
+in
+  (all [true, true, true], all [true, false, true])
+```
+
+Why this works: once `acc` becomes `false`, `acc && x` stays `false` for the rest of the fold.
+
+### Example: `any` over booleans
+
+Problem: check whether at least one boolean in a list is `true`.
+
+```rex,interactive
+let
+  any = \xs -> foldl (\acc x -> acc || x) false xs
+in
+  (any [false, false, true], any [false, false, false])
+```
+
+Why this works: the accumulator starts `false` and flips to `true` as soon as any element is `true`.
