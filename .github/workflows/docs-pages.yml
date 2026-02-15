@@ -44,10 +44,12 @@ jobs:
       - name: Build docs
         run: |
           mdbook build docs
+          cp llms.txt docs/book/llms.txt
 
       - name: Verify built book output
         run: |
           test -f docs/book/index.html
+          test -f docs/book/llms.txt
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
