@@ -18,6 +18,11 @@ const rexRuns = new WeakMap();
 const rexInitialSource = new WeakMap();
 const rexEditorNodes = new WeakMap();
 let rexThemeObserver = null;
+const rexAssetBaseUrl = new URL(".", import.meta.url);
+
+function rexAssetUrl(path) {
+  return new URL(path, rexAssetBaseUrl).toString();
+}
 
 function installStyles() {
   if (document.getElementById("rex-repl-style")) return;
@@ -40,7 +45,7 @@ function installStyles() {
 async function ensureWasm() {
   if (rexWasm) return rexWasm;
   if (!rexWasmInit) {
-    rexWasmInit = import("/assets/rex-wasm/rex_wasm.js").then(async (m) => {
+    rexWasmInit = import(rexAssetUrl("rex_wasm.js")).then(async (m) => {
       await m.default();
       rexWasm = m;
       return m;
@@ -433,7 +438,7 @@ function bindDiagnostics(editor, monaco, wasm) {
 }
 
 function createEvalWorker() {
-  return new Worker("/assets/rex-wasm/rex_eval_worker.js", { type: "module" });
+  return new Worker(rexAssetUrl("rex_eval_worker.js"), { type: "module" });
 }
 
 function setRunState(root, running) {
@@ -609,11 +614,16 @@ if (document.readyState === "loading") {
 
 const EVAL_WORKER_JS: &str = r#"let rexWasm = null;
 let rexWasmInit = null;
+const rexAssetBaseUrl = new URL(".", import.meta.url);
+
+function rexAssetUrl(path) {
+  return new URL(path, rexAssetBaseUrl).toString();
+}
 
 async function ensureWasm() {
   if (rexWasm) return rexWasm;
   if (!rexWasmInit) {
-    rexWasmInit = import("/assets/rex-wasm/rex_wasm.js").then(async (m) => {
+    rexWasmInit = import(rexAssetUrl("rex_wasm.js")).then(async (m) => {
       await m.default();
       rexWasm = m;
       return m;
@@ -701,15 +711,15 @@ fn is_interactive_rex_fence(spec: &str) -> bool {
     matches!(parts.first(), Some(&"rex")) && parts.contains(&"interactive")
 }
 
-fn render_repl_widget(code: &str) -> String {
+fn render_repl_widget(code: &str, runtime_script_src: &str) -> String {
     let encoded = hex_encode(code.trim_end_matches('\n'));
     format!(
         r#"<div class="rex-repl" data-rex-repl data-rex-source-hex="{encoded}"></div>
-<script type="module" src="/assets/rex-wasm/rex_repl.js"></script>"#
+<script type="module" src="{runtime_script_src}"></script>"#
     )
 }
 
-fn rewrite_interactive_blocks(content: &str) -> String {
+fn rewrite_interactive_blocks(content: &str, runtime_script_src: &str) -> String {
     let mut out = String::new();
     let mut in_rex_interactive = false;
     let mut code = String::new();
@@ -729,7 +739,7 @@ fn rewrite_interactive_blocks(content: &str) -> String {
         }
 
         if trimmed.starts_with("```") {
-            out.push_str(&render_repl_widget(&code));
+            out.push_str(&render_repl_widget(&code, runtime_script_src));
             out.push('\n');
             code.clear();
             in_rex_interactive = false;
@@ -748,29 +758,55 @@ fn rewrite_interactive_blocks(content: &str) -> String {
     out
 }
 
-fn rewrite_book(book: &mut Value) {
-    fn walk(value: &mut Value) {
+fn rewrite_book(book: &mut Value, runtime_script_src: &str) {
+    fn walk(value: &mut Value, runtime_script_src: &str) {
         match value {
             Value::Object(map) => {
                 if let Some(content_value) = map.get_mut("content")
                     && let Some(content) = content_value.as_str()
                 {
-                    *content_value = Value::String(rewrite_interactive_blocks(content));
+                    *content_value = Value::String(rewrite_interactive_blocks(
+                        content,
+                        runtime_script_src,
+                    ));
                 }
                 for child in map.values_mut() {
-                    walk(child);
+                    walk(child, runtime_script_src);
                 }
             }
             Value::Array(items) => {
                 for item in items {
-                    walk(item);
+                    walk(item, runtime_script_src);
                 }
             }
             _ => {}
         }
     }
 
-    walk(book);
+    walk(book, runtime_script_src);
+}
+
+fn site_url_from_context(ctx: &Value) -> String {
+    let raw = ctx
+        .get("config")
+        .and_then(|c| c.get("output"))
+        .and_then(|o| o.get("html"))
+        .and_then(|h| h.get("site-url"))
+        .and_then(Value::as_str)
+        .unwrap_or("/");
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed == "/" {
+        return "/".to_string();
+    }
+
+    let mut normalized = trimmed.to_string();
+    if !normalized.starts_with('/') {
+        normalized.insert(0, '/');
+    }
+    if !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    normalized
 }
 
 fn build_wasm_assets(ctx: &Value) -> Result<(), String> {
@@ -856,9 +892,11 @@ fn main() -> Result<(), String> {
 
     let ctx = &arr[0];
     let mut book = arr[1].clone();
+    let site_url = site_url_from_context(ctx);
+    let runtime_script_src = format!("{site_url}assets/rex-wasm/rex_repl.js");
 
     build_wasm_assets(ctx)?;
-    rewrite_book(&mut book);
+    rewrite_book(&mut book, &runtime_script_src);
 
     let mut stdout = io::stdout();
     serde_json::to_writer(&mut stdout, &book)

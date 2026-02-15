@@ -7,6 +7,11 @@ const rexRuns = new WeakMap();
 const rexInitialSource = new WeakMap();
 const rexEditorNodes = new WeakMap();
 let rexThemeObserver = null;
+const rexAssetBaseUrl = new URL(".", import.meta.url);
+
+function rexAssetUrl(path) {
+  return new URL(path, rexAssetBaseUrl).toString();
+}
 
 function installStyles() {
   if (document.getElementById("rex-repl-style")) return;
@@ -29,7 +34,7 @@ function installStyles() {
 async function ensureWasm() {
   if (rexWasm) return rexWasm;
   if (!rexWasmInit) {
-    rexWasmInit = import("/assets/rex-wasm/rex_wasm.js").then(async (m) => {
+    rexWasmInit = import(rexAssetUrl("rex_wasm.js")).then(async (m) => {
       await m.default();
       rexWasm = m;
       return m;
@@ -422,7 +427,7 @@ function bindDiagnostics(editor, monaco, wasm) {
 }
 
 function createEvalWorker() {
-  return new Worker("/assets/rex-wasm/rex_eval_worker.js", { type: "module" });
+  return new Worker(rexAssetUrl("rex_eval_worker.js"), { type: "module" });
 }
 
 function setRunState(root, running) {

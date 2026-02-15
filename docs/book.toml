@@ -14,8 +14,9 @@ command = "cargo run --manifest-path ../Cargo.toml -p rex-mdbook --"
 [output.html]
 default-theme = "light"
 preferred-dark-theme = "ayu"
-git-repository-url = "https://github.com/rushsteve1/rex"
-edit-url-template = "https://github.com/rushsteve1/rex/edit/master/docs/{path}"
+git-repository-url = "https://github.com/talo/rex"
+edit-url-template = "https://github.com/talo/rex/edit/v4/docs/{path}"
+site-url = "/rex/"
 
 [output.html.playground]
 editable = false

@@ -1,10 +1,15 @@
 let rexWasm = null;
 let rexWasmInit = null;
+const rexAssetBaseUrl = new URL(".", import.meta.url);
+
+function rexAssetUrl(path) {
+  return new URL(path, rexAssetBaseUrl).toString();
+}
 
 async function ensureWasm() {
   if (rexWasm) return rexWasm;
   if (!rexWasmInit) {
-    rexWasmInit = import("/assets/rex-wasm/rex_wasm.js").then(async (m) => {
+    rexWasmInit = import(rexAssetUrl("rex_wasm.js")).then(async (m) => {
       await m.default();
       rexWasm = m;
       return m;
