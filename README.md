@@ -8,13 +8,30 @@
 [docs-badge]: https://img.shields.io/badge/docs-online-blue
 [docs-url]: https://talo.github.io/rex/
 
-Rex (short for *Rush Expressions*) is a strongly-typed, pure functional language built to be an excellent target for LLM-generated programs, with a focus on data processing. At a high level, you write transformations over lists, records, ADTs, and other values using familiar functional building blocks like `map`, `filter`, folds, pattern matching, and composition. The language is designed to make dataflow clear and predictable, with types and pure expressions doing most of the heavy lifting.
+Rex (short for *Rush Expressions*) is a strongly-typed, pure functional
+language built to be an excellent target for LLM-generated programs, with a
+focus on data processing. At a high level, you write transformations over
+lists, records, ADTs, and other values using familiar functional building
+blocks like `map`, `filter`, folds, pattern matching, and composition. The
+language is designed to make dataflow clear and predictable, with types and
+pure expressions doing most of the heavy lifting.
 
-Rex is designed first and foremost to be embedded inside Rust applications. In that model, your Rust program acts as the host runtime and injects native functions into Rex so scripts can orchestrate real work while staying in a concise, declarative style. This makes Rex a practical scripting layer for workflow-style systems where you want strong typing and explicit control at the host boundary.
+Rex is designed first and foremost to be embedded inside Rust applications. In
+that model, your Rust program acts as the host runtime and injects native
+functions into Rex so scripts can orchestrate real work while staying in a
+concise, declarative style. This makes Rex a practical scripting layer for
+workflow-style systems where you want strong typing and explicit control at the
+host boundary.
 
-Because Rex programs are pure and free of side effects in the language itself, the runtime can safely execute host-provided async functions in parallel when it is valid to do so. In practice, that means users can write straightforward functional code and still benefit from concurrency without directly managing threads, locks, or low-level async orchestration.
+Because Rex programs are pure and free of side effects in the language itself,
+the runtime can safely execute host-provided async functions in parallel when
+it is valid to do so. In practice, that means users can write straightforward
+functional code and still benefit from concurrency without directly managing
+threads, locks, or low-level async orchestration.
 
-If you are using Rex as a code-generation target, read **[LLM Guidance](docs/src/LLMS.md)** early. It captures syntax pitfalls and validation workflow that reduce iteration time.
+If you are using Rex as a code-generation target, read
+**[LLM Guidance](docs/src/LLMS.md)** early. It captures syntax pitfalls and
+validation workflow that reduce iteration time.
 
 ## Example
 
@@ -27,6 +44,28 @@ let
 in
   (values, selected, adjusted, total)
 ```
+
+## Rex as a target for LLMs
+
+Rex is the world’s first parallel functional language explicitly designed to be
+a useful target for LLMs. Its strong static type system gives rapid,
+high-signal feedback on generated programs, so both users and models can
+quickly identify mismatches and converge on correct code.
+
+That typechecking loop works especially well with Rex’s functional,
+expression-oriented style. Because programs are written as pure data
+transformations, LLM-generated code tends to be easier to inspect, reason
+about, and refine than imperative scripts with hidden state or side effects.
+
+Together, these properties make Rex a strong fit for LLM-generated data
+analysis pipelines and scientific workflows. Models can generate high-level
+orchestration in Rex, while host-provided Rust functions handle domain-specific
+execution, giving a clean split between deterministic workflow logic and host
+capabilities.
+
+## Documentation
+
+[https://talo.github.io/rex/](https://talo.github.io/rex/)
 
 ## Crates
 
@@ -75,7 +114,9 @@ Other useful flags:
 
 ## Standard Library (Prelude)
 
-Rex ships with a prelude that provides core functions, types, and type classes used throughout the language (for example mapping, filtering, folds, numeric operations, equality/ordering, and container abstractions).
+Rex ships with a prelude that provides core functions, types, and type classes
+used throughout the language (for example mapping, filtering, folds, numeric
+operations, equality/ordering, and container abstractions).
 
 The prelude surface definitions and type-class wiring live primarily in:
 
@@ -87,15 +128,5 @@ For full details and usage patterns, see the docs:
 
 - Prelude tour: [Section 1.12](https://talo.github.io/rex/tutorial/section1/12_prelude_tour.html)
 - Language reference: [LANGUAGE](https://talo.github.io/rex/LANGUAGE.html)
-
-## Documentation
-
-Use the published docs for architecture, embedding, semantics, language details, and contribution workflow:
-
-- Docs home: <https://talo.github.io/rex/>
-- Architecture: <https://talo.github.io/rex/ARCHITECTURE.html>
-- Embedding: <https://talo.github.io/rex/EMBEDDING.html>
-- Specification: <https://talo.github.io/rex/SPEC.html>
-- Contributing: <https://talo.github.io/rex/CONTRIBUTING.html>
 
 Made with ❤️ by [QDX](https://qdx.co/)
