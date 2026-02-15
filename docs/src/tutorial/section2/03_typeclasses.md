@@ -27,7 +27,7 @@ Both forms are accepted.
 
 ## Operators as methods
 
-```rex,interactive
+```rex
 class Eq a
   == : a -> a -> bool
   != : a -> a -> bool
@@ -37,7 +37,7 @@ class Eq a
 
 Superclasses use `<=` (read “requires”):
 
-```rex,interactive
+```rex
 class Ord a <= Eq a
   < : a -> a -> bool
 ```
@@ -50,14 +50,14 @@ Some prelude classes logically take multiple type parameters, such as `Indexable
 
 In Rex source you write:
 
-```rex,interactive
+```rex
 class Indexable t a
   get : i32 -> t -> a
 ```
 
 In `where` constraints, multi-parameter classes are written using a tuple:
 
-```rex,interactive
+```rex
 where Indexable (t, a) -> ...
 ```
 

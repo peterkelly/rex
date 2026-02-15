@@ -121,12 +121,20 @@ function lspRangeToMonacoRange(range, monaco) {
 }
 
 function decodeHex(hex) {
-  let out = "";
+  const bytes = [];
   for (let i = 0; i + 1 < hex.length; i += 2) {
-    const byte = Number.parseInt(hex.slice(i, i + 2), 16);
-    out += String.fromCharCode(byte);
+    bytes.push(Number.parseInt(hex.slice(i, i + 2), 16));
   }
-  return out;
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+  } catch (_) {
+    // Fallback for any malformed payloads: preserve prior byte-wise behavior.
+    let out = "";
+    for (const byte of bytes) {
+      out += String.fromCharCode(byte);
+    }
+    return out;
+  }
 }
 
 function cloneIconTemplate(id) {

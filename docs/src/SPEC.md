@@ -26,7 +26,7 @@ Regression tests live in:
 
 Top-level imports support three forms:
 
-```rex,interactive
+```rex
 import foo.bar as Bar
 import foo.bar (*)
 import foo.bar (x, y, z as q)
@@ -60,7 +60,7 @@ Only exported (`pub`) values are importable through `(*)` and item clauses.
 
 Recursive bindings use `let rec` with comma-separated entries:
 
-```rex,interactive
+```rex
 let rec
   a = ...,
   b = ...
@@ -92,7 +92,7 @@ bindings in `let rec`, but at declaration scope.
 
 Field projection is an expression:
 
-```rex,interactive
+```rex
 base.field
 ```
 
@@ -126,7 +126,7 @@ non-record-like value.
 
 Record update is an expression:
 
-```rex,interactive
+```rex
 { base with { field1 = e1, field2 = e2 } }
 ```
 

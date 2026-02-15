@@ -13,7 +13,7 @@ Learn how to pull elements out of common containers with a single API:
 Example uses:
 
 ```rex,interactive
-( get 0 [10, 20, 30] , get 2 ["a", "b", "c"] ) -- returns (10, "c")
+( get 0 [10, 20, 30] , get 2 ["a", "b", "c"] )
 ```
 
 ## How it works

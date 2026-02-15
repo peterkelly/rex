@@ -14,7 +14,10 @@ type Maybe a = Just a | Nothing
 Constructors are values:
 
 ```rex,interactive
-(Just 1, Nothing)
+type Maybe a = Just a | Nothing
+
+let v = Just 1 in
+  (v, Nothing)
 ```
 
 ### Using ADTs is all about `match`
@@ -22,6 +25,8 @@ Constructors are values:
 Defining an ADT is only half the story; consuming it is done with pattern matching:
 
 ```rex,interactive
+type Maybe a = Just a | Nothing
+
 let
   fromMaybe = \d m ->
     match m
@@ -36,7 +41,8 @@ in
 ```rex,interactive
 type Pair a b = Pair a b
 
-Pair 1 "hi"
+let v = Pair 1 "hi" in
+  v
 ```
 
 This is a single-constructor ADT (a “product type”). In many programs you’ll use record-carrying
@@ -49,7 +55,8 @@ Variants can carry a record payload:
 ```rex,interactive
 type User = User { name: string, age: i32 }
 
-User { name = "Ada", age = 36 }
+let u = User { name = "Ada", age = 36 } in
+  u
 ```
 
 This style works well with field projection and update (covered later).

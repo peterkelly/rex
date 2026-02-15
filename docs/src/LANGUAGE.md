@@ -33,7 +33,7 @@ Rex modules are `.rex` files. Imports are top-level declarations.
 
 Supported forms:
 
-```rex,interactive
+```rex
 import foo.bar as Bar
 import foo.bar (*)
 import foo.bar (x, y as z)
@@ -62,7 +62,8 @@ Path resolution:
 ### Whitespace and Comments
 
 - Whitespace (including newlines) is generally insignificant.
-- Block comments use `{- ... -}` and can nest in the token stream but are stripped before parsing.
+- Comments use `{- ... -}` and are stripped before parsing.
+- Nested block comments are not supported in current Rex builds.
 
 ### Identifiers and Operators
 
@@ -133,7 +134,7 @@ if 1 < 2 then "ok" else "no"
 
 ### Tuples, Lists, Dictionaries
 
-```rex,interactive
+```rex
 (1, "hi", true)
 [1, 2, 3]
 { a = 1, b = 2 }
@@ -149,7 +150,7 @@ Notes:
 
 `match` performs structural matching with one or more `when` arms:
 
-```rex,interactive
+```rex
 match xs
   when Empty -> 0
   when Cons h t -> h
@@ -201,7 +202,7 @@ type Maybe a = Just a | Nothing
 
 Constructors are values (functions) in the prelude environment:
 
-```rex,interactive
+```rex
 Just 1
 Nothing
 ```
@@ -288,14 +289,14 @@ class Size a
 
 Methods can be operators (use parentheses to refer to them as values if needed):
 
-```rex,interactive
+```rex
 class Eq a
   == : a -> a -> bool
 ```
 
 Superclasses use `<=` (read “requires”):
 
-```rex,interactive
+```rex
 class Ord a <= Eq a
   < : a -> a -> bool
 ```
@@ -317,7 +318,7 @@ instance Size (List t)
 
 Instance contexts use `<=`:
 
-```rex,interactive
+```rex
 class Pretty a
   pretty : a -> string
 

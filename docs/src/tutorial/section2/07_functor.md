@@ -2,7 +2,7 @@
 
 The prelude defines:
 
-```rex,interactive
+```rex
 class Functor f
   map : (a -> b) -> f a -> f b
 ```

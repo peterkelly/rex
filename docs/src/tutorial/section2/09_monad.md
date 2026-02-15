@@ -4,7 +4,7 @@ Monads are about *sequencing* computations where the next step depends on the pr
 
 In Rex, the core monad operation is `bind`:
 
-```rex,interactive
+```rex
 class Monad m <= Applicative m
   bind : (a -> m b) -> m a -> m b
 ```
@@ -61,3 +61,14 @@ bind (\x ->
 ```
 
 > **Tip:** When your `bind` chains get hard to read, consider extracting the steps into named `let` bindings.
+
+For example, the same logic with named steps:
+
+```rex,interactive
+let
+  add_x_y = \x y -> pure (x + y),
+  step_y = \x -> bind (add_x_y x) (Some 2),
+  run = \mx -> bind step_y mx
+in
+  run (Some 1)
+```

@@ -16,7 +16,7 @@ like `.0` and `.1`.
 ### Indexing tuples with `.`
 
 ```rex,interactive
-let t = (1, "hi", true) in t.1 -- returns "hi"
+let t = (1, "hi", true) in t.1
 ```
 
 ## Lists
@@ -59,7 +59,9 @@ These are “record-like” values. Depending on context they may be treated as 
 field is known to exist:
 
 ```rex,interactive
-let r = { a = 1, b = 2 } in r.a
+type R = R { a: i32, b: i32 }
+
+let r: R = R { a = 1, b = 2 } in r.a
 ```
 
 ### Forcing a dictionary type

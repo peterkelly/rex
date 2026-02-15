@@ -18,6 +18,8 @@ This is a single-variant ADT that “wraps” a value.
 ## Step 2: make it a Functor
 
 ```rex,interactive
+type Box a = Box a
+
 instance Functor Box where
   map = \f bx ->
     match bx
@@ -27,12 +29,26 @@ instance Functor Box where
 Now you can:
 
 ```rex,interactive
+type Box a = Box a
+
+instance Functor Box where
+  map = \f bx ->
+    match bx
+      when Box x -> Box (f x)
+
 map ((+) 1) (Box 41)
 ```
 
 ## Step 3: make it an Applicative
 
 ```rex,interactive
+type Box a = Box a
+
+instance Functor Box where
+  map = \f bx ->
+    match bx
+      when Box x -> Box (f x)
+
 instance Applicative Box <= Functor Box where
   pure = \x -> Box x
   ap = \bf bx ->
@@ -43,12 +59,38 @@ instance Applicative Box <= Functor Box where
 Try:
 
 ```rex,interactive
+type Box a = Box a
+
+instance Functor Box where
+  map = \f bx ->
+    match bx
+      when Box x -> Box (f x)
+
+instance Applicative Box <= Functor Box where
+  pure = \x -> Box x
+  ap = \bf bx ->
+    match bf
+      when Box f -> map f bx
+
 ap (Box ((*) 2)) (Box 21)
 ```
 
 ## Step 4: make it a Monad
 
 ```rex,interactive
+type Box a = Box a
+
+instance Functor Box where
+  map = \f bx ->
+    match bx
+      when Box x -> Box (f x)
+
+instance Applicative Box <= Functor Box where
+  pure = \x -> Box x
+  ap = \bf bx ->
+    match bf
+      when Box f -> map f bx
+
 instance Monad Box <= Applicative Box where
   bind = \f bx ->
     match bx
@@ -58,6 +100,24 @@ instance Monad Box <= Applicative Box where
 Try:
 
 ```rex,interactive
+type Box a = Box a
+
+instance Functor Box where
+  map = \f bx ->
+    match bx
+      when Box x -> Box (f x)
+
+instance Applicative Box <= Functor Box where
+  pure = \x -> Box x
+  ap = \bf bx ->
+    match bf
+      when Box f -> map f bx
+
+instance Monad Box <= Applicative Box where
+  bind = \f bx ->
+    match bx
+      when Box x -> f x
+
 bind (\x -> Box (x + 1)) (Box 41)
 ```
 

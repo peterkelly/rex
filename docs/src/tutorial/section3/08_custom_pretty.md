@@ -15,54 +15,54 @@ We’ll build it up in layers:
 4. (optional) add a container instance (`List a`)
 
 ```rex,interactive
-class Pretty a
-  pretty : a -> string
+class DemoPretty a
+  demo_pretty : a -> string
 
 type Point = Point { x: i32, y: i32 }
 
-instance Pretty i32
-  pretty = \_ -> "<i32>"
+instance DemoPretty i32
+  demo_pretty = \_ -> "<i32>"
 
-instance Pretty Point
-  pretty = \p -> "Point(" + pretty p.x + ", " + pretty p.y + ")"
+instance DemoPretty Point
+  demo_pretty = \p -> "Point(" + demo_pretty p.x + ", " + demo_pretty p.y + ")"
 
-pretty (Point { x = 1, y = 2 })
+demo_pretty (Point { x = 1, y = 2 })
 ```
 
 ## Extending it
 
-Add an instance `Pretty (List a) <= Pretty a` (see `rex/examples/typeclasses_custom_pretty.rex`)
-and try `pretty [Point { x = 1, y = 2 }]`.
+Add an instance `DemoPretty (List a) <= DemoPretty a` (see `rex/examples/typeclasses_custom_pretty.rex`)
+and try `demo_pretty [Point { x = 1, y = 2 }]`.
 
-## A worked `Pretty (List a)` instance
+## A worked `DemoPretty (List a)` instance
 
 Here is the list instance from the repo example, with commentary:
 
 ```rex,interactive
-class Pretty a
-  pretty : a -> string
+class DemoPretty a
+  demo_pretty : a -> string
 
-instance Pretty i32
-  pretty = \_ -> "<i32>"
+instance DemoPretty i32
+  demo_pretty = \_ -> "<i32>"
 
-instance Pretty (List a) <= Pretty a
-  pretty = \xs ->
+instance DemoPretty (List a) <= DemoPretty a
+  demo_pretty = \xs ->
     let
       step = \out x ->
         if out == "["
-          then out + pretty x
-          else out + ", " + pretty x,
+          then out + demo_pretty x
+          else out + ", " + demo_pretty x,
       out = foldl step "[" xs
     in
       out + "]"
 ```
 
-### Why the `<= Pretty a` constraint?
+### Why the `<= DemoPretty a` constraint?
 
-Because the implementation calls `pretty x` for list elements, so it requires `Pretty a`.
+Because the implementation calls `demo_pretty x` for list elements, so it requires `DemoPretty a`.
 
 ## Exercises
 
 1. Change the list formatting to use `"; "` instead of `", "`.
 2. Add a `Pretty bool` instance.
-3. Add a `Pretty (Option a) <= Pretty a` instance that prints `Some(...)` and `None`.
+3. Add a `DemoPretty (Option a) <= DemoPretty a` instance that prints `Some(...)` and `None`.

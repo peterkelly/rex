@@ -22,7 +22,7 @@ In informal kind notation:
 
 The class is defined as:
 
-```rex,interactive
+```rex
 class Functor f
   map : (a -> b) -> f a -> f b
 ```
@@ -33,7 +33,7 @@ class Functor f
 
 The prelude has an instance:
 
-```rex,interactive
+```rex
 instance Functor (Result e)
   map = prim_map
 ```

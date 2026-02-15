@@ -66,13 +66,13 @@ errors. Use `let rec` for local recursion.
 
 Bad (expression):
 
-```rex,interactive
+```rex
 x:xs
 ```
 
 Good:
 
-```rex,interactive
+```rex
 Cons x xs
 ```
 
@@ -83,7 +83,7 @@ Do not assume custom ADTs automatically implement `Eq`. For example, comparing `
 
 For small enums/ADTs, write an explicit equality helper:
 
-```rex,interactive
+```rex
 node_eq = \a b ->
   match (a, b)
     when (A, A) -> true
@@ -182,7 +182,7 @@ mdbook build
 Interactive Rex demos use fenced blocks with:
 
 ````md
-```rex,interactive
+```rex
 ...
 ```
 ````

@@ -10,7 +10,7 @@ An instance has three parts:
 
 ## A monomorphic instance
 
-```rex,interactive
+```rex
 class Pretty a
   pretty : a -> string
 
@@ -22,7 +22,7 @@ instance Pretty i32
 
 Instance contexts use `<=`:
 
-```rex,interactive
+```rex
 instance Pretty (List a) <= Pretty a
   pretty = \xs ->
     let

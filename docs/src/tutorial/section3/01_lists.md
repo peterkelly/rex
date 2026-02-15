@@ -77,7 +77,11 @@ Because application is left-associative, nesting calls without parentheses does 
 want. Prefer:
 
 ```rex,interactive
-map ((+) 1) (filter is_even xs)
+let
+  xs = [1, 2, 3, 4, 5, 6],
+  is_even = \x -> (x % 2) == 0
+in
+  map ((+) 1) (filter is_even xs)
 ```
 
 over trying to “read it as English” without grouping.

@@ -46,20 +46,11 @@ The program above:
 
 ## Comments
 
-Line comments start with `--`:
+Comments use `{- ... -}`:
 
 ```rex,interactive
--- This is a comment
+{- This is a comment -}
 1 + 2
-```
-
-Block comments use `{- ... -}` and can nest:
-
-```rex,interactive
-{- Outer
-   {- Inner -}
--}
-true
 ```
 
 ## Whitespace and layout
@@ -74,7 +65,7 @@ in
   x + y
 ```
 
-Commas between `let` bindings are recommended. The parser also accepts many one-line forms, but
+Commas between `let` bindings are required. The parser also accepts many one-line forms, but
 multi-line layout tends to be easier to debug.
 
 Type-class and instance method blocks are also written by indentation:

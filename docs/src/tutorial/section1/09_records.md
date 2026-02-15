@@ -14,13 +14,16 @@ At the value level, “record” literals are written like dicts:
 At the type level, record types are written with `:`:
 
 ```rex,interactive
-{ x: i32, y: i32 }
+let p: { x: i32, y: i32 } = { x = 1, y = 2 } in
+  p
 ```
 
 ## Projection
 
 ```rex,interactive
-let p = { x = 1, y = 2 } in p.x
+type Point = Point { x: i32, y: i32 }
+
+let p: Point = Point { x = 1, y = 2 } in p.x
 ```
 
 Projection is accepted when the field is *definitely available* on the type (see [Specification](../../SPEC.md)).
@@ -31,14 +34,18 @@ Projection is accepted when the field is *definitely available* on the type (see
 ## Update
 
 ```rex,interactive
-let p = { x = 1, y = 2 } in
+type Point = Point { x: i32, y: i32 }
+
+let p: Point = Point { x = 1, y = 2 } in
   { p with { x = p.x + 10 } }
 ```
 
 Updates can set multiple fields at once:
 
 ```rex,interactive
-let p = { x = 1, y = 2 } in
+type Point = Point { x: i32, y: i32 }
+
+let p: Point = Point { x = 1, y = 2 } in
   { p with { x = 100, y = 200 } }
 ```
 

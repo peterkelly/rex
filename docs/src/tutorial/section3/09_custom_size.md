@@ -40,8 +40,14 @@ Once you have a class, you can write functions that work for *any* type that has
 class Size a
   size : a -> i32
 
+instance Size (List t)
+  size = \xs ->
+    match xs
+      when Empty -> 0
+      when Cons _ t -> 1 + size t
+
 let
-  bigger = \x where Size a -> size x + 1
+  bigger = \(x: a) where Size a -> size x + 1
 in
   bigger [1, 2, 3]
 ```

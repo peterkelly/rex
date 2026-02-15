@@ -22,6 +22,8 @@ type Maybe a = Just a | Nothing
 ## Use it
 
 ```rex,interactive
+type Maybe a = Just a | Nothing
+
 let
   fromMaybe = \d m ->
     match m

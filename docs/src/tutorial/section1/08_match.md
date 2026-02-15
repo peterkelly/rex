@@ -18,6 +18,8 @@ let fromMaybe = \d m ->
   match m
     when Just x -> x
     when Nothing -> d
+in
+  fromMaybe 0 (Just 5)
 ```
 
 Rex checks matches for exhaustiveness on ADTs and reports missing constructors.
@@ -49,6 +51,7 @@ match [1, 2]
   when [] -> 0
   when [x] -> x
   when [x, y] -> x + y
+  when _ -> 0
 ```
 
 Cons patterns:
@@ -64,8 +67,9 @@ Record patterns on record-carrying constructors:
 ```rex,interactive
 type Point = Point { x: i32, y: i32 }
 
-match Point { x = 1, y = 2 }
-  when Point {x, y} -> x + y
+let p = Point { x = 1, y = 2 } in
+match p
+  when Point { x: x, y: y } -> x + y
 ```
 
 Dict key presence patterns:
@@ -83,9 +87,12 @@ match d
 Arms can use `->` or `→`:
 
 ```rex,interactive
-match true
-  when true → 1
-  when false -> 0
+type Bit = T | F
+
+let v = T in
+match v
+  when T → 1
+  when F -> 0
 ```
 
 ## Ordering and fallbacks

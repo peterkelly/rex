@@ -52,7 +52,7 @@ let x = 10 in
 
 `if` requires both branches and they must have the same type:
 
-```rex,interactive
+```rex
 -- Not OK: the branches disagree ("string" vs "i32")
 if true then "yes" else 0
 ```

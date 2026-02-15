@@ -2,7 +2,7 @@
 
 An `Applicative` is a `Functor` that can inject values and apply wrapped functions:
 
-```rex,interactive
+```rex
 class Applicative f <= Functor f
   pure : a -> f a
   ap : f (a -> b) -> f a -> f b
@@ -14,7 +14,7 @@ container”.
 ## `pure`
 
 ```rex,interactive
-pure 1
+let x: Option i32 = pure 1 in x
 ```
 
 The type depends on context. For example, this forces `Option`:

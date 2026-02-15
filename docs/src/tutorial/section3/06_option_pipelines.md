@@ -39,6 +39,8 @@ If you have many steps, name them:
 
 ```rex,interactive
 let
+  step1 = \x -> if x < 0 then None else Some (x + 1),
+  step2 = \x -> Some (x * 2),
   run = \x -> bind step2 (bind step1 x)
 in
   run (Some 10)

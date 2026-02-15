@@ -8,21 +8,19 @@ This page is about the “tools” you use to make types explicit when inference
 
 Examples of primitive and constructed types:
 
-```rex,interactive
--- bool, i32, f32, string
--- (a, b) for tuples
--- List a, Option a, Result a e (prelude)
-```
+- `bool`, `i32`, `f32`, `string`
+- `(a, b)` for tuples
+- `List a`, `Option a`, `Result a e` (prelude)
 
 Function types are right-associative:
 
-```rex,interactive
+```rex
 i32 -> i32 -> i32
 ```
 
 means:
 
-```rex,interactive
+```rex
 i32 -> (i32 -> i32)
 ```
 
@@ -30,7 +28,7 @@ i32 -> (i32 -> i32)
 
 Record types use `:`:
 
-```rex,interactive
+```rex
 { x: i32, y: i32 }
 ```
 

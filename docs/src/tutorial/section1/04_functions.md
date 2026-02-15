@@ -29,13 +29,21 @@ You can annotate parameters when you need to force a specific type:
 Function application is left-associative:
 
 ```rex,interactive
-f x y
+let
+  f = \x y -> x + y
+in
+  f 1 2
 ```
 
 is parsed as:
 
 ```rex,interactive
-(f x) y
+let
+  f = \x y -> x + y,
+  x = 1,
+  y = 2
+in
+  (f x) y
 ```
 
 This is why parentheses are important when an argument is itself an application.
