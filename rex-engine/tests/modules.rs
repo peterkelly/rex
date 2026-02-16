@@ -47,7 +47,7 @@ fn i32_value_scheme() -> Scheme {
     Scheme::new(vec![], vec![], i32_type())
 }
 
-async fn eval_module_file<State: Clone + Sync + 'static>(
+async fn eval_module_file<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     path: &Path,
 ) -> Result<Pointer, rex_engine::EngineError> {
@@ -55,7 +55,7 @@ async fn eval_module_file<State: Clone + Sync + 'static>(
     engine.eval_module_file(path, &mut gas).await
 }
 
-async fn eval_snippet<State: Clone + Sync + 'static>(
+async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
 ) -> Result<Pointer, rex_engine::EngineError> {
@@ -63,7 +63,7 @@ async fn eval_snippet<State: Clone + Sync + 'static>(
     engine.eval_snippet(source, &mut gas).await
 }
 
-async fn eval_snippet_at<State: Clone + Sync + 'static>(
+async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
@@ -313,7 +313,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
                         .cloned()
                         .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
                 }
-                .boxed_local()
+                .boxed()
             },
         )
         .unwrap();
@@ -323,7 +323,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             i32_value_scheme(),
             0,
             |engine: &Engine<bool>, _: Type, _args: Vec<Pointer>| {
-                async move { engine.heap().alloc_i32(77) }.boxed_local()
+                async move { engine.heap().alloc_i32(77) }.boxed()
             },
         )
         .unwrap();
@@ -345,7 +345,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
                         .cloned()
                         .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
                 }
-                .boxed_local()
+                .boxed()
             }
         })
         .unwrap();
@@ -417,7 +417,7 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
             unary_scheme,
             2,
             |_engine: &Engine<()>, _: Type, _args: Vec<Pointer>| {
-                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed_local()
+                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed()
             },
         )
         .unwrap_err();

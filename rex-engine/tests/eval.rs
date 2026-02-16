@@ -534,7 +534,7 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
             unary_scheme,
             2,
             |_engine: &Engine<()>, _: Type, _args| {
-                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed_local()
+                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed()
             },
         )
         .unwrap_err();

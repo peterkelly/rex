@@ -2477,7 +2477,10 @@ fn split_fun(typ: &Type) -> Option<(Type, Type)> {
     }
 }
 
-fn impl_matches_type<State: Clone + Send + Sync + 'static>(imp: &NativeImpl<State>, typ: &Type) -> bool {
+fn impl_matches_type<State: Clone + Send + Sync + 'static>(
+    imp: &NativeImpl<State>,
+    typ: &Type,
+) -> bool {
     let mut supply = TypeVarSupply::new();
     let (_preds, scheme_ty) = instantiate(&imp.scheme, &mut supply);
     unify(&scheme_ty, typ).is_ok()
