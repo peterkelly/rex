@@ -1,0 +1,19 @@
+[package]
+name = "ouroboros"
+edition = "2021"
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-graphql = { version = "7", optional = true }
+ouroboros-proc-macro = { path = "../ouroboros-proc-macro" }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+thiserror = { version = "1" }
+
+[features]
+default = ["graphql", "serde"]
+graphql = ["dep:async-graphql"]
+serde = ["dep:serde", "dep:serde_json"]

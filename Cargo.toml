@@ -13,6 +13,9 @@ members = [
     "rex-ts",
     "rex-util",
     "rex-wasm",
+    "ouroboros",
+    "ouroboros-proc-macro",
+    "ouroboros-rex",
 ]
 
 [workspace.package]

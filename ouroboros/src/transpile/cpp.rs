@@ -1,0 +1,756 @@
+use crate::{
+    alias::Alias,
+    field::Fields,
+    product::{Array, Record, Tuple},
+    sum::{Enum, Optional, Union},
+    symbolic::Symbolic,
+    type_info::Type,
+    UnnamedFields,
+};
+
+pub struct TypenameVisitor;
+
+impl TypenameVisitor {
+    pub fn visit_type(t: &Type) -> String {
+        Self::visit_type_with_prefix(t, "")
+    }
+
+    pub fn visit_type_with_prefix(t: &Type, prefix: &str) -> String {
+        match t {
+            Type::Unit => unimplemented!(),
+            Type::Bool => Self::visit_bool_with_prefix(prefix),
+            Type::I8 => Self::visit_i8_with_prefix(prefix),
+            Type::I16 => Self::visit_i16_with_prefix(prefix),
+            Type::I32 => Self::visit_i32_with_prefix(prefix),
+            Type::I64 => Self::visit_i64_with_prefix(prefix),
+            Type::I128 => Self::visit_i128_with_prefix(prefix),
+            Type::U8 => Self::visit_u8_with_prefix(prefix),
+            Type::U16 => Self::visit_u16_with_prefix(prefix),
+            Type::U32 => Self::visit_u32_with_prefix(prefix),
+            Type::U64 => Self::visit_u64_with_prefix(prefix),
+            Type::U128 => Self::visit_u128_with_prefix(prefix),
+            Type::F32 => Self::visit_f32_with_prefix(prefix),
+            Type::F64 => Self::visit_f64_with_prefix(prefix),
+            Type::String => Self::visit_string_with_prefix(prefix),
+            Type::Array(arr) => Self::visit_array_with_prefix(arr, prefix),
+            Type::Func(_) => todo!(),
+            Type::Record(record) => Self::visit_record_with_prefix(record, prefix),
+            Type::Tuple(tuple) => Self::visit_tuple_with_prefix(tuple, prefix),
+            Type::Enum(e) => Self::visit_enum_with_prefix(e, prefix),
+            Type::Fallible(_) => unimplemented!(),
+            Type::Optional(optional) => Self::visit_optional_with_prefix(optional, prefix),
+            Type::Union(union) => Self::visit_union_with_prefix(union, prefix),
+            Type::Ptr(_) => Self::visit_string_with_prefix(prefix),
+            Type::Symbolic(sym) => Self::visit_symbolic_with_prefix(sym, prefix),
+            Type::Generic(_) => todo!(),
+            Type::Alias(alias) => Self::visit_alias(alias),
+        }
+    }
+
+    pub fn visit_unit() -> String {
+        Self::visit_unit_with_prefix("")
+    }
+
+    pub fn visit_unit_with_prefix(prefix: &str) -> String {
+        format!("{}std::monostate", prefix)
+    }
+
+    pub fn visit_bool() -> String {
+        Self::visit_bool_with_prefix("")
+    }
+
+    pub fn visit_bool_with_prefix(prefix: &str) -> String {
+        format!("{}bool", prefix)
+    }
+
+    pub fn visit_i8() -> String {
+        Self::visit_i8_with_prefix("")
+    }
+
+    pub fn visit_i8_with_prefix(prefix: &str) -> String {
+        format!("{}int8_t", prefix)
+    }
+
+    pub fn visit_i16() -> String {
+        Self::visit_i16_with_prefix("")
+    }
+
+    pub fn visit_i16_with_prefix(prefix: &str) -> String {
+        format!("{}int16_t", prefix)
+    }
+
+    pub fn visit_i32() -> String {
+        Self::visit_i32_with_prefix("")
+    }
+
+    pub fn visit_i32_with_prefix(prefix: &str) -> String {
+        format!("{}int32_t", prefix)
+    }
+
+    pub fn visit_i64() -> String {
+        Self::visit_i64_with_prefix("")
+    }
+
+    pub fn visit_i64_with_prefix(prefix: &str) -> String {
+        format!("{}int64_t", prefix)
+    }
+
+    pub fn visit_i128() -> String {
+        Self::visit_i128_with_prefix("")
+    }
+
+    pub fn visit_i128_with_prefix(prefix: &str) -> String {
+        format!("{}int128_t", prefix)
+    }
+
+    pub fn visit_u8() -> String {
+        Self::visit_u8_with_prefix("")
+    }
+
+    pub fn visit_u8_with_prefix(prefix: &str) -> String {
+        format!("{}uint8_t", prefix)
+    }
+
+    pub fn visit_u16() -> String {
+        Self::visit_u16_with_prefix("")
+    }
+
+    pub fn visit_u16_with_prefix(prefix: &str) -> String {
+        format!("{}uint16_t", prefix)
+    }
+
+    pub fn visit_u32() -> String {
+        Self::visit_u32_with_prefix("")
+    }
+
+    pub fn visit_u32_with_prefix(prefix: &str) -> String {
+        format!("{}uint32_t", prefix)
+    }
+
+    pub fn visit_u64() -> String {
+        Self::visit_u64_with_prefix("")
+    }
+
+    pub fn visit_u64_with_prefix(prefix: &str) -> String {
+        format!("{}uint64_t", prefix)
+    }
+
+    pub fn visit_u128() -> String {
+        Self::visit_u128_with_prefix("")
+    }
+
+    pub fn visit_u128_with_prefix(prefix: &str) -> String {
+        format!("{}uint128_t", prefix)
+    }
+
+    pub fn visit_f32() -> String {
+        Self::visit_f32_with_prefix("")
+    }
+
+    pub fn visit_f32_with_prefix(prefix: &str) -> String {
+        format!("{}float", prefix)
+    }
+
+    pub fn visit_f64() -> String {
+        Self::visit_f64_with_prefix("")
+    }
+
+    pub fn visit_f64_with_prefix(prefix: &str) -> String {
+        format!("{}double", prefix)
+    }
+
+    pub fn visit_string() -> String {
+        Self::visit_string_with_prefix("")
+    }
+
+    pub fn visit_string_with_prefix(prefix: &str) -> String {
+        format!("{}std::string", prefix)
+    }
+
+    pub fn visit_array(arr: &Array) -> String {
+        Self::visit_array_with_prefix(arr, "")
+    }
+
+    pub fn visit_array_with_prefix(arr: &Array, prefix: &str) -> String {
+        format!(
+            "{}std::vector<{}>",
+            prefix,
+            &TypenameVisitor::visit_type(&arr.t)
+        )
+    }
+
+    pub fn visit_record(record: &Record) -> String {
+        Self::visit_record_with_prefix(record, "")
+    }
+
+    pub fn visit_record_with_prefix(record: &Record, prefix: &str) -> String {
+        format!("{}{}", prefix, &record.n)
+    }
+
+    pub fn visit_tuple(tuple: &Tuple) -> String {
+        Self::visit_tuple_with_prefix(tuple, "")
+    }
+
+    pub fn visit_tuple_with_prefix(tuple: &Tuple, prefix: &str) -> String {
+        format!(
+            "{}std::tuple<{}>",
+            prefix,
+            tuple
+                .fields
+                .iter()
+                .map(|f| Self::visit_type(&f.t))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    }
+
+    pub fn visit_enum(e: &Enum) -> String {
+        Self::visit_enum_with_prefix(e, "")
+    }
+
+    pub fn visit_enum_with_prefix(e: &Enum, prefix: &str) -> String {
+        format!("{}{}", prefix, &e.n)
+    }
+
+    pub fn visit_optional(optional: &Optional) -> String {
+        Self::visit_optional_with_prefix(optional, "")
+    }
+
+    pub fn visit_optional_with_prefix(optional: &Optional, prefix: &str) -> String {
+        format!("{}std::optional<{}>", prefix, Self::visit_type(&optional.t))
+    }
+
+    pub fn visit_union(union: &Union) -> String {
+        Self::visit_union_with_prefix(union, "")
+    }
+
+    pub fn visit_union_with_prefix(union: &Union, prefix: &str) -> String {
+        format!("{}{}", prefix, &union.n)
+    }
+
+    pub fn visit_symbolic(sym: &Symbolic) -> String {
+        Self::visit_symbolic_with_prefix(sym, "")
+    }
+
+    pub fn visit_symbolic_with_prefix(sym: &Symbolic, prefix: &str) -> String {
+        format!("{}{}_Symbol", prefix, &sym.n)
+    }
+
+    pub fn visit_alias(alias: &Alias) -> String {
+        Self::visit_alias_with_prefix(alias, "")
+    }
+
+    pub fn visit_alias_with_prefix(alias: &Alias, prefix: &str) -> String {
+        format!("{}{}", prefix, alias.n)
+    }
+}
+
+pub struct TypedefVisitor;
+
+impl TypedefVisitor {
+    pub fn visit_type(t: &Type) -> String {
+        Self::visit_type_with_prefix(t, "")
+    }
+
+    pub fn visit_type_with_prefix(t: &Type, prefix: &str) -> String {
+        match t {
+            Type::Unit => todo!(),
+            Type::Bool => Self::visit_bool_with_prefix(prefix),
+            Type::I8 => Self::visit_i8_with_prefix(prefix),
+            Type::I16 => Self::visit_i16_with_prefix(prefix),
+            Type::I32 => Self::visit_i32_with_prefix(prefix),
+            Type::I64 => Self::visit_i64_with_prefix(prefix),
+            Type::I128 => Self::visit_i128_with_prefix(prefix),
+            Type::U8 => Self::visit_u8_with_prefix(prefix),
+            Type::U16 => Self::visit_u16_with_prefix(prefix),
+            Type::U32 => Self::visit_u32_with_prefix(prefix),
+            Type::U64 => Self::visit_u64_with_prefix(prefix),
+            Type::U128 => Self::visit_u128_with_prefix(prefix),
+            Type::F32 => Self::visit_f32_with_prefix(prefix),
+            Type::F64 => Self::visit_f64_with_prefix(prefix),
+            Type::String => Self::visit_string_with_prefix(prefix),
+            Type::Array(arr) => Self::visit_array_with_prefix(arr, prefix),
+            Type::Func(_) => todo!(),
+            Type::Record(record) => Self::visit_record_with_prefix(record, prefix),
+            Type::Tuple(tuple) => Self::visit_tuple_with_prefix(tuple, prefix),
+            Type::Enum(e) => Self::visit_enum_with_prefix(e, prefix),
+            Type::Fallible(_) => unimplemented!(),
+            Type::Optional(optional) => Self::visit_optional_with_prefix(optional, prefix),
+            Type::Union(union) => Self::visit_union_with_prefix(union, prefix),
+            Type::Ptr(_) => Self::visit_string_with_prefix(prefix),
+            Type::Symbolic(sym) => Self::visit_symbolic_with_prefix(sym, prefix),
+            Type::Generic(_) => todo!(),
+            Type::Alias(alias) => Self::visit_alias_with_prefix(alias, prefix), // FIXME: Should we transpile the alias?
+        }
+    }
+
+    pub fn visit_bool() -> String {
+        Self::visit_bool_with_prefix("")
+    }
+
+    pub fn visit_bool_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_bool_with_prefix(prefix)
+    }
+
+    pub fn visit_unit_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_unit_with_prefix(prefix)
+    }
+
+    pub fn visit_i8() -> String {
+        Self::visit_i8_with_prefix("")
+    }
+
+    pub fn visit_i8_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_i8_with_prefix(prefix)
+    }
+
+    pub fn visit_i16() -> String {
+        Self::visit_i16_with_prefix("")
+    }
+
+    pub fn visit_i16_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_i16_with_prefix(prefix)
+    }
+
+    pub fn visit_i32() -> String {
+        Self::visit_i32_with_prefix("")
+    }
+
+    pub fn visit_i32_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_i32_with_prefix(prefix)
+    }
+
+    pub fn visit_i64() -> String {
+        Self::visit_i64_with_prefix("")
+    }
+
+    pub fn visit_i64_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_i64_with_prefix(prefix)
+    }
+
+    pub fn visit_i128() -> String {
+        Self::visit_i128_with_prefix("")
+    }
+
+    pub fn visit_i128_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_i128_with_prefix(prefix)
+    }
+
+    pub fn visit_u8() -> String {
+        Self::visit_u8_with_prefix("")
+    }
+
+    pub fn visit_u8_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_u8_with_prefix(prefix)
+    }
+
+    pub fn visit_u16() -> String {
+        Self::visit_u16_with_prefix("")
+    }
+
+    pub fn visit_u16_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_u16_with_prefix(prefix)
+    }
+
+    pub fn visit_u32() -> String {
+        Self::visit_u32_with_prefix("")
+    }
+
+    pub fn visit_u32_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_u32_with_prefix(prefix)
+    }
+
+    pub fn visit_u64() -> String {
+        Self::visit_u64_with_prefix("")
+    }
+
+    pub fn visit_u64_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_u64_with_prefix(prefix)
+    }
+
+    pub fn visit_u128() -> String {
+        Self::visit_u128_with_prefix("")
+    }
+
+    pub fn visit_u128_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_u128_with_prefix(prefix)
+    }
+
+    pub fn visit_f32() -> String {
+        Self::visit_f32_with_prefix("")
+    }
+
+    pub fn visit_f32_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_f32_with_prefix(prefix)
+    }
+
+    pub fn visit_f64() -> String {
+        Self::visit_f64_with_prefix("")
+    }
+
+    pub fn visit_f64_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_f64_with_prefix(prefix)
+    }
+
+    pub fn visit_string() -> String {
+        Self::visit_string_with_prefix("")
+    }
+
+    pub fn visit_string_with_prefix(prefix: &str) -> String {
+        TypenameVisitor::visit_string_with_prefix(prefix)
+    }
+
+    pub fn visit_array(list: &Array) -> String {
+        Self::visit_array_with_prefix(list, "")
+    }
+
+    pub fn visit_array_with_prefix(list: &Array, prefix: &str) -> String {
+        TypenameVisitor::visit_array_with_prefix(list, prefix)
+    }
+
+    pub fn visit_record(record: &Record) -> String {
+        Self::visit_record_with_prefix(record, "")
+    }
+
+    pub fn visit_record_with_prefix(record: &Record, prefix: &str) -> String {
+        let mut s = String::new();
+        s.push_str(prefix);
+        match &record.fields {
+            Fields::Unnamed(fields) => {
+                s.push_str("using ");
+                s.push_str(&record.n);
+                s.push_str(" = std::tuple<");
+                for (i, field) in fields.iter().enumerate() {
+                    s.push_str(&TypenameVisitor::visit_type(&field.t));
+                    if i != fields.len() - 1 {
+                        s.push_str(", ");
+                    }
+                }
+                s.push_str(">;");
+            }
+            Fields::Named(fields) => {
+                s.push_str("struct ");
+                s.push_str(&record.n);
+                s.push_str(" {\n");
+                for field in fields.iter() {
+                    s.push_str(prefix);
+                    s.push_str("    ");
+                    s.push_str(&TypenameVisitor::visit_type(&field.t));
+                    s.push(' ');
+                    s.push_str(&field.n);
+                    s.push_str(";\n");
+                }
+                s.push_str(prefix);
+                s.push_str("};");
+            }
+        }
+        s
+    }
+
+    pub fn visit_tuple(tuple: &Tuple) -> String {
+        Self::visit_tuple_with_prefix(tuple, "")
+    }
+
+    pub fn visit_tuple_with_prefix(tuple: &Tuple, prefix: &str) -> String {
+        TypenameVisitor::visit_tuple_with_prefix(tuple, prefix)
+    }
+
+    pub fn visit_enum(e: &Enum) -> String {
+        Self::visit_enum_with_prefix(e, "")
+    }
+
+    pub fn visit_enum_with_prefix(e: &Enum, prefix: &str) -> String {
+        let mut s = String::new();
+        s.push_str(prefix);
+        s.push_str("enum class ");
+        s.push_str(&e.n);
+        s.push_str(" : uint8_t {\n");
+        for variant in &e.variants {
+            s.push_str(prefix);
+            s.push_str("    ");
+            s.push_str(&variant.n);
+            if let Some(v) = &variant.v {
+                s.push_str(" = ");
+                s.push_str(&v.to_string());
+            }
+            s.push_str(",\n");
+        }
+        s.push_str(prefix);
+        s.push_str("};");
+        s
+    }
+
+    pub fn visit_optional(optional: &Optional) -> String {
+        Self::visit_optional_with_prefix(optional, "")
+    }
+
+    pub fn visit_optional_with_prefix(optional: &Optional, prefix: &str) -> String {
+        TypenameVisitor::visit_optional_with_prefix(optional, prefix)
+    }
+
+    pub fn visit_union(union: &Union) -> String {
+        Self::visit_union_with_prefix(union, "")
+    }
+
+    pub fn visit_union_with_prefix(union: &Union, prefix: &str) -> String {
+        let mut s = String::new();
+        s.push_str(prefix);
+        s.push_str("struct ");
+        s.push_str(&union.n);
+        s.push_str(" {\n");
+
+        s.push_str(prefix);
+        s.push_str("    enum class Tag {\n");
+        for variant in &union.variants {
+            s.push_str(prefix);
+            s.push_str("        ");
+            s.push_str(&variant.n);
+            s.push_str(",\n");
+        }
+        s.push_str("    };\n\n");
+
+        let inner_types: Vec<_> = union
+            .variants
+            .iter()
+            .map(|variant| {
+                variant
+                    .fields
+                    .as_ref()
+                    .map(|variant_fields| match variant_fields {
+                        Fields::Unnamed(fields) => Record::new(
+                            format!("{}_Body", &variant.n),
+                            Fields::Unnamed(fields.clone()),
+                        ),
+                        Fields::Named(fields) => Record::new(
+                            format!("{}_Body", &variant.n),
+                            Fields::named(fields.clone()),
+                        ),
+                    })
+            })
+            .collect();
+
+        for (inner_type, variant) in inner_types.iter().zip(&union.variants) {
+            match inner_type {
+                Some(t) => {
+                    s.push_str(&Self::visit_record_with_prefix(
+                        t,
+                        &format!("{}    ", prefix),
+                    ));
+                    s.push('\n');
+                }
+                None => {
+                    s.push_str(prefix);
+                    s.push_str("    struct ");
+                    s.push_str(&variant.n);
+                    s.push_str("_Body {};\n");
+                }
+            }
+        }
+
+        s.push('\n');
+        s.push_str(prefix);
+        s.push_str("    Tag tag;\n");
+        for (variant, inner_type) in union.variants.iter().zip(inner_types.iter()) {
+            match inner_type {
+                Some(t) => {
+                    s.push_str(&Self::visit_optional_with_prefix(
+                        &Optional::new(t.clone()),
+                        &format!("{}    ", prefix),
+                    ));
+                }
+                None => {
+                    s.push_str(&Self::visit_optional_with_prefix(
+                        &Optional::new(Record::new(
+                            format!("{}_Body", variant.n),
+                            Fields::unnamed(UnnamedFields::empty()),
+                        )),
+                        &format!("{}    ", prefix),
+                    ));
+                }
+            }
+            s.push(' ');
+            s.push_str(&variant.n);
+            s.push_str(";\n");
+        }
+        s.push_str(prefix);
+        s.push_str("};");
+        s
+    }
+
+    pub fn visit_symbolic(sym: &Symbolic) -> String {
+        Self::visit_symbolic_with_prefix(sym, "")
+    }
+
+    pub fn visit_symbolic_with_prefix(sym: &Symbolic, prefix: &str) -> String {
+        let mut s = String::new();
+        s.push_str(prefix);
+        s.push_str("struct ");
+        s.push_str(&sym.n);
+        s.push_str("_Symbol {};");
+        s
+    }
+
+    pub fn visit_alias(alias: &Alias) -> String {
+        Self::visit_alias_with_prefix(alias, "")
+    }
+
+    pub fn visit_alias_with_prefix(alias: &Alias, prefix: &str) -> String {
+        let mut s = String::new();
+        s.push_str(prefix);
+        s.push_str("using ");
+        s.push_str(&alias.n);
+        s.push_str(&format!(" = {};", TypenameVisitor::visit_type(&alias.t)));
+        s
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        alias::Alias,
+        field::{NamedField, UnnamedField},
+        product::{Array, Record, Tuple},
+        sum::{Enum, EnumVariant, Optional, Union, UnionVariant},
+        symbolic::Symbolic,
+        type_info::Type,
+    };
+
+    use super::TypedefVisitor;
+
+    #[test]
+    fn simple_array() {
+        let t = Array::new(Type::U8);
+
+        assert_eq!(TypedefVisitor::visit_array(&t), r#"std::vector<uint8_t>"#);
+    }
+
+    #[test]
+    fn simple_record() {
+        let t = Record::new("Foo", [("bar", Type::U8), ("baz", Type::U8)]);
+
+        assert_eq!(
+            TypedefVisitor::visit_record(&t),
+            r#"struct Foo {
+    uint8_t bar;
+    uint8_t baz;
+};"#
+        );
+
+        let t = Record::new("Foo", [Type::U8, Type::U8]);
+
+        assert_eq!(
+            TypedefVisitor::visit_record(&t),
+            r#"using Foo = std::tuple<uint8_t, uint8_t>;"#
+        );
+    }
+
+    #[test]
+    fn simple_tuple() {
+        let t = Tuple::new([UnnamedField::new(Type::U8), UnnamedField::new(Type::U8)]);
+
+        assert_eq!(
+            TypedefVisitor::visit_tuple(&t),
+            r#"std::tuple<uint8_t, uint8_t>"#
+        );
+    }
+
+    #[test]
+    fn simple_enum() {
+        let t = Enum::new(
+            "Foo",
+            [
+                EnumVariant::with_const_value("Bar", 0),
+                EnumVariant::with_const_value("Baz", 1),
+            ],
+        );
+
+        assert_eq!(
+            TypedefVisitor::visit_enum(&t),
+            r#"enum class Foo : uint8_t {
+    Bar = 0,
+    Baz = 1,
+};"#
+        );
+    }
+
+    #[test]
+    fn simple_optional() {
+        let t = Optional::new(Type::U8);
+
+        assert_eq!(
+            TypedefVisitor::visit_optional(&t),
+            r#"std::optional<uint8_t>"#
+        );
+    }
+
+    #[test]
+    fn simple_union() {
+        let t = Union::new(
+            "Foo",
+            [
+                UnionVariant::with_fields("X", [Type::U8, Type::U8]),
+                UnionVariant::with_fields("Y", [("bar", Type::U8), ("baz", Type::U8)]),
+                UnionVariant::new("Z"),
+            ],
+        );
+
+        assert_eq!(
+            TypedefVisitor::visit_union(&t),
+            r#"struct Foo {
+    enum class Tag {
+        X,
+        Y,
+        Z,
+    };
+
+    using X_Body = std::tuple<uint8_t, uint8_t>;
+    struct Y_Body {
+        uint8_t bar;
+        uint8_t baz;
+    };
+    struct Z_Body {};
+
+    Tag tag;
+    std::optional<X_Body> X;
+    std::optional<Y_Body> Y;
+    std::optional<Z_Body> Z;
+};"#
+        );
+    }
+
+    #[test]
+    fn simple_symbolic() {
+        let t = Symbolic::new("Foo");
+
+        assert_eq!(
+            TypedefVisitor::visit_symbolic(&t),
+            r#"struct Foo_Symbol {};"#
+        );
+    }
+
+    #[test]
+    fn alias() {
+        let t = Alias::new("Foo", Type::U32);
+
+        assert_eq!(TypedefVisitor::visit_alias(&t), r#"using Foo = uint32_t;"#);
+        assert_eq!(
+            TypedefVisitor::visit_type(&Type::from(t)),
+            r#"using Foo = uint32_t;"#
+        );
+
+        let t = Record::new(
+            "Foo",
+            [NamedField::new(
+                "bar",
+                Type::Alias(Alias::new("Baz", Type::U32)),
+            )],
+        );
+
+        assert_eq!(
+            TypedefVisitor::visit_record(&t),
+            r#"struct Foo {
+    Baz bar;
+};"#
+        );
+    }
+}
