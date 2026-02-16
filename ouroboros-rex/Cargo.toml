@@ -7,3 +7,4 @@ edition = "2024"
 ouroboros = { path = "../ouroboros", default-features = false }
 ouroboros-proc-macro = { path = "../ouroboros-proc-macro" }
 rex = { path = "../rex" }
+rex-ts = { path = "../rex-ts" }

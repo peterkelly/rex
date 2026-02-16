@@ -1090,6 +1090,7 @@ dependencies = [
  "ouroboros",
  "ouroboros-proc-macro",
  "rex",
+ "rex-ts",
 ]
 
 [[package]]
