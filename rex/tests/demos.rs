@@ -1,4 +1,4 @@
-use rex::{Engine, GasMeter};
+use rex::{Engine, GasMeter, Heap, Pointer, Type, Value};
 
 fn extract_first_interactive_rex(markdown: &str) -> String {
     let mut lines = markdown.lines();
@@ -20,7 +20,7 @@ fn extract_first_interactive_rex(markdown: &str) -> String {
     panic!("no rex,interactive fence found");
 }
 
-async fn assert_demo_ok(name: &str, markdown: &str) {
+async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
     let source = extract_first_interactive_rex(markdown);
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -30,19 +30,41 @@ async fn assert_demo_ok(name: &str, markdown: &str) {
         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
 
     let mut gas = GasMeter::default();
-    let (_value, ty) = engine
+    let (value, ty) = engine
         .eval_snippet(&source, &mut gas)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
-    assert!(
-        !ty.to_string().is_empty(),
-        "{name}: eval returned an empty type"
-    );
+    (engine.into_heap(), value, ty)
+}
+
+fn list_elements(heap: &rex::Heap, list: &Pointer) -> Vec<Pointer> {
+    let mut out = Vec::new();
+    let mut cur = list.clone();
+    loop {
+        let val = heap.get(&cur).unwrap();
+        match val.as_ref() {
+            Value::Adt(tag, args) if tag.as_ref() == "Empty" => return out,
+            Value::Adt(tag, args) if tag.as_ref() == "Cons" => {
+                assert_eq!(args.len(), 2, "Cons must have exactly two fields");
+                out.push(args[0].clone());
+                cur = args[1].clone();
+            }
+            other => panic!("expected list, got {}", other.value_type_name()),
+        }
+    }
+}
+
+fn list_i32_values(heap: &rex::Heap, ptr: &Pointer) -> Vec<i32> {
+    let elems = list_elements(heap, ptr);
+    elems
+        .iter()
+        .map(|p| heap.pointer_as_i32(p).unwrap())
+        .collect::<Vec<_>>()
 }
 
 #[tokio::test]
 async fn demo_factorial() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "factorial",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -50,11 +72,13 @@ async fn demo_factorial() {
         )),
     )
     .await;
+    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(heap.pointer_as_i32(&value).unwrap(), 720);
 }
 
 #[tokio::test]
 async fn demo_fibonacci() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "fibonacci",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -62,11 +86,16 @@ async fn demo_fibonacci() {
         )),
     )
     .await;
+    assert_eq!(ty, Type::list(Type::con("i32", 0)));
+    assert_eq!(
+        list_i32_values(&heap, &value),
+        vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+    );
 }
 
 #[tokio::test]
 async fn demo_merge_sort() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "merge_sort",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -74,11 +103,30 @@ async fn demo_merge_sort() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::list(Type::con("i32", 0)),
+            Type::list(Type::con("i32", 0)),
+            Type::list(Type::con("i32", 0)),
+        ])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        list_i32_values(&heap, &items[0]),
+        vec![9, 1, 7, 3, 2, 8, 6, 4, 5]
+    );
+    assert_eq!(
+        list_i32_values(&heap, &items[1]),
+        vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
+    );
+    assert_eq!(list_i32_values(&heap, &items[2]), vec![1, 2, 3, 4, 5]);
 }
 
 #[tokio::test]
 async fn demo_binary_search_tree() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "binary_search_tree",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -86,11 +134,24 @@ async fn demo_binary_search_tree() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+        ])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 6);
+    assert!(heap.pointer_as_bool(&items[1]).unwrap());
+    assert!(!heap.pointer_as_bool(&items[2]).unwrap());
 }
 
 #[tokio::test]
 async fn demo_expression_evaluator() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "expression_evaluator",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -98,11 +159,24 @@ async fn demo_expression_evaluator() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 14);
+    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 3);
+    assert_eq!(heap.pointer_as_i32(&items[2]).unwrap(), 14);
 }
 
 #[tokio::test]
 async fn demo_dijkstra_lite() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "dijkstra_lite",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -110,11 +184,19 @@ async fn demo_dijkstra_lite() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 7);
+    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 5);
 }
 
 #[tokio::test]
 async fn demo_knapsack_01() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "knapsack_01",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -122,11 +204,19 @@ async fn demo_knapsack_01() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 8);
+    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 12);
 }
 
 #[tokio::test]
 async fn demo_union_find() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "union_find",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -134,11 +224,26 @@ async fn demo_union_find() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 4);
+    assert!(heap.pointer_as_bool(&items[0]).unwrap());
+    assert!(!heap.pointer_as_bool(&items[1]).unwrap());
+    assert_eq!(heap.pointer_as_i32(&items[2]).unwrap(), 0);
+    assert_eq!(heap.pointer_as_i32(&items[3]).unwrap(), 3);
 }
 
 #[tokio::test]
 async fn demo_prefix_parser() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "prefix_parser",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -146,11 +251,26 @@ async fn demo_prefix_parser() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("bool", 0),
+            Type::con("i32", 0),
+            Type::con("bool", 0),
+        ])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 4);
+    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 14);
+    assert!(heap.pointer_as_bool(&items[1]).unwrap());
+    assert_eq!(heap.pointer_as_i32(&items[2]).unwrap(), 7);
+    assert!(heap.pointer_as_bool(&items[3]).unwrap());
 }
 
 #[tokio::test]
 async fn demo_topological_sort() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "topological_sort",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -158,11 +278,34 @@ async fn demo_topological_sort() {
         )),
     )
     .await;
+    let ty_str = ty.to_string();
+    assert!(
+        ty_str.starts_with("(List "),
+        "topological_sort: expected list result type, got {ty_str}"
+    );
+    assert!(
+        ty_str.ends_with(".Node)"),
+        "topological_sort: expected element type ending in .Node, got {ty_str}"
+    );
+    let elems = list_elements(&heap, &value);
+    assert_eq!(elems.len(), 4);
+    for (idx, expected_tag) in ["A", "B", "C", "D"].iter().enumerate() {
+        let value = heap.get(&elems[idx]).unwrap();
+        let Value::Adt(tag, args) = value.as_ref() else {
+            panic!("expected ADT constructor");
+        };
+        assert!(
+            tag.as_ref().ends_with(&format!(".{expected_tag}")),
+            "expected constructor ending with .{expected_tag}, got {}",
+            tag.as_ref()
+        );
+        assert!(args.is_empty(), "{expected_tag} should have no payload");
+    }
 }
 
 #[tokio::test]
 async fn demo_n_queens() {
-    assert_demo_ok(
+    let (heap, value, ty) = eval_demo(
         "n_queens",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -170,4 +313,12 @@ async fn demo_n_queens() {
         )),
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+    );
+    let items = heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 2);
+    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 10);
 }
