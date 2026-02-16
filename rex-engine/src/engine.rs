@@ -5,7 +5,7 @@ use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use async_recursion::async_recursion;
-use futures::{FutureExt, future::LocalBoxFuture, pin_mut};
+use futures::{FutureExt, future::BoxFuture, pin_mut};
 use rex_ast::expr::{
     ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, sym, sym_eq,
 };
@@ -25,7 +25,7 @@ use crate::prelude::{
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType};
 
-fn check_cancelled<State: Clone + Sync + 'static>(
+fn check_cancelled<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
 ) -> Result<(), EngineError> {
     if engine.cancel.is_cancelled() {
@@ -43,7 +43,7 @@ fn type_head_is_var(typ: &Type) -> bool {
     matches!(cur.as_ref(), TypeKind::Var(..))
 }
 
-type NativeFuture<'a> = LocalBoxFuture<'a, Result<Pointer, EngineError>>;
+type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
 type NativeId = u64;
 type SyncNativeCallable<State> = Arc<
     dyn Fn(&Engine<State>, &Type, &[Pointer]) -> Result<Pointer, EngineError>
@@ -67,14 +67,14 @@ type AsyncNativeCallableCancellable<State> = Arc<
 type ExportInjector<State> =
     Box<dyn FnOnce(&mut Engine<State>, &str) -> Result<(), EngineError> + Send + 'static>;
 
-struct NativeRegistration<State: Clone + Sync + 'static> {
+struct NativeRegistration<State: Clone + Send + Sync + 'static> {
     scheme: Scheme,
     arity: usize,
     callable: NativeCallable<State>,
     gas_cost: u64,
 }
 
-impl<State: Clone + Sync + 'static> NativeRegistration<State> {
+impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
     fn sync(scheme: Scheme, arity: usize, func: SyncNativeCallable<State>, gas_cost: u64) -> Self {
         Self {
             scheme,
@@ -113,7 +113,7 @@ impl<State: Clone + Sync + 'static> NativeRegistration<State> {
     }
 }
 
-pub trait Handler<State: Clone + Sync + 'static, Sig>: Send + Sync + 'static {
+pub trait Handler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
     fn declaration(export_name: &str) -> String;
     fn declaration_for(&self, export_name: &str) -> String {
         Self::declaration(export_name)
@@ -121,7 +121,7 @@ pub trait Handler<State: Clone + Sync + 'static, Sig>: Send + Sync + 'static {
     fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError>;
 }
 
-pub trait AsyncHandler<State: Clone + Sync + 'static, Sig>: Send + Sync + 'static {
+pub trait AsyncHandler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
     fn declaration(export_name: &str) -> String;
     fn declaration_for(&self, export_name: &str) -> String {
         Self::declaration(export_name)
@@ -136,7 +136,7 @@ struct NativeCallableSig;
 #[derive(Debug, Clone, Copy)]
 struct AsyncNativeCallableSig;
 
-pub struct Export<State: Clone + Sync + 'static> {
+pub struct Export<State: Clone + Send + Sync + 'static> {
     pub name: String,
     declaration: String,
     injector: ExportInjector<State>,
@@ -144,7 +144,7 @@ pub struct Export<State: Clone + Sync + 'static> {
 
 impl<State> Export<State>
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     fn from_injector(
         name: impl Into<String>,
@@ -233,14 +233,14 @@ where
     }
 }
 
-pub struct Module<State: Clone + Sync + 'static> {
+pub struct Module<State: Clone + Send + Sync + 'static> {
     pub name: String,
     exports: Vec<Export<State>>,
 }
 
 impl<State> Module<State>
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
@@ -372,7 +372,7 @@ macro_rules! define_handler_impl {
     ([] ; $arity:literal ; $sig:ty) => {
         impl<State, F, R> Handler<State, $sig> for F
         where
-            State: Clone + Sync + 'static,
+            State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoPointer + RexType,
         {
@@ -408,7 +408,7 @@ macro_rules! define_handler_impl {
     ([ $(($arg_ty:ident, $arg_name:ident, $idx:tt)),+ ] ; $arity:literal ; $sig:ty) => {
         impl<State, F, R, $($arg_ty),+> Handler<State, $sig> for F
         where
-            State: Clone + Sync + 'static,
+            State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State, $($arg_ty),+) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType),+
@@ -449,7 +449,7 @@ macro_rules! define_handler_impl {
 
 impl<State> Handler<State, NativeCallableSig> for (Scheme, usize, SyncNativeCallable<State>)
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     fn declaration(_export_name: &str) -> String {
         unreachable!("native callable handlers use declaration_for")
@@ -472,9 +472,9 @@ macro_rules! define_async_handler_impl {
     ([] ; $arity:literal ; $sig:ty) => {
         impl<State, F, Fut, R> AsyncHandler<State, $sig> for F
         where
-            State: Clone + Sync + 'static,
+            State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = Result<R, EngineError>> + 'static,
+            Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
             R: IntoPointer + RexType,
         {
             fn declaration(export_name: &str) -> String {
@@ -503,7 +503,7 @@ macro_rules! define_async_handler_impl {
                             let value = f(engine.state.as_ref()).await?;
                             value.into_pointer(engine.heap())
                         }
-                        .boxed_local()
+                        .boxed()
                     },
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
@@ -515,9 +515,9 @@ macro_rules! define_async_handler_impl {
     ([ $(($arg_ty:ident, $arg_name:ident, $idx:tt)),+ ] ; $arity:literal ; $sig:ty) => {
         impl<State, F, Fut, R, $($arg_ty),+> AsyncHandler<State, $sig> for F
         where
-            State: Clone + Sync + 'static,
+            State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State, $($arg_ty),+) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = Result<R, EngineError>> + 'static,
+            Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType),+
         {
@@ -549,7 +549,7 @@ macro_rules! define_async_handler_impl {
                             let value = f(engine.state.as_ref(), $($arg_name),+).await?;
                             value.into_pointer(engine.heap())
                         }
-                        .boxed_local()
+                        .boxed()
                     },
                 );
                 let typ = native_fn_type!($($arg_ty),+ ; R);
@@ -564,7 +564,7 @@ macro_rules! define_async_handler_impl {
 impl<State> AsyncHandler<State, AsyncNativeCallableSig>
     for (Scheme, usize, AsyncNativeCallable<State>)
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     fn declaration(_export_name: &str) -> String {
         unreachable!("native async callable handlers use declaration_for")
@@ -588,19 +588,19 @@ where
 }
 
 #[derive(Clone)]
-pub(crate) enum NativeCallable<State: Clone + Sync + 'static> {
+pub(crate) enum NativeCallable<State: Clone + Send + Sync + 'static> {
     Sync(SyncNativeCallable<State>),
     Async(AsyncNativeCallable<State>),
     AsyncCancellable(AsyncNativeCallableCancellable<State>),
 }
 
-impl<State: Clone + Sync + 'static> PartialEq for NativeCallable<State> {
+impl<State: Clone + Send + Sync + 'static> PartialEq for NativeCallable<State> {
     fn eq(&self, _other: &NativeCallable<State>) -> bool {
         false
     }
 }
 
-impl<State: Clone + Sync + 'static> std::fmt::Debug for NativeCallable<State> {
+impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<State> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
             NativeCallable::Sync(_) => write!(f, "Sync"),
@@ -610,7 +610,7 @@ impl<State: Clone + Sync + 'static> std::fmt::Debug for NativeCallable<State> {
     }
 }
 
-impl<State: Clone + Sync + 'static> NativeCallable<State> {
+impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
     async fn call(
         &self,
         engine: &Engine<State>,
@@ -706,7 +706,7 @@ impl NativeFn {
         &self.name
     }
 
-    async fn call_zero<State: Clone + Sync + 'static>(
+    async fn call_zero<State: Clone + Send + Sync + 'static>(
         &self,
         engine: &Engine<State>,
         gas: &mut GasMeter,
@@ -730,7 +730,7 @@ impl NativeFn {
             .await
     }
 
-    async fn apply<State: Clone + Sync + 'static>(
+    async fn apply<State: Clone + Send + Sync + 'static>(
         mut self,
         engine: &Engine<State>,
         arg: Pointer,
@@ -839,7 +839,7 @@ impl OverloadedFn {
         (self.name, self.typ, self.applied, self.applied_types)
     }
 
-    async fn apply<State: Clone + Sync + 'static>(
+    async fn apply<State: Clone + Send + Sync + 'static>(
         mut self,
         engine: &Engine<State>,
         arg: Pointer,
@@ -911,7 +911,7 @@ impl OverloadedFn {
 }
 
 #[derive(Clone)]
-struct NativeImpl<State: Clone + Sync + 'static> {
+struct NativeImpl<State: Clone + Send + Sync + 'static> {
     id: NativeId,
     name: Symbol,
     arity: usize,
@@ -920,20 +920,20 @@ struct NativeImpl<State: Clone + Sync + 'static> {
     gas_cost: u64,
 }
 
-impl<State: Clone + Sync + 'static> NativeImpl<State> {
+impl<State: Clone + Send + Sync + 'static> NativeImpl<State> {
     fn to_native_fn(&self, typ: Type) -> NativeFn {
         NativeFn::new(self.id, self.name.clone(), self.arity, typ, self.gas_cost)
     }
 }
 
 #[derive(Clone)]
-struct NativeRegistry<State: Clone + Sync + 'static> {
+struct NativeRegistry<State: Clone + Send + Sync + 'static> {
     next_id: NativeId,
     entries: HashMap<Symbol, Vec<NativeImpl<State>>>,
     by_id: HashMap<NativeId, NativeImpl<State>>,
 }
 
-impl<State: Clone + Sync + 'static> NativeRegistry<State> {
+impl<State: Clone + Send + Sync + 'static> NativeRegistry<State> {
     fn insert(
         &mut self,
         name: Symbol,
@@ -977,7 +977,7 @@ impl<State: Clone + Sync + 'static> NativeRegistry<State> {
     }
 }
 
-impl<State: Clone + Sync + 'static> Default for NativeRegistry<State> {
+impl<State: Clone + Send + Sync + 'static> Default for NativeRegistry<State> {
     fn default() -> Self {
         Self {
             next_id: 0,
@@ -1070,7 +1070,7 @@ impl TypeclassRegistry {
 
 pub struct Engine<State = ()>
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     pub state: Arc<State>,
     env: Env,
@@ -1086,7 +1086,7 @@ where
 
 impl<State> Default for Engine<State>
 where
-    State: Clone + Sync + 'static + Default,
+    State: Clone + Send + Sync + 'static + Default,
 {
     fn default() -> Self {
         Self::new(State::default())
@@ -1144,7 +1144,7 @@ define_async_handler_impl!(
 
 impl<State> Engine<State>
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     pub fn new(state: State) -> Self {
         Self {
@@ -1286,7 +1286,7 @@ where
                 log(&message);
                 engine.heap().alloc_string(message)
             }
-            .boxed_local()
+            .boxed()
         })
     }
 
@@ -2244,7 +2244,7 @@ fn normalize_name(name: &str) -> Symbol {
     sym(name)
 }
 
-fn default_ambiguous_types<State: Clone + Sync + 'static>(
+fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
     typed: TypedExpr,
     mut preds: Vec<Predicate>,
@@ -2385,7 +2385,7 @@ fn push_unique_type(out: &mut Vec<Type>, typ: Type) {
     }
 }
 
-fn choose_default_type<State: Clone + Sync + 'static>(
+fn choose_default_type<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
     preds: &[Predicate],
     candidates: &[Type],
@@ -2477,7 +2477,7 @@ fn split_fun(typ: &Type) -> Option<(Type, Type)> {
     }
 }
 
-fn impl_matches_type<State: Clone + Sync + 'static>(imp: &NativeImpl<State>, typ: &Type) -> bool {
+fn impl_matches_type<State: Clone + Send + Sync + 'static>(imp: &NativeImpl<State>, typ: &Type) -> bool {
     let mut supply = TypeVarSupply::new();
     let (_preds, scheme_ty) = instantiate(&imp.scheme, &mut supply);
     unify(&scheme_ty, typ).is_ok()
@@ -2659,7 +2659,7 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
     }
 }
 
-#[async_recursion(?Send)]
+#[async_recursion]
 async fn eval_typed_expr<State>(
     engine: &Engine<State>,
     env: &Env,
@@ -2667,7 +2667,7 @@ async fn eval_typed_expr<State>(
     gas: &mut GasMeter,
 ) -> Result<Pointer, EngineError>
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     check_cancelled(engine)?;
     let mut env = env.clone();
@@ -2872,7 +2872,7 @@ where
     }
 }
 
-#[async_recursion(?Send)]
+#[async_recursion]
 pub(crate) async fn apply<State>(
     engine: &Engine<State>,
     func: Pointer,
@@ -2882,7 +2882,7 @@ pub(crate) async fn apply<State>(
     gas: &mut GasMeter,
 ) -> Result<Pointer, EngineError>
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     let func_value = engine.heap().get(&func)?.as_ref().clone();
     match func_value {
@@ -3126,7 +3126,7 @@ mod tests {
                         token.cancelled().await;
                         _engine.heap().alloc_i32(0)
                     }
-                    .boxed_local()
+                    .boxed()
                 },
             )
             .unwrap();
@@ -3223,7 +3223,7 @@ mod tests {
         let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
         engine
             .export_native_async_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
-                async move { engine.heap().alloc_i32(1) }.boxed_local()
+                async move { engine.heap().alloc_i32(1) }.boxed()
             })
             .unwrap();
 
@@ -3255,7 +3255,7 @@ mod tests {
                 0,
                 50,
                 |engine, _token: CancellationToken, _t, _args| {
-                    async move { engine.heap().alloc_i32(1) }.boxed_local()
+                    async move { engine.heap().alloc_i32(1) }.boxed()
                 },
             )
             .unwrap();

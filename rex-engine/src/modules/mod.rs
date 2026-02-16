@@ -1345,7 +1345,7 @@ fn parse_program_from_source(
 
 impl<State> Engine<State>
 where
-    State: Clone + Sync + 'static,
+    State: Clone + Send + Sync + 'static,
 {
     pub fn add_resolver<F>(&mut self, name: impl Into<String>, f: F)
     where
@@ -1392,7 +1392,7 @@ where
         Err(EngineError::UnsupportedExpr)
     }
 
-    #[async_recursion(?Send)]
+    #[async_recursion]
     async fn import_bindings_for_decls(
         &mut self,
         decls: &[Decl],
@@ -1423,7 +1423,7 @@ where
         Ok(bindings)
     }
 
-    #[async_recursion(?Send)]
+    #[async_recursion]
     async fn load_module_from_resolved(
         &mut self,
         resolved: ResolvedModule,

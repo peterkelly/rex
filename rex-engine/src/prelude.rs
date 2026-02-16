@@ -25,7 +25,7 @@ fn values_to_ptrs<T: IntoPointer>(
         .collect()
 }
 
-async fn invoke_pointer_fn<State: Clone + Sync + 'static>(
+async fn invoke_pointer_fn<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
     func: Pointer,
     arg: Pointer,
@@ -115,7 +115,7 @@ pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     }
 }
 
-pub(crate) async fn resolve_binary_op<State: Clone + Sync + 'static>(
+pub(crate) async fn resolve_binary_op<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
     name: &str,
     elem_ty: &Type,
@@ -234,7 +234,7 @@ pub(crate) fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) async fn map_values<State: Clone + Sync + 'static, F, I, T>(
+pub(crate) async fn map_values<State: Clone + Send + Sync + 'static, F, I, T>(
     engine: &Engine<State>,
     func: F,
     func_ty: &Type,
@@ -257,7 +257,7 @@ where
     Ok(out)
 }
 
-pub(crate) async fn filter_values<State: Clone + Sync + 'static, P, I, T>(
+pub(crate) async fn filter_values<State: Clone + Send + Sync + 'static, P, I, T>(
     engine: &Engine<State>,
     pred: P,
     pred_ty: &Type,
@@ -288,7 +288,7 @@ where
     Ok(out)
 }
 
-pub(crate) async fn filter_map_values<State: Clone + Sync + 'static, F, I, T>(
+pub(crate) async fn filter_map_values<State: Clone + Send + Sync + 'static, F, I, T>(
     engine: &Engine<State>,
     func: F,
     func_ty: &Type,
@@ -313,7 +313,7 @@ where
     Ok(out)
 }
 
-pub(crate) async fn flat_map_values<State: Clone + Sync + 'static, F, I, T>(
+pub(crate) async fn flat_map_values<State: Clone + Send + Sync + 'static, F, I, T>(
     engine: &Engine<State>,
     func: F,
     func_ty: &Type,
@@ -337,7 +337,7 @@ where
     Ok(out)
 }
 
-pub(crate) async fn foldl_values<State: Clone + Sync + 'static>(
+pub(crate) async fn foldl_values<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
     func: Pointer,
     func_ty: &Type,
@@ -355,7 +355,7 @@ pub(crate) async fn foldl_values<State: Clone + Sync + 'static>(
     Ok(acc)
 }
 
-pub(crate) async fn foldr_values<State: Clone + Sync + 'static>(
+pub(crate) async fn foldr_values<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
     func: Pointer,
     func_ty: &Type,
@@ -597,7 +597,7 @@ fn cmp_value_by_type(
     }
 }
 
-pub(crate) fn inject_prelude_adts<State: Clone + Sync + 'static>(
+pub(crate) fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     let mut list_adt = engine.adt_decl("List", &["a"]);
@@ -634,7 +634,7 @@ pub(crate) fn inject_prelude_adts<State: Clone + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_equality_ops<State: Clone + Sync + 'static>(
+pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     // Equality primitives are monomorphic overloads (same name, different
@@ -733,7 +733,7 @@ pub(crate) fn inject_equality_ops<State: Clone + Sync + 'static>(
                     }
                     engine.heap().alloc_bool(true)
                 }
-                .boxed_local()
+                .boxed()
             },
         )?;
 
@@ -751,14 +751,14 @@ pub(crate) fn inject_equality_ops<State: Clone + Sync + 'static>(
                     .heap()
                     .alloc_bool(!bool::from_pointer(engine.heap(), &eq)?)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
     Ok(())
 }
 
-pub(crate) fn inject_order_ops<State: Clone + Sync + 'static>(
+pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     fn cmp_to_i32(ord: std::cmp::Ordering) -> i32 {
@@ -958,7 +958,7 @@ pub(crate) fn inject_order_ops<State: Clone + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_pretty_ops<State: Clone + Sync + 'static>(
+pub(crate) fn inject_pretty_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     engine.export("prim_pretty", |_: &State, x: bool| Ok(x.to_string()))?;
@@ -980,7 +980,7 @@ pub(crate) fn inject_pretty_ops<State: Clone + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_boolean_ops<State: Clone + Sync + 'static>(
+pub(crate) fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     engine.export("(&&)", |_: &State, a: bool, b: bool| Ok(a && b))?;
@@ -988,7 +988,7 @@ pub(crate) fn inject_boolean_ops<State: Clone + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_numeric_ops<State: Clone + Sync + 'static>(
+pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     // Additive identity
@@ -1231,7 +1231,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_json_primops<State: Clone + Sync + 'static>(
+pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     // List -> Array conversion.
@@ -1285,7 +1285,7 @@ pub(crate) fn inject_json_primops<State: Clone + Sync + 'static>(
                 }
                 engine.heap().alloc_dict(out)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1340,7 +1340,7 @@ pub(crate) fn inject_json_primops<State: Clone + Sync + 'static>(
                     let dict = engine.heap().alloc_dict(out)?;
                     result_from_pointer(engine.heap(), Ok(dict))
                 }
-                .boxed_local()
+                .boxed()
             },
         )?;
     }
@@ -1584,7 +1584,7 @@ pub(crate) fn inject_json_primops<State: Clone + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
+pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     {
@@ -1613,7 +1613,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1643,7 +1643,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1690,7 +1690,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     None => option_from_pointer(engine.heap(), None),
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1729,7 +1729,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     Err(e) => result_from_pointer(engine.heap(), Err(e)),
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1772,7 +1772,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1815,7 +1815,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1857,7 +1857,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1900,7 +1900,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1943,7 +1943,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -1985,7 +1985,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2028,7 +2028,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2071,7 +2071,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2113,7 +2113,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 )
                 .await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2141,7 +2141,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2169,7 +2169,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2206,7 +2206,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     None => option_from_pointer(engine.heap(), None),
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2237,7 +2237,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2268,7 +2268,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2304,7 +2304,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     None => option_from_pointer(engine.heap(), None),
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2339,7 +2339,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2373,7 +2373,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2406,7 +2406,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     None => option_from_pointer(engine.heap(), None),
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2446,7 +2446,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     Err(e) => result_from_pointer(engine.heap(), Err(e)),
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2474,7 +2474,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let list = args[1].clone();
                 invoke_pointer_fn(engine, func, list, Some(&func_ty), Some(&list_ty)).await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2502,7 +2502,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let array = args[1].clone();
                 invoke_pointer_fn(engine, func, array, Some(&func_ty), Some(&array_ty)).await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2530,7 +2530,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let opt = args[1].clone();
                 invoke_pointer_fn(engine, func, opt, Some(&func_ty), Some(&opt_ty)).await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2561,7 +2561,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     Ok(args[1].clone())
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2589,7 +2589,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let acc = values.remove(0);
                 foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc, values).await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2617,7 +2617,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                 let acc = values.remove(0);
                 foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc, values).await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2640,7 +2640,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     None => engine.resolve_global(&sym("zero"), &elem_ty).await,
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2676,7 +2676,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     invoke_pointer_fn(engine, div, acc, Some(&plus_ty), Some(&elem_ty)).await?;
                 invoke_pointer_fn(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty)).await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2712,7 +2712,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     invoke_pointer_fn(engine, div, acc, Some(&plus_ty), Some(&elem_ty)).await?;
                 invoke_pointer_fn(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty)).await
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -2746,7 +2746,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
                     None => Err(EngineError::EmptySequence),
                 }
             }
-            .boxed_local()
+            .boxed()
         })?;
     }
 
@@ -3173,7 +3173,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_option_result_builtins<State: Clone + Sync + 'static>(
+pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     let is_some = sym("is_some");
