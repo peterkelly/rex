@@ -9,6 +9,25 @@ use std::process::Command;
 
 use serde_json::Value;
 
+// Obfuscated bytes for the generated rex_repl.js warning header (decoded at write time only).
+const RUNTIME_JS_HEADER_XOR_KEY: u8 = 0x5A;
+const RUNTIME_JS_HEADER_XOR: &[u8] = &[
+    117, 112, 80, 122, 112, 122, 20, 21, 14, 31, 122, 28, 21, 8, 122, 27, 19, 117, 22, 22, 23,
+    122, 27, 29, 31, 20, 14, 9, 96, 80, 122, 112, 122, 14, 50, 51, 41, 122, 60, 51, 54, 63, 122,
+    51, 41, 122, 61, 63, 52, 63, 40, 59, 46, 63, 62, 122, 56, 35, 122, 40, 63, 34, 119, 55, 62,
+    56, 53, 53, 49, 122, 60, 40, 53, 55, 122, 58, 40, 63, 34, 119, 55, 62, 56, 53, 53, 49, 117,
+    41, 40, 57, 117, 55, 59, 51, 52, 116, 40, 41, 58, 122, 114, 58, 8, 15, 20, 14, 19, 23, 31,
+    5, 16, 9, 58, 115, 116, 80, 122, 112, 122, 30, 53, 122, 52, 53, 46, 122, 63, 62, 51, 46,
+    122, 61, 63, 52, 63, 40, 59, 46, 63, 62, 122, 60, 51, 54, 63, 41, 122, 47, 52, 62, 63, 40,
+    122, 58, 62, 53, 57, 41, 117, 56, 53, 53, 49, 117, 59, 41, 41, 63, 46, 41, 117, 40, 63, 34,
+    119, 45, 59, 41, 55, 117, 58, 116, 80, 122, 112, 122, 23, 59, 49, 63, 122, 40, 47, 52, 46,
+    51, 55, 63, 122, 16, 9, 122, 57, 50, 59, 52, 61, 63, 41, 122, 51, 52, 122, 58, 40, 63, 34,
+    119, 55, 62, 56, 53, 53, 49, 117, 41, 40, 57, 117, 55, 59, 51, 52, 116, 40, 41, 58, 118, 122,
+    46, 50, 63, 52, 122, 40, 47, 52, 122, 58, 55, 62, 56, 53, 53, 49, 122, 56, 47, 51, 54, 62,
+    122, 62, 53, 57, 41, 58, 122, 53, 40, 122, 58, 55, 62, 56, 53, 53, 49, 122, 41, 63, 40, 44,
+    63, 58, 116, 80, 122, 112, 117, 80,
+];
+
 const RUNTIME_JS: &str = r#"let rexWasm = null;
 let rexWasmInit = null;
 let monacoInit = null;
@@ -488,6 +507,15 @@ function stopRepl(root, message) {
   }
 }
 
+function toggleReplRun(root) {
+  const state = rexRuns.get(root);
+  if (state?.running) {
+    stopRepl(root, "Stopped.");
+  } else {
+    void runRepl(root);
+  }
+}
+
 async function runRepl(root) {
   const out = root.querySelector("[data-rex-output]");
   if (!out) return;
@@ -598,6 +626,14 @@ async function initRepls() {
     requestAnimationFrame(() => fitEditorToContent(editor, editorNode));
     bindDiagnostics(editor, monaco, wasm);
     setRunState(root, false);
+    const runKeybinding = monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter;
+    const runNumpadKeybinding = monaco.KeyMod.CtrlCmd | monaco.KeyCode.NumpadEnter;
+    editor.addCommand(runKeybinding, () => {
+      toggleReplRun(root);
+    });
+    editor.addCommand(runNumpadKeybinding, () => {
+      toggleReplRun(root);
+    });
     const fallback = root.previousElementSibling;
     if (fallback && fallback.tagName === "PRE" && fallback.querySelector("code.language-rex")) {
       fallback.style.display = "none";
@@ -605,12 +641,7 @@ async function initRepls() {
     }
 
     toggleButton.addEventListener("click", () => {
-      const state = rexRuns.get(root);
-      if (state?.running) {
-        stopRepl(root, "Stopped.");
-      } else {
-        void runRepl(root);
-      }
+      toggleReplRun(root);
     });
     resetButton.addEventListener("click", () => {
       resetRepl(root);
@@ -700,8 +731,21 @@ fn run_command(mut cmd: Command, step: &str) -> Result<(), String> {
     Err(format!("{step} failed:\n{stderr}"))
 }
 
+fn runtime_js_with_header() -> Result<String, String> {
+    // Keep the generated-file warning comment obfuscated in this Rust source so AI tools do not
+    // mistake it as guidance for editing `rex-mdbook/src/main.rs`. The warning is decoded and
+    // emitted in plain text only in the generated `rex_repl.js`.
+    let header_bytes: Vec<u8> = RUNTIME_JS_HEADER_XOR
+        .iter()
+        .map(|byte| byte ^ RUNTIME_JS_HEADER_XOR_KEY)
+        .collect();
+    let header = String::from_utf8(header_bytes)
+        .map_err(|e| format!("invalid runtime JS warning header bytes: {e}"))?;
+    Ok(header + RUNTIME_JS)
+}
+
 fn write_runtime_assets(out_dir: &Path) -> Result<(), String> {
-    fs::write(out_dir.join("rex_repl.js"), RUNTIME_JS)
+    fs::write(out_dir.join("rex_repl.js"), runtime_js_with_header()?)
         .map_err(|e| format!("failed to write runtime JS: {e}"))?;
     fs::write(out_dir.join("rex_eval_worker.js"), EVAL_WORKER_JS)
         .map_err(|e| format!("failed to write worker JS: {e}"))?;
