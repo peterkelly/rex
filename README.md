@@ -8,6 +8,10 @@
 [docs-badge]: https://img.shields.io/badge/docs-online-blue
 [docs-url]: https://talo.github.io/rex/
 
+<p align="center">
+  <img src="logo.jpg" width="400">
+</p>
+
 Rex (short for *Rush Expressions*) is a strongly-typed, pure functional
 language built to be an excellent target for LLM-generated programs, with a
 focus on data processing. At a high level, you write transformations over
