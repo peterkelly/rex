@@ -12,6 +12,12 @@ The primary use case is executing scientific workflows, where host functions inv
 pieces of software. Rex provides a language for coordinating these and performing intermediate
 computations and data manipulation.
 
+## Rex version migration
+
+- This repository contains a new version of rex & ouroboros I'm currently working on
+- The old version of rex & ouroboros can be found in the old-version directory
+- Files in the old-version directory are for reference only. Do not modify them.
+
 ## Pipeline for executing a rex programs
 
 - lexer (`rex-lexer`)
