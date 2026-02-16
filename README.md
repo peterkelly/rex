@@ -24,6 +24,13 @@
 
 ![Logo](https://github.com/talo/rex/blob/v4-logo/logo400.jpg)
 
+
+And now for the html:
+
+<p align="center">
+  <img src="logo1024.jpg" width="400">
+</p>
+
 Rex (short for *Rush Expressions*) is a strongly-typed, pure functional
 language built to be an excellent target for LLM-generated programs, with a
 focus on data processing. At a high level, you write transformations over
