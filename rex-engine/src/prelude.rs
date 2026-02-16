@@ -738,9 +738,9 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
         )?;
 
         let scheme = Scheme::new(
-            vec![a_tv],
+            vec![a_tv.clone()],
             vec![],
-            Type::fun(array_a.clone(), Type::fun(array_a, bool_ty.clone())),
+            Type::fun(array_a.clone(), Type::fun(array_a.clone(), bool_ty.clone())),
         );
         engine.export_native_async("prim_array_ne", scheme, 2, |engine, call_type, args| {
             async move {

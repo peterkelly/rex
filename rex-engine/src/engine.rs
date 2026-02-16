@@ -12,7 +12,7 @@ use rex_ast::expr::{
 use rex_ts::{
     AdtDecl, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type, TypeError, TypeKind,
     TypeSystem, TypeSystemLimits, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst,
-    entails, instantiate, unify,
+    entails, instantiate, unify, TypeVar,
 };
 use rex_util::GasMeter;
 
@@ -43,7 +43,7 @@ fn type_head_is_var(typ: &Type) -> bool {
     matches!(cur.as_ref(), TypeKind::Var(..))
 }
 
-type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
+pub type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
 type NativeId = u64;
 type SyncNativeCallable<State> = Arc<
     dyn Fn(&Engine<State>, &Type, &[Pointer]) -> Result<Pointer, EngineError>
@@ -1076,7 +1076,7 @@ where
     env: Env,
     natives: NativeRegistry<State>,
     typeclasses: TypeclassRegistry,
-    types: TypeSystem,
+    pub types: TypeSystem,
     typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
     pub(crate) modules: ModuleSystem,
     injected_modules: HashSet<String>,
@@ -1161,8 +1161,8 @@ where
         }
     }
 
-    pub(crate) fn fresh_type_var(&mut self, name: Option<Symbol>) -> rex_ts::TypeVar {
-        self.types.supply.fresh(name)
+    pub fn fresh_type_var(&mut self, name: Option<Symbol>) -> TypeVar {
+        self.types.fresh_type_var(name)
     }
 
     pub fn with_prelude(state: State) -> Result<Self, EngineError> {

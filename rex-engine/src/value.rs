@@ -434,7 +434,7 @@ pub struct Closure {
     pub body: Arc<TypedExpr>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Pointer {
     heap_id: u64,
     index: u32,

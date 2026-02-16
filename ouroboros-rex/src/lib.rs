@@ -22,11 +22,8 @@ use ouroboros::ptr::Ptr;
 use ouroboros::sum::{Enum, EnumVariant, Fallible, Optional, Union, UnionVariant};
 use ouroboros::symbolic::Symbolic;
 use ouroboros::type_info::Type as OuroborosType;
-use rex::{RexType, TypeKind, TypeSystem, sym};
+use rex::{RexType, TypeKind, TypeSystem, sym, JsonOptions};
 use std::collections::{BTreeMap, HashMap};
-
-#[derive(Default)]
-pub struct JsonOptions;
 
 // Note: We cannot use From/Into here as these only work if the types
 // they are implemented on are defined in the same crate

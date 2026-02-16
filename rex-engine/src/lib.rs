@@ -13,7 +13,7 @@ mod stack;
 mod value;
 
 pub use cancel::CancellationToken;
-pub use engine::{AsyncHandler, Engine, Export, Handler, Module, NativeFn, OverloadedFn};
+pub use engine::{AsyncHandler, Engine, Export, Handler, Module, NativeFn, OverloadedFn, NativeFuture};
 pub use env::Env;
 pub use error::{EngineError, ModuleError};
 pub use modules::virtual_export_name;
