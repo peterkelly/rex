@@ -25,7 +25,7 @@ async fn compile_err(code: &str) -> EngineError {
     }
     let mut gas = GasMeter::default();
     match engine.eval(program.expr.as_ref(), &mut gas).await {
-        Ok(v) => {
+        Ok((v, _)) => {
             let value_type = engine.heap().type_name(&v).unwrap_or("<invalid pointer>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");
         }

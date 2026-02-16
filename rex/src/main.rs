@@ -325,7 +325,7 @@ async fn repl_loop(
             .eval_repl_program(&program, &mut state, &mut gas)
             .await
         {
-            Ok(v) => {
+            Ok((v, _)) => {
                 let rendered = engine
                     .heap()
                     .get(&v)
@@ -428,7 +428,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let mut engine = init_engine(&include)?;
 
-    let pointer = if let Some(path) = file {
+    let (pointer, _) = if let Some(path) = file {
         engine
             .eval_module_file(&path, &mut gas)
             .await

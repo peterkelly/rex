@@ -1,7 +1,7 @@
-use rex::{Engine, GasMeter, Parser, Token};
+use rex::{Engine, GasMeter, Parser, Token, Type};
 use rex_engine::{ValueDisplayOptions, value_display_with};
 
-async fn eval_to_string(code: &str) -> Result<String, String> {
+async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     let program = parser
@@ -13,10 +13,11 @@ async fn eval_to_string(code: &str) -> Result<String, String> {
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
     let mut gas = GasMeter::default();
-    let pointer = engine
+    let (pointer, ty) = engine
         .eval(program.expr.as_ref(), &mut gas)
         .await
         .map_err(|e| format!("{e}"))?;
+    assert_eq!(ty, expected_ty, "eval returned unexpected type for: {code}");
     let value = engine.heap().get(&pointer).map_err(|e| format!("{e}"))?;
     let opts = ValueDisplayOptions {
         include_numeric_suffixes: true,
@@ -25,15 +26,15 @@ async fn eval_to_string(code: &str) -> Result<String, String> {
     value_display_with(engine.heap(), value.as_ref(), opts).map_err(|e| format!("{e}"))
 }
 
-async fn assert_eval(code: &str, expected: &str) {
-    let actual = eval_to_string(code)
+async fn assert_eval(code: &str, expected: &str, expected_ty: Type) {
+    let actual = eval_to_string(code, expected_ty)
         .await
         .unwrap_or_else(|e| panic!("expected ok, got error: {e}"));
     assert_eq!(actual, expected);
 }
 
 async fn assert_err_contains(code: &str, needle: &str) {
-    let err = eval_to_string(code).await.unwrap_err();
+    let err = eval_to_string(code, Type::con("i32", 0)).await.unwrap_err();
     assert!(
         err.contains(needle),
         "expected error containing {needle:?}, got: {err}"
@@ -55,6 +56,7 @@ async fn default_record_dispatch() {
         let x: Foo = default in x
         "#,
         "Bar {z = 0f32}",
+        Type::con("Foo", 0),
     )
     .await;
 }
@@ -75,6 +77,7 @@ async fn default_nested_context_list() {
         let xs: List i32 = default in xs
         "#,
         "[0i32, 0i32]",
+        Type::list(Type::con("i32", 0)),
     )
     .await;
 }
@@ -94,6 +97,7 @@ async fn pattern_field_renaming() {
         (Point { x = 1.0, y = 2.0 }) + (Point { x = 3.0, y = 4.0 })
         "#,
         "Point {x = 4f32, y = 6f32}",
+        Type::con("Point", 0),
     )
     .await;
 }
@@ -114,6 +118,7 @@ async fn default_nested_context_option() {
         let x: Option i32 = default in x
         "#,
         "Some 0i32",
+        Type::option(Type::con("i32", 0)),
     )
     .await;
 }
@@ -137,6 +142,7 @@ async fn methods_can_call_other_methods() {
         sum_pair (Pair { a = 19, b = 23 })
         "#,
         "42i32",
+        Type::con("i32", 0),
     )
     .await;
 }
@@ -154,6 +160,7 @@ async fn method_can_return_function() {
         let f = make_adder 5 in f 37
         "#,
         "42i32",
+        Type::con("i32", 0),
     )
     .await;
 }
@@ -173,6 +180,7 @@ async fn instance_method_can_reference_global_fn() {
         bump 41
         "#,
         "42i32",
+        Type::con("i32", 0),
     )
     .await;
 }
@@ -206,6 +214,12 @@ async fn hkt_functor_option_and_result() {
             (a, b, c, d)
         "#,
         r#"(Some 2i32, None, Ok 2i32, Err "bad")"#,
+        Type::tuple(vec![
+            Type::option(Type::con("i32", 0)),
+            Type::option(Type::con("i32", 0)),
+            Type::result(Type::con("i32", 0), Type::con("string", 0)),
+            Type::result(Type::con("i32", 0), Type::con("string", 0)),
+        ]),
     )
     .await;
 }
@@ -226,6 +240,7 @@ async fn pattern_match_inside_method_body() {
         (head_or 0 [1, 2, 3], head_or 7 [])
         "#,
         "(1i32, 7i32)",
+        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)]),
     )
     .await;
 }
@@ -263,6 +278,12 @@ async fn superclass_and_instance_context() {
         (eq Red Blue, eq Blue Blue, my_cmp Red Green, my_cmp Blue Red)
         "#,
         "(false, true, -1i32, 1i32)",
+        Type::tuple(vec![
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ]),
     )
     .await;
 }

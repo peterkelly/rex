@@ -1,26 +1,42 @@
-use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token};
+use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type};
 use rex_engine::assert_pointer_eq;
 
-async fn eval(source: &str) -> Result<(Heap, Pointer), EngineError> {
+async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::default();
-    let pointer = engine.eval(program.expr.as_ref(), &mut gas).await?;
+    let (pointer, ty) = engine.eval(program.expr.as_ref(), &mut gas).await?;
     let heap = engine.into_heap();
-    Ok((heap, pointer))
+    Ok((heap, pointer, ty))
 }
 
 async fn assert_i32_result(source: &str, expected: i32) {
-    let (heap, pointer) = eval(source).await.unwrap();
+    let (heap, pointer, ty) = eval(source).await.unwrap();
+    assert_eq!(
+        ty,
+        Type::con("i32", 0),
+        "eval returned unexpected type for: {source}"
+    );
     let expected = heap.alloc_i32(expected).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
 
 async fn assert_even_odd_tuple(source: &str) {
-    let (heap, pointer) = eval(source).await.unwrap();
+    let bool_ty = Type::con("bool", 0);
+    let expected_ty = Type::tuple(vec![
+        bool_ty.clone(),
+        bool_ty.clone(),
+        bool_ty.clone(),
+        bool_ty,
+    ]);
+    let (heap, pointer, ty) = eval(source).await.unwrap();
+    assert_eq!(
+        ty, expected_ty,
+        "eval returned unexpected type for: {source}"
+    );
     let t0 = heap.alloc_bool(true).unwrap();
     let t1 = heap.alloc_bool(false).unwrap();
     let t2 = heap.alloc_bool(false).unwrap();

@@ -14,6 +14,4 @@ pub use rex_proc_macro::Rex;
 pub use rex_ts::{AdtDecl, Type, TypeError, TypeSystem};
 pub use rex_util::{GasCosts, GasMeter};
 
-pub use crate::json::{
-    EnumPatch, JsonOptions, json_to_rex as json_to_expr, rex_to_json as expr_to_json,
-};
+pub use crate::json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json};

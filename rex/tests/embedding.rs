@@ -55,7 +55,16 @@ async fn injected_functions_can_read_shared_state_fields() {
 
     let expr = parse("(current_user_id, is_admin, have_role \"admin\", have_role \"viewer\")");
     let mut gas = unlimited_gas();
-    let value = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("string", 0),
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+        ])
+    );
 
     let items = engine.heap().pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 4);
@@ -82,7 +91,11 @@ async fn async_injected_functions_can_read_shared_state_fields() {
 
     let expr = parse("(have_role_async \"editor\", have_role_async \"admin\")");
     let mut gas = unlimited_gas();
-    let value = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("bool", 0), Type::con("bool", 0)])
+    );
 
     let items = engine.heap().pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 2);
@@ -157,7 +170,8 @@ async fn overloaded_exports_types_and_values() {
         .eval(parse(expr).as_ref(), &mut GasMeter::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
-    let value = value.unwrap();
+    let (value, ty) = value.unwrap();
+    assert_eq!(ty, expected);
 
     let items = engine.heap().pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 6);
@@ -248,7 +262,8 @@ async fn overloaded_async_exports_types_and_values() {
         .eval(parse(expr).as_ref(), &mut GasMeter::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
-    let value = value.unwrap();
+    let (value, ty) = value.unwrap();
+    assert_eq!(ty, expected);
 
     let items = engine.heap().pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 6);

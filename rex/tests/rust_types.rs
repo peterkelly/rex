@@ -1,16 +1,19 @@
 use rex::{
-    Engine, EngineError, FromPointer, GasCosts, GasMeter, Parser, Pointer, Token, Type, sym,
+    Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Parser, Pointer, RexType, Token,
+    Type, sym,
 };
 use rex_engine::assert_pointer_eq;
 use rex_proc_macro::Rex;
 use serde_json::json;
 
 /// Helper to evaluate a Rex expression and return the result pointer
-async fn eval_expr(engine: &mut Engine<()>, expr: &str) -> Pointer {
+async fn eval_expr(mut engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
     let tokens = Token::tokenize(expr).unwrap();
     let mut gas = GasMeter::default();
     let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
-    engine.eval(program.expr.as_ref(), &mut gas).await.unwrap()
+    let (value, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let heap = engine.into_heap();
+    (value, heap, ty)
 }
 
 /// Helper to infer the type of a Rex expression
@@ -30,15 +33,11 @@ async fn vec_from_value() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("accept_vec", accept_vec).unwrap();
 
-    let result = eval_expr(
-        &mut engine,
-        r#"accept_vec (prim_array_from_list [1, 2, 3])"#,
-    )
-    .await;
-
-    let heap = engine.heap();
+    let (result, heap, ty) =
+        eval_expr(engine, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
+    assert_eq!(ty, Type::con("string", 0));
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_string("accept_vec: [1, 2, 3]".to_string())
             .unwrap(),
@@ -54,11 +53,10 @@ async fn vec_to_value() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("return_vec", return_vec).unwrap();
 
-    let result = eval_expr(&mut engine, r#"return_vec "hello""#).await;
-
-    let heap = engine.heap();
+    let (result, heap, ty) = eval_expr(engine, r#"return_vec "hello""#).await;
+    assert_eq!(ty, Type::array(Type::con("i32", 0)));
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_array(vec![
             heap.alloc_i32(0).unwrap(),
@@ -86,11 +84,21 @@ async fn vec_rex_type() {
 
 #[tokio::test]
 async fn option_prelude() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let result = eval_expr(&mut engine, r#"(Some 4, None)"#).await;
-    let heap = engine.heap();
+    let engine = Engine::with_prelude(()).unwrap();
+    let (result, heap, ty) = eval_expr(
+        engine,
+        r#"(((Some 4) is Option i32), (None is Option i32))"#,
+    )
+    .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::option(Type::con("i32", 0)),
+            Type::option(Type::con("i32", 0)),
+        ])
+    );
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(4).unwrap()])
@@ -109,11 +117,13 @@ async fn option_from_value() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("accept_opt", accept_opt).unwrap();
-    let result = eval_expr(&mut engine, r#"(accept_opt (Some 4), accept_opt None)"#).await;
-
-    let heap = engine.heap();
+    let (result, heap, ty) = eval_expr(engine, r#"(accept_opt (Some 4), accept_opt None)"#).await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("string", 0), Type::con("string", 0)])
+    );
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_opt: Some(4)".to_string())
@@ -136,11 +146,16 @@ async fn option_into_value() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("return_opt", return_opt).unwrap();
-    let result = eval_expr(&mut engine, r#"(return_opt "hello", return_opt "")"#).await;
-
-    let heap = engine.heap();
+    let (result, heap, ty) = eval_expr(engine, r#"(return_opt "hello", return_opt "")"#).await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::option(Type::con("i32", 0)),
+            Type::option(Type::con("i32", 0)),
+        ])
+    );
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(5).unwrap()])
@@ -170,11 +185,21 @@ async fn option_rex_type() {
 
 #[tokio::test]
 async fn result_prelude() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let result = eval_expr(&mut engine, r#"(Ok 42, Err "error")"#).await;
-    let heap = engine.heap();
+    let engine = Engine::with_prelude(()).unwrap();
+    let (result, heap, ty) = eval_expr(
+        engine,
+        r#"(((Ok 42) is Result i32 string), ((Err "error") is Result i32 string))"#,
+    )
+    .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::result(Type::con("i32", 0), Type::con("string", 0)),
+            Type::result(Type::con("i32", 0), Type::con("string", 0)),
+        ])
+    );
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Ok"), vec![heap.alloc_i32(42).unwrap()])
@@ -197,15 +222,17 @@ async fn result_from_value_primitives() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("accept_result", accept_result).unwrap();
-    let result = eval_expr(
-        &mut engine,
+    let (result, heap, ty) = eval_expr(
+        engine,
         r#"(accept_result (Ok 42), accept_result (Err "failed"))"#,
     )
     .await;
-
-    let heap = engine.heap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("string", 0), Type::con("string", 0)])
+    );
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_result: Ok(42)".to_string())
@@ -225,15 +252,17 @@ async fn result_from_value_different_primitives() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("accept_result", accept_result).unwrap();
-    let result = eval_expr(
-        &mut engine,
+    let (result, heap, ty) = eval_expr(
+        engine,
         r#"(accept_result (Ok 3.14), accept_result (Err 404))"#,
     )
     .await;
-
-    let heap = engine.heap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("string", 0), Type::con("string", 0)])
+    );
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_result: Ok(3.14)".to_string())
@@ -257,11 +286,17 @@ async fn result_into_value_primitives() {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("return_result", return_result).unwrap();
-    let result = eval_expr(&mut engine, r#"(return_result "hello", return_result "")"#).await;
-
-    let heap = engine.heap();
+    let (result, heap, ty) =
+        eval_expr(engine, r#"(return_result "hello", return_result "")"#).await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::result(Type::con("i32", 0), Type::con("string", 0)),
+            Type::result(Type::con("i32", 0), Type::con("string", 0)),
+        ])
+    );
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Ok"), vec![heap.alloc_i32(5).unwrap()])
@@ -325,18 +360,21 @@ async fn result_from_value_custom_types() {
     ErrorInfo::inject_rex(&mut engine).unwrap();
     engine.export("accept_result", accept_result).unwrap();
 
-    let result = eval_expr(
-        &mut engine,
+    let (result, heap, ty) = eval_expr(
+        engine,
         r#"(
             accept_result (Ok (Point { x = 10, y = 20 })),
             accept_result (Err (ErrorInfo { code = 404, message = "not found" }))
         )"#,
     )
     .await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("string", 0), Type::con("string", 0)])
+    );
 
-    let heap = engine.heap();
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("Ok: Point(10, 20)".to_string()).unwrap(),
@@ -365,14 +403,21 @@ async fn result_into_value_custom_types() {
     ErrorInfo::inject_rex(&mut engine).unwrap();
     engine.export("return_result", return_result).unwrap();
 
-    let result = eval_expr(&mut engine, r#"(return_result true, return_result false)"#).await;
+    let (result, heap, ty) =
+        eval_expr(engine, r#"(return_result true, return_result false)"#).await;
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::result(Point::rex_type(), ErrorInfo::rex_type()),
+            Type::result(Point::rex_type(), ErrorInfo::rex_type()),
+        ])
+    );
 
-    let heap = engine.heap();
     let tuple_ptrs = heap.pointer_as_tuple(&result).unwrap();
     assert_eq!(tuple_ptrs.len(), 2);
 
-    let ok_result = <Result<Point, ErrorInfo>>::from_pointer(heap, &tuple_ptrs[0]).unwrap();
-    let err_result = <Result<Point, ErrorInfo>>::from_pointer(heap, &tuple_ptrs[1]).unwrap();
+    let ok_result = <Result<Point, ErrorInfo>>::from_pointer(&heap, &tuple_ptrs[0]).unwrap();
+    let err_result = <Result<Point, ErrorInfo>>::from_pointer(&heap, &tuple_ptrs[1]).unwrap();
 
     assert_eq!(ok_result, Ok(Point { x: 100, y: 200 }));
     assert_eq!(
@@ -400,9 +445,9 @@ async fn serde_json_value_into_pointer() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.export("return_json", return_json).unwrap();
 
-    let result = eval_expr(&mut engine, r#"return_json "test_key""#).await;
+    let (result, heap, ty) = eval_expr(engine, r#"return_json "test_key""#).await;
+    assert_eq!(ty, Type::con("serde_json::Value", 0));
 
-    let heap = engine.heap();
     let (tag, args) = heap.pointer_as_adt(&result).unwrap();
     assert_eq!(tag.as_ref(), "serde_json::Value");
     assert_eq!(args.len(), 1);
@@ -429,11 +474,11 @@ async fn serde_json_value_from_pointer() {
         .export_value("test_json", json!({"key": "manual_key", "count": 99}))
         .unwrap();
 
-    let result = eval_expr(&mut engine, r#"accept_json test_json"#).await;
+    let (result, heap, ty) = eval_expr(engine, r#"accept_json test_json"#).await;
+    assert_eq!(ty, Type::con("string", 0));
 
-    let heap = engine.heap();
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_string("key=manual_key, count=99".to_string())
             .unwrap(),
@@ -460,10 +505,10 @@ async fn serde_json_value_roundtrip() {
     });
     engine.export_value("test_json", original.clone()).unwrap();
 
-    let result = eval_expr(&mut engine, r#"roundtrip test_json"#).await;
+    let (result, heap, ty) = eval_expr(engine, r#"roundtrip test_json"#).await;
+    assert_eq!(ty, Type::con("serde_json::Value", 0));
 
-    let heap = engine.heap();
-    let result_value = serde_json::Value::from_pointer(heap, &result).unwrap();
+    let result_value = serde_json::Value::from_pointer(&heap, &result).unwrap();
     assert_eq!(result_value, original);
 }
 
@@ -508,15 +553,15 @@ async fn serde_json_value_primitives() {
     engine.export_value("num_val", json!(42)).unwrap();
     engine.export_value("str_val", json!("hello")).unwrap();
 
-    let result = eval_expr(
-        &mut engine,
+    let (result, heap, ty) = eval_expr(
+        engine,
         r#"accept_primitives null_val bool_val num_val str_val"#,
     )
     .await;
+    assert_eq!(ty, Type::con("string", 0));
 
-    let heap = engine.heap();
     assert_pointer_eq!(
-        heap,
+        &heap,
         result,
         heap.alloc_string("null=true, bool=true, num=42, str=hello".to_string())
             .unwrap(),

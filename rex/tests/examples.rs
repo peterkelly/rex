@@ -1,4 +1,4 @@
-use rex::{Engine, GasMeter, Parser, Token, TypeSystem};
+use rex::{Engine, GasMeter, Parser, Token, Type, Value};
 
 fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");
@@ -8,28 +8,33 @@ fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     out
 }
 
-async fn assert_program_ok(name: &str, source: &str) {
+async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expected_type: Type) {
     let tokens = Token::tokenize(source).unwrap_or_else(|err| panic!("{name}: lex error: {err}"));
     let mut parser = Parser::new(tokens);
     let program = parser
         .parse_program(&mut GasMeter::default())
         .unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)));
 
-    let mut ts = TypeSystem::with_prelude().unwrap();
-    ts.inject_decls(&program.decls)
-        .unwrap_or_else(|err| panic!("{name}: decl error: {err}"));
-    ts.infer(program.expr.as_ref())
-        .unwrap_or_else(|err| panic!("{name}: type error: {err}"));
-
     let mut engine = Engine::with_prelude(()).unwrap();
     engine
         .inject_decls(&program.decls)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
     let mut gas = GasMeter::default();
-    let _value = engine
+    let (value, ty) = engine
         .eval(program.expr.as_ref(), &mut gas)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+    assert_eq!(ty, expected_type, "{name}: unexpected eval type");
+
+    let value = engine
+        .heap()
+        .get(&value)
+        .map(|value| value.as_ref().clone())
+        .unwrap_or_else(|err| panic!("{name}: heap read error: {err}"));
+    match value {
+        Value::I32(actual) => assert_eq!(actual, expected_value, "{name}: unexpected eval value"),
+        _ => panic!("{name}: expected i32 result"),
+    }
 }
 
 #[tokio::test]
@@ -42,6 +47,8 @@ async fn example_adt_record_constructor() {
             let v: Foo = Bar { x = 1, y = 2 } in
               v.x + v.y
         "#,
+        3,
+        Type::con("i32", 0),
     )
     .await;
 }
@@ -57,6 +64,8 @@ async fn example_nested_lets() {
               c = a + b
             in c
         "#,
+        3,
+        Type::con("i32", 0),
     )
     .await;
 }
@@ -69,6 +78,8 @@ async fn example_lambda_application() {
             let inc = \x -> x + 1 in
               inc 41
         "#,
+        42,
+        Type::con("i32", 0),
     )
     .await;
 }
@@ -85,6 +96,8 @@ async fn example_match() {
                 when A {x} -> x
                 when B {x} -> x + 100
         "#,
+        7,
+        Type::con("i32", 0),
     )
     .await;
 }

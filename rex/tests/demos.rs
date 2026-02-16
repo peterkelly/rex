@@ -30,10 +30,14 @@ async fn assert_demo_ok(name: &str, markdown: &str) {
         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
 
     let mut gas = GasMeter::default();
-    engine
+    let (_value, ty) = engine
         .eval_snippet(&source, &mut gas)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+    assert!(
+        !ty.to_string().is_empty(),
+        "{name}: eval returned an empty type"
+    );
 }
 
 #[tokio::test]

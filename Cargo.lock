@@ -755,6 +755,7 @@ dependencies = [
  "rex-proc-macro",
  "rex-ts",
  "rex-util",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

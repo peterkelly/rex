@@ -200,7 +200,7 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
     engine.set_type_system_limits(rex_ts::TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
-    let value_ptr = engine
+    let (value_ptr, _value_ty) = engine
         .eval_snippet(source, &mut gas)
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
@@ -301,7 +301,7 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
 
     let fut = async move {
         let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-        let value_ptr = engine
+        let (value_ptr, _value_ty) = engine
             .eval_snippet(source, &mut gas)
             .await
             .map_err(|e| format!("runtime error: {e}"))?;

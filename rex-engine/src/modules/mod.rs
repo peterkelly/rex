@@ -1461,13 +1461,14 @@ where
         );
 
         self.inject_decls(&rewritten.decls)?;
-        let init_value = self.eval(rewritten.expr.as_ref(), gas).await?;
+        let (init_value, init_type) = self.eval(rewritten.expr.as_ref(), gas).await?;
 
         let exports = exports_from_program(&program, &prefix);
         let inst = ModuleInstance {
             id: resolved.id.clone(),
             exports,
             init_value,
+            init_type,
         };
         self.modules.store_loaded(inst.clone())?;
         Ok(inst)
@@ -1678,28 +1679,28 @@ where
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<(Pointer, Type), EngineError> {
         let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
         if let Some(inst) = self.modules.cached(&id)? {
-            return Ok(inst.init_value);
+            return Ok((inst.init_value, inst.init_type));
         }
         let source = self.decode_local_module_source(&id, bytes)?;
         let inst = self
             .load_module_from_resolved(ResolvedModule { id, source }, gas)
             .await?;
-        Ok(inst.init_value)
+        Ok((inst.init_value, inst.init_type))
     }
 
     pub async fn eval_module_source(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<(Pointer, Type), EngineError> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
         let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
         if let Some(inst) = self.modules.cached(&id)? {
-            return Ok(inst.init_value);
+            return Ok((inst.init_value, inst.init_type));
         }
         let inst = self
             .load_module_from_resolved(
@@ -1710,14 +1711,14 @@ where
                 gas,
             )
             .await?;
-        Ok(inst.init_value)
+        Ok((inst.init_value, inst.init_type))
     }
 
     pub async fn eval_snippet(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<(Pointer, Type), EngineError> {
         self.eval_snippet_with_gas_and_importer(source, gas, None)
             .await
     }
@@ -1727,7 +1728,7 @@ where
         program: &Program,
         state: &mut ReplState,
         gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<(Pointer, Type), EngineError> {
         let importer = state.importer_path.as_ref().map(|p| ModuleId::Local {
             path: p.clone(),
             hash: "repl".into(),
@@ -1774,7 +1775,7 @@ where
         source: &str,
         importer_path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<(Pointer, Type), EngineError> {
         let path = importer_path.as_ref().to_path_buf();
         self.eval_snippet_with_gas_and_importer(source, gas, Some(path))
             .await
@@ -1785,7 +1786,7 @@ where
         source: &str,
         gas: &mut GasMeter,
         importer_path: Option<PathBuf>,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<(Pointer, Type), EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
         let importer = importer_path.map(|p| ModuleId::Local {

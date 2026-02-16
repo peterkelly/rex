@@ -1195,6 +1195,10 @@ where
         &self.heap
     }
 
+    pub fn type_system(&self) -> &TypeSystem {
+        &self.types
+    }
+
     /// Inject `debug`/`info`/`warn`/`error` logging functions backed by `tracing`.
     ///
     /// Each function has the Rex type `a -> str where Pretty a` and logs
@@ -1700,10 +1704,16 @@ where
         self.types.inject_instance(class, inst);
     }
 
-    pub async fn eval(&mut self, expr: &Expr, gas: &mut GasMeter) -> Result<Pointer, EngineError> {
+    pub async fn eval(
+        &mut self,
+        expr: &Expr,
+        gas: &mut GasMeter,
+    ) -> Result<(Pointer, Type), EngineError> {
         check_cancelled(self)?;
         let typed = self.type_check(expr)?;
-        eval_typed_expr(self, &self.env, &typed, gas).await
+        let typ = typed.typ.clone();
+        let value = eval_typed_expr(self, &self.env, &typed, gas).await?;
+        Ok((value, typ))
     }
 
     fn inject_prelude(&mut self) -> Result<(), EngineError> {
@@ -3044,18 +3054,20 @@ mod tests {
         let mut state = ReplState::new();
 
         let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
-        let v1 = engine
+        let (v1, t1) = engine
             .eval_repl_program(&program1, &mut state, &mut gas)
             .await
             .unwrap();
+        assert_eq!(t1, Type::con("i32", 0));
         let expected = engine.heap().alloc_i32(2).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &v1, &expected).unwrap());
 
         let program2 = parse_program("inc 2");
-        let v2 = engine
+        let (v2, t2) = engine
             .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
+        assert_eq!(t2, Type::con("i32", 0));
         let expected = engine.heap().alloc_i32(3).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &v2, &expected).unwrap());
     }
@@ -3071,16 +3083,20 @@ mod tests {
 
         let mut state = ReplState::new();
         let program1 = parse_program("import foo.bar as Bar\n()");
-        engine
+        let (v1, t1) = engine
             .eval_repl_program(&program1, &mut state, &mut gas)
             .await
             .unwrap();
+        assert_eq!(t1, Type::tuple(vec![]));
+        let expected = engine.heap().alloc_tuple(vec![]).unwrap();
+        assert!(crate::pointer_eq(engine.heap(), &v1, &expected).unwrap());
 
         let program2 = parse_program("Bar.triple 10");
-        let v2 = engine
+        let (v2, t2) = engine
             .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
+        assert_eq!(t2, Type::con("i32", 0));
         let expected = engine.heap().alloc_i32(30).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &v2, &expected).unwrap());
     }
@@ -3096,16 +3112,20 @@ mod tests {
 
         let mut state = ReplState::new();
         let program1 = parse_program("import foo.bar (triple as t)\n()");
-        engine
+        let (v1, t1) = engine
             .eval_repl_program(&program1, &mut state, &mut gas)
             .await
             .unwrap();
+        assert_eq!(t1, Type::tuple(vec![]));
+        let expected = engine.heap().alloc_tuple(vec![]).unwrap();
+        assert!(crate::pointer_eq(engine.heap(), &v1, &expected).unwrap());
 
         let program2 = parse_program("t 10");
-        let v2 = engine
+        let (v2, t2) = engine
             .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
+        assert_eq!(t2, Type::con("i32", 0));
         let expected = engine.heap().alloc_i32(30).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &v2, &expected).unwrap());
     }
@@ -3214,7 +3234,8 @@ mod tests {
             .unwrap();
 
         let mut gas = unlimited_gas();
-        let value = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+        let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
         let expected = engine.heap().alloc_i32(42).unwrap();
         assert!(crate::pointer_eq(engine.heap(), &value, &expected).unwrap());
     }

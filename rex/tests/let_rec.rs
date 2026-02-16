@@ -1,61 +1,83 @@
-use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeSystem, Value};
+use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, Value};
 use rex_engine::assert_pointer_eq;
 
-async fn eval(code: &str) -> Result<(Heap, Pointer), EngineError> {
+async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::default();
-    let pointer = engine.eval(program.expr.as_ref(), &mut gas).await?;
+    let (pointer, ty) = engine.eval(program.expr.as_ref(), &mut gas).await?;
     let heap = engine.into_heap();
-    Ok((heap, pointer))
-}
-
-fn type_of(code: &str) -> Type {
-    let tokens = Token::tokenize(code).unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-    let mut ts = TypeSystem::with_prelude().unwrap();
-    ts.inject_decls(&program.decls).unwrap();
-    let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
-    ty
+    Ok((heap, pointer, ty))
 }
 
 #[tokio::test]
 async fn let_rec_self_recursive_factorial() {
-    let (heap, pointer) =
-        eval("let rec fact = \\n -> if n == 0 then 1 else n * fact (n - 1) in fact 6")
-            .await
-            .unwrap();
+    let (heap, pointer, ty) = eval(
+        r#"
+        let rec
+            fact = \n ->
+                if n == 0
+                    then
+                        1
+                    else
+                        n * fact (n - 1)
+        in
+            fact 6
+    "#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let expected = heap.alloc_i32(720).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_self_recursive_fibonacci() {
-    let (heap, pointer) =
-        eval("let rec fib = \\n -> if n <= 1 then n else fib (n - 1) + fib (n - 2) in fib 8")
-            .await
-            .unwrap();
+    let (heap, pointer, ty) = eval(
+        r#"
+        let rec
+            fib = \n ->
+                if n <= 1
+                    then n
+                else
+                    fib (n - 1) + fib (n - 2)
+        in
+            fib 8
+    "#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let expected = heap.alloc_i32(21).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_mutual_even_odd() {
-    let (heap, pointer) = eval(
+    let (heap, pointer, ty) = eval(
         r#"
-let rec
-  even = \n -> if n == 0 then true else odd (n - 1),
-  odd = \n -> if n == 0 then false else even (n - 1)
-in
-  (even 10, odd 10, even 11, odd 11)
-"#,
+        let rec
+            even = \n -> if n == 0 then true else odd (n - 1),
+            odd = \n -> if n == 0 then false else even (n - 1)
+        in
+            (even 10, odd 10, even 11, odd 11)
+    "#,
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+            Type::con("bool", 0),
+        ])
+    );
 
     let t0 = heap.alloc_bool(true).unwrap();
     let t1 = heap.alloc_bool(false).unwrap();
@@ -67,18 +89,26 @@ in
 
 #[tokio::test]
 async fn let_rec_mutual_three_function_group() {
-    let (heap, pointer) = eval(
+    let (heap, pointer, ty) = eval(
         r#"
-let rec
-  step0 = \n -> if n == 0 then 0 else step1 (n - 1),
-  step1 = \n -> if n == 0 then 1 else step2 (n - 1),
-  step2 = \n -> if n == 0 then 2 else step0 (n - 1)
-in
-  (step0 3, step1 3, step2 3)
-"#,
+        let rec
+            step0 = \n -> if n == 0 then 0 else step1 (n - 1),
+            step1 = \n -> if n == 0 then 1 else step2 (n - 1),
+            step2 = \n -> if n == 0 then 2 else step0 (n - 1)
+        in
+            (step0 3, step1 3, step2 3)
+    "#,
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ])
+    );
 
     let a = heap.alloc_i32(0).unwrap();
     let b = heap.alloc_i32(1).unwrap();
@@ -89,22 +119,37 @@ in
 
 #[tokio::test]
 async fn let_rec_function_is_still_polymorphic() {
-    let (heap, pointer) = eval("let rec id = \\x -> x in (id 1, id true)")
-        .await
-        .unwrap();
+    let expected_ty = Type::tuple(vec![Type::con("i32", 0), Type::con("bool", 0)]);
+    let (heap, pointer, ty) = eval(
+        r#"
+        let rec
+            id = \x -> x
+        in
+            (id 1, id true)
+    "#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ty, expected_ty);
     let one = heap.alloc_i32(1).unwrap();
     let tru = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![one, tru]).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
-
-    let ty = type_of("let rec id = \\x -> x in (id 1, id true)");
-    let expected_ty = Type::tuple(vec![Type::con("i32", 0), Type::con("bool", 0)]);
-    assert_eq!(ty, expected_ty);
 }
 
 #[tokio::test]
 async fn let_rec_allows_self_referential_data_cycles() {
-    let (heap, pointer) = eval("let rec xs = Cons 1 xs in xs").await.unwrap();
+    let (heap, pointer, ty) = eval(
+        r#"
+        let rec
+            xs = Cons 1 xs
+        in
+            xs
+    "#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(ty, Type::list(Type::con("i32", 0)));
     let value = heap.get(&pointer).unwrap();
     let Value::Adt(tag, args) = value.as_ref() else {
         panic!(
@@ -119,9 +164,24 @@ async fn let_rec_allows_self_referential_data_cycles() {
 
 #[tokio::test]
 async fn let_rec_allows_mutual_data_cycles() {
-    let (heap, pointer) = eval("let rec a = Cons 1 b, b = Cons 2 a in (a, b)")
-        .await
-        .unwrap();
+    let (heap, pointer, ty) = eval(
+        r#"
+        let rec
+            a = Cons 1 b,
+            b = Cons 2 a
+        in
+            (a, b)
+    "#,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::list(Type::con("i32", 0)),
+            Type::list(Type::con("i32", 0)),
+        ])
+    );
     let tuple = heap.get(&pointer).unwrap();
     let Value::Tuple(items) = tuple.as_ref() else {
         panic!("expected tuple, got {}", heap.type_name(&pointer).unwrap());
@@ -147,7 +207,6 @@ async fn let_rec_allows_mutual_data_cycles() {
         );
     };
     assert_eq!(b_args.len(), 2);
-
     assert_pointer_eq!(&heap, &a_args[1], &b_ptr);
     assert_pointer_eq!(&heap, &b_args[1], &a_ptr);
 }

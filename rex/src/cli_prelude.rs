@@ -554,7 +554,15 @@ mod tests {
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
         let mut gas = unlimited_gas();
-        let value = engine.eval_snippet(code, &mut gas).await.unwrap();
+        let (value, ty) = engine.eval_snippet(code, &mut gas).await.unwrap();
+        assert_eq!(
+            ty,
+            Type::tuple(vec![
+                Type::con("i32", 0),
+                array_type(Type::con("u8", 0)),
+                array_type(Type::con("u8", 0)),
+            ])
+        );
         let value = engine
             .heap()
             .get(&value)

@@ -4,6 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use rex_ast::expr::{Symbol, intern};
+use rex_ts::Type;
 
 use crate::Pointer;
 
@@ -69,6 +70,7 @@ pub struct ModuleInstance {
     pub id: ModuleId,
     pub exports: ModuleExports,
     pub init_value: Pointer,
+    pub init_type: Type,
 }
 
 pub(crate) fn prefix_for_module(id: &ModuleId) -> String {

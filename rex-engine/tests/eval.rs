@@ -35,7 +35,7 @@ async fn eval_expr(
     expr: &rex_ast::expr::Expr,
 ) -> Result<rex_engine::Pointer, EngineError> {
     let mut gas = unlimited_gas();
-    engine.eval(expr, &mut gas).await
+    engine.eval(expr, &mut gas).await.map(|(value, _)| value)
 }
 
 macro_rules! pval {

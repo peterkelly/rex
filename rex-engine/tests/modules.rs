@@ -50,7 +50,7 @@ fn i32_value_scheme() -> Scheme {
 async fn eval_module_file<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     path: &Path,
-) -> Result<Pointer, rex_engine::EngineError> {
+) -> Result<(Pointer, Type), rex_engine::EngineError> {
     let mut gas = unlimited_gas();
     engine.eval_module_file(path, &mut gas).await
 }
@@ -58,7 +58,7 @@ async fn eval_module_file<State: Clone + Send + Sync + 'static>(
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
-) -> Result<Pointer, rex_engine::EngineError> {
+) -> Result<(Pointer, Type), rex_engine::EngineError> {
     let mut gas = unlimited_gas();
     engine.eval_snippet(source, &mut gas).await
 }
@@ -67,7 +67,7 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
-) -> Result<Pointer, rex_engine::EngineError> {
+) -> Result<(Pointer, Type), rex_engine::EngineError> {
     let mut gas = unlimited_gas();
     engine
         .eval_snippet_at(source, importer_path, &mut gas)
@@ -116,7 +116,8 @@ async fn module_import_local_pub() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -148,7 +149,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import host.math (inc, double_async as d)
@@ -157,6 +158,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
     )
     .await
     .unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -218,7 +220,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
 
     engine.inject_module(module).unwrap();
 
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import host.ptrsync (pick, pick_typed, heap_i32)
@@ -227,6 +229,14 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ])
+    );
 
     let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
     let Value::Tuple(xs) = value else {
@@ -260,7 +270,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     module.export("id", |_state: &(), x: String| Ok(x)).unwrap();
     engine.inject_module(module).unwrap();
 
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import host.over (id)
@@ -269,6 +279,10 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("i32", 0), Type::con("string", 0)])
+    );
 
     let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
     let Value::Tuple(xs) = value else {
@@ -352,7 +366,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
 
     engine.inject_module(module).unwrap();
 
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import host.ptrasync (pick_async, pick_typed_async as pta, heap_i32_async)
@@ -361,6 +375,14 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ])
+    );
 
     let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
     let Value::Tuple(xs) = value else {
@@ -442,7 +464,7 @@ async fn module_injected_from_rust_wildcard_import() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import host.ops (*)
@@ -451,6 +473,7 @@ async fn module_injected_from_rust_wildcard_import() {
     )
     .await
     .unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -538,7 +561,8 @@ async fn module_import_include_roots() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     engine.add_include_resolver(&include_root).unwrap();
-    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -567,7 +591,7 @@ async fn snippet_can_import_with_explicit_base() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_snippet_at(
+    let (value_ptr, ty) = eval_snippet_at(
         &mut engine,
         r#"
         import foo.bar as Bar
@@ -577,6 +601,7 @@ async fn snippet_can_import_with_explicit_base() {
     )
     .await
     .unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -617,7 +642,8 @@ async fn module_import_wildcard_clause() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -656,7 +682,8 @@ async fn module_import_selected_clause_with_alias() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -778,7 +805,7 @@ async fn module_import_selected_clause_conflicts_with_local() {
 async fn std_json_encode_decode_smoke() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import std.json as Json
@@ -857,6 +884,19 @@ async fn std_json_encode_decode_smoke() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ])
+    );
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -887,7 +927,7 @@ async fn std_json_encode_decode_smoke() {
 async fn std_json_roundtrip_nested() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import std.json as Json
@@ -918,6 +958,10 @@ async fn std_json_roundtrip_nested() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+    );
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -948,7 +992,7 @@ async fn std_json_roundtrip_nested() {
 async fn std_json_decode_errors_have_useful_messages() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import std.json as Json
@@ -985,6 +1029,15 @@ async fn std_json_decode_errors_have_useful_messages() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("string", 0),
+            Type::con("string", 0),
+            Type::con("string", 0),
+            Type::con("string", 0),
+        ])
+    );
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -1019,7 +1072,7 @@ async fn std_json_decode_errors_have_useful_messages() {
 async fn std_json_numeric_decode_errors() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import std.json as Json
@@ -1040,6 +1093,10 @@ async fn std_json_numeric_decode_errors() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![Type::con("string", 0), Type::con("string", 0)])
+    );
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -1072,7 +1129,7 @@ async fn std_json_numeric_decode_errors() {
 async fn std_json_pretty_renders_valid_json() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import std.json as Json
@@ -1095,6 +1152,7 @@ async fn std_json_pretty_renders_valid_json() {
     )
     .await
     .unwrap();
+    assert_eq!(ty, Type::con("string", 0));
     let value = engine
         .heap()
         .get(&value_ptr)
@@ -1130,7 +1188,7 @@ async fn std_json_pretty_renders_valid_json() {
 async fn std_json_parse_and_from_string_roundtrip() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let value_ptr = eval_snippet(
+    let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
         import std.json as Json
@@ -1171,6 +1229,14 @@ async fn std_json_parse_and_from_string_roundtrip() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+            Type::con("i32", 0),
+        ])
+    );
     let value = engine
         .heap()
         .get(&value_ptr)

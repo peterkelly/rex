@@ -54,8 +54,6 @@ impl JsonOptions {
 /// - JSON arrays targeting `Array a` become Rex runtime arrays (`Value::Array`).
 /// - JSON arrays targeting tuple types become tuples.
 /// - JSON arrays targeting `List a` become list ADTs (`Cons`/`Empty`).
-///
-/// Note: this function is re-exported from `rex` as `json_to_expr` for backward compatibility.
 pub fn json_to_rex(
     heap: &Heap,
     json: &Value,
@@ -106,8 +104,6 @@ pub fn json_to_rex(
 ///
 /// The conversion is compatible with serde-style JSON representations for Rex-compatible Rust
 /// types, but operates on runtime values stored in the evaluator heap.
-///
-/// Note: this function is re-exported from `rex` as `expr_to_json` for backward compatibility.
 pub fn rex_to_json(
     heap: &Heap,
     pointer: &Pointer,

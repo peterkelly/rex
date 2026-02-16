@@ -13,6 +13,7 @@ rex-engine = { workspace = true }
 rex-ts = { workspace = true }
 rex-util = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
