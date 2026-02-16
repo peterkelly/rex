@@ -6,14 +6,13 @@
 #![allow(unused_macros)]
 #![allow(non_upper_case_globals)]
 //
-// NOTE ON LOSSINESS:
+// NOTE ON STRICT REVERSE CONVERSION:
 // - `ouroboros -> rex` is mostly straightforward.
-// - `rex -> ouroboros` is structurally lossy for nominal ADTs in Rex v4 (`Type::con(...)`):
-//   records/enums/unions/symbolics with the same constructor shape cannot always be
-//   distinguished without out-of-band metadata.
-// - Enum discriminant values and docs are not recoverable from Rex types.
-// - Named vs unnamed record identity is only preserved when Rex uses `Type::Record`; for
-//   nominal `Type::con("Foo", 0)` values, reverse conversion defaults to `Symbolic("Foo")`.
+// - `rex -> ouroboros` is strict and returns an error whenever reconstruction is ambiguous.
+// - Ambiguous cases include nominal ADTs represented as `Type::con("Foo", 0)` and bare
+//   structural `Type::Record` values that do not carry original Ouroboros record metadata.
+// - Enum discriminant values/docs and symbolic docs are not encoded in Rex types, so exact
+//   reconstruction from Rex alone is impossible.
 
 use ouroboros::alias::Alias;
 use ouroboros::field::{Fields, NamedField, NamedFields, UnnamedField, UnnamedFields};
@@ -184,19 +183,8 @@ pub fn rex_to_ouroboros(rex_type: &rex::Type) -> Result<OuroborosType, String> {
                 }))
             }
         }
-        TypeKind::Record(entries) => {
-            let mut fields: Vec<NamedField> = Vec::new();
-            for (name, t) in entries {
-                fields.push(NamedField {
-                    n: name.to_string(),
-                    t: rex_to_ouroboros(t)?,
-                });
-            }
-            Ok(OuroborosType::Record(Record {
-                doc: None,
-                n: "Record".to_string(),
-                fields: Fields::Named(NamedFields { fields }),
-            }))
+        TypeKind::Record(_) => {
+            Err("Ambiguous Rex type: structural record lacks Ouroboros record identity".to_string())
         }
     }
 }
@@ -217,10 +205,10 @@ fn rex_con_to_ouroboros(name: &str) -> Result<OuroborosType, String> {
         "string" => Ok(OuroborosType::String),
         "uuid" => Err("Unsupported Rex type: uuid".to_string()),
         "datetime" => Err("Unsupported Rex type: datetime".to_string()),
-        _ => Ok(OuroborosType::Symbolic(Symbolic {
-            n: name.to_string(),
-            doc: None,
-        })),
+        _ => Err(format!(
+            "Ambiguous Rex type constructor: {} (cannot infer exact Ouroboros ADT kind)",
+            name
+        )),
     }
 }
 
@@ -377,11 +365,14 @@ pub mod test {
     use rex::{Rex, RexType};
     // use rex_type_system::types as rex;
 
-    fn symbolic(name: &str) -> OuroborosType {
-        OuroborosType::Symbolic(Symbolic {
-            n: name.to_string(),
-            doc: None,
-        })
+    fn assert_err_contains<T: std::fmt::Debug>(res: Result<T, String>, needle: &str) {
+        let err = res.expect_err("expected error, got Ok(..)");
+        assert!(
+            err.contains(needle),
+            "expected error to contain {:?}, got {:?}",
+            needle,
+            err
+        );
     }
 
     #[test]
@@ -450,7 +441,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"))
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        )
     }
 
     #[test]
@@ -463,7 +457,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"))
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        )
     }
 
     #[test]
@@ -479,7 +476,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"));
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
@@ -516,9 +516,9 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &int::Foo::t(), &Default::default()).unwrap(),
             int::Foo::rex_type()
         );
-        assert_eq!(
-            rex_to_ouroboros(&int::Foo::rex_type()).unwrap(),
-            symbolic("Foo")
+        assert_err_contains(
+            rex_to_ouroboros(&int::Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
         );
     }
 
@@ -535,7 +535,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"));
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
@@ -551,7 +554,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"));
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
@@ -568,7 +574,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"));
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
@@ -584,7 +593,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"));
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
@@ -629,13 +641,12 @@ pub mod test {
         }
 
         let mut ts = TypeSystem::new();
-        assert_eq!(
+        assert_err_contains(
             rex_to_ouroboros(
                 &ouroboros_to_rex(&mut ts, &different_sizes::Foo::t(), &Default::default())
-                    .unwrap()
-            )
-            .unwrap(),
-            symbolic("Foo")
+                    .unwrap(),
+            ),
+            "Ambiguous Rex type constructor: Foo",
         );
 
         assert_eq!(
@@ -677,7 +688,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &our_type, &Default::default()).unwrap(),
             rex_type
         );
-        assert_eq!(rex_to_ouroboros(&rex_type).unwrap(), symbolic("Foo"));
+        assert_err_contains(
+            rex_to_ouroboros(&rex_type),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
@@ -698,7 +712,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &our_type, &Default::default()).unwrap(),
             rex_type
         );
-        assert_eq!(rex_to_ouroboros(&rex_type).unwrap(), our_type);
+        assert_err_contains(
+            rex_to_ouroboros(&rex_type),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
@@ -717,7 +734,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &our_type, &Default::default()).unwrap(),
             rex_type
         );
-        assert_eq!(rex_to_ouroboros(&rex_type).unwrap(), symbolic("Ptr"));
+        assert_err_contains(
+            rex_to_ouroboros(&rex_type),
+            "Ambiguous Rex type constructor: Ptr",
+        );
     }
 
     #[test]
@@ -748,7 +768,10 @@ pub mod test {
             ouroboros_to_rex(&mut ts, &Foo::t(), &Default::default()).unwrap(),
             Foo::rex_type()
         );
-        assert_eq!(rex_to_ouroboros(&Foo::rex_type()).unwrap(), symbolic("Foo"));
+        assert_err_contains(
+            rex_to_ouroboros(&Foo::rex_type()),
+            "Ambiguous Rex type constructor: Foo",
+        );
     }
 
     #[test]
