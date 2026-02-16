@@ -1,6 +1,23 @@
 [workspace]
 resolver = "2"
-members = ["rex", "rex-ast", "rex-engine", "rex-fuzz", "rex-lexer", "rex-lsp", "rex-mdbook", "rex-parser", "rex-proc-macro", "rex-ts", "rex-util", "rex-wasm"]
+members = [
+    "rex",
+    "rex-ast",
+    "rex-engine",
+    "rex-fuzz",
+    "rex-lexer",
+    "rex-lsp",
+    "rex-mdbook",
+    "rex-parser",
+    "rex-proc-macro",
+    "rex-ts",
+    "rex-util",
+    "rex-wasm",
+]
+
+[workspace.package]
+version = "4.0.0"
+edition = "2024"
 
 [workspace.dependencies]
 # External dependencies

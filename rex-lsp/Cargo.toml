@@ -1,7 +1,7 @@
 [package]
 name = "rex-lsp"
-version = "4.0.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 lsp-types = "0.94"

@@ -745,7 +745,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "rex"
-version = "0.1.0"
+version = "4.0.0"
 dependencies = [
  "clap",
  "rex-ast",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "rex-mdbook"
-version = "0.1.0"
+version = "4.0.0"
 dependencies = [
  "serde_json",
 ]
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "rex-wasm"
-version = "0.1.0"
+version = "4.0.0"
 dependencies = [
  "futures",
  "rex-ast",
