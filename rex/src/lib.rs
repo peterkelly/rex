@@ -9,9 +9,9 @@ pub use rex_engine::{
     Pointer, RexType, Value, closure_debug, closure_eq, value_debug, value_display, value_eq,
 };
 pub use rex_lexer::Token;
-pub use rex_parser::{Parser, ParserLimits};
+pub use rex_parser::{Parser, ParserLimits, error::ParserErr};
 pub use rex_proc_macro::Rex;
-pub use rex_ts::{AdtDecl, Type, TypeError, TypeSystem};
+pub use rex_ts::{AdtDecl, Type, TypeError, TypeKind, TypeSystem};
 pub use rex_util::{GasCosts, GasMeter};
 
 pub use crate::json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json};

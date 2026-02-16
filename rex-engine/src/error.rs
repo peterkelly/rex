@@ -262,6 +262,8 @@ pub enum EngineError {
     OutOfGas(#[from] OutOfGas),
     #[error("{0}")]
     Custom(String),
+    #[error("Evaluation suspended")]
+    Suspended,
 }
 
 impl From<ModuleError> for EngineError {
