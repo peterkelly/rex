@@ -15,6 +15,8 @@ use ouroboros::sum::{Enum, EnumVariant, Fallible, Optional, Union, UnionVariant}
 use ouroboros::symbolic::Symbolic;
 use ouroboros::type_info::Type as OuroborosType;
 use rex::{
+    RexType,
+    TypeSystem,
     // ADT,
     // ADTVariant,
     // AppliedType,
@@ -24,8 +26,6 @@ use rex::{
     // TypeCon,
     // TypeVarSupply,
     sym,
-    RexType,
-    TypeSystem,
 };
 use std::{
     collections::{BTreeMap, HashMap},
@@ -158,7 +158,7 @@ pub fn ouroboros_to_rex(
             //         discriminant: None,
             //     }],
             // })))
-        },
+        }
         OuroborosType::Symbolic(symbolic) => {
             todo!()
             // Ok(Arc::new(rex::Type::ADT(ADT {
@@ -173,21 +173,27 @@ pub fn ouroboros_to_rex(
             //     }],
             // })))
         }
-        OuroborosType::Generic(g) => {
-            Ok(rex::Type::var(ts.supply.fresh(Some(g.n.clone().into()))))
-        }
+        OuroborosType::Generic(g) => Ok(rex::Type::var(ts.supply.fresh(Some(g.n.clone().into())))),
         OuroborosType::Alias(alias) => ouroboros_to_rex(ts, &alias.t, opts),
     }
 }
 
-fn fields_to_rex(ts: &mut TypeSystem, fields: &Fields, opts: &JsonOptions) -> Result<rex::Type, String> {
+fn fields_to_rex(
+    ts: &mut TypeSystem,
+    fields: &Fields,
+    opts: &JsonOptions,
+) -> Result<rex::Type, String> {
     match fields {
         Fields::Named(named) => named_fields_to_rex(ts, named, opts),
         Fields::Unnamed(unnamed) => unnamed_fields_to_rex(ts, unnamed, opts),
     }
 }
 
-fn named_fields_to_rex(ts: &mut TypeSystem, fields: &NamedFields, opts: &JsonOptions) -> Result<rex::Type, String> {
+fn named_fields_to_rex(
+    ts: &mut TypeSystem,
+    fields: &NamedFields,
+    opts: &JsonOptions,
+) -> Result<rex::Type, String> {
     todo!()
     // let mut entries: BTreeMap<String, Arc<rex::Type>> = BTreeMap::new();
     // for field in fields.fields.iter() {
@@ -456,10 +462,7 @@ pub mod test {
         });
         let mut ts = TypeSystem::new();
         let rex_type = ouroboros_to_rex(&mut ts, &our_type, &Default::default()).unwrap();
-        assert_eq!(
-            rex_type,
-            rex::Type::tuple(vec![rex::Type::con("u64", 0)])
-        );
+        assert_eq!(rex_type, rex::Type::tuple(vec![rex::Type::con("u64", 0)]));
         assert_eq!(rex_to_ouroboros(&rex_type).unwrap(), our_type);
     }
 
@@ -481,10 +484,7 @@ pub mod test {
         let rex_type = ouroboros_to_rex(&mut ts, &our_type, &Default::default()).unwrap();
         assert_eq!(
             rex_type,
-            rex::Type::tuple(vec![
-                rex::Type::con("u64", 0),
-                rex::Type::con("string", 0)
-            ])
+            rex::Type::tuple(vec![rex::Type::con("u64", 0), rex::Type::con("string", 0)])
         );
         assert_eq!(rex_to_ouroboros(&rex_type).unwrap(), our_type);
     }
@@ -687,7 +687,8 @@ pub mod test {
         let mut ts = TypeSystem::new();
         assert_eq!(
             rex_to_ouroboros(
-                &ouroboros_to_rex(&mut ts, &different_sizes::Foo::t(), &Default::default()).unwrap()
+                &ouroboros_to_rex(&mut ts, &different_sizes::Foo::t(), &Default::default())
+                    .unwrap()
             )
             .unwrap(),
             all_64::Foo::t()
@@ -781,10 +782,7 @@ pub mod test {
             a: Box::new(OuroborosType::U64),
             b: Box::new(OuroborosType::String),
         });
-        let rex_type = rex::Type::fun(
-            rex::Type::con("u64", 0),
-            rex::Type::con("string", 0),
-        );
+        let rex_type = rex::Type::fun(rex::Type::con("u64", 0), rex::Type::con("string", 0));
 
         let mut ts = TypeSystem::new();
         assert_eq!(
