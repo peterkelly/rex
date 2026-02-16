@@ -1,4 +1,5 @@
-use rex::{Engine, GasMeter, Parser, Token, value_display};
+use rex::{Engine, GasMeter, Parser, Token};
+use rex_engine::{ValueDisplayOptions, value_display_with};
 
 async fn eval_to_string(code: &str) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
@@ -17,7 +18,11 @@ async fn eval_to_string(code: &str) -> Result<String, String> {
         .await
         .map_err(|e| format!("{e}"))?;
     let value = engine.heap().get(&pointer).map_err(|e| format!("{e}"))?;
-    value_display(engine.heap(), value.as_ref()).map_err(|e| format!("{e}"))
+    let opts = ValueDisplayOptions {
+        include_numeric_suffixes: true,
+        ..ValueDisplayOptions::default()
+    };
+    value_display_with(engine.heap(), value.as_ref(), opts).map_err(|e| format!("{e}"))
 }
 
 async fn assert_eval(code: &str, expected: &str) {

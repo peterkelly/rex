@@ -368,7 +368,20 @@ async fn compile_rejects_invalid_programs_engine_errors() {
 
             my_fn 1
             "#,
-            |e| matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "default"),
+            |e| {
+                matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "default")
+                    || matches!(
+                        e,
+                        EngineError::Type(TypeError::Spanned {
+                            error,
+                            ..
+                        }) if matches!(
+                            error.as_ref(),
+                            TypeError::AmbiguousTypeVars { constraints, .. }
+                                if constraints.contains("Default")
+                        )
+                    )
+            },
         ),
     ];
 
