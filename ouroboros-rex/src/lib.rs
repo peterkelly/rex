@@ -22,8 +22,7 @@ use ouroboros::ptr::Ptr;
 use ouroboros::sum::{Enum, EnumVariant, Fallible, Optional, Union, UnionVariant};
 use ouroboros::symbolic::Symbolic;
 use ouroboros::type_info::Type as OuroborosType;
-use rex::{RexType, TypeSystem, sym};
-use rex_ts::TypeKind;
+use rex::{RexType, TypeKind, TypeSystem, sym};
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Default)]
