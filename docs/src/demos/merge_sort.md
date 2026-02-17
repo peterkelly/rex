@@ -16,14 +16,14 @@ fn split_alt : List i32 -> (List i32, List i32) = \xs ->
   match xs
     when [] -> ([], [])
     when [x] -> ([x], [])
-    when x:y:rest ->
+    when x::y::rest ->
       let (xs1, ys1) = split_alt rest in (Cons x xs1, Cons y ys1)
 
 fn merge : List i32 -> List i32 -> List i32 = \xs ys ->
   match (xs, ys)
     when ([], _) -> ys
     when (_, []) -> xs
-    when (x:xt, y:yt) ->
+    when (x::xt, y::yt) ->
       match (compare_i32 x y)
         when Lt -> Cons x (merge xt ys)
         when Eq -> Cons x (Cons y (merge xt yt))
@@ -40,9 +40,5 @@ fn mergesort : List i32 -> List i32 = \xs ->
 let
   input = [9, 1, 7, 3, 2, 8, 6, 4, 5]
 in
-  let
-    sorted = mergesort input,
-    reversed = mergesort [5, 4, 3, 2, 1]
-  in
-    (input, sorted, reversed)
+  mergesort input
 ```

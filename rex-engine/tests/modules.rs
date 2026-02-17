@@ -837,7 +837,7 @@ async fn std_json_encode_decode_smoke() {
                 (
                   match xs
                     when [] -> -1
-                    when x:rest -> x
+                    when x::rest -> x
                 )
               when Err _ -> -2,
 

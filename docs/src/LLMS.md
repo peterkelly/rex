@@ -15,7 +15,7 @@ When building or revising Rex code, read docs in this order:
 
 1. Use `fn` for top-level reusable functions; use `let`/`let rec` for local helpers.
 2. For local mutual recursion, use comma-separated `let rec` bindings.
-3. Treat `x:xs` as a **pattern** form, not an expression constructor.
+3. Use `x::xs` for list cons in both patterns and expressions (`x::xs` is equivalent to `Cons x xs`).
 4. Validate snippets with the Rex CLI before shipping docs.
 
 ## Quick Generation Checklist
@@ -59,20 +59,16 @@ in
 If you define local helpers in plain `let` and reference each other, you will get unbound-variable
 errors. Use `let rec` for local recursion.
 
-### 2) List construction vs list pattern
+### 2) List construction and list patterns
 
-- Pattern matching: `x:xs` is valid in `when` patterns.
-- Expression construction: use `Cons x xs` (or list literals), not `x:xs`.
+- Pattern matching: `x::xs` is valid in `when` patterns.
+- Expression construction: `x::xs` and `Cons x xs` are equivalent (list literals are also valid).
+  `Cons` uses normal constructor/function call style (`Cons head tail`).
 
-Bad (expression):
-
-```rex
-x:xs
-```
-
-Good:
+Equivalent:
 
 ```rex
+x::xs
 Cons x xs
 ```
 
@@ -123,7 +119,7 @@ Some forms like `Lit 1` inside nested patterns can fail to parse. Prefer simpler
 patterns and do literal checks in expression logic if needed.
 
 Also avoid relying on tuple/list patterns that include numeric literals in one branch (for example
-`(x:_, 0)`); match structurally first, then use an `if` guard/check in expression code.
+`(x::_, 0)`); match structurally first, then use an `if` guard/check in expression code.
 
 ## ADT and Pattern Tips
 

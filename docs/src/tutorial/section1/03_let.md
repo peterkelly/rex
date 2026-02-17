@@ -55,7 +55,7 @@ let rec
   sum = \xs ->
     match xs
       when [] -> 0
-      when x:xs -> x + sum xs
+      when x::xs -> x + sum xs
 in
   sum [1, 2, 3, 4]
 ```

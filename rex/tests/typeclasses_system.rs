@@ -234,7 +234,7 @@ async fn pattern_match_inside_method_body() {
             head_or = \fallback xs ->
                 match xs
                     when [] -> fallback
-                    when x:rest -> x
+                    when x::rest -> x
 
         (head_or 0 [1, 2, 3], head_or 7 [])
         "#,

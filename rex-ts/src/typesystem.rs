@@ -4784,9 +4784,28 @@ mod tests {
                 head_or = \fallback xs ->
                     match xs
                         when [] -> fallback
-                        when x:xs -> x
+                        when x::xs -> x
             in
                 (head_or 0 [1, 2, 3], head_or 0 [])
+            "#,
+        );
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        let expected = Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)]);
+        assert_eq!(ty, expected);
+    }
+
+    #[test]
+    fn infer_head_or_list_match_cons_constructor_form() {
+        let expr = parse_expr(
+            r#"
+            let
+                head_or = \fallback xs ->
+                    match xs
+                        when [] -> fallback
+                        when Cons x xs1 -> x
+            in
+                (head_or 0 (Cons 1 (Cons 2 Empty)), head_or 0 Empty)
             "#,
         );
         let mut ts = TypeSystem::with_prelude().unwrap();
@@ -5161,7 +5180,7 @@ mod tests {
 
     #[test]
     fn infer_cons_pattern_on_non_list_error() {
-        let expr = parse_expr("match 1 when x:xs -> x");
+        let expr = parse_expr("match 1 when x::xs -> x");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
@@ -5251,7 +5270,7 @@ mod tests {
 
     #[test]
     fn infer_non_exhaustive_list_missing_empty_error() {
-        let expr = parse_expr("match [1, 2] when x:xs -> x");
+        let expr = parse_expr("match [1, 2] when x::xs -> x");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
@@ -5264,7 +5283,7 @@ mod tests {
 
     #[test]
     fn infer_non_exhaustive_list_match_on_bound_var_error() {
-        let expr = parse_expr("let xs = [1, 2] in match xs when x:xs -> x");
+        let expr = parse_expr("let xs = [1, 2] in match xs when x::xs -> x");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
@@ -5285,7 +5304,7 @@ mod tests {
 
     #[test]
     fn infer_match_list_patterns_on_result_error() {
-        let expr = parse_expr("match (Ok 1) when [] -> 0 when x:xs -> 1");
+        let expr = parse_expr("match (Ok 1) when [] -> 0 when x::xs -> 1");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));

@@ -13,20 +13,20 @@ type Expr = Num i32 | Add Expr Expr | Mul Expr Expr | Neg Expr
 fn parse_expr : List Tok -> (Expr, List Tok) = \toks ->
   match toks
     when [] -> (Num 0, [])
-    when TNum n:rest -> (Num n, rest)
-    when TPlus:rest ->
+    when TNum n::rest -> (Num n, rest)
+    when TPlus::rest ->
       let
         (lhs, rest1) = parse_expr rest,
         (rhs, rest2) = parse_expr rest1
       in
         (Add lhs rhs, rest2)
-    when TMul:rest ->
+    when TMul::rest ->
       let
         (lhs, rest1) = parse_expr rest,
         (rhs, rest2) = parse_expr rest1
       in
         (Mul lhs rhs, rest2)
-    when TNeg:rest ->
+    when TNeg::rest ->
       let (inner, rest1) = parse_expr rest in
       (Neg inner, rest1)
 
@@ -40,7 +40,7 @@ fn eval : Expr -> i32 = \expr ->
 fn is_empty : List a -> bool = \xs ->
   match xs
     when [] -> true
-    when _:_ -> false
+    when _::_ -> false
 
 let
   toks1 = [TPlus, TNum 2, TMul, TNum 3, TNum 4],

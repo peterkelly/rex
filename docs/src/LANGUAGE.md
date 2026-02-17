@@ -143,8 +143,19 @@ if 1 < 2 then "ok" else "no"
 Notes:
 
 - Lists are implemented as a `List a` ADT (`Empty`/`Cons`) in the prelude.
+- Cons expressions use `::` (for example `x::xs`), equivalent to `Cons x xs`.
+- `Cons` is used with normal constructor-call syntax (`Cons head tail`), while `::` is infix sugar.
 - Dictionary literals `{ k = v, ... }` build record/dict values. They become *records* when used as
   the payload of an ADT record constructor, or when their type is inferred/annotated as a record.
+
+`::` is right-associative, so `1::2::[]` means `1::(2::[])`.
+
+```rex,interactive
+let
+  xs = 1::2::3::[]
+in
+  xs
+```
 
 ### Pattern Matching
 
@@ -162,9 +173,15 @@ Patterns include:
 - variables: `x`
 - constructors: `Ok x`, `Cons h t`, `Pair a b`
 - list patterns: `[]`, `[x]`, `[x, y]`
-- cons patterns: `h:t`
+- cons patterns: `h::t` (equivalent to `Cons h t`)
 - dict key presence: `{foo, bar}` (keys are identifiers)
 - record patterns on record-carrying constructors: `Bar {x, y}`
+
+```rex,interactive
+match [1, 2, 3]
+  when h::t -> h
+  when [] -> 0
+```
 
 Rex checks ADT matches for exhaustiveness and reports missing constructors.
 

@@ -13,7 +13,7 @@ fn abs_i32 : i32 -> i32 = \x ->
 fn is_safe : i32 -> List i32 -> i32 -> bool = \col placed dist ->
   match placed
     when [] -> true
-    when c:rest ->
+    when c::rest ->
       if col == c then
         false
       else if abs_i32 (col - c) == dist then

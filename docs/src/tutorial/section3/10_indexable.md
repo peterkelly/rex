@@ -38,7 +38,7 @@ in
 
 `get` is generally expected to error if the index is out of bounds (depending on the host/runtime
 implementation). If you need safe indexing (returning `Option`/`Result`), write it with `match` on
-your container type (e.g. `[]` vs `x:xs` for lists).
+your container type (e.g. `[]` vs `x::xs` for lists).
 
 ## Worked examples
 
@@ -51,7 +51,7 @@ let
   head = \xs ->
     match xs
       when [] -> None
-      when x:_ -> Some x
+      when x::_ -> Some x
 in
   (head [] is Option i32, head [10, 20, 30])
 ```

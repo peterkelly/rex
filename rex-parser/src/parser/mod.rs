@@ -614,6 +614,48 @@ impl Parser {
                 Token::Add(..) => Operator::Add,
                 Token::And(..) => Operator::And,
                 Token::Concat(..) => Operator::Concat,
+                Token::ColonColon(..) => {
+                    let operator_span = token.span();
+                    this.next_token();
+
+                    let rhs_expr = this.parse_unary_expr()?;
+                    let rhs_expr_span = *rhs_expr.span();
+
+                    let next_binary_expr_takes_precedence = match this.current_token() {
+                        Token::Eof(..) => false,
+                        token if prec > token.precedence() => false,
+                        token if prec == token.precedence() => !matches!(
+                            token,
+                            Token::Add(..)
+                                | Token::And(..)
+                                | Token::Concat(..)
+                                | Token::Div(..)
+                                | Token::Mul(..)
+                                | Token::Mod(..)
+                                | Token::Or(..)
+                                | Token::Sub(..)
+                        ),
+                        _ => true,
+                    };
+
+                    let rhs_expr = if next_binary_expr_takes_precedence {
+                        this.parse_binary_expr(rhs_expr)?
+                    } else {
+                        rhs_expr
+                    };
+
+                    let cons_span = Span::from_begin_end(lhs_expr_span.begin, operator_span.end);
+                    let outer_span = Span::from_begin_end(lhs_expr_span.begin, rhs_expr_span.end);
+                    return this.parse_binary_expr(Expr::App(
+                        outer_span,
+                        Arc::new(Expr::App(
+                            cons_span,
+                            Arc::new(Expr::Var(Var::with_span(*operator_span, "Cons"))),
+                            Arc::new(lhs_expr),
+                        )),
+                        Arc::new(rhs_expr),
+                    ));
+                }
                 Token::Div(..) => Operator::Div,
                 Token::Eq(..) => Operator::Eq,
                 Token::Ne(..) => Operator::Ne,
@@ -644,19 +686,20 @@ impl Parser {
                 // Next token has lower precedence
                 token if prec > token.precedence() => false,
                 // Next token has the same precedence
-                token if prec == token.precedence() => match token {
-                    // But it is left-associative
-                    Token::Add(..)
-                    | Token::And(..)
-                    | Token::Concat(..)
-                    | Token::Div(..)
-                    | Token::Mul(..)
-                    | Token::Mod(..)
-                    | Token::Or(..)
-                    | Token::Sub(..) => false,
-                    // But it is right-associative
-                    _ => true,
-                },
+                token if prec == token.precedence() => {
+                    // Right-associative unless token is one of the left-associative ops.
+                    !matches!(
+                        token,
+                        Token::Add(..)
+                            | Token::And(..)
+                            | Token::Concat(..)
+                            | Token::Div(..)
+                            | Token::Mul(..)
+                            | Token::Mod(..)
+                            | Token::Or(..)
+                            | Token::Sub(..)
+                    )
+                }
                 // Next token has higher precedence
                 _ => true,
             };
@@ -3174,7 +3217,7 @@ impl Parser {
         let span = *self.current_token().span();
         self.with_nesting(span, |this| {
             let mut lhs = this.parse_pattern_app()?;
-            while let Token::Colon(..) = this.current_token() {
+            while let Token::ColonColon(..) = this.current_token() {
                 this.next_token();
                 let rhs = this.parse_pattern_cons()?;
                 let span = Span::from_begin_end(lhs.span().begin, rhs.span().end);
@@ -3787,7 +3830,7 @@ mod tests {
         let pattern = (1..=12)
             .map(|i| format!("x{i}"))
             .collect::<Vec<_>>()
-            .join(" : ");
+            .join(" :: ");
         let code = format!("match xs when {pattern} -> xs");
         let mut parser = Parser::new(Token::tokenize(&code).unwrap());
         parser.set_limits(ParserLimits {
@@ -4367,6 +4410,30 @@ mod tests {
     }
 
     #[test]
+    fn test_list_cons_expr() {
+        let expr = parse("x::xs");
+        let expected = app!(app!(v!("Cons"), v!("x")), v!("xs"));
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_list_cons_expr_right_associative() {
+        let expr = parse("x::y::zs");
+        let expected = app!(
+            app!(v!("Cons"), v!("x")),
+            app!(app!(v!("Cons"), v!("y")), v!("zs"))
+        );
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
+    fn test_list_cons_constructor_call_expr() {
+        let expr = parse("Cons x xs");
+        let expected = app!(app!(v!("Cons"), v!("x")), v!("xs"));
+        assert_expr_eq!(expr, expected; ignore span);
+    }
+
+    #[test]
     fn test_operator_precedence() {
         let expr = parse("1 + 2 * 3 - 4");
         let expected = app!(
@@ -4608,7 +4675,7 @@ mod tests {
     #[test]
     fn test_match_list_patterns() {
         let expr = parse(
-            "match list when [] -> empty when [x] -> x when [x, y, z] -> z when x:xs -> xs when _ -> fallback",
+            "match list when [] -> empty when [x] -> x when [x, y, z] -> z when x::xs -> xs when _ -> fallback",
         );
         let expected = Arc::new(Expr::Match(
             Span::default(),
@@ -4718,7 +4785,7 @@ mod tests {
 
     #[test]
     fn test_match_cons_associativity() {
-        let expr = parse("match xs when h:t:u -> u");
+        let expr = parse("match xs when h::t::u -> u");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("xs"),
@@ -4741,7 +4808,7 @@ mod tests {
 
     #[test]
     fn test_match_wildcard_cons() {
-        let expr = parse("match xs when (_:_) -> xs");
+        let expr = parse("match xs when (_::_) -> xs");
         let expected = Arc::new(Expr::Match(
             Span::default(),
             v!("xs"),

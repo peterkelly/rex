@@ -29,6 +29,12 @@ List literals use square brackets:
 
 Under the hood, lists are a prelude ADT `List a` with constructors `Empty` and `Cons`.
 
+You can construct cons cells either as `Cons h t` (normal constructor call style) or with `h::t` sugar.
+
+```rex,interactive
+let xs = 1::2::3::[] in xs
+```
+
 ```rex,interactive
 match [1, 2, 3]
   when Empty -> 0
@@ -43,7 +49,7 @@ Rex also supports list-pattern sugar:
 match [1, 2, 3]
   when [] -> 0
   when [x] -> x
-  when x:xs -> x
+  when x::xs -> x
 ```
 
 ## Dictionaries (records / dict values)

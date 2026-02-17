@@ -154,7 +154,7 @@ pub enum Pattern {
     Named(Span, Symbol, Vec<Pattern>),      // Ok x y z
     Tuple(Span, Vec<Pattern>),              // (x, y, z)
     List(Span, Vec<Pattern>),               // [x, y, z]
-    Cons(Span, Box<Pattern>, Box<Pattern>), // x:xs
+    Cons(Span, Box<Pattern>, Box<Pattern>), // x::xs
     Dict(Span, Vec<(Symbol, Pattern)>),     // {a, b, c} or {a: x, b: y}
 }
 
@@ -251,7 +251,7 @@ impl Display for Pattern {
                 }
                 ']'.fmt(f)
             }
-            Pattern::Cons(_, head, tail) => write!(f, "{}:{}", head, tail),
+            Pattern::Cons(_, head, tail) => write!(f, "{}::{}", head, tail),
             Pattern::Dict(_, fields) => {
                 '{'.fmt(f)?;
                 for (i, (key, pat)) in fields.iter().enumerate() {

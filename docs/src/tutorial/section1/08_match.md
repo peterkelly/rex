@@ -5,7 +5,7 @@ Use `match` to branch on the shape of values.
 `match` is the “workhorse” control flow construct in Rex. You’ll use it for:
 
 - consuming ADTs (`Option`, `Result`, your own types),
-- splitting lists (`[]` vs `x:xs`),
+- splitting lists (`[]` vs `x::xs`),
 - checking key presence in dicts (`{a, b}`),
 - refining record-carrying variants so projection/update typecheck.
 
@@ -58,9 +58,11 @@ Cons patterns:
 
 ```rex,interactive
 match [1, 2, 3]
-  when h:t -> h
+  when h::t -> h
   when [] -> 0
 ```
+
+`h::t` is equivalent to `Cons h t`; both expression forms are valid.
 
 Record patterns on record-carrying constructors:
 

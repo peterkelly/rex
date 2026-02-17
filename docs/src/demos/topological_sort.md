@@ -21,17 +21,17 @@ fn node_eq : Node -> Node -> bool = \a b ->
 fn contains : List Node -> Node -> bool = \xs x ->
   match xs
     when [] -> false
-    when y:ys -> if node_eq y x then true else contains ys x
+    when y::ys -> if node_eq y x then true else contains ys x
 
 fn append : List Node -> List Node -> List Node = \xs ys ->
   match xs
     when [] -> ys
-    when h:t -> Cons h (append t ys)
+    when h::t -> Cons h (append t ys)
 
 fn reverse_go : List Node -> List Node -> List Node = \rest acc ->
   match rest
     when [] -> acc
-    when h:t -> reverse_go t (Cons h acc)
+    when h::t -> reverse_go t (Cons h acc)
 
 fn reverse : List Node -> List Node = \xs ->
   reverse_go xs []
@@ -39,19 +39,19 @@ fn reverse : List Node -> List Node = \xs ->
 fn is_empty : List a -> bool = \xs ->
   match xs
     when [] -> true
-    when _:_ -> false
+    when _::_ -> false
 
 fn remove_outgoing : List Edge -> Node -> List Edge = \edges n ->
   match edges
     when [] -> []
-    when Edge from to:rest ->
+    when Edge from to::rest ->
       if node_eq from n then remove_outgoing rest n
       else Cons (Edge from to) (remove_outgoing rest n)
 
 fn in_degree : List Edge -> Node -> i32 = \edges n ->
   match edges
     when [] -> 0
-    when Edge from to:rest ->
+    when Edge from to::rest ->
       let tail = in_degree rest n in
       if node_eq to n then 1 + tail else tail
 
@@ -61,7 +61,7 @@ fn push_unique : List Node -> Node -> List Node = \queue n ->
 fn enqueue_zeros : List Node -> List Node -> List Node -> List Edge -> List Node = \nodes queue seen edges ->
   match nodes
     when [] -> queue
-    when n:rest ->
+    when n::rest ->
       let queue1 =
         if contains seen n then
           queue
@@ -79,7 +79,7 @@ fn kahn : List Node -> List Node -> List Node -> List Edge -> List Node -> List 
         reverse order
       else
         []
-    when n:rest ->
+    when n::rest ->
       let
         edges1 = remove_outgoing edges n,
         seen1 = Cons n seen,

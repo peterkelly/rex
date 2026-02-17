@@ -268,9 +268,9 @@ instance Eq (List a) <= Eq a
                 (match ys
                     when [] -> true
                     when _ -> false)
-            when x:xs1 ->
+            when x::xs1 ->
                 (match ys
-                    when y:ys1 -> if x == y then xs1 == ys1 else false
+                    when y::ys1 -> if x == y then xs1 == ys1 else false
                     when [] -> false)
     != = \xs ys -> if xs == ys then false else true
 instance Eq (Option a) <= Eq a
@@ -403,7 +403,7 @@ instance Pretty (List a) <= Pretty a
     pretty = \xs ->
         match xs
             when [] -> "[]"
-            when x:xs1 ->
+            when x::xs1 ->
                 let
                     step = \out y -> out + ", " + pretty y
                 in

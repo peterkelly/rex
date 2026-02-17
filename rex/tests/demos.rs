@@ -103,25 +103,11 @@ async fn demo_merge_sort() {
         )),
     )
     .await;
+    assert_eq!(ty, Type::list(Type::con("i32", 0)));
     assert_eq!(
-        ty,
-        Type::tuple(vec![
-            Type::list(Type::con("i32", 0)),
-            Type::list(Type::con("i32", 0)),
-            Type::list(Type::con("i32", 0)),
-        ])
-    );
-    let items = heap.pointer_as_tuple(&value).unwrap();
-    assert_eq!(items.len(), 3);
-    assert_eq!(
-        list_i32_values(&heap, &items[0]),
-        vec![9, 1, 7, 3, 2, 8, 6, 4, 5]
-    );
-    assert_eq!(
-        list_i32_values(&heap, &items[1]),
+        list_i32_values(&heap, &value),
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
     );
-    assert_eq!(list_i32_values(&heap, &items[2]), vec![1, 2, 3, 4, 5]);
 }
 
 #[tokio::test]

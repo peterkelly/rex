@@ -553,11 +553,60 @@ async fn eval_match_list() {
         r#"
         match [1, 2, 3]
             when [] -> 0
-            when x:xs -> x
+            when x::xs -> x
         "#,
     );
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
+}
+
+#[tokio::test]
+async fn eval_cons_constructor_form_for_lists() {
+    let mut engine = engine_with_arith();
+
+    let expr = parse(
+        r#"
+        let
+            from_sugar = 1::2::[],
+            from_ctor = Cons 1 (Cons 2 Empty)
+        in
+            (from_sugar, from_ctor, match from_ctor when Cons h _t -> h when [] -> 0)
+        "#,
+    );
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
+    let value = pval!(engine, value);
+    let Value::Tuple(xs) = value else {
+        panic!("expected tuple result");
+    };
+    assert_eq!(xs.len(), 3);
+
+    let sugar = engine.heap.get(&xs[0]).unwrap();
+    let ctor = engine.heap.get(&xs[1]).unwrap();
+    let sugar_items = list_values(&engine, sugar.as_ref());
+    let ctor_items = list_values(&engine, ctor.as_ref());
+    assert_eq!(sugar_items.len(), 2);
+    assert_eq!(ctor_items.len(), 2);
+    assert_pointer_eq!(
+        &engine.heap,
+        sugar_items[0],
+        engine.heap.alloc_i32(1).unwrap()
+    );
+    assert_pointer_eq!(
+        &engine.heap,
+        sugar_items[1],
+        engine.heap.alloc_i32(2).unwrap()
+    );
+    assert_pointer_eq!(
+        &engine.heap,
+        ctor_items[0],
+        engine.heap.alloc_i32(1).unwrap()
+    );
+    assert_pointer_eq!(
+        &engine.heap,
+        ctor_items[1],
+        engine.heap.alloc_i32(2).unwrap()
+    );
+    assert_pointer_eq!(&engine.heap, xs[2], engine.heap.alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
@@ -680,7 +729,7 @@ async fn eval_match_missing_arm_errors() {
 
 #[tokio::test]
 async fn eval_match_invalid_pattern_type_error() {
-    let expr = parse("match (Ok 1) when [] -> 0 when x:xs -> 1");
+    let expr = parse("match (Ok 1) when [] -> 0 when x::xs -> 1");
     let mut engine = Engine::with_prelude(()).unwrap();
     let result = eval_expr(&mut engine, expr.as_ref()).await;
     match result {
@@ -697,10 +746,10 @@ async fn eval_nested_match_list_sum() {
     let expr = parse(
         r#"
         match [1, 2, 3]
-            when x:xs ->
+            when x::xs ->
                 (match xs
                     when [] -> x
-                    when y:ys -> x + y)
+                    when y::ys -> x + y)
             when [] -> 0
         "#,
     );
