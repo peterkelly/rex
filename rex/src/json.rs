@@ -732,15 +732,15 @@ fn variant_discriminant(
 
 fn list_to_vec(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     let mut out = Vec::new();
-    let mut cur = pointer.clone();
+    let mut cur = *pointer;
     loop {
         let (tag, args) = heap.pointer_as_adt(&cur)?;
         if tag.as_ref() == "Empty" && args.is_empty() {
             return Ok(out);
         }
         if tag.as_ref() == "Cons" && args.len() == 2 {
-            out.push(args[0].clone());
-            cur = args[1].clone();
+            out.push(args[0]);
+            cur = args[1];
             continue;
         }
         return Err(error(format!(

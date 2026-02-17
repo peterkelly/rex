@@ -434,7 +434,7 @@ pub struct Closure {
     pub body: Arc<TypedExpr>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Pointer {
     heap_id: u64,
     index: u32,
@@ -1165,7 +1165,7 @@ fn list_to_vec_opt(heap: &Heap, value: &Value) -> Result<Option<Vec<Pointer>>, E
                 return Ok(Some(out));
             }
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
-                out.push(args[0].clone());
+                out.push(args[0]);
                 cursor = Cursor::Owned(heap.get(&args[1])?);
             }
             _ => return Ok(None),
@@ -1190,7 +1190,7 @@ pub(crate) fn list_to_vec(heap: &Heap, value: &Value) -> Result<Vec<Pointer>, En
         match cur {
             Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Ok(out),
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
-                out.push(args[0].clone());
+                out.push(args[0]);
                 cursor = Cursor::Owned(heap.get(&args[1])?);
             }
             _ => {
@@ -1235,7 +1235,7 @@ impl IntoPointer for Pointer {
 
 impl IntoPointer for &Pointer {
     fn into_pointer(self, _heap: &Heap) -> Result<Pointer, EngineError> {
-        Ok(self.clone())
+        Ok(*self)
     }
 }
 

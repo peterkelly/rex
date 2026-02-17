@@ -187,8 +187,8 @@ async fn let_rec_allows_mutual_data_cycles() {
         panic!("expected tuple, got {}", heap.type_name(&pointer).unwrap());
     };
     assert_eq!(items.len(), 2);
-    let a_ptr = items[0].clone();
-    let b_ptr = items[1].clone();
+    let a_ptr = items[0];
+    let b_ptr = items[1];
 
     let a_val = heap.get(&a_ptr).unwrap();
     let Value::Adt(_, a_args) = a_val.as_ref() else {

@@ -39,15 +39,15 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
 
 fn list_elements(heap: &rex::Heap, list: &Pointer) -> Vec<Pointer> {
     let mut out = Vec::new();
-    let mut cur = list.clone();
+    let mut cur = *list;
     loop {
         let val = heap.get(&cur).unwrap();
         match val.as_ref() {
             Value::Adt(tag, args) if tag.as_ref() == "Empty" => return out,
             Value::Adt(tag, args) if tag.as_ref() == "Cons" => {
                 assert_eq!(args.len(), 2, "Cons must have exactly two fields");
-                out.push(args[0].clone());
-                cur = args[1].clone();
+                out.push(args[0]);
+                cur = args[1];
             }
             other => panic!("expected list, got {}", other.value_type_name()),
         }

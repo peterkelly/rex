@@ -39,7 +39,7 @@ impl Env {
         let mut current: Option<&Env> = Some(self);
         while let Some(env) = current {
             if let Some(v) = env.0.bindings.get(name) {
-                return Some(v.clone());
+                return Some(*v);
             }
             current = env.0.parent.as_ref();
         }

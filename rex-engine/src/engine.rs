@@ -1279,7 +1279,7 @@ where
                 let rendered_ptr = apply(
                     engine,
                     pretty_ptr,
-                    args[0].clone(),
+                    args[0],
                     Some(&pretty_ty),
                     Some(&arg_ty),
                     &mut gas,
@@ -1430,7 +1430,7 @@ where
         let typ = V::rex_type();
         let value = value.into_pointer(self.heap())?;
         let func: SyncNativeCallable<State> =
-            Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value.clone()));
+            Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func, 0);
         self.register_native_registration(name, registration)
@@ -1444,7 +1444,7 @@ where
     ) -> Result<(), EngineError> {
         let value = self.heap().alloc_value(value)?;
         let func: SyncNativeCallable<State> =
-            Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value.clone()));
+            Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func, 0);
         self.register_native_registration(name, registration)
@@ -1607,7 +1607,7 @@ where
         let mut slots = Vec::with_capacity(decls.len());
         for decl in decls {
             let placeholder = self.heap().alloc_uninitialized(decl.name.name.clone())?;
-            env_rec = env_rec.extend(decl.name.name.clone(), placeholder.clone());
+            env_rec = env_rec.extend(decl.name.name.clone(), placeholder);
             slots.push(placeholder);
         }
 
@@ -2037,7 +2037,7 @@ where
         if typ.ftv().is_empty()
             && let Ok(mut cache) = self.typeclass_cache.lock()
         {
-            cache.insert((name.clone(), typ.clone()), pointer.clone());
+            cache.insert((name.clone(), typ.clone()), *pointer);
         }
     }
 
@@ -2840,7 +2840,7 @@ where
             let mut slots = Vec::with_capacity(bindings.len());
             for (name, _) in bindings {
                 let placeholder = engine.heap().alloc_uninitialized(name.clone())?;
-                env_rec = env_rec.extend(name.clone(), placeholder.clone());
+                env_rec = env_rec.extend(name.clone(), placeholder);
                 slots.push(placeholder);
             }
 
@@ -2942,7 +2942,7 @@ fn match_pattern_ptr(
         Pattern::Wildcard(..) => Some(HashMap::new()),
         Pattern::Var(var) => {
             let mut bindings = HashMap::new();
-            bindings.insert(var.name.clone(), value.clone());
+            bindings.insert(var.name.clone(), *value);
             Some(bindings)
         }
         Pattern::Named(_, name, ps) => {

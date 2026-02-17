@@ -70,7 +70,7 @@ fn list_values(engine: &Engine, value: &Value) -> Vec<rex_engine::Pointer> {
         match &cur {
             Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return out,
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
-                out.push(args[0].clone());
+                out.push(args[0]);
                 cur = engine
                     .heap()
                     .get(&args[1])

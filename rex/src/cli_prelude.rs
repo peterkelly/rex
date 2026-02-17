@@ -47,14 +47,14 @@ fn array_type(elem: Type) -> Type {
 
 fn list_to_vec(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     let mut out = Vec::new();
-    let mut cursor = pointer.clone();
+    let mut cursor = *pointer;
     loop {
         let value = heap.get(&cursor)?;
         match value.as_ref() {
             Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => return Ok(out),
             Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
-                out.push(args[0].clone());
-                cursor = args[1].clone();
+                out.push(args[0]);
+                cursor = args[1];
             }
             _ => {
                 return Err(EngineError::NativeType {

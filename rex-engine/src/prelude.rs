@@ -156,7 +156,7 @@ pub(crate) fn option_from_pointer(
 pub(crate) fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
     if sym_eq(&tag, "Some") && args.len() == 1 {
-        Ok(Some(args[0].clone()))
+        Ok(Some(args[0]))
     } else if sym_eq(&tag, "None") && args.is_empty() {
         Ok(None)
     } else {
@@ -173,9 +173,9 @@ pub(crate) fn result_value(
 ) -> Result<Result<Pointer, Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
     if sym_eq(&tag, "Ok") && args.len() == 1 {
-        Ok(Ok(args[0].clone()))
+        Ok(Ok(args[0]))
     } else if sym_eq(&tag, "Err") && args.len() == 1 {
-        Ok(Err(args[0].clone()))
+        Ok(Err(args[0]))
     } else {
         Err(EngineError::NativeType {
             expected: "Result".into(),
@@ -250,9 +250,7 @@ where
     let mut out = Vec::new();
     for value in values {
         let value = value.into_pointer(engine.heap())?;
-        out.push(
-            invoke_pointer_fn(engine, func.clone(), value, Some(func_ty), Some(elem_ty)).await?,
-        );
+        out.push(invoke_pointer_fn(engine, func, value, Some(func_ty), Some(elem_ty)).await?);
     }
     Ok(out)
 }
@@ -273,14 +271,7 @@ where
     let mut out = Vec::new();
     for value in values {
         let value = value.into_pointer(engine.heap())?;
-        let keep = invoke_pointer_fn(
-            engine,
-            pred.clone(),
-            value.clone(),
-            Some(pred_ty),
-            Some(elem_ty),
-        )
-        .await?;
+        let keep = invoke_pointer_fn(engine, pred, value, Some(pred_ty), Some(elem_ty)).await?;
         if bool::from_pointer(engine.heap(), &keep)? {
             out.push(value);
         }
@@ -304,8 +295,7 @@ where
     let mut out = Vec::new();
     for value in values {
         let value = value.into_pointer(engine.heap())?;
-        let mapped =
-            invoke_pointer_fn(engine, func.clone(), value, Some(func_ty), Some(elem_ty)).await?;
+        let mapped = invoke_pointer_fn(engine, func, value, Some(func_ty), Some(elem_ty)).await?;
         if let Some(v) = option_value(engine.heap(), &mapped)? {
             out.push(v);
         }
@@ -330,8 +320,7 @@ where
     let mut out = Vec::new();
     for value in values {
         let value = value.into_pointer(engine.heap())?;
-        let mapped =
-            invoke_pointer_fn(engine, func.clone(), value, Some(func_ty), Some(elem_ty)).await?;
+        let mapped = invoke_pointer_fn(engine, func, value, Some(func_ty), Some(elem_ty)).await?;
         out.extend(extract(&mapped)?);
     }
     Ok(out)
@@ -348,8 +337,7 @@ pub(crate) async fn foldl_values<State: Clone + Send + Sync + 'static>(
 ) -> Result<Pointer, EngineError> {
     let step_ty = Type::fun(elem_ty.clone(), acc_ty.clone());
     for value in values {
-        let step =
-            invoke_pointer_fn(engine, func.clone(), acc, Some(func_ty), Some(acc_ty)).await?;
+        let step = invoke_pointer_fn(engine, func, acc, Some(func_ty), Some(acc_ty)).await?;
         acc = invoke_pointer_fn(engine, step, value, Some(&step_ty), Some(elem_ty)).await?;
     }
     Ok(acc)
@@ -366,8 +354,7 @@ pub(crate) async fn foldr_values<State: Clone + Send + Sync + 'static>(
 ) -> Result<Pointer, EngineError> {
     let step_ty = Type::fun(acc_ty.clone(), acc_ty.clone());
     for value in values.into_iter().rev() {
-        let step =
-            invoke_pointer_fn(engine, func.clone(), value, Some(func_ty), Some(elem_ty)).await?;
+        let step = invoke_pointer_fn(engine, func, value, Some(func_ty), Some(elem_ty)).await?;
         acc = invoke_pointer_fn(engine, step, acc, Some(&step_ty), Some(acc_ty)).await?;
     }
     Ok(acc)
@@ -431,8 +418,8 @@ pub(crate) fn unzip_tuple2(
                 got: format!("tuple{len}"),
             });
         }
-        left.push(elems[0].clone());
-        right.push(elems[1].clone());
+        left.push(elems[0]);
+        right.push(elems[1]);
     }
     Ok((left, right))
 }
@@ -721,10 +708,10 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                             engine
                                 .heap()
                                 .alloc_overloaded(name, typ, applied, applied_types)?;
-                        let x = x.clone();
+                        let x = *x;
                         let f =
                             invoke_pointer_fn(engine, f, x, Some(&eq_ty), Some(&elem_ty)).await?;
-                        let y = y.clone();
+                        let y = *y;
                         let r =
                             invoke_pointer_fn(engine, f, y, Some(&step_ty), Some(&elem_ty)).await?;
                         if !bool::from_pointer(engine.heap(), &r)? {
@@ -1270,17 +1257,11 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
                 let map = engine.heap().pointer_as_dict(&args[1])?;
-                let func = args[0].clone();
+                let func = args[0];
                 let mut out: BTreeMap<Symbol, Pointer> = BTreeMap::new();
                 for (k, v) in &map {
-                    let mapped = invoke_pointer_fn(
-                        engine,
-                        func.clone(),
-                        v.clone(),
-                        Some(&func_ty),
-                        Some(&elem_ty),
-                    )
-                    .await?;
+                    let mapped =
+                        invoke_pointer_fn(engine, func, *v, Some(&func_ty), Some(&elem_ty)).await?;
                     out.insert(k.clone(), mapped);
                 }
                 engine.heap().alloc_dict(out)
@@ -1318,17 +1299,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                     let elem_ty = dict_elem_type(&dict_ty)?;
                     let map = engine.heap().pointer_as_dict(&args[1])?;
 
-                    let func = args[0].clone();
+                    let func = args[0];
                     let mut out: BTreeMap<Symbol, Pointer> = BTreeMap::new();
                     for (k, v) in &map {
-                        let mapped = invoke_pointer_fn(
-                            engine,
-                            func.clone(),
-                            v.clone(),
-                            Some(&func_ty),
-                            Some(&elem_ty),
-                        )
-                        .await?;
+                        let mapped =
+                            invoke_pointer_fn(engine, func, *v, Some(&func_ty), Some(&elem_ty))
+                                .await?;
                         match result_value(engine.heap(), &mapped)? {
                             Ok(ok) => {
                                 out.insert(k.clone(), ok);
@@ -1609,7 +1585,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
                 let values = expect_list(engine.heap(), &args[1])?;
-                let out = map_values(engine, args[0].clone(), &func_ty, &elem_ty, values).await?;
+                let out = map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
@@ -1639,7 +1615,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
                 let values = expect_array(engine.heap(), &args[1])?;
-                let out = map_values(engine, args[0].clone(), &func_ty, &elem_ty, values).await?;
+                let out = map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
@@ -1653,7 +1629,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, array_a));
         engine.export_native("prim_array_singleton", scheme, 1, |engine, _, args| {
-            let ptr = args[0].clone();
+            let ptr = args[0];
             engine.heap().alloc_array(vec![ptr])
         })?;
     }
@@ -1679,7 +1655,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                let func = args[0].clone();
+                let func = args[0];
                 match option_value(engine.heap(), &args[1])? {
                     Some(v) => {
                         let mapped =
@@ -1717,8 +1693,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let result_ty = arg_tys[1].clone();
                 let (ok_ty, _err_ty) = result_types(&result_ty)?;
-                let func = args[0].clone();
-                let result = args[1].clone();
+                let func = args[0];
+                let result = args[1];
                 match result_value(engine.heap(), &result)? {
                     Ok(v) => {
                         let mapped =
@@ -1762,13 +1738,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = list_elem_type(&list_ty)?;
                 let values = expect_list(engine.heap(), &args[2])?;
                 foldl_values(
-                    engine,
-                    args[0].clone(),
-                    &func_ty,
-                    &acc_ty,
-                    &elem_ty,
-                    args[1].clone(),
-                    values,
+                    engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
                 .await
             }
@@ -1805,13 +1775,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = array_elem_type(&array_ty)?;
                 let values = expect_array(engine.heap(), &args[2])?;
                 foldl_values(
-                    engine,
-                    args[0].clone(),
-                    &func_ty,
-                    &acc_ty,
-                    &elem_ty,
-                    args[1].clone(),
-                    values,
+                    engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
                 .await
             }
@@ -1848,11 +1812,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = option_elem_type(&opt_ty)?;
                 foldl_values(
                     engine,
-                    args[0].clone(),
+                    args[0],
                     &func_ty,
                     &acc_ty,
                     &elem_ty,
-                    args[1].clone(),
+                    args[1],
                     option_value(engine.heap(), &args[2])?.into_iter(),
                 )
                 .await
@@ -1890,13 +1854,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = list_elem_type(&list_ty)?;
                 let values = expect_list(engine.heap(), &args[2])?;
                 foldr_values(
-                    engine,
-                    args[0].clone(),
-                    &func_ty,
-                    &acc_ty,
-                    &elem_ty,
-                    args[1].clone(),
-                    values,
+                    engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
                 .await
             }
@@ -1933,13 +1891,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = array_elem_type(&array_ty)?;
                 let values = expect_array(engine.heap(), &args[2])?;
                 foldr_values(
-                    engine,
-                    args[0].clone(),
-                    &func_ty,
-                    &acc_ty,
-                    &elem_ty,
-                    args[1].clone(),
-                    values,
+                    engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
                 .await
             }
@@ -1976,11 +1928,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = option_elem_type(&opt_ty)?;
                 foldr_values(
                     engine,
-                    args[0].clone(),
+                    args[0],
                     &func_ty,
                     &acc_ty,
                     &elem_ty,
-                    args[1].clone(),
+                    args[1],
                     option_value(engine.heap(), &args[2])?.into_iter().collect(),
                 )
                 .await
@@ -2018,13 +1970,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = list_elem_type(&list_ty)?;
                 let values = expect_list(engine.heap(), &args[2])?;
                 foldl_values(
-                    engine,
-                    args[0].clone(),
-                    &func_ty,
-                    &acc_ty,
-                    &elem_ty,
-                    args[1].clone(),
-                    values,
+                    engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
                 .await
             }
@@ -2061,13 +2007,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = array_elem_type(&array_ty)?;
                 let values = expect_array(engine.heap(), &args[2])?;
                 foldl_values(
-                    engine,
-                    args[0].clone(),
-                    &func_ty,
-                    &acc_ty,
-                    &elem_ty,
-                    args[1].clone(),
-                    values,
+                    engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
                 .await
             }
@@ -2104,11 +2044,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let elem_ty = option_elem_type(&opt_ty)?;
                 foldl_values(
                     engine,
-                    args[0].clone(),
+                    args[0],
                     &func_ty,
                     &acc_ty,
                     &elem_ty,
-                    args[1].clone(),
+                    args[1],
                     option_value(engine.heap(), &args[2])?.into_iter(),
                 )
                 .await
@@ -2136,8 +2076,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
                 let values = expect_list(engine.heap(), &args[1])?;
-                let out =
-                    filter_values(engine, args[0].clone(), &func_ty, &elem_ty, values).await?;
+                let out = filter_values(engine, args[0], &func_ty, &elem_ty, values).await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
@@ -2164,8 +2103,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
                 let values = expect_array(engine.heap(), &args[1])?;
-                let out =
-                    filter_values(engine, args[0].clone(), &func_ty, &elem_ty, values).await?;
+                let out = filter_values(engine, args[0], &func_ty, &elem_ty, values).await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
@@ -2191,14 +2129,14 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                let func = args[0].clone();
+                let func = args[0];
                 match option_value(engine.heap(), &args[1])? {
                     Some(v) => {
                         let keep =
                             invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&elem_ty))
                                 .await?;
                         if bool::from_pointer(engine.heap(), &keep)? {
-                            Ok(args[1].clone())
+                            Ok(args[1])
                         } else {
                             option_from_pointer(engine.heap(), None)
                         }
@@ -2232,8 +2170,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
                 let values = expect_list(engine.heap(), &args[1])?;
-                let out =
-                    filter_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values).await?;
+                let out = filter_map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
@@ -2263,8 +2200,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
                 let values = expect_array(engine.heap(), &args[1])?;
-                let out =
-                    filter_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values).await?;
+                let out = filter_map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
@@ -2293,7 +2229,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                let func = args[0].clone();
+                let func = args[0];
                 match option_value(engine.heap(), &args[1])? {
                     Some(v) => {
                         let mapped =
@@ -2330,12 +2266,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
                 let values = expect_list(engine.heap(), &args[1])?;
-                let out =
-                    flat_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values, |v| {
-                        let mapped = engine.heap().get(v)?;
-                        list_to_vec(engine.heap(), mapped.as_ref())
-                    })
-                    .await?;
+                let out = flat_map_values(engine, args[0], &func_ty, &elem_ty, values, |v| {
+                    let mapped = engine.heap().get(v)?;
+                    list_to_vec(engine.heap(), mapped.as_ref())
+                })
+                .await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 list_from_pointers(engine.heap(), ptrs)
             }
@@ -2365,11 +2300,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
                 let values = expect_array(engine.heap(), &args[1])?;
-                let out =
-                    flat_map_values(engine, args[0].clone(), &func_ty, &elem_ty, values, |v| {
-                        expect_array(engine.heap(), v)
-                    })
-                    .await?;
+                let out = flat_map_values(engine, args[0], &func_ty, &elem_ty, values, |v| {
+                    expect_array(engine.heap(), v)
+                })
+                .await?;
                 let ptrs = values_to_ptrs(engine.heap(), out)?;
                 engine.heap().alloc_array(ptrs)
             }
@@ -2398,7 +2332,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                let func = args[0].clone();
+                let func = args[0];
                 match option_value(engine.heap(), &args[1])? {
                     Some(v) => {
                         invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&elem_ty)).await
@@ -2433,8 +2367,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let result_ty = arg_tys[1].clone();
                 let (ok_ty, _err_ty) = result_types(&result_ty)?;
-                let func = args[0].clone();
-                let result = args[1].clone();
+                let func = args[0];
+                let result = args[1];
                 match result_value(engine.heap(), &result)? {
                     Ok(v) => {
                         let mapped =
@@ -2468,10 +2402,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 if !expect_list(engine.heap(), &args[1])?.is_empty() {
-                    return Ok(args[1].clone());
+                    return Ok(args[1]);
                 }
-                let func = args[0].clone();
-                let list = args[1].clone();
+                let func = args[0];
+                let list = args[1];
                 invoke_pointer_fn(engine, func, list, Some(&func_ty), Some(&list_ty)).await
             }
             .boxed()
@@ -2496,10 +2430,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 if !expect_array(engine.heap(), &args[1])?.is_empty() {
-                    return Ok(args[1].clone());
+                    return Ok(args[1]);
                 }
-                let func = args[0].clone();
-                let array = args[1].clone();
+                let func = args[0];
+                let array = args[1];
                 invoke_pointer_fn(engine, func, array, Some(&func_ty), Some(&array_ty)).await
             }
             .boxed()
@@ -2524,10 +2458,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
                 if option_value(engine.heap(), &args[1])?.is_some() {
-                    return Ok(args[1].clone());
+                    return Ok(args[1]);
                 }
-                let func = args[0].clone();
-                let opt = args[1].clone();
+                let func = args[0];
+                let opt = args[1];
                 invoke_pointer_fn(engine, func, opt, Some(&func_ty), Some(&opt_ty)).await
             }
             .boxed()
@@ -2553,12 +2487,12 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let result_ty = arg_tys[1].clone();
-                let result = args[1].clone();
+                let result = args[1];
                 if result_value(engine.heap(), &result)?.is_err() {
-                    let func = args[0].clone();
+                    let func = args[0];
                     invoke_pointer_fn(engine, func, result, Some(&func_ty), Some(&result_ty)).await
                 } else {
-                    Ok(args[1].clone())
+                    Ok(args[1])
                 }
             }
             .boxed()
@@ -2808,7 +2742,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(Type::con("i32", 0), Type::fun(list_a.clone(), list_a)),
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
-            let n_ptr = args[0].clone();
+            let n_ptr = args[0];
             let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
             let xs = expect_list(engine.heap(), &args[1])?;
@@ -2826,7 +2760,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(Type::con("i32", 0), Type::fun(array_a.clone(), array_a)),
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
-            let n_ptr = args[0].clone();
+            let n_ptr = args[0];
             let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
             let xs = expect_array(engine.heap(), &args[1])?;
@@ -2845,7 +2779,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(Type::con("i32", 0), Type::fun(list_a.clone(), list_a)),
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
-            let n_ptr = args[0].clone();
+            let n_ptr = args[0];
             let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
             let xs = expect_list(engine.heap(), &args[1])?;
@@ -2863,7 +2797,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(Type::con("i32", 0), Type::fun(array_a.clone(), array_a)),
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
-            let n_ptr = args[0].clone();
+            let n_ptr = args[0];
             let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
             let xs = expect_array(engine.heap(), &args[1])?;
@@ -2885,11 +2819,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty)?;
-            let idx_ptr = args[0].clone();
+            let idx_ptr = args[0];
             let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
             let xs = expect_list(engine.heap(), &args[1])?;
             let idx = checked_index(sym("prim_get"), idx, xs.len())?;
-            Ok(xs[idx].clone())
+            Ok(xs[idx])
         })?;
     }
 
@@ -2906,11 +2840,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let array_ty = arg_tys[1].clone();
             let _elem_ty = array_elem_type(&array_ty)?;
-            let idx_ptr = args[0].clone();
+            let idx_ptr = args[0];
             let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
             let xs = expect_array(engine.heap(), &args[1])?;
             let idx = checked_index(sym("prim_get"), idx, xs.len())?;
-            Ok(xs[idx].clone())
+            Ok(xs[idx])
         })?;
     }
 
@@ -2927,7 +2861,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
             let tuple_ty = arg_tys[1].clone();
             let _elem_ty = tuple_elem_type(&tuple_ty)?;
-            let idx_ptr = args[0].clone();
+            let idx_ptr = args[0];
             let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
             let idx_usize = checked_index(sym("prim_get"), idx, size)?;
             let xs = engine.heap().pointer_as_tuple(&args[1])?;
@@ -2937,7 +2871,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     got: format!("tuple{}", xs.len()),
                 });
             }
-            Ok(xs[idx_usize].clone())
+            Ok(xs[idx_usize])
         })?;
     }
 
