@@ -729,7 +729,7 @@ impl Parser {
 
     fn parse_postfix_expr(&mut self) -> Result<Expr, ParserErr> {
         let mut base = self.parse_atom_expr()?;
-        while let Token::Dot(..) | Token::Colon(..) = self.current_token() {
+        while let Token::Dot(..) = self.current_token() {
             self.next_token();
 
             let (field, end) = match self.current_token() {
@@ -4341,11 +4341,9 @@ mod tests {
     }
 
     #[test]
-    fn test_projection_expr_colon() {
-        let expr = parse("x:field");
-        let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("field")));
-
-        assert_expr_eq!(expr, expected; ignore span);
+    fn test_projection_expr_colon_rejected() {
+        let mut parser = Parser::new(Token::tokenize("x:field").unwrap());
+        assert!(parser.parse_program(&mut GasMeter::default()).is_err());
     }
 
     #[test]

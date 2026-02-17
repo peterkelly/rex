@@ -4674,7 +4674,7 @@ mod tests {
             r#"
             type Boxed = Boxed { value: i32 }
             let
-                f = \x -> x:value
+                f = \x -> x.value
             in
                 f (Boxed { value = 1 })
             "#,
