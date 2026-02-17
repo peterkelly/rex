@@ -53,10 +53,10 @@ fn assert_eval_json(
     expected: serde_json::Value,
 ) {
     let actual = rex_to_json(
-        engine.heap(),
+        &engine.heap,
         pointer,
         typ,
-        engine.type_system(),
+        &engine.type_system,
         &JsonOptions::default(),
     )
     .unwrap();

@@ -27,7 +27,7 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");
 
     let value = engine
-        .heap()
+        .heap
         .get(&value)
         .map(|value| value.as_ref().clone())
         .unwrap_or_else(|err| panic!("{name}: heap read error: {err}"));

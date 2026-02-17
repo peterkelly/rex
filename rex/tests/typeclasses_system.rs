@@ -18,12 +18,12 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
         .await
         .map_err(|e| format!("{e}"))?;
     assert_eq!(ty, expected_ty, "eval returned unexpected type for: {code}");
-    let value = engine.heap().get(&pointer).map_err(|e| format!("{e}"))?;
+    let value = engine.heap.get(&pointer).map_err(|e| format!("{e}"))?;
     let opts = ValueDisplayOptions {
         include_numeric_suffixes: true,
         ..ValueDisplayOptions::default()
     };
-    value_display_with(engine.heap(), value.as_ref(), opts).map_err(|e| format!("{e}"))
+    value_display_with(&engine.heap, value.as_ref(), opts).map_err(|e| format!("{e}"))
 }
 
 async fn assert_eval(code: &str, expected: &str, expected_ty: Type) {

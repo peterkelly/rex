@@ -246,10 +246,10 @@ where
     I: IntoIterator<Item = T>,
     T: IntoPointer,
 {
-    let func = func.into_pointer(engine.heap())?;
+    let func = func.into_pointer(&engine.heap)?;
     let mut out = Vec::new();
     for value in values {
-        let value = value.into_pointer(engine.heap())?;
+        let value = value.into_pointer(&engine.heap)?;
         out.push(invoke_pointer_fn(engine, func, value, Some(func_ty), Some(elem_ty)).await?);
     }
     Ok(out)
@@ -267,12 +267,12 @@ where
     I: IntoIterator<Item = T>,
     T: IntoPointer,
 {
-    let pred = pred.into_pointer(engine.heap())?;
+    let pred = pred.into_pointer(&engine.heap)?;
     let mut out = Vec::new();
     for value in values {
-        let value = value.into_pointer(engine.heap())?;
+        let value = value.into_pointer(&engine.heap)?;
         let keep = invoke_pointer_fn(engine, pred, value, Some(pred_ty), Some(elem_ty)).await?;
-        if bool::from_pointer(engine.heap(), &keep)? {
+        if bool::from_pointer(&engine.heap, &keep)? {
             out.push(value);
         }
     }
@@ -291,12 +291,12 @@ where
     I: IntoIterator<Item = T>,
     T: IntoPointer,
 {
-    let func = func.into_pointer(engine.heap())?;
+    let func = func.into_pointer(&engine.heap)?;
     let mut out = Vec::new();
     for value in values {
-        let value = value.into_pointer(engine.heap())?;
+        let value = value.into_pointer(&engine.heap)?;
         let mapped = invoke_pointer_fn(engine, func, value, Some(func_ty), Some(elem_ty)).await?;
-        if let Some(v) = option_value(engine.heap(), &mapped)? {
+        if let Some(v) = option_value(&engine.heap, &mapped)? {
             out.push(v);
         }
     }
@@ -316,10 +316,10 @@ where
     I: IntoIterator<Item = T>,
     T: IntoPointer,
 {
-    let func = func.into_pointer(engine.heap())?;
+    let func = func.into_pointer(&engine.heap)?;
     let mut out = Vec::new();
     for value in values {
-        let value = value.into_pointer(engine.heap())?;
+        let value = value.into_pointer(&engine.heap)?;
         let mapped = invoke_pointer_fn(engine, func, value, Some(func_ty), Some(elem_ty)).await?;
         out.extend(extract(&mapped)?);
     }
@@ -669,7 +669,7 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     // primitive, but we *can* express the element comparison: the primitive
     // calls `(==)` on each pair.
     {
-        let a_tv = engine.fresh_type_var(Some(sym("a")));
+        let a_tv = engine.type_system.fresh_type_var(Some(sym("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::app(Type::con("Array", 1), a);
         let bool_ty = Type::con("bool", 0);
@@ -691,10 +691,10 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                     })?;
                     let array_ty = lhs_ty.apply(&subst);
                     let elem_ty = array_elem_type(&array_ty)?;
-                    let xs = expect_array(engine.heap(), &args[0])?;
-                    let ys = expect_array(engine.heap(), &args[1])?;
+                    let xs = expect_array(&engine.heap, &args[0])?;
+                    let ys = expect_array(&engine.heap, &args[1])?;
                     if xs.len() != ys.len() {
-                        return engine.heap().alloc_bool(false);
+                        return engine.heap.alloc_bool(false);
                     }
 
                     let bool_ty = Type::con("bool", 0);
@@ -704,21 +704,20 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                     for (x, y) in xs.iter().zip(ys.iter()) {
                         let (name, typ, applied, applied_types) =
                             OverloadedFn::new(sym("=="), eq_ty.clone()).into_parts();
-                        let f =
-                            engine
-                                .heap()
-                                .alloc_overloaded(name, typ, applied, applied_types)?;
+                        let f = engine
+                            .heap
+                            .alloc_overloaded(name, typ, applied, applied_types)?;
                         let x = *x;
                         let f =
                             invoke_pointer_fn(engine, f, x, Some(&eq_ty), Some(&elem_ty)).await?;
                         let y = *y;
                         let r =
                             invoke_pointer_fn(engine, f, y, Some(&step_ty), Some(&elem_ty)).await?;
-                        if !bool::from_pointer(engine.heap(), &r)? {
-                            return engine.heap().alloc_bool(false);
+                        if !bool::from_pointer(&engine.heap, &r)? {
+                            return engine.heap.alloc_bool(false);
                         }
                     }
-                    engine.heap().alloc_bool(true)
+                    engine.heap.alloc_bool(true)
                 }
                 .boxed()
             },
@@ -735,8 +734,8 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                     .call_native_impl("prim_array_eq", &call_type, &args)
                     .await?;
                 engine
-                    .heap()
-                    .alloc_bool(!bool::from_pointer(engine.heap(), &eq)?)
+                    .heap
+                    .alloc_bool(!bool::from_pointer(&engine.heap, &eq)?)
             }
             .boxed()
         })?;
@@ -869,23 +868,23 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     ] {
         let scheme = f32_bool.clone();
         engine.export_native(name, scheme, 2, move |engine, _, args| {
-            let a = f32::from_pointer(engine.heap(), &args[0])?;
-            let b = f32::from_pointer(engine.heap(), &args[1])?;
+            let a = f32::from_pointer(&engine.heap, &args[0])?;
+            let b = f32::from_pointer(&engine.heap, &args[1])?;
             let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                 expected: "f32".into(),
                 got: "nan".into(),
             })?;
-            engine.heap().alloc_bool(pred(ord))
+            engine.heap.alloc_bool(pred(ord))
         })?;
     }
     engine.export_native("prim_cmp", f32_cmp, 2, |engine, _, args| {
-        let a = f32::from_pointer(engine.heap(), &args[0])?;
-        let b = f32::from_pointer(engine.heap(), &args[1])?;
+        let a = f32::from_pointer(&engine.heap, &args[0])?;
+        let b = f32::from_pointer(&engine.heap, &args[1])?;
         let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
             expected: "f32".into(),
             got: "nan".into(),
         })?;
-        engine.heap().alloc_i32(cmp_to_i32(ord))
+        engine.heap.alloc_i32(cmp_to_i32(ord))
     })?;
 
     let f64_ty = Type::con("f64", 0);
@@ -923,23 +922,23 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     ] {
         let scheme = f64_bool.clone();
         engine.export_native(name, scheme, 2, move |engine, _, args| {
-            let a = f64::from_pointer(engine.heap(), &args[0])?;
-            let b = f64::from_pointer(engine.heap(), &args[1])?;
+            let a = f64::from_pointer(&engine.heap, &args[0])?;
+            let b = f64::from_pointer(&engine.heap, &args[1])?;
             let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                 expected: "f64".into(),
                 got: "nan".into(),
             })?;
-            engine.heap().alloc_bool(pred(ord))
+            engine.heap.alloc_bool(pred(ord))
         })?;
     }
     engine.export_native("prim_cmp", f64_cmp, 2, |engine, _, args| {
-        let a = f64::from_pointer(engine.heap(), &args[0])?;
-        let b = f64::from_pointer(engine.heap(), &args[1])?;
+        let a = f64::from_pointer(&engine.heap, &args[0])?;
+        let b = f64::from_pointer(&engine.heap, &args[1])?;
         let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
             expected: "f64".into(),
             got: "nan".into(),
         })?;
-        engine.heap().alloc_i32(cmp_to_i32(ord))
+        engine.heap.alloc_i32(cmp_to_i32(ord))
     })?;
 
     Ok(())
@@ -1080,9 +1079,9 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
                     Type::fun(Type::con("f64", 0), Type::option($dst_ty)),
                 );
                 engine.export_native($name, scheme, 1, move |engine, _t, args| {
-                    let x = f64::from_pointer(engine.heap(), &args[0])?;
+                    let x = f64::from_pointer(&engine.heap, &args[0])?;
                     let converted: Option<Pointer> = $convert(engine, x)?;
-                    option_from_pointer(engine.heap(), converted)
+                    option_from_pointer(&engine.heap, converted)
                 })?;
             }};
         }
@@ -1096,7 +1095,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
-                Ok(Some(engine.heap().alloc_u8(x as u8)?))
+                Ok(Some(engine.heap.alloc_u8(x as u8)?))
             } else {
                 Ok(None)
             }
@@ -1110,7 +1109,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64 {
-                Ok(Some(engine.heap().alloc_u16(x as u16)?))
+                Ok(Some(engine.heap.alloc_u16(x as u16)?))
             } else {
                 Ok(None)
             }
@@ -1124,7 +1123,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64 {
-                Ok(Some(engine.heap().alloc_u32(x as u32)?))
+                Ok(Some(engine.heap.alloc_u32(x as u32)?))
             } else {
                 Ok(None)
             }
@@ -1138,7 +1137,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64 {
-                Ok(Some(engine.heap().alloc_u64(x as u64)?))
+                Ok(Some(engine.heap.alloc_u64(x as u64)?))
             } else {
                 Ok(None)
             }
@@ -1152,7 +1151,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
-                Ok(Some(engine.heap().alloc_i8(x as i8)?))
+                Ok(Some(engine.heap.alloc_i8(x as i8)?))
             } else {
                 Ok(None)
             }
@@ -1166,7 +1165,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64 {
-                Ok(Some(engine.heap().alloc_i16(x as i16)?))
+                Ok(Some(engine.heap.alloc_i16(x as i16)?))
             } else {
                 Ok(None)
             }
@@ -1180,7 +1179,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64 {
-                Ok(Some(engine.heap().alloc_i32(x as i32)?))
+                Ok(Some(engine.heap.alloc_i32(x as i32)?))
             } else {
                 Ok(None)
             }
@@ -1194,7 +1193,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64 {
-                Ok(Some(engine.heap().alloc_i64(x as i64)?))
+                Ok(Some(engine.heap.alloc_i64(x as i64)?))
             } else {
                 Ok(None)
             }
@@ -1208,7 +1207,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             EngineError,
         > {
             if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
-                Ok(Some(engine.heap().alloc_f32(x as f32)?))
+                Ok(Some(engine.heap.alloc_f32(x as f32)?))
             } else {
                 Ok(None)
             }
@@ -1223,21 +1222,21 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 ) -> Result<(), EngineError> {
     // List -> Array conversion.
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let array_a = Type::array(a);
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(list_a, array_a));
         engine.export_native("prim_array_from_list", scheme, 1, |engine, _, args| {
-            let values = expect_list(engine.heap(), &args[0])?;
-            engine.heap().alloc_array(values)
+            let values = expect_list(&engine.heap, &args[0])?;
+            engine.heap.alloc_array(values)
         })?;
     }
 
     // Dict mapping and traversal helpers (used by `std.json`).
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let dict_a = Type::dict(a.clone());
@@ -1256,7 +1255,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
-                let map = engine.heap().pointer_as_dict(&args[1])?;
+                let map = engine.heap.pointer_as_dict(&args[1])?;
                 let func = args[0];
                 let mut out: BTreeMap<Symbol, Pointer> = BTreeMap::new();
                 for (k, v) in &map {
@@ -1264,16 +1263,16 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                         invoke_pointer_fn(engine, func, *v, Some(&func_ty), Some(&elem_ty)).await?;
                     out.insert(k.clone(), mapped);
                 }
-                engine.heap().alloc_dict(out)
+                engine.heap.alloc_dict(out)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
-        let e_tv = engine.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let e = Type::var(e_tv.clone());
@@ -1297,7 +1296,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                     let func_ty = arg_tys[0].clone();
                     let dict_ty = arg_tys[1].clone();
                     let elem_ty = dict_elem_type(&dict_ty)?;
-                    let map = engine.heap().pointer_as_dict(&args[1])?;
+                    let map = engine.heap.pointer_as_dict(&args[1])?;
 
                     let func = args[0];
                     let mut out: BTreeMap<Symbol, Pointer> = BTreeMap::new();
@@ -1305,16 +1304,16 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                         let mapped =
                             invoke_pointer_fn(engine, func, *v, Some(&func_ty), Some(&elem_ty))
                                 .await?;
-                        match result_value(engine.heap(), &mapped)? {
+                        match result_value(&engine.heap, &mapped)? {
                             Ok(ok) => {
                                 out.insert(k.clone(), ok);
                             }
-                            Err(err) => return result_from_pointer(engine.heap(), Err(err)),
+                            Err(err) => return result_from_pointer(&engine.heap, Err(err)),
                         }
                     }
 
-                    let dict = engine.heap().alloc_dict(out)?;
-                    result_from_pointer(engine.heap(), Ok(dict))
+                    let dict = engine.heap.alloc_dict(out)?;
+                    result_from_pointer(&engine.heap, Ok(dict))
                 }
                 .boxed()
             },
@@ -1331,12 +1330,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             Type::fun(string_ty.clone(), Type::option(uuid_ty)),
         );
         engine.export_native("prim_parse_uuid", scheme, 1, |engine, _, args| {
-            let s = String::from_pointer(engine.heap(), &args[0])?;
+            let s = String::from_pointer(&engine.heap, &args[0])?;
             let parsed = Uuid::parse_str(&s)
                 .ok()
-                .map(|uuid| engine.heap().alloc_uuid(uuid))
+                .map(|uuid| engine.heap.alloc_uuid(uuid))
                 .transpose()?;
-            option_from_pointer(engine.heap(), parsed)
+            option_from_pointer(&engine.heap, parsed)
         })?;
     }
 
@@ -1349,13 +1348,13 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             Type::fun(string_ty.clone(), Type::option(dt_ty)),
         );
         engine.export_native("prim_parse_datetime", scheme, 1, |engine, _, args| {
-            let s = String::from_pointer(engine.heap(), &args[0])?;
+            let s = String::from_pointer(&engine.heap, &args[0])?;
             let parsed = DateTime::parse_from_rfc3339(&s)
                 .ok()
                 .map(|dt| dt.with_timezone(&Utc))
-                .map(|dt| engine.heap().alloc_datetime(dt))
+                .map(|dt| engine.heap.alloc_datetime(dt))
                 .transpose()?;
-            option_from_pointer(engine.heap(), parsed)
+            option_from_pointer(&engine.heap, parsed)
         })?;
     }
 
@@ -1363,7 +1362,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     //
     // Used by `std.json` to implement `Pretty Value` (JSON-encoded string).
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let string_ty = Type::con("string", 0);
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, string_ty));
@@ -1451,11 +1450,11 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         engine.export_native("prim_json_stringify", scheme, 1, move |engine, _, args| {
-            let value = engine.heap().get(&args[0])?;
-            let Some(json) = to_serde_json(engine.heap(), value.as_ref(), &tags) else {
-                return engine.heap().alloc_string("<non-std.json.Value>".into());
+            let value = engine.heap.get(&args[0])?;
+            let Some(json) = to_serde_json(&engine.heap, value.as_ref(), &tags) else {
+                return engine.heap.alloc_string("<non-std.json.Value>".into());
             };
-            engine.heap().alloc_string(json.to_string())
+            engine.heap.alloc_string(json.to_string())
         })?;
     }
 
@@ -1465,7 +1464,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     // qualified `std.json.Value` type. It's a primop, so we keep it minimal and
     // let `std.json.parse/from_string` wrap the string error into `DecodeError`.
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let string_ty = Type::con("string", 0);
         let result_con = Type::con("Result", 2);
@@ -1545,14 +1544,14 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         engine.export_native("prim_json_parse", scheme, 1, move |engine, _, args| {
-            let s = String::from_pointer(engine.heap(), &args[0])?;
+            let s = String::from_pointer(&engine.heap, &args[0])?;
             let parsed: serde_json::Value = match serde_json::from_str(&s) {
                 Ok(v) => v,
-                Err(e) => return result_err(engine.heap(), e.to_string()),
+                Err(e) => return result_err(&engine.heap, e.to_string()),
             };
-            match to_json_value(&parsed, &tags, engine.heap()) {
-                Ok(v) => result_ok(engine.heap(), v),
-                Err(err) => result_err(engine.heap(), err.to_string()),
+            match to_json_value(&parsed, &tags, &engine.heap) {
+                Ok(v) => result_ok(&engine.heap, v),
+                Err(err) => result_err(&engine.heap, err.to_string()),
             }
         })?;
     }
@@ -1564,8 +1563,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1584,18 +1583,18 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[1])?;
+                let values = expect_list(&engine.heap, &args[1])?;
                 let out = map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                list_from_pointers(engine.heap(), ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                list_from_pointers(&engine.heap, ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -1614,29 +1613,29 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[1])?;
+                let values = expect_array(&engine.heap, &args[1])?;
                 let out = map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                engine.heap().alloc_array(ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                engine.heap.alloc_array(ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, array_a));
         engine.export_native("prim_array_singleton", scheme, 1, |engine, _, args| {
             let ptr = args[0];
-            engine.heap().alloc_array(vec![ptr])
+            engine.heap.alloc_array(vec![ptr])
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -1656,14 +1655,14 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
                 let func = args[0];
-                match option_value(engine.heap(), &args[1])? {
+                match option_value(&engine.heap, &args[1])? {
                     Some(v) => {
                         let mapped =
                             invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&elem_ty))
                                 .await?;
-                        option_from_pointer(engine.heap(), Some(mapped))
+                        option_from_pointer(&engine.heap, Some(mapped))
                     }
-                    None => option_from_pointer(engine.heap(), None),
+                    None => option_from_pointer(&engine.heap, None),
                 }
             }
             .boxed()
@@ -1671,9 +1670,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
-        let e_tv = engine.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let e = Type::var(e_tv.clone());
@@ -1695,14 +1694,14 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (ok_ty, _err_ty) = result_types(&result_ty)?;
                 let func = args[0];
                 let result = args[1];
-                match result_value(engine.heap(), &result)? {
+                match result_value(&engine.heap, &result)? {
                     Ok(v) => {
                         let mapped =
                             invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&ok_ty))
                                 .await?;
-                        result_from_pointer(engine.heap(), Ok(mapped))
+                        result_from_pointer(&engine.heap, Ok(mapped))
                     }
-                    Err(e) => result_from_pointer(engine.heap(), Err(e)),
+                    Err(e) => result_from_pointer(&engine.heap, Err(e)),
                 }
             }
             .boxed()
@@ -1710,8 +1709,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1736,7 +1735,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[2])?;
+                let values = expect_list(&engine.heap, &args[2])?;
                 foldl_values(
                     engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
@@ -1747,8 +1746,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -1773,7 +1772,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[2])?;
+                let values = expect_array(&engine.heap, &args[2])?;
                 foldl_values(
                     engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
@@ -1784,8 +1783,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -1817,7 +1816,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     &acc_ty,
                     &elem_ty,
                     args[1],
-                    option_value(engine.heap(), &args[2])?.into_iter(),
+                    option_value(&engine.heap, &args[2])?.into_iter(),
                 )
                 .await
             }
@@ -1826,8 +1825,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1852,7 +1851,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[2])?;
+                let values = expect_list(&engine.heap, &args[2])?;
                 foldr_values(
                     engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
@@ -1863,8 +1862,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -1889,7 +1888,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[2])?;
+                let values = expect_array(&engine.heap, &args[2])?;
                 foldr_values(
                     engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
@@ -1900,8 +1899,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -1933,7 +1932,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     &acc_ty,
                     &elem_ty,
                     args[1],
-                    option_value(engine.heap(), &args[2])?.into_iter().collect(),
+                    option_value(&engine.heap, &args[2])?.into_iter().collect(),
                 )
                 .await
             }
@@ -1942,8 +1941,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1968,7 +1967,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[2])?;
+                let values = expect_list(&engine.heap, &args[2])?;
                 foldl_values(
                     engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
@@ -1979,8 +1978,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -2005,7 +2004,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     });
                 }
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[2])?;
+                let values = expect_array(&engine.heap, &args[2])?;
                 foldl_values(
                     engine, args[0], &func_ty, &acc_ty, &elem_ty, args[1], values,
                 )
@@ -2016,8 +2015,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -2049,7 +2048,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     &acc_ty,
                     &elem_ty,
                     args[1],
-                    option_value(engine.heap(), &args[2])?.into_iter(),
+                    option_value(&engine.heap, &args[2])?.into_iter(),
                 )
                 .await
             }
@@ -2058,7 +2057,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2075,17 +2074,17 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[1])?;
+                let values = expect_list(&engine.heap, &args[1])?;
                 let out = filter_values(engine, args[0], &func_ty, &elem_ty, values).await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                list_from_pointers(engine.heap(), ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                list_from_pointers(&engine.heap, ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2102,17 +2101,17 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[1])?;
+                let values = expect_array(&engine.heap, &args[1])?;
                 let out = filter_values(engine, args[0], &func_ty, &elem_ty, values).await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                engine.heap().alloc_array(ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                engine.heap.alloc_array(ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2130,18 +2129,18 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
                 let func = args[0];
-                match option_value(engine.heap(), &args[1])? {
+                match option_value(&engine.heap, &args[1])? {
                     Some(v) => {
                         let keep =
                             invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&elem_ty))
                                 .await?;
-                        if bool::from_pointer(engine.heap(), &keep)? {
+                        if bool::from_pointer(&engine.heap, &keep)? {
                             Ok(args[1])
                         } else {
-                            option_from_pointer(engine.heap(), None)
+                            option_from_pointer(&engine.heap, None)
                         }
                     }
-                    None => option_from_pointer(engine.heap(), None),
+                    None => option_from_pointer(&engine.heap, None),
                 }
             }
             .boxed()
@@ -2149,8 +2148,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -2169,18 +2168,18 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[1])?;
+                let values = expect_list(&engine.heap, &args[1])?;
                 let out = filter_map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                list_from_pointers(engine.heap(), ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                list_from_pointers(&engine.heap, ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -2199,18 +2198,18 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[1])?;
+                let values = expect_array(&engine.heap, &args[1])?;
                 let out = filter_map_values(engine, args[0], &func_ty, &elem_ty, values).await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                engine.heap().alloc_array(ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                engine.heap.alloc_array(ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -2230,14 +2229,14 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
                 let func = args[0];
-                match option_value(engine.heap(), &args[1])? {
+                match option_value(&engine.heap, &args[1])? {
                     Some(v) => {
                         let mapped =
                             invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&elem_ty))
                                 .await?;
                         Ok(mapped)
                     }
-                    None => option_from_pointer(engine.heap(), None),
+                    None => option_from_pointer(&engine.heap, None),
                 }
             }
             .boxed()
@@ -2245,8 +2244,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -2265,22 +2264,22 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(engine.heap(), &args[1])?;
+                let values = expect_list(&engine.heap, &args[1])?;
                 let out = flat_map_values(engine, args[0], &func_ty, &elem_ty, values, |v| {
-                    let mapped = engine.heap().get(v)?;
-                    list_to_vec(engine.heap(), mapped.as_ref())
+                    let mapped = engine.heap.get(v)?;
+                    list_to_vec(&engine.heap, mapped.as_ref())
                 })
                 .await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                list_from_pointers(engine.heap(), ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                list_from_pointers(&engine.heap, ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -2299,21 +2298,21 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(engine.heap(), &args[1])?;
+                let values = expect_array(&engine.heap, &args[1])?;
                 let out = flat_map_values(engine, args[0], &func_ty, &elem_ty, values, |v| {
-                    expect_array(engine.heap(), v)
+                    expect_array(&engine.heap, v)
                 })
                 .await?;
-                let ptrs = values_to_ptrs(engine.heap(), out)?;
-                engine.heap().alloc_array(ptrs)
+                let ptrs = values_to_ptrs(&engine.heap, out)?;
+                engine.heap.alloc_array(ptrs)
             }
             .boxed()
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -2333,11 +2332,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
                 let func = args[0];
-                match option_value(engine.heap(), &args[1])? {
+                match option_value(&engine.heap, &args[1])? {
                     Some(v) => {
                         invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&elem_ty)).await
                     }
-                    None => option_from_pointer(engine.heap(), None),
+                    None => option_from_pointer(&engine.heap, None),
                 }
             }
             .boxed()
@@ -2345,9 +2344,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
-        let e_tv = engine.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let e = Type::var(e_tv.clone());
@@ -2369,15 +2368,15 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (ok_ty, _err_ty) = result_types(&result_ty)?;
                 let func = args[0];
                 let result = args[1];
-                match result_value(engine.heap(), &result)? {
+                match result_value(&engine.heap, &result)? {
                     Ok(v) => {
                         let mapped =
                             invoke_pointer_fn(engine, func, v, Some(&func_ty), Some(&ok_ty))
                                 .await?;
-                        let _ = result_value(engine.heap(), &mapped)?;
+                        let _ = result_value(&engine.heap, &mapped)?;
                         Ok(mapped)
                     }
-                    Err(e) => result_from_pointer(engine.heap(), Err(e)),
+                    Err(e) => result_from_pointer(&engine.heap, Err(e)),
                 }
             }
             .boxed()
@@ -2385,7 +2384,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2401,7 +2400,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
-                if !expect_list(engine.heap(), &args[1])?.is_empty() {
+                if !expect_list(&engine.heap, &args[1])?.is_empty() {
                     return Ok(args[1]);
                 }
                 let func = args[0];
@@ -2413,7 +2412,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2429,7 +2428,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
-                if !expect_array(engine.heap(), &args[1])?.is_empty() {
+                if !expect_array(&engine.heap, &args[1])?.is_empty() {
                     return Ok(args[1]);
                 }
                 let func = args[0];
@@ -2441,7 +2440,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2457,7 +2456,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
-                if option_value(engine.heap(), &args[1])?.is_some() {
+                if option_value(&engine.heap, &args[1])?.is_some() {
                     return Ok(args[1]);
                 }
                 let func = args[0];
@@ -2469,8 +2468,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let e_tv = engine.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
         let a = Type::var(a_tv.clone());
         let e = Type::var(e_tv.clone());
         let result_a = Type::result(a.clone(), e.clone());
@@ -2488,7 +2487,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let result_ty = arg_tys[1].clone();
                 let result = args[1];
-                if result_value(engine.heap(), &result)?.is_err() {
+                if result_value(&engine.heap, &result)?.is_err() {
                     let func = args[0];
                     invoke_pointer_fn(engine, func, result, Some(&func_ty), Some(&result_ty)).await
                 } else {
@@ -2500,7 +2499,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2513,7 +2512,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
                 let list_ty = arg_tys[0].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let mut values = expect_list(engine.heap(), &args[0])?;
+                let mut values = expect_list(&engine.heap, &args[0])?;
                 if values.is_empty() {
                     return engine.resolve_global(&sym("zero"), &elem_ty).await;
                 }
@@ -2528,7 +2527,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2541,7 +2540,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
                 let array_ty = arg_tys[0].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
-                let mut values = expect_array(engine.heap(), &args[0])?;
+                let mut values = expect_array(&engine.heap, &args[0])?;
                 if values.is_empty() {
                     return engine.resolve_global(&sym("zero"), &elem_ty).await;
                 }
@@ -2556,7 +2555,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2569,7 +2568,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
                 let opt_ty = arg_tys[0].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                match option_value(engine.heap(), &args[0])? {
+                match option_value(&engine.heap, &args[0])? {
                     Some(v) => Ok(v),
                     None => engine.resolve_global(&sym("zero"), &elem_ty).await,
                 }
@@ -2579,7 +2578,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2592,7 +2591,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
                 let list_ty = arg_tys[0].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let mut values = expect_list(engine.heap(), &args[0])?;
+                let mut values = expect_list(&engine.heap, &args[0])?;
                 let len = values.len();
                 if len == 0 {
                     return Err(EngineError::EmptySequence);
@@ -2605,7 +2604,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let acc0 = values.remove(0);
                 let acc =
                     foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc0, values).await?;
-                let len_val = len_value_for_type(engine.heap(), &elem_ty, len)?;
+                let len_val = len_value_for_type(&engine.heap, &elem_ty, len)?;
                 let div_step =
                     invoke_pointer_fn(engine, div, acc, Some(&plus_ty), Some(&elem_ty)).await?;
                 invoke_pointer_fn(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty)).await
@@ -2615,7 +2614,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2628,7 +2627,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
                 let array_ty = arg_tys[0].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
-                let mut values = expect_array(engine.heap(), &args[0])?;
+                let mut values = expect_array(&engine.heap, &args[0])?;
                 let len = values.len();
                 if len == 0 {
                     return Err(EngineError::EmptySequence);
@@ -2641,7 +2640,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let acc0 = values.remove(0);
                 let acc =
                     foldl_values(engine, plus, &plus_ty, &elem_ty, &elem_ty, acc0, values).await?;
-                let len_val = len_value_for_type(engine.heap(), &elem_ty, len)?;
+                let len_val = len_value_for_type(&engine.heap, &elem_ty, len)?;
                 let div_step =
                     invoke_pointer_fn(engine, div, acc, Some(&plus_ty), Some(&elem_ty)).await?;
                 invoke_pointer_fn(engine, div_step, len_val, Some(&step_ty), Some(&elem_ty)).await
@@ -2651,7 +2650,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2664,9 +2663,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
                 let opt_ty = arg_tys[0].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                match option_value(engine.heap(), &args[0])? {
+                match option_value(&engine.heap, &args[0])? {
                     Some(v) => {
-                        let len_val = len_value_for_type(engine.heap(), &elem_ty, 1)?;
+                        let len_val = len_value_for_type(&engine.heap, &elem_ty, 1)?;
                         let div = resolve_binary_op(engine, "/", &elem_ty).await?;
                         let div_ty =
                             Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
@@ -2685,7 +2684,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2695,13 +2694,13 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
-                .heap()
-                .alloc_i32(expect_list(engine.heap(), &args[0])?.len() as i32)
+                .heap
+                .alloc_i32(expect_list(&engine.heap, &args[0])?.len() as i32)
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2711,13 +2710,13 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
-                .heap()
-                .alloc_i32(expect_array(engine.heap(), &args[0])?.len() as i32)
+                .heap
+                .alloc_i32(expect_array(&engine.heap, &args[0])?.len() as i32)
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2727,13 +2726,13 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
-                .heap()
-                .alloc_i32(option_value(engine.heap(), &args[0])?.is_some() as i32)
+                .heap
+                .alloc_i32(option_value(&engine.heap, &args[0])?.is_some() as i32)
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2743,15 +2742,15 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
+            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_list(engine.heap(), &args[1])?;
-            list_from_pointers(engine.heap(), xs.into_iter().take(n).collect())
+            let xs = expect_list(&engine.heap, &args[1])?;
+            list_from_pointers(&engine.heap, xs.into_iter().take(n).collect())
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2761,16 +2760,16 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
+            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_array(engine.heap(), &args[1])?;
-            let ptrs = values_to_ptrs(engine.heap(), xs.into_iter().take(n).collect())?;
-            engine.heap().alloc_array(ptrs)
+            let xs = expect_array(&engine.heap, &args[1])?;
+            let ptrs = values_to_ptrs(&engine.heap, xs.into_iter().take(n).collect())?;
+            engine.heap.alloc_array(ptrs)
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2780,15 +2779,15 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
+            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_list(engine.heap(), &args[1])?;
-            list_from_pointers(engine.heap(), xs.into_iter().skip(n).collect())
+            let xs = expect_list(&engine.heap, &args[1])?;
+            list_from_pointers(&engine.heap, xs.into_iter().skip(n).collect())
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2798,16 +2797,16 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
+            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_array(engine.heap(), &args[1])?;
-            let ptrs = values_to_ptrs(engine.heap(), xs.into_iter().skip(n).collect())?;
-            engine.heap().alloc_array(ptrs)
+            let xs = expect_array(&engine.heap, &args[1])?;
+            let ptrs = values_to_ptrs(&engine.heap, xs.into_iter().skip(n).collect())?;
+            engine.heap.alloc_array(ptrs)
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2820,15 +2819,15 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty)?;
             let idx_ptr = args[0];
-            let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
-            let xs = expect_list(engine.heap(), &args[1])?;
+            let idx = i32::from_pointer(&engine.heap, &idx_ptr)?;
+            let xs = expect_list(&engine.heap, &args[1])?;
             let idx = checked_index(sym("prim_get"), idx, xs.len())?;
             Ok(xs[idx])
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2841,15 +2840,15 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let array_ty = arg_tys[1].clone();
             let _elem_ty = array_elem_type(&array_ty)?;
             let idx_ptr = args[0];
-            let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
-            let xs = expect_array(engine.heap(), &args[1])?;
+            let idx = i32::from_pointer(&engine.heap, &idx_ptr)?;
+            let xs = expect_array(&engine.heap, &args[1])?;
             let idx = checked_index(sym("prim_get"), idx, xs.len())?;
             Ok(xs[idx])
         })?;
     }
 
     for size in 2..=32 {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let tuple = Type::tuple(vec![a.clone(); size]);
         let scheme = Scheme::new(
@@ -2862,9 +2861,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let tuple_ty = arg_tys[1].clone();
             let _elem_ty = tuple_elem_type(&tuple_ty)?;
             let idx_ptr = args[0];
-            let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
+            let idx = i32::from_pointer(&engine.heap, &idx_ptr)?;
             let idx_usize = checked_index(sym("prim_get"), idx, size)?;
-            let xs = engine.heap().pointer_as_tuple(&args[1])?;
+            let xs = engine.heap.pointer_as_tuple(&args[1])?;
             if xs.len() != size {
                 return Err(EngineError::NativeType {
                     expected: format!("tuple{}", size),
@@ -2876,8 +2875,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -2889,16 +2888,16 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(list_a.clone(), Type::fun(list_b.clone(), list_pair)),
         );
         engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
-            let xs = expect_list(engine.heap(), &args[0])?;
-            let ys = expect_list(engine.heap(), &args[1])?;
-            let zipped = zip_tuple2(engine.heap(), xs, ys)?;
-            list_from_pointers(engine.heap(), zipped)
+            let xs = expect_list(&engine.heap, &args[0])?;
+            let ys = expect_list(&engine.heap, &args[1])?;
+            let zipped = zip_tuple2(&engine.heap, xs, ys)?;
+            list_from_pointers(&engine.heap, zipped)
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -2910,17 +2909,17 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(array_a.clone(), Type::fun(array_b.clone(), array_pair)),
         );
         engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
-            let xs = expect_array(engine.heap(), &args[0])?;
-            let ys = expect_array(engine.heap(), &args[1])?;
-            let zipped = zip_tuple2(engine.heap(), xs, ys)?;
-            let ptrs = values_to_ptrs(engine.heap(), zipped)?;
-            engine.heap().alloc_array(ptrs)
+            let xs = expect_array(&engine.heap, &args[0])?;
+            let ys = expect_array(&engine.heap, &args[1])?;
+            let zipped = zip_tuple2(&engine.heap, xs, ys)?;
+            let ptrs = values_to_ptrs(&engine.heap, zipped)?;
+            engine.heap.alloc_array(ptrs)
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_pair = Type::list(Type::tuple(vec![a.clone(), b.clone()]));
@@ -2932,17 +2931,17 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(list_pair.clone(), Type::tuple(vec![list_a, list_b])),
         );
         engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
-            let pairs = expect_list(engine.heap(), &args[0])?;
-            let (left, right) = unzip_tuple2(engine.heap(), pairs)?;
-            let left = list_from_pointers(engine.heap(), left)?;
-            let right = list_from_pointers(engine.heap(), right)?;
-            engine.heap().alloc_tuple(vec![left, right])
+            let pairs = expect_list(&engine.heap, &args[0])?;
+            let (left, right) = unzip_tuple2(&engine.heap, pairs)?;
+            let left = list_from_pointers(&engine.heap, left)?;
+            let right = list_from_pointers(&engine.heap, right)?;
+            engine.heap.alloc_tuple(vec![left, right])
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
-        let b_tv = engine.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_pair = Type::array(Type::tuple(vec![a.clone(), b.clone()]));
@@ -2954,20 +2953,20 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(array_pair.clone(), Type::tuple(vec![array_a, array_b])),
         );
         engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
-            let pairs = expect_array(engine.heap(), &args[0])?;
-            let (left, right) = unzip_tuple2(engine.heap(), pairs)?;
+            let pairs = expect_array(&engine.heap, &args[0])?;
+            let (left, right) = unzip_tuple2(&engine.heap, pairs)?;
             let left = engine
-                .heap()
-                .alloc_array(values_to_ptrs(engine.heap(), left)?)?;
+                .heap
+                .alloc_array(values_to_ptrs(&engine.heap, left)?)?;
             let right = engine
-                .heap()
-                .alloc_array(values_to_ptrs(engine.heap(), right)?)?;
-            engine.heap().alloc_tuple(vec![left, right])
+                .heap
+                .alloc_array(values_to_ptrs(&engine.heap, right)?)?;
+            engine.heap.alloc_tuple(vec![left, right])
         })?;
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2979,10 +2978,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let list = engine.heap().get(&args[0])?;
-            let values = list_to_vec(engine.heap(), list.as_ref())?;
+            let list = engine.heap.get(&args[0])?;
+            let values = list_to_vec(&engine.heap, list.as_ref())?;
             extremum_by_type(
-                engine.heap(),
+                &engine.heap,
                 "min",
                 &elem_ty,
                 values,
@@ -2992,7 +2991,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -3004,9 +3003,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[0])?;
+            let values = expect_array(&engine.heap, &args[0])?;
             extremum_by_type(
-                engine.heap(),
+                &engine.heap,
                 "min",
                 &elem_ty,
                 values,
@@ -3016,7 +3015,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -3028,7 +3027,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let _elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(engine.heap(), &args[0])? {
+            match option_value(&engine.heap, &args[0])? {
                 Some(v) => Ok(v),
                 None => Err(EngineError::EmptySequence),
             }
@@ -3036,7 +3035,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -3048,10 +3047,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let list = engine.heap().get(&args[0])?;
-            let values = list_to_vec(engine.heap(), list.as_ref())?;
+            let list = engine.heap.get(&args[0])?;
+            let values = list_to_vec(&engine.heap, list.as_ref())?;
             extremum_by_type(
-                engine.heap(),
+                &engine.heap,
                 "max",
                 &elem_ty,
                 values,
@@ -3061,7 +3060,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -3073,9 +3072,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(engine.heap(), &args[0])?;
+            let values = expect_array(&engine.heap, &args[0])?;
             extremum_by_type(
-                engine.heap(),
+                &engine.heap,
                 "max",
                 &elem_ty,
                 values,
@@ -3085,7 +3084,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -3097,7 +3096,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let _elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(engine.heap(), &args[0])? {
+            match option_value(&engine.heap, &args[0])? {
                 Some(v) => Ok(v),
                 None => Err(EngineError::EmptySequence),
             }
@@ -3114,30 +3113,30 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
     let is_some_scheme = engine.lookup_scheme(&is_some)?;
     engine.export_native("is_some", is_some_scheme, 1, |engine, _, args| {
         engine
-            .heap()
-            .alloc_bool(option_value(engine.heap(), &args[0])?.is_some())
+            .heap
+            .alloc_bool(option_value(&engine.heap, &args[0])?.is_some())
     })?;
     let is_none = sym("is_none");
     let is_none_scheme = engine.lookup_scheme(&is_none)?;
     engine.export_native("is_none", is_none_scheme, 1, |engine, _, args| {
         engine
-            .heap()
-            .alloc_bool(option_value(engine.heap(), &args[0])?.is_none())
+            .heap
+            .alloc_bool(option_value(&engine.heap, &args[0])?.is_none())
     })?;
 
     let is_ok = sym("is_ok");
     let is_ok_scheme = engine.lookup_scheme(&is_ok)?;
     engine.export_native("is_ok", is_ok_scheme, 1, |engine, _, args| {
         engine
-            .heap()
-            .alloc_bool(result_value(engine.heap(), &args[0])?.is_ok())
+            .heap
+            .alloc_bool(result_value(&engine.heap, &args[0])?.is_ok())
     })?;
     let is_err = sym("is_err");
     let is_err_scheme = engine.lookup_scheme(&is_err)?;
     engine.export_native("is_err", is_err_scheme, 1, |engine, _, args| {
         engine
-            .heap()
-            .alloc_bool(result_value(engine.heap(), &args[0])?.is_err())
+            .heap
+            .alloc_bool(result_value(&engine.heap, &args[0])?.is_err())
     })?;
     Ok(())
 }

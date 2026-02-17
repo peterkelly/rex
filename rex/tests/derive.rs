@@ -135,10 +135,10 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
     let (v_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
 
     let actual_rex = rex_to_json(
-        engine.heap(),
+        &engine.heap,
         &v_ptr,
         &ty,
-        engine.type_system(),
+        &engine.type_system,
         &JsonOptions::default(),
     )
     .unwrap();
@@ -226,7 +226,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     let expected_ty = Type::tuple(vec![Maybe::<i32>::rex_type(), Maybe::<bool>::rex_type()]);
     assert_eq!(ty, expected_ty);
     let v = engine
-        .heap()
+        .heap
         .get(&v_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -234,16 +234,16 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     let Value::Tuple(items) = v else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&v_ptr).unwrap()
+            engine.heap.type_name(&v_ptr).unwrap()
         );
     };
     assert_eq!(items.len(), 2);
     assert_eq!(
-        Maybe::<i32>::from_pointer(engine.heap(), &items[0]).unwrap(),
+        Maybe::<i32>::from_pointer(&engine.heap, &items[0]).unwrap(),
         Maybe::Just(1)
     );
     assert_eq!(
-        Maybe::<bool>::from_pointer(engine.heap(), &items[1]).unwrap(),
+        Maybe::<bool>::from_pointer(&engine.heap, &items[1]).unwrap(),
         Maybe::Just(true)
     );
 }
@@ -287,7 +287,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let mut gas = GasMeter::default();
     let (v_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(ty, MyStruct::rex_type());
-    let bumped = MyStruct::from_pointer(engine.heap(), &v_ptr).unwrap();
+    let bumped = MyStruct::from_pointer(&engine.heap, &v_ptr).unwrap();
     assert_eq!(bumped.y, 43);
 
     engine
@@ -309,7 +309,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(ty, Type::con("i32", 0));
-    let heap = engine.heap();
+    let heap = &engine.heap;
     assert_pointer_eq!(heap, v, heap.alloc_i32(100).unwrap());
 }
 
@@ -336,7 +336,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let mut gas = GasMeter::default();
     let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(ty, Type::con("i32", 0));
-    let heap = engine.heap();
+    let heap = &engine.heap;
     assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
 }
 
@@ -364,27 +364,27 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
         Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
     );
     let v = engine
-        .heap()
+        .heap
         .get(&v_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
     let Value::Tuple(items) = v else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&v_ptr).unwrap()
+            engine.heap.type_name(&v_ptr).unwrap()
         );
     };
     let items = items
         .into_iter()
         .map(|item| {
             engine
-                .heap()
+                .heap
                 .get(&item)
                 .map(|value| value.as_ref().clone())
                 .unwrap()
         })
         .collect::<Vec<_>>();
-    let heap = engine.heap();
+    let heap = &engine.heap;
     assert_pointer_eq!(
         heap,
         heap.alloc_value(items[0].clone()).unwrap(),

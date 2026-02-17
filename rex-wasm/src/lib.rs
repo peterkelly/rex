@@ -99,7 +99,7 @@ fn engine_type_diagnostics_json(source: &str) -> Vec<serde_json::Value> {
         Ok(engine) => engine,
         Err(err) => return vec![diagnostic_json(None, format!("engine init error: {err}"))],
     };
-    engine.set_type_system_limits(TypeSystemLimits::unlimited());
+    engine.type_system.set_limits(TypeSystemLimits::unlimited());
     let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
 
     match engine.infer_snippet(source, &mut gas) {
@@ -197,7 +197,9 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
     let _ = parse_program_with_limits(source, &mut gas, ParserLimits::unlimited())?;
 
     let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-    engine.set_type_system_limits(rex_ts::TypeSystemLimits::unlimited());
+    engine
+        .type_system
+        .set_limits(rex_ts::TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
     let (value_ptr, _value_ty) = engine
@@ -206,11 +208,11 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
         .map_err(|e| format!("runtime error: {e}"))?;
 
     let value_ref = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map_err(|e| format!("heap error: {e}"))?;
     value_display_with(
-        engine.heap(),
+        &engine.heap,
         value_ref.as_ref(),
         ValueDisplayOptions::docs(),
     )
@@ -306,11 +308,11 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
             .await
             .map_err(|e| format!("runtime error: {e}"))?;
         let value_ref = engine
-            .heap()
+            .heap
             .get(&value_ptr)
             .map_err(|e| format!("heap error: {e}"))?;
         let rendered = value_display_with(
-            engine.heap(),
+            &engine.heap,
             value_ref.as_ref(),
             ValueDisplayOptions::unsanitized(),
         )

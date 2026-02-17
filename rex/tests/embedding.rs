@@ -66,12 +66,12 @@ async fn injected_functions_can_read_shared_state_fields() {
         ])
     );
 
-    let items = engine.heap().pointer_as_tuple(&value).unwrap();
+    let items = engine.heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 4);
-    assert_eq!(engine.heap().pointer_as_string(&items[0]).unwrap(), "u-123");
-    assert!(engine.heap().pointer_as_bool(&items[1]).unwrap());
-    assert!(engine.heap().pointer_as_bool(&items[2]).unwrap());
-    assert!(!engine.heap().pointer_as_bool(&items[3]).unwrap());
+    assert_eq!(engine.heap.pointer_as_string(&items[0]).unwrap(), "u-123");
+    assert!(engine.heap.pointer_as_bool(&items[1]).unwrap());
+    assert!(engine.heap.pointer_as_bool(&items[2]).unwrap());
+    assert!(!engine.heap.pointer_as_bool(&items[3]).unwrap());
 }
 
 #[tokio::test]
@@ -97,10 +97,10 @@ async fn async_injected_functions_can_read_shared_state_fields() {
         Type::tuple(vec![Type::con("bool", 0), Type::con("bool", 0)])
     );
 
-    let items = engine.heap().pointer_as_tuple(&value).unwrap();
+    let items = engine.heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 2);
-    assert!(engine.heap().pointer_as_bool(&items[0]).unwrap());
-    assert!(!engine.heap().pointer_as_bool(&items[1]).unwrap());
+    assert!(engine.heap.pointer_as_bool(&items[0]).unwrap());
+    assert!(!engine.heap.pointer_as_bool(&items[1]).unwrap());
 }
 
 #[tokio::test]
@@ -173,18 +173,18 @@ async fn overloaded_exports_types_and_values() {
     let (value, ty) = value.unwrap();
     assert_eq!(ty, expected);
 
-    let items = engine.heap().pointer_as_tuple(&value).unwrap();
+    let items = engine.heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 6);
-    assert_eq!(engine.heap().pointer_as_i32(&items[0]).unwrap(), 42);
+    assert_eq!(engine.heap.pointer_as_i32(&items[0]).unwrap(), 42);
     assert_eq!(
-        engine.heap().pointer_as_string(&items[1]).unwrap(),
+        engine.heap.pointer_as_string(&items[1]).unwrap(),
         "bool:true"
     );
-    assert!(!engine.heap().pointer_as_bool(&items[2]).unwrap());
-    assert_eq!(engine.heap().pointer_as_i32(&items[3]).unwrap(), 6);
-    assert!(engine.heap().pointer_as_bool(&items[4]).unwrap());
+    assert!(!engine.heap.pointer_as_bool(&items[2]).unwrap());
+    assert_eq!(engine.heap.pointer_as_i32(&items[3]).unwrap(), 6);
+    assert!(engine.heap.pointer_as_bool(&items[4]).unwrap());
     assert_eq!(
-        engine.heap().pointer_as_string(&items[5]).unwrap(),
+        engine.heap.pointer_as_string(&items[5]).unwrap(),
         "records:1:2:3"
     );
 }
@@ -265,18 +265,18 @@ async fn overloaded_async_exports_types_and_values() {
     let (value, ty) = value.unwrap();
     assert_eq!(ty, expected);
 
-    let items = engine.heap().pointer_as_tuple(&value).unwrap();
+    let items = engine.heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 6);
-    assert_eq!(engine.heap().pointer_as_i32(&items[0]).unwrap(), 42);
+    assert_eq!(engine.heap.pointer_as_i32(&items[0]).unwrap(), 42);
     assert_eq!(
-        engine.heap().pointer_as_string(&items[1]).unwrap(),
+        engine.heap.pointer_as_string(&items[1]).unwrap(),
         "bool:true"
     );
-    assert!(!engine.heap().pointer_as_bool(&items[2]).unwrap());
-    assert_eq!(engine.heap().pointer_as_i32(&items[3]).unwrap(), 6);
-    assert!(engine.heap().pointer_as_bool(&items[4]).unwrap());
+    assert!(!engine.heap.pointer_as_bool(&items[2]).unwrap());
+    assert_eq!(engine.heap.pointer_as_i32(&items[3]).unwrap(), 6);
+    assert!(engine.heap.pointer_as_bool(&items[4]).unwrap());
     assert_eq!(
-        engine.heap().pointer_as_string(&items[5]).unwrap(),
+        engine.heap.pointer_as_string(&items[5]).unwrap(),
         "records:1:2:3"
     );
 }

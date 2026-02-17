@@ -327,11 +327,11 @@ async fn repl_loop(
         {
             Ok((v, _)) => {
                 let rendered = engine
-                    .heap()
+                    .heap
                     .get(&v)
                     .and_then(|value| {
                         value_display_with(
-                            engine.heap(),
+                            &engine.heap,
                             value.as_ref(),
                             ValueDisplayOptions::unsanitized(),
                         )
@@ -440,11 +440,11 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
             .map_err(|e| format!("{e}"))?
     };
     let rendered = engine
-        .heap()
+        .heap
         .get(&pointer)
         .and_then(|value| {
             value_display_with(
-                engine.heap(),
+                &engine.heap,
                 value.as_ref(),
                 ValueDisplayOptions::unsanitized(),
             )

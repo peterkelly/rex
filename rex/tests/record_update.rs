@@ -29,7 +29,7 @@ async fn record_update_end_to_end() {
         rex::Type::tuple(vec![rex::Type::con("i32", 0), rex::Type::con("i32", 0)])
     );
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -37,25 +37,25 @@ async fn record_update_end_to_end() {
     let rex_engine::Value::Tuple(items) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     assert_eq!(items.len(), 2);
 
     let a_ptr = &items[0];
-    let a_value = engine.heap().get(a_ptr).unwrap();
+    let a_value = engine.heap.get(a_ptr).unwrap();
     let rex_engine::Value::I32(a) = a_value.as_ref() else {
         panic!(
             "expected i32, got {}",
-            engine.heap().type_name(a_ptr).unwrap()
+            engine.heap.type_name(a_ptr).unwrap()
         );
     };
     let b_ptr = &items[1];
-    let b_value = engine.heap().get(b_ptr).unwrap();
+    let b_value = engine.heap.get(b_ptr).unwrap();
     let rex_engine::Value::I32(b) = b_value.as_ref() else {
         panic!(
             "expected i32, got {}",
-            engine.heap().type_name(b_ptr).unwrap()
+            engine.heap.type_name(b_ptr).unwrap()
         );
     };
     assert_eq!(*a, 6);

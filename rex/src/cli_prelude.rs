@@ -160,7 +160,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let fd = i32::from_pointer(engine.heap(), &args[0])?;
+                let fd = i32::from_pointer(&engine.heap, &args[0])?;
 
                 if fd != 0 {
                     return Err(EngineError::Internal(format!(
@@ -172,7 +172,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 io::stdin()
                     .read_to_end(&mut buf)
                     .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
-                bytes_to_array_u8(engine.heap(), buf)
+                bytes_to_array_u8(&engine.heap, buf)
             })
         },
     )?;
@@ -196,8 +196,8 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let fd = i32::from_pointer(engine.heap(), &args[0])?;
-                let bytes = array_u8_to_bytes(engine.heap(), &args[1])?;
+                let fd = i32::from_pointer(&engine.heap, &args[0])?;
+                let bytes = array_u8_to_bytes(&engine.heap, &args[1])?;
 
                 match fd {
                     1 => {
@@ -219,7 +219,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     }
                 }
 
-                unit_pointer(engine.heap())
+                unit_pointer(&engine.heap)
             })
         },
     )?;
@@ -257,22 +257,22 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let map = engine.heap().pointer_as_dict(&args[0])?;
+                let map = engine.heap.pointer_as_dict(&args[0])?;
 
                 let cmd_pointer = map
                     .get(&sym("cmd"))
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("spawn missing `cmd`".into()))?;
-                let cmd = String::from_pointer(engine.heap(), &cmd_pointer)?;
+                let cmd = String::from_pointer(&engine.heap, &cmd_pointer)?;
 
                 let args_pointer = map
                     .get(&sym("args"))
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("spawn missing `args`".into()))?;
-                let args_list = list_to_vec(engine.heap(), &args_pointer)?;
+                let args_list = list_to_vec(&engine.heap, &args_pointer)?;
                 let mut args_vec = Vec::with_capacity(args_list.len());
                 for arg in args_list {
-                    args_vec.push(String::from_pointer(engine.heap(), &arg)?);
+                    args_vec.push(String::from_pointer(&engine.heap, &arg)?);
                 }
 
                 let mut child = Command::new(cmd)
@@ -347,9 +347,9 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     .insert(id, entry);
 
                 let mut payload = BTreeMap::new();
-                payload.insert(sym("id"), engine.heap().alloc_uuid(id)?);
-                let payload = engine.heap().alloc_dict(payload)?;
-                engine.heap().alloc_adt(subprocess_ctor, vec![payload])
+                payload.insert(sym("id"), engine.heap.alloc_uuid(id)?);
+                let payload = engine.heap.alloc_dict(payload)?;
+                engine.heap.alloc_adt(subprocess_ctor, vec![payload])
             })
         },
     )?;
@@ -371,11 +371,11 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
+                let id = subprocess_id(&engine.heap, &args[0], &subprocess_ctor)?;
                 let entry = subprocess_get(&id, wait_sym.as_ref())?;
 
                 if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
-                    return engine.heap().alloc_i32(code);
+                    return engine.heap.alloc_i32(code);
                 }
 
                 let status = {
@@ -417,7 +417,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     let _ = handle.join();
                 }
 
-                engine.heap().alloc_i32(code)
+                engine.heap.alloc_i32(code)
             })
         },
     )?;
@@ -443,10 +443,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
+                let id = subprocess_id(&engine.heap, &args[0], &subprocess_ctor)?;
                 let entry = subprocess_get(&id, stdout_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stdout, "std.process.stdout buffer")?.clone();
-                bytes_to_array_u8(engine.heap(), bytes)
+                bytes_to_array_u8(&engine.heap, bytes)
             })
         },
     )?;
@@ -472,10 +472,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                         got: args.len(),
                     });
                 }
-                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
+                let id = subprocess_id(&engine.heap, &args[0], &subprocess_ctor)?;
                 let entry = subprocess_get(&id, stderr_sym.as_ref())?;
                 let bytes = lock_arc_mutex(&entry.stderr, "std.process.stderr buffer")?.clone();
-                bytes_to_array_u8(engine.heap(), bytes)
+                bytes_to_array_u8(&engine.heap, bytes)
             })
         },
     )?;
@@ -564,7 +564,7 @@ mod tests {
             ])
         );
         let value = engine
-            .heap()
+            .heap
             .get(&value)
             .map(|value| value.as_ref().clone())
             .unwrap();
@@ -572,13 +572,13 @@ mod tests {
             panic!("expected tuple");
         };
         assert_pointer_eq!(
-            engine.heap(),
+            &engine.heap,
             xs[0].clone(),
-            engine.heap().alloc_i32(0).unwrap()
+            engine.heap.alloc_i32(0).unwrap()
         );
 
         let Value::Array(out) = engine
-            .heap()
+            .heap
             .get(&xs[1])
             .map(|value| value.as_ref().clone())
             .unwrap()
@@ -589,7 +589,7 @@ mod tests {
             .iter()
             .map(|v| {
                 match engine
-                    .heap()
+                    .heap
                     .get(v)
                     .map(|value| value.as_ref().clone())
                     .unwrap()
@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(got, b"hi");
 
         let Value::Array(err) = engine
-            .heap()
+            .heap
             .get(&xs[2])
             .map(|value| value.as_ref().clone())
             .unwrap()

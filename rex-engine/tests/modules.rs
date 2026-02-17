@@ -82,7 +82,7 @@ macro_rules! pvals {
                 (
                     pointer.clone(),
                     $engine
-                        .heap()
+                        .heap
                         .get(pointer)
                         .map(|value| value.as_ref().clone())
                         .unwrap(),
@@ -119,7 +119,7 @@ async fn module_import_local_pub() {
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::con("i32", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -127,7 +127,7 @@ async fn module_import_local_pub() {
         Value::I32(v) => assert_eq!(v, 3),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
 }
@@ -160,7 +160,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
     .unwrap();
     assert_eq!(ty, Type::con("i32", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -168,7 +168,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
         Value::I32(v) => assert_eq!(v, 41),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
 }
@@ -197,7 +197,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "heap_i32",
             i32_value_scheme(),
             0,
-            |engine: &Engine<bool>, _: &Type, _args| engine.heap().alloc_i32(123),
+            |engine: &Engine<bool>, _: &Type, _args| engine.heap.alloc_i32(123),
         )
         .unwrap();
 
@@ -238,11 +238,11 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
         ])
     );
 
-    let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
+    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
     let Value::Tuple(xs) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let xs = pvals!(engine, xs);
@@ -252,7 +252,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             Value::I32(n) => n,
             _ => panic!(
                 "expected i32, got {}",
-                engine.heap().type_name(&pointer).unwrap()
+                engine.heap.type_name(&pointer).unwrap()
             ),
         })
         .collect();
@@ -284,11 +284,11 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
         Type::tuple(vec![Type::con("i32", 0), Type::con("string", 0)])
     );
 
-    let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
+    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
     let Value::Tuple(xs) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let xs = pvals!(engine, xs);
@@ -297,14 +297,14 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
         Value::I32(n) => assert_eq!(*n, 7),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&xs[0].0).unwrap()
+            engine.heap.type_name(&xs[0].0).unwrap()
         ),
     }
     match &xs[1].1 {
         Value::String(s) => assert_eq!(s, "ok"),
         _ => panic!(
             "expected string, got {}",
-            engine.heap().type_name(&xs[1].0).unwrap()
+            engine.heap.type_name(&xs[1].0).unwrap()
         ),
     }
 }
@@ -337,7 +337,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             i32_value_scheme(),
             0,
             |engine: &Engine<bool>, _: Type, _args: Vec<Pointer>| {
-                async move { engine.heap().alloc_i32(77) }.boxed()
+                async move { engine.heap.alloc_i32(77) }.boxed()
             },
         )
         .unwrap();
@@ -384,11 +384,11 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
         ])
     );
 
-    let value = engine.heap().get(&value_ptr).unwrap().as_ref().clone();
+    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
     let Value::Tuple(xs) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let xs = pvals!(engine, xs);
@@ -398,7 +398,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             Value::I32(n) => n,
             _ => panic!(
                 "expected i32, got {}",
-                engine.heap().type_name(&pointer).unwrap()
+                engine.heap.type_name(&pointer).unwrap()
             ),
         })
         .collect();
@@ -475,7 +475,7 @@ async fn module_injected_from_rust_wildcard_import() {
     .unwrap();
     assert_eq!(ty, Type::con("i32", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -483,7 +483,7 @@ async fn module_injected_from_rust_wildcard_import() {
         Value::I32(v) => assert_eq!(v, 32),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
 }
@@ -564,7 +564,7 @@ async fn module_import_include_roots() {
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::con("i32", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -572,7 +572,7 @@ async fn module_import_include_roots() {
         Value::I32(v) => assert_eq!(v, 42),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
 }
@@ -603,7 +603,7 @@ async fn snippet_can_import_with_explicit_base() {
     .unwrap();
     assert_eq!(ty, Type::con("i32", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -612,7 +612,7 @@ async fn snippet_can_import_with_explicit_base() {
         Value::I32(v) => assert_eq!(v, 42),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
 }
@@ -645,7 +645,7 @@ async fn module_import_wildcard_clause() {
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::con("i32", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -653,7 +653,7 @@ async fn module_import_wildcard_clause() {
         Value::I32(v) => assert_eq!(v, 32),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
 }
@@ -685,7 +685,7 @@ async fn module_import_selected_clause_with_alias() {
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::con("i32", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -693,7 +693,7 @@ async fn module_import_selected_clause_with_alias() {
         Value::I32(v) => assert_eq!(v, 32),
         _ => panic!(
             "expected i32, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
 }
@@ -898,7 +898,7 @@ async fn std_json_encode_decode_smoke() {
         ])
     );
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -906,7 +906,7 @@ async fn std_json_encode_decode_smoke() {
     let Value::Tuple(xs) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let xs = pvals!(engine, xs);
@@ -916,7 +916,7 @@ async fn std_json_encode_decode_smoke() {
             Value::I32(n) => n,
             _ => panic!(
                 "expected i32, got {}",
-                engine.heap().type_name(&pointer).unwrap()
+                engine.heap.type_name(&pointer).unwrap()
             ),
         })
         .collect();
@@ -963,7 +963,7 @@ async fn std_json_roundtrip_nested() {
         Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
     );
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -971,7 +971,7 @@ async fn std_json_roundtrip_nested() {
     let Value::Tuple(xs) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let xs = pvals!(engine, xs);
@@ -981,7 +981,7 @@ async fn std_json_roundtrip_nested() {
             Value::I32(n) => n,
             _ => panic!(
                 "expected i32, got {}",
-                engine.heap().type_name(&pointer).unwrap()
+                engine.heap.type_name(&pointer).unwrap()
             ),
         })
         .collect();
@@ -1039,7 +1039,7 @@ async fn std_json_decode_errors_have_useful_messages() {
         ])
     );
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -1047,7 +1047,7 @@ async fn std_json_decode_errors_have_useful_messages() {
     let Value::Tuple(parts) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let parts = pvals!(engine, parts);
@@ -1057,7 +1057,7 @@ async fn std_json_decode_errors_have_useful_messages() {
             Value::String(s) => s,
             _ => panic!(
                 "expected string, got {}",
-                engine.heap().type_name(&pointer).unwrap()
+                engine.heap.type_name(&pointer).unwrap()
             ),
         })
         .collect();
@@ -1098,7 +1098,7 @@ async fn std_json_numeric_decode_errors() {
         Type::tuple(vec![Type::con("string", 0), Type::con("string", 0)])
     );
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -1106,7 +1106,7 @@ async fn std_json_numeric_decode_errors() {
     let Value::Tuple(parts) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let parts = pvals!(engine, parts);
@@ -1116,7 +1116,7 @@ async fn std_json_numeric_decode_errors() {
             Value::String(s) => s,
             _ => panic!(
                 "expected string, got {}",
-                engine.heap().type_name(&pointer).unwrap()
+                engine.heap.type_name(&pointer).unwrap()
             ),
         })
         .collect();
@@ -1154,7 +1154,7 @@ async fn std_json_pretty_renders_valid_json() {
     .unwrap();
     assert_eq!(ty, Type::con("string", 0));
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -1162,7 +1162,7 @@ async fn std_json_pretty_renders_valid_json() {
     let Value::String(rendered) = value else {
         panic!(
             "expected string, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
 
@@ -1238,7 +1238,7 @@ async fn std_json_parse_and_from_string_roundtrip() {
         ])
     );
     let value = engine
-        .heap()
+        .heap
         .get(&value_ptr)
         .map(|value| value.as_ref().clone())
         .unwrap();
@@ -1246,7 +1246,7 @@ async fn std_json_parse_and_from_string_roundtrip() {
     let Value::Tuple(xs) = value else {
         panic!(
             "expected tuple, got {}",
-            engine.heap().type_name(&value_ptr).unwrap()
+            engine.heap.type_name(&value_ptr).unwrap()
         );
     };
     let xs = pvals!(engine, xs);
@@ -1256,7 +1256,7 @@ async fn std_json_parse_and_from_string_roundtrip() {
             Value::I32(n) => n,
             _ => panic!(
                 "expected i32, got {}",
-                engine.heap().type_name(&pointer).unwrap()
+                engine.heap.type_name(&pointer).unwrap()
             ),
         })
         .collect();

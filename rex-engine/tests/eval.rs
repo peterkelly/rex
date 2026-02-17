@@ -41,7 +41,7 @@ async fn eval_expr(
 macro_rules! pval {
     ($engine:expr, $ptr:expr) => {
         $engine
-            .heap()
+            .heap
             .get(&$ptr)
             .map(|value| value.as_ref().clone())
             .unwrap()
@@ -54,7 +54,7 @@ macro_rules! pvals {
             .iter()
             .map(|value| {
                 $engine
-                    .heap()
+                    .heap
                     .get(&value)
                     .map(|value| value.as_ref().clone())
                     .unwrap()
@@ -72,7 +72,7 @@ fn list_values(engine: &Engine, value: &Value) -> Vec<rex_engine::Pointer> {
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0]);
                 cur = engine
-                    .heap()
+                    .heap
                     .get(&args[1])
                     .map(|value| value.as_ref().clone())
                     .unwrap();
@@ -100,14 +100,14 @@ async fn eval_let_lambda() {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[0].clone()).unwrap(),
-                engine.heap().alloc_i32(1).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[0].clone()).unwrap(),
+                engine.heap.alloc_i32(1).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[1].clone()).unwrap(),
-                engine.heap().alloc_i32(2).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[1].clone()).unwrap(),
+                engine.heap.alloc_i32(2).unwrap()
             );
         }
         _ => panic!("expected tuple"),
@@ -123,7 +123,7 @@ async fn eval_native_injection() {
         .unwrap();
 
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(2).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
 }
 
 #[tokio::test]
@@ -339,19 +339,19 @@ fn eval_deep_list_does_not_overflow() {
                 let mut engine = Engine::with_prelude(()).unwrap();
                 let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
                 let xs = engine
-                    .heap()
+                    .heap
                     .get(&value)
                     .map(|value| list_values(&engine, value.as_ref()))
                     .unwrap();
                 assert_eq!(xs.len(), N);
-                let expected = engine.heap().alloc_i32(0).unwrap();
+                let expected = engine.heap.alloc_i32(0).unwrap();
                 assert_pointer_eq!(
-                    engine.heap(),
+                    &engine.heap,
                     xs.first().expect("list should be non-empty"),
                     expected
                 );
                 assert_pointer_eq!(
-                    engine.heap(),
+                    &engine.heap,
                     xs.last().expect("list should be non-empty"),
                     expected
                 );
@@ -367,7 +367,7 @@ async fn eval_type_annotation_let() {
     let expr = parse("let x: i32 = 42 in x");
     let mut engine = engine_with_arith();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(42).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
 }
 
 #[tokio::test]
@@ -376,9 +376,9 @@ async fn eval_type_annotation_is() {
     let mut engine = engine_with_arith();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(
-        engine.heap(),
+        &engine.heap,
         value,
-        engine.heap().alloc_string("hi".into()).unwrap()
+        engine.heap.alloc_string("hi".into()).unwrap()
     );
 }
 
@@ -406,7 +406,7 @@ async fn eval_record_update_single_variant_adt() {
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(6).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(6).unwrap());
 }
 
 #[tokio::test]
@@ -425,7 +425,7 @@ async fn eval_record_update_refined_by_match() {
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(2).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
 }
 
 #[tokio::test]
@@ -441,7 +441,7 @@ async fn eval_record_update_plain_record_type() {
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(9).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(9).unwrap());
 }
 
 #[tokio::test]
@@ -469,11 +469,11 @@ async fn eval_sync_native_injection() {
 
     let expr = parse("one + one");
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_u32(2).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_u32(2).unwrap());
 
     let expr = parse("zero");
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_u32(0).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_u32(0).unwrap());
 }
 
 #[tokio::test]
@@ -557,7 +557,7 @@ async fn eval_match_list() {
         "#,
     );
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(1).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
@@ -565,7 +565,7 @@ async fn eval_simple_addition() {
     let expr = parse("420 + 69");
     let mut engine = engine_with_arith();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(489).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(489).unwrap());
 }
 
 #[tokio::test]
@@ -573,7 +573,7 @@ async fn eval_simple_mod() {
     let expr = parse("10 % 3");
     let mut engine = engine_with_arith();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(1).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
@@ -582,11 +582,11 @@ async fn eval_get_list_and_tuple() {
 
     let expr = parse("get 1 [1, 2, 3]");
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(2).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
 
     let expr = parse("(1, 2, 3).2");
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
 }
 
 #[tokio::test]
@@ -613,7 +613,7 @@ async fn eval_let_id_nested() {
     );
     let mut engine = engine_with_arith();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(489).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(489).unwrap());
 }
 
 #[tokio::test]
@@ -628,7 +628,7 @@ async fn eval_higher_order_add() {
     );
     let mut engine = engine_with_arith();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(42).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
 }
 
 #[tokio::test]
@@ -650,14 +650,14 @@ async fn eval_match_dict_and_tuple() {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[0].clone()).unwrap(),
-                engine.heap().alloc_i32(2).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[0].clone()).unwrap(),
+                engine.heap.alloc_i32(2).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[1].clone()).unwrap(),
-                engine.heap().alloc_i32(3).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[1].clone()).unwrap(),
+                engine.heap.alloc_i32(3).unwrap()
             );
         }
         _ => panic!("expected tuple result"),
@@ -706,7 +706,7 @@ async fn eval_nested_match_list_sum() {
     );
     let mut engine = engine_with_arith();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
 }
 
 #[tokio::test]
@@ -769,7 +769,7 @@ async fn eval_user_adt_declaration() {
         }
     }
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(42).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
 }
 
 #[tokio::test]
@@ -788,7 +788,7 @@ async fn eval_fn_decl_simple() {
     }
     let expr = program.expr_with_fns();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
 }
 
 #[tokio::test]
@@ -807,7 +807,7 @@ async fn eval_fn_decl_with_where_constraints() {
     }
     let expr = program.expr_with_fns();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(3).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
 }
 
 #[tokio::test]
@@ -833,9 +833,9 @@ async fn eval_adt_record_projection_single_variant() {
         Value::Tuple(xs) => {
             let xs = pvals!(engine, xs);
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[0].clone()).unwrap(),
-                engine.heap().alloc_i32(1).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[0].clone()).unwrap(),
+                engine.heap.alloc_i32(1).unwrap()
             );
             match xs[1] {
                 Value::F32(v) => assert!((v - 2.0).abs() < 1e-3),
@@ -866,7 +866,7 @@ async fn eval_adt_record_projection_match_arm() {
         }
     }
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(engine.heap(), value, engine.heap().alloc_i32(1).unwrap());
+    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
@@ -891,16 +891,16 @@ async fn eval_list_map_fold_filter() {
             assert_eq!(xs.len(), 3);
             let vals = list_values(&engine, &xs[0]);
             assert_eq!(vals.len(), 3);
-            assert_pointer_eq!(engine.heap(), vals[0], engine.heap().alloc_i32(2).unwrap());
-            assert_pointer_eq!(engine.heap(), vals[1], engine.heap().alloc_i32(3).unwrap());
-            assert_pointer_eq!(engine.heap(), vals[2], engine.heap().alloc_i32(4).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(2).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[1], engine.heap.alloc_i32(3).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[2], engine.heap.alloc_i32(4).unwrap());
             let vals = list_values(&engine, &xs[1]);
             assert_eq!(vals.len(), 1);
-            assert_pointer_eq!(engine.heap(), vals[0], engine.heap().alloc_i32(2).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(2).unwrap());
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[2].clone()).unwrap(),
-                engine.heap().alloc_i32(6).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[2].clone()).unwrap(),
+                engine.heap.alloc_i32(6).unwrap()
             );
         }
         _ => panic!("expected tuple result"),
@@ -928,10 +928,10 @@ async fn eval_list_flat_map_zip_unzip() {
             assert_eq!(xs.len(), 2);
             let vals = list_values(&engine, &xs[0]);
             assert_eq!(vals.len(), 4);
-            assert_pointer_eq!(engine.heap(), vals[0], engine.heap().alloc_i32(1).unwrap());
-            assert_pointer_eq!(engine.heap(), vals[1], engine.heap().alloc_i32(1).unwrap());
-            assert_pointer_eq!(engine.heap(), vals[2], engine.heap().alloc_i32(2).unwrap());
-            assert_pointer_eq!(engine.heap(), vals[3], engine.heap().alloc_i32(2).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(1).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[1], engine.heap.alloc_i32(1).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[2], engine.heap.alloc_i32(2).unwrap());
+            assert_pointer_eq!(&engine.heap, vals[3], engine.heap.alloc_i32(2).unwrap());
             match &xs[1] {
                 Value::Tuple(parts) => {
                     let parts = pvals!(engine, parts);
@@ -967,23 +967,23 @@ async fn eval_list_sum_mean_min_max() {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 4);
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[0].clone()).unwrap(),
-                engine.heap().alloc_i32(6).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[0].clone()).unwrap(),
+                engine.heap.alloc_i32(6).unwrap()
             );
             match xs[1] {
                 Value::F32(v) => assert!((v - 2.0).abs() < 1e-3),
                 _ => panic!("expected mean f32"),
             }
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[2].clone()).unwrap(),
-                engine.heap().alloc_i32(1).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[2].clone()).unwrap(),
+                engine.heap.alloc_i32(1).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[3].clone()).unwrap(),
-                engine.heap().alloc_i32(3).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[3].clone()).unwrap(),
+                engine.heap.alloc_i32(3).unwrap()
             );
         }
         _ => panic!("expected tuple result"),
@@ -1014,14 +1014,14 @@ async fn eval_option_result_helpers() {
             assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
             assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "Ok")));
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[2].clone()).unwrap(),
-                engine.heap().alloc_bool(true).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[2].clone()).unwrap(),
+                engine.heap.alloc_bool(true).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[3].clone()).unwrap(),
-                engine.heap().alloc_bool(true).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[3].clone()).unwrap(),
+                engine.heap.alloc_bool(true).unwrap()
             );
         }
         _ => panic!("expected tuple result"),
@@ -1050,29 +1050,29 @@ async fn eval_order_ops() {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 5);
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[0].clone()).unwrap(),
-                engine.heap().alloc_bool(true).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[0].clone()).unwrap(),
+                engine.heap.alloc_bool(true).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[1].clone()).unwrap(),
-                engine.heap().alloc_bool(true).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[1].clone()).unwrap(),
+                engine.heap.alloc_bool(true).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[2].clone()).unwrap(),
-                engine.heap().alloc_bool(true).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[2].clone()).unwrap(),
+                engine.heap.alloc_bool(true).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[3].clone()).unwrap(),
-                engine.heap().alloc_bool(false).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[3].clone()).unwrap(),
+                engine.heap.alloc_bool(false).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[4].clone()).unwrap(),
-                engine.heap().alloc_bool(true).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[4].clone()).unwrap(),
+                engine.heap.alloc_bool(true).unwrap()
             );
         }
         _ => panic!("expected tuple result"),
@@ -1129,14 +1129,14 @@ async fn eval_result_filter_pipeline() {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[0].clone()).unwrap(),
-                engine.heap().alloc_i32(3).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[0].clone()).unwrap(),
+                engine.heap.alloc_i32(3).unwrap()
             );
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[1].clone()).unwrap(),
-                engine.heap().alloc_i32(5).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[1].clone()).unwrap(),
+                engine.heap.alloc_i32(5).unwrap()
             );
         }
         _ => panic!("expected tuple result"),
@@ -1171,41 +1171,41 @@ async fn eval_array_combinators() {
                     let vals = pvals!(engine, vals);
                     assert_eq!(vals.len(), 3);
                     assert_pointer_eq!(
-                        engine.heap(),
-                        engine.heap().alloc_value(vals[0].clone()).unwrap(),
-                        engine.heap().alloc_i32(2).unwrap()
+                        &engine.heap,
+                        engine.heap.alloc_value(vals[0].clone()).unwrap(),
+                        engine.heap.alloc_i32(2).unwrap()
                     );
                     assert_pointer_eq!(
-                        engine.heap(),
-                        engine.heap().alloc_value(vals[1].clone()).unwrap(),
-                        engine.heap().alloc_i32(3).unwrap()
+                        &engine.heap,
+                        engine.heap.alloc_value(vals[1].clone()).unwrap(),
+                        engine.heap.alloc_i32(3).unwrap()
                     );
                     assert_pointer_eq!(
-                        engine.heap(),
-                        engine.heap().alloc_value(vals[2].clone()).unwrap(),
-                        engine.heap().alloc_i32(4).unwrap()
+                        &engine.heap,
+                        engine.heap.alloc_value(vals[2].clone()).unwrap(),
+                        engine.heap.alloc_i32(4).unwrap()
                     );
                 }
                 _ => panic!("expected mapped array"),
             }
             assert_pointer_eq!(
-                engine.heap(),
-                engine.heap().alloc_value(xs[1].clone()).unwrap(),
-                engine.heap().alloc_i32(6).unwrap()
+                &engine.heap,
+                engine.heap.alloc_value(xs[1].clone()).unwrap(),
+                engine.heap.alloc_i32(6).unwrap()
             );
             match &xs[2] {
                 Value::Array(vals) => {
                     let vals = pvals!(engine, vals);
                     assert_eq!(vals.len(), 2);
                     assert_pointer_eq!(
-                        engine.heap(),
-                        engine.heap().alloc_value(vals[0].clone()).unwrap(),
-                        engine.heap().alloc_i32(1).unwrap()
+                        &engine.heap,
+                        engine.heap.alloc_value(vals[0].clone()).unwrap(),
+                        engine.heap.alloc_i32(1).unwrap()
                     );
                     assert_pointer_eq!(
-                        engine.heap(),
-                        engine.heap().alloc_value(vals[1].clone()).unwrap(),
-                        engine.heap().alloc_i32(2).unwrap()
+                        &engine.heap,
+                        engine.heap.alloc_value(vals[1].clone()).unwrap(),
+                        engine.heap.alloc_i32(2).unwrap()
                     );
                 }
                 _ => panic!("expected taken array"),
@@ -1215,14 +1215,14 @@ async fn eval_array_combinators() {
                     let vals = pvals!(engine, vals);
                     assert_eq!(vals.len(), 2);
                     assert_pointer_eq!(
-                        engine.heap(),
-                        engine.heap().alloc_value(vals[0].clone()).unwrap(),
-                        engine.heap().alloc_i32(2).unwrap()
+                        &engine.heap,
+                        engine.heap.alloc_value(vals[0].clone()).unwrap(),
+                        engine.heap.alloc_i32(2).unwrap()
                     );
                     assert_pointer_eq!(
-                        engine.heap(),
-                        engine.heap().alloc_value(vals[1].clone()).unwrap(),
-                        engine.heap().alloc_i32(3).unwrap()
+                        &engine.heap,
+                        engine.heap.alloc_value(vals[1].clone()).unwrap(),
+                        engine.heap.alloc_i32(3).unwrap()
                     );
                 }
                 _ => panic!("expected skipped array"),
