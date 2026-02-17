@@ -1,5 +1,22 @@
 # Pattern Matching Syntax in Rex
 
+## Rationale
+
+The decision to use match <expr> followed by arms introduced with when and
+separated from their bodies by -> was made to maximize structural clarity and
+reliability for LLM generation while keeping the syntax minimal. Because LLMs
+generate code incrementally and can struggle with implicit or indentation-only
+boundaries, each arm must begin with a clear, mandatory marker; requiring when
+for every case establishes a strong, repetitive template—when <pattern> ->
+<expression>—that models can continue predictably.
+
+This explicit structure reduces the likelihood of accidentally merging arms,
+extending a previous expression incorrectly, or omitting a necessary delimiter.
+By enforcing a single canonical form with no optional variations, the syntax
+lowers grammatical entropy and improves first-pass correctness, making match
+expressions both simple to parse and straightforward for LLMs to generate
+accurately.
+
 ## Status
 
 Accepted design.

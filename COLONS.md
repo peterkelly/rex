@@ -1,5 +1,23 @@
 # Colon and Double-Colon Syntax in Rex
 
+## Rationale
+
+The decision to use : exclusively for type annotations and :: exclusively for
+list construction and pattern matching was made to maximize reliability in
+LLM-generated code by eliminating token-level ambiguity and reducing syntactic
+overlap. Because large language models generate code incrementally and often
+reason locally, tokens that serve multiple roles increase the likelihood of
+incorrect continuations; fragments like x : y would be ambiguous if : were used
+for both types and list cons.
+
+By strictly separating domains—: for the type system and :: for list
+structure—the grammar becomes more predictable and easier for models to extend
+correctly. Using :: symmetrically for both constructing and pattern-matching
+lists further reduces cognitive load, since the same syntactic form applies in
+both contexts. Overall, the design minimizes overloading, reinforces structural
+regularity, and lowers the entropy of the grammar, all of which directly
+support higher first-pass correctness from LLMs generating Rex code.
+
 ## Status
 
 Accepted design.
