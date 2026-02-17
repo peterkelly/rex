@@ -80,9 +80,21 @@ The lambda syntax is `\x -> expr`. Some docs/examples may also use Unicode `λ` 
 ### Literals
 
 - `true`, `false`
-- integers and floats (currently integer literals are `i32`)
+- integers and floats (integer literals are overloaded over `Integral` and default to `i32` when ambiguous)
 - strings: `"hello"`
 - UUID and datetime literals (if present in your lexer source)
+
+Examples:
+
+```rex,interactive
+( (4 is u8)
+, (4 is u64)
+, (4 is i16)
+, (-3 is i16)
+)
+```
+
+Negative literals only specialize to signed types. For example, `(-3 is u8)` is a type error.
 
 ### Function Application
 
@@ -108,6 +120,17 @@ Let bindings are polymorphic (HM “let-generalization”):
 
 ```rex,interactive
 let id = \x -> x in (id 1, id true, id "hi")
+```
+
+Integer-literal bindings are a special case: unannotated `let x = 4` is kept monomorphic so use
+sites can specialize it through context.
+
+```rex,interactive
+let
+  x = 4,
+  f: u8 -> u8 = \y -> y
+in
+  f x
 ```
 
 ### Recursive Let (`let rec`)
@@ -192,7 +215,7 @@ Rex checks ADT matches for exhaustiveness and reports missing constructors.
 Common built-in types include:
 
 - `bool`
-- `i32` (integer literal type)
+- `i32` (default integer-literal fallback type)
 - `f32` (float literal type)
 - `string`
 - `uuid`

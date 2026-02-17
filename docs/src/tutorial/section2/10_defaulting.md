@@ -28,8 +28,30 @@ Another common fix is to use the value in a way that forces a type:
 zero + 1
 ```
 
+Integer literals behave similarly: they are overloaded over `Integral` and become concrete when a
+context requires a specific integer type.
+
+```rex,interactive
+let
+  x = 4,
+  f: u16 -> u16 = \n -> n
+in
+  f x
+```
+
+For negative literals, context must pick a signed type:
+
+```rex,interactive
+let
+  x: i32 = -3,
+  f: i32 -> i32 = \n -> n
+in
+  f x
+```
+
+`let x: u32 = -3 in x` is a type error.
+
 ## Learn the rules
 
 Defaulting is specified precisely in [Specification](../../SPEC.md) (“Defaulting”). If you hit an “ambiguous
 overload” error, that section explains why and how to resolve it.
-

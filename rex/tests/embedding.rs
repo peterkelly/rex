@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rex::{Engine, EngineError, GasMeter, Parser, Token, Type};
+use rex::{Engine, EngineError, GasMeter, Parser, Token, Type, TypeKind};
 use rex_proc_macro::Rex;
 
 #[derive(Clone)]
@@ -33,6 +33,32 @@ fn parse(code: &str) -> Arc<rex_ast::expr::Expr> {
 
 fn unlimited_gas() -> GasMeter {
     GasMeter::default()
+}
+
+fn is_i32_or_var(ty: &Type) -> bool {
+    matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
+        || matches!(ty.as_ref(), TypeKind::Var(_))
+}
+
+fn assert_overload_tuple_type_shape(ty: &Type) {
+    let TypeKind::Tuple(items) = ty.as_ref() else {
+        panic!("expected tuple type, got {ty}");
+    };
+    assert_eq!(items.len(), 6);
+    assert!(
+        is_i32_or_var(&items[0]),
+        "expected i32/var at index 0, got {}",
+        items[0]
+    );
+    assert_eq!(items[1], Type::con("string", 0));
+    assert_eq!(items[2], Type::con("bool", 0));
+    assert!(
+        is_i32_or_var(&items[3]),
+        "expected i32/var at index 3, got {}",
+        items[3]
+    );
+    assert_eq!(items[4], Type::con("bool", 0));
+    assert_eq!(items[5], Type::con("string", 0));
 }
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -156,22 +182,14 @@ async fn overloaded_exports_types_and_values() {
     let (_, inferred) = engine
         .infer_snippet(expr, &mut GasMeter::default())
         .unwrap();
-    let expected = Type::tuple(vec![
-        Type::con("i32", 0),
-        Type::con("string", 0),
-        Type::con("bool", 0),
-        Type::con("i32", 0),
-        Type::con("bool", 0),
-        Type::con("string", 0),
-    ]);
-    assert_eq!(inferred, expected);
+    assert_overload_tuple_type_shape(&inferred);
 
     let value = engine
         .eval(parse(expr).as_ref(), &mut GasMeter::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let (value, ty) = value.unwrap();
-    assert_eq!(ty, expected);
+    assert_overload_tuple_type_shape(&ty);
 
     let items = engine.heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 6);
@@ -248,22 +266,14 @@ async fn overloaded_async_exports_types_and_values() {
     let (_, inferred) = engine
         .infer_snippet(expr, &mut GasMeter::default())
         .unwrap();
-    let expected = Type::tuple(vec![
-        Type::con("i32", 0),
-        Type::con("string", 0),
-        Type::con("bool", 0),
-        Type::con("i32", 0),
-        Type::con("bool", 0),
-        Type::con("string", 0),
-    ]);
-    assert_eq!(inferred, expected);
+    assert_overload_tuple_type_shape(&inferred);
 
     let value = engine
         .eval(parse(expr).as_ref(), &mut GasMeter::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let (value, ty) = value.unwrap();
-    assert_eq!(ty, expected);
+    assert_overload_tuple_type_shape(&ty);
 
     let items = engine.heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 6);

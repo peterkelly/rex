@@ -20,10 +20,18 @@ the host).
 
 ### Integers vs floats
 
-`123` is an integer literal and defaults to `i32`.
+`123` is an integer literal. It can specialize to any `Integral` type from context, and defaults to
+`i32` when ambiguous.
 `3.14` is a float literal and defaults to `f32`.
 
 If you need to force a different numeric type, you can use an annotation (covered later).
+
+```rex,interactive
+( (4 is u8)
+, (4 is i64)
+, (-3 is i32)
+)
+```
 
 ### Negative numbers
 
@@ -32,6 +40,9 @@ Rex supports negative integer literals:
 ```rex,interactive
 -420
 ```
+
+Negative literals require a signed numeric type. For example, `(-3 is u8)` is a type error, while
+`(-3 is i16)` is valid.
 
 When you’re unsure about parsing, you can always write subtraction explicitly:
 

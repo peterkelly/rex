@@ -34,9 +34,9 @@ fn main() -> Result<(), rex_ts::TypeError> {
 
 ## Inference
 
-The inference entry points are `TypeSystem::infer` (predicates + type) and `TypeSystem::infer_typed` (typed AST + predicates + type), both of which work on `rex_ast::expr::Expr`. Literal defaults follow the current language requirement:
+The inference entry points are `TypeSystem::infer` (predicates + type) and `TypeSystem::infer_typed` (typed AST + predicates + type), both of which work on `rex_ast::expr::Expr`. Literal behavior follows the current language requirement:
 
-- Integer literals default to `i32`
+- Integer literals are `Integral`-constrained and can specialize from context; ambiguous cases default later to `i32`
 - Float literals default to `f32`
 
 Example (from tests):

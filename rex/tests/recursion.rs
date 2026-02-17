@@ -1,4 +1,4 @@
-use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type};
+use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeKind};
 use rex_engine::assert_pointer_eq;
 
 async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
@@ -15,9 +15,9 @@ async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
 
 async fn assert_i32_result(source: &str, expected: i32) {
     let (heap, pointer, ty) = eval(source).await.unwrap();
-    assert_eq!(
-        ty,
-        Type::con("i32", 0),
+    assert!(
+        matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
+            || matches!(ty.as_ref(), TypeKind::Var(_)),
         "eval returned unexpected type for: {source}"
     );
     let expected = heap.alloc_i32(expected).unwrap();

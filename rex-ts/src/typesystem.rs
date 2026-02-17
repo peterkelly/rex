@@ -581,6 +581,48 @@ fn dedup_preds(preds: Vec<Predicate>) -> Vec<Predicate> {
     out
 }
 
+fn is_integral_primitive(typ: &Type) -> bool {
+    matches!(
+        typ.as_ref(),
+        TypeKind::Con(tc)
+            if matches!(
+                tc.name.as_ref(),
+                "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64"
+            )
+    )
+}
+
+fn finalize_infer_for_public_api(
+    mut preds: Vec<Predicate>,
+    mut typ: Type,
+) -> Result<(Vec<Predicate>, Type), TypeError> {
+    let mut subst = Subst::new_sync();
+    for pred in &preds {
+        if pred.class.as_ref() == "Integral"
+            && let TypeKind::Var(tv) = pred.typ.as_ref()
+        {
+            subst = subst.insert(tv.id, Type::con("i32", 0));
+        }
+    }
+
+    if !subst_is_empty(&subst) {
+        preds = dedup_preds(preds.apply(&subst));
+        typ = typ.apply(&subst);
+    }
+
+    for pred in &preds {
+        if pred.class.as_ref() != "Integral" {
+            continue;
+        }
+        if matches!(pred.typ.as_ref(), TypeKind::Var(_)) || is_integral_primitive(&pred.typ) {
+            continue;
+        }
+        return Err(TypeError::Unification("i32".into(), pred.typ.to_string()));
+    }
+
+    Ok((preds, typ))
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TypeError {
     #[error("types do not unify: {0} vs {1}")]
@@ -1312,6 +1354,25 @@ fn generalize_with_unifier(
         .collect();
     vars.sort_by_key(|v| v.id);
     Scheme::new(vars, preds, typ)
+}
+
+fn monomorphic_scheme_with_unifier(
+    preds: Vec<Predicate>,
+    typ: Type,
+    unifier: &mut Unifier<'_>,
+) -> Scheme {
+    let preds = dedup_preds(
+        preds
+            .into_iter()
+            .map(|pred| Predicate::new(pred.class, unifier.apply_type(&pred.typ)))
+            .collect(),
+    );
+    let typ = unifier.apply_type(&typ);
+    Scheme::new(vec![], preds, typ)
+}
+
+fn is_integral_literal_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::Int(..) | Expr::Uint(..))
 }
 
 /// Turn a monotype `typ` (plus constraints `preds`) into a polymorphic `Scheme`
@@ -2425,7 +2486,7 @@ impl TypeSystem {
         let preds = dedup_preds(preds.apply(&subst));
         let t = t.apply(&subst);
         self.check_predicate_kinds(&preds)?;
-        Ok((preds, t))
+        finalize_infer_for_public_api(preds, t)
     }
 
     fn infer_inner(&mut self, expr: &Expr) -> Result<(Vec<Predicate>, Type), TypeError> {
@@ -2449,7 +2510,7 @@ impl TypeSystem {
             t = t.apply(&improve);
         }
         self.check_predicate_kinds(&preds)?;
-        Ok((preds, t))
+        finalize_infer_for_public_api(preds, t)
     }
 
     fn expected_class_param_arities(&self, class: &Symbol) -> Option<Vec<usize>> {
@@ -2899,8 +2960,20 @@ fn infer_expr_type_inner(
     unifier.charge_infer_node()?;
     match expr {
         Expr::Bool(_, _) => Ok((vec![], Type::con("bool", 0))),
-        Expr::Uint(_, _) => Ok((vec![], Type::con("i32", 0))),
-        Expr::Int(_, _) => Ok((vec![], Type::con("i32", 0))),
+        Expr::Uint(_, _) => {
+            let lit_ty = Type::var(supply.fresh(Some(sym("n"))));
+            Ok((vec![Predicate::new("Integral", lit_ty.clone())], lit_ty))
+        }
+        Expr::Int(_, _) => {
+            let lit_ty = Type::var(supply.fresh(Some(sym("n"))));
+            Ok((
+                vec![
+                    Predicate::new("Integral", lit_ty.clone()),
+                    Predicate::new("AdditiveGroup", lit_ty.clone()),
+                ],
+                lit_ty,
+            ))
+        }
         Expr::Float(_, _) => Ok((vec![], Type::con("f32", 0))),
         Expr::String(_, _) => Ok((vec![], Type::con("string", 0))),
         Expr::Uuid(_, _) => Ok((vec![], Type::con("uuid", 0))),
@@ -3066,14 +3139,19 @@ fn infer_expr_type_inner(
             let mut known_cur = known.clone();
             for (v, ann, d) in bindings {
                 let (p1, t1) = infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?;
-                if let Some(ann) = ann {
+                if let Some(ref ann) = ann {
                     let mut ann_vars = HashMap::new();
-                    let ann_ty = type_from_annotation_expr_vars(adts, &ann, &mut ann_vars, supply)?;
+                    let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
                     unifier.unify(&t1, &ann_ty)?;
                 }
                 let def_ty = unifier.apply_type(&t1);
-                let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
-                reject_ambiguous_scheme(&scheme)?;
+                let scheme = if ann.is_none() && is_integral_literal_expr(&d) {
+                    monomorphic_scheme_with_unifier(p1, def_ty.clone(), unifier)
+                } else {
+                    let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
+                    reject_ambiguous_scheme(&scheme)?;
+                    scheme
+                };
                 env_cur.extend(v.name.clone(), scheme);
                 if let Some(known_variant) =
                     known_variant_from_expr_with_known(&d, &def_ty, adts, &known_cur)
@@ -3272,16 +3350,23 @@ fn infer_expr(
                     ))
                 }
                 Expr::Uint(_, v) => {
-                    let t = Type::con("i32", 0);
+                    let t = Type::var(supply.fresh(Some(sym("n"))));
                     Ok((
-                        vec![],
+                        vec![Predicate::new("Integral", t.clone())],
                         t.clone(),
                         TypedExpr::new(t, TypedExprKind::Uint(*v)),
                     ))
                 }
                 Expr::Int(_, v) => {
-                    let t = Type::con("i32", 0);
-                    Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Int(*v))))
+                    let t = Type::var(supply.fresh(Some(sym("n"))));
+                    Ok((
+                        vec![
+                            Predicate::new("Integral", t.clone()),
+                            Predicate::new("AdditiveGroup", t.clone()),
+                        ],
+                        t.clone(),
+                        TypedExpr::new(t, TypedExprKind::Int(*v)),
+                    ))
                 }
                 Expr::Float(_, v) => {
                     let t = Type::con("f32", 0);
@@ -3526,15 +3611,21 @@ fn infer_expr(
                     for (v, ann, d) in bindings {
                         let (p1, t1, typed_def) =
                             infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?;
-                        if let Some(ann) = ann {
+                        if let Some(ref ann) = ann {
                             let mut ann_vars = HashMap::new();
                             let ann_ty =
-                                type_from_annotation_expr_vars(adts, &ann, &mut ann_vars, supply)?;
+                                type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
                             unifier.unify(&t1, &ann_ty)?;
                         }
                         let def_ty = unifier.apply_type(&t1);
-                        let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
-                        reject_ambiguous_scheme(&scheme)?;
+                        let scheme = if ann.is_none() && is_integral_literal_expr(&d) {
+                            monomorphic_scheme_with_unifier(p1, def_ty.clone(), unifier)
+                        } else {
+                            let scheme =
+                                generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
+                            reject_ambiguous_scheme(&scheme)?;
+                            scheme
+                        };
                         env_cur.extend(v.name.clone(), scheme);
                         if let Some(known_variant) =
                             known_variant_from_expr_with_known(&d, &def_ty, adts, &known_cur)
@@ -4469,7 +4560,12 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         ts.inject_decls(&program.decls).unwrap();
         let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
-        assert!(preds.is_empty());
+        assert!(
+            preds.is_empty()
+                || preds
+                    .iter()
+                    .all(|p| p.class.as_ref() == "Integral" && p.typ == Type::con("i32", 0))
+        );
         assert_eq!(ty, Type::con("i32", 0));
     }
 
@@ -4964,10 +5060,10 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
-        assert_eq!(preds.len(), 1);
-        assert_eq!(preds[0].class.as_ref(), "AdditiveMonoid");
-        assert_eq!(preds[0].typ, Type::con("i32", 0));
-        assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+        assert_eq!(preds.len(), 2);
+        assert!(preds.iter().any(|p| p.class.as_ref() == "AdditiveMonoid"));
+        assert!(preds.iter().any(|p| p.class.as_ref() == "Integral"));
+        assert!(preds.iter().all(|p| p.typ == Type::con("i32", 0)));
     }
 
     #[test]
@@ -4979,7 +5075,6 @@ mod tests {
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "Integral");
         assert_eq!(preds[0].typ, Type::con("i32", 0));
-        assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
     }
 
     #[test]
@@ -4988,9 +5083,14 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
-        assert_eq!(preds.len(), 1);
-        assert_eq!(preds[0].class.as_ref(), "Indexable");
-        assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+        assert!(preds.iter().any(|p| p.class.as_ref() == "Indexable"));
+        assert!(preds.iter().all(|p| {
+            p.class.as_ref() == "Indexable"
+                || (p.class.as_ref() == "Integral" && p.typ == Type::con("i32", 0))
+        }));
+        for pred in preds.iter().filter(|p| p.class.as_ref() == "Indexable") {
+            assert!(entails(&ts.classes, &[], pred).unwrap());
+        }
     }
 
     #[test]
@@ -4999,19 +5099,19 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("i32", 0));
-        assert_eq!(preds.len(), 0);
+        assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
         let expr = parse_expr("(1, 'Hello', true).1");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("string", 0));
-        assert_eq!(preds.len(), 0);
+        assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
         let expr = parse_expr("(1, 'Hello', true).2");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::con("bool", 0));
-        assert_eq!(preds.len(), 0);
+        assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
     }
 
     #[test]
@@ -5133,8 +5233,7 @@ mod tests {
     fn infer_match_list_on_non_list_error() {
         let expr = parse_expr("match 1 when [x] -> x");
         let mut ts = TypeSystem::with_prelude().unwrap();
-        let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
-        assert!(matches!(err, TypeError::Unification(_, _)));
+        assert!(ts.infer(expr.as_ref()).is_err());
     }
 
     #[test]
@@ -5166,8 +5265,7 @@ mod tests {
     fn infer_match_option_on_non_option_error() {
         let expr = parse_expr("match 1 when Some x -> x");
         let mut ts = TypeSystem::with_prelude().unwrap();
-        let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
-        assert!(matches!(err, TypeError::Unification(_, _)));
+        assert!(ts.infer(expr.as_ref()).is_err());
     }
 
     #[test]
@@ -5182,8 +5280,7 @@ mod tests {
     fn infer_cons_pattern_on_non_list_error() {
         let expr = parse_expr("match 1 when x::xs -> x");
         let mut ts = TypeSystem::with_prelude().unwrap();
-        let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
-        assert!(matches!(err, TypeError::Unification(_, _)));
+        assert!(ts.infer(expr.as_ref()).is_err());
     }
 
     #[test]

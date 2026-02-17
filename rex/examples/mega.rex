@@ -1,24 +1,24 @@
 let
     id = λx → x,
-    add = λx y → x + y,
-    sub = λx y → x - y,
-    mul = λx y → x * y,
-    inc = λx → x + 1,
-    dec = λx → x - 1,
-    square = λx → x * x,
-    cube = λx → x * x * x,
-    quad = λx → x * x * x * x,
-    clamp = λlo hi x → if x < lo then lo else if x > hi then hi else x,
-    is_even = λx → x % 2 == 0,
-    is_odd = λx → x % 2 != 0,
-    choose = λa b c d e f g h i j → if a + b > c + d then e + f + g + h + i + j else a + b + c + d,
-    mega26 = λa b c d e f g h i j k l m n o p q r s t u v w x y z →
+    add: i32 -> i32 -> i32 = λx y → x + y,
+    sub: i32 -> i32 -> i32 = λx y → x - y,
+    mul: i32 -> i32 -> i32 = λx y → x * y,
+    inc: i32 -> i32 = λx → x + 1,
+    dec: i32 -> i32 = λx → x - 1,
+    square: i32 -> i32 = λx → x * x,
+    cube: i32 -> i32 = λx → x * x * x,
+    quad: i32 -> i32 = λx → x * x * x * x,
+    clamp: i32 -> i32 -> i32 -> i32 = λlo hi x → if x < lo then lo else if x > hi then hi else x,
+    is_even: i32 -> bool = λx → x % 2 == 0,
+    is_odd: i32 -> bool = λx → x % 2 != 0,
+    choose: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j → if a + b > c + d then e + f + g + h + i + j else a + b + c + d,
+    mega26: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j k l m n o p q r s t u v w x y z →
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
         + s + t + u + v + w + x
         + y + z,
-    mega52 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az →
+    mega52: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az →
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
@@ -28,7 +28,7 @@ let
         + ak + al + am + an + ao + ap
         + aq + ar + as_ + at + au + av
         + aw + ax + ay + az,
-    mega64 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ba bb bc bd be bf bg bh bi bj bk bl →
+    mega64: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ba bb bc bd be bf bg bh bi bj bk bl →
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
@@ -40,11 +40,11 @@ let
         + aw + ax + ay + az + ba + bb
         + bc + bd + be + bf + bg + bh
         + bi + bj + bk + bl,
-    fanout = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af →
+    fanout: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af →
         (a + b + c, d + e + f, g + h + i, j + k + l,
         m + n + o, p + q + r, s + t + u, v + w + x,
         y + z + aa, ab + ac + ad, ae + af),
-    nums = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240],
+    nums: List i32 = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239, 240],
     nums2 = map inc nums,
     nums3 = map square nums,
     nums4 = map cube nums,
@@ -78,45 +78,45 @@ let
     odds_count = count odds,
     pair_list = zip evens odds,
     pair_count = count pair_list,
-    pair_head = match pair_list when [] → (0, 0) when p:ps → p,
+    pair_head = match pair_list when [] → (0, 0) when p::ps → p,
     pair_first = pair_head.0,
     pair_second = pair_head.1,
     pair_mix = pair_first + pair_second,
     first_three = (get 0 nums, get 1 nums, get 2 nums),
     last_three = (get 237 nums, get 238 nums, get 239 nums),
-    head_num = match nums when [] → 0 when x:xs → x,
-    head_opt = match nums when [] → None when x:xs → Some x,
+    head_num = match nums when [] → 0 when x::xs → x,
+    head_opt = match nums when [] → None when x::xs → Some x,
     opt_to_zero = λx → match x when None → 0 when Some v → v,
     head_or_zero = opt_to_zero head_opt,
     deep_match =
         match nums
             when [] → 0
-            when x:xs →
+            when x::xs →
                 match xs
                     when [] → x
-                    when y:ys →
+                    when y::ys →
                         match ys
                             when [] → x + y
-                            when z:zs →
+                            when z::zs →
                                 match zs
                                     when [] → x + y + z
-                                    when w:ws → x + y + z + w,
+                                    when w::ws → x + y + z + w,
     first_five =
         match nums
             when [a, b, c, d, e] → a + b + c + d + e
-            when a:rest → a
+            when a::rest → a
             when _ → 0,
     list_of_lists = [front20, mid20, slice20, tail20],
     list_summary =
         match list_of_lists
             when [a, b, c, d] → sum a + sum b + sum c + sum d
             when _ → 0,
-    classify = λn → if n % 3 == 0 then Ok n else Err n,
+    classify: i32 -> Result i32 i32 = λn → if n % 3 == 0 then Ok n else Err n,
     classified = map classify nums,
     only_ok = filter_map (λx → match x when Ok v → Some v when Err _ → None) classified,
     ok_count = count only_ok,
     ok_sum = sum only_ok,
-    ok_head = match only_ok when [] → 0 when x:xs → x,
+    ok_head = match only_ok when [] → 0 when x::xs → x,
     mega26_result = mega26 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26,
     mega52_result = mega52 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52,
     mega64_result = mega64 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64,
@@ -125,16 +125,16 @@ let
     fanout_last = fanout_result.10,
     fanout_sum = fanout_first + fanout_last,
     choose_result = choose 5 3 4 2 1 2 3 4 5 6,
-    triple = (*) 3,
-    quad = (*) 4,
-    quint = (*) 5,
+    triple: i32 -> i32 = (*) 3,
+    quad: i32 -> i32 = (*) 4,
+    quint: i32 -> i32 = (*) 5,
     triple_list = map triple nums,
     quad_list = map quad nums,
     quint_list = map quint nums,
     sum_triple_list = sum triple_list,
     sum_quad_list = sum quad_list,
     sum_quint_list = sum quint_list,
-    v001 = 1,
+    v001: i32 = 1,
     v002 = v001 + 2,
     v003 = v002 + 3,
     v004 = v003 + 4,

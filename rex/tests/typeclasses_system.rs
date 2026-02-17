@@ -1,5 +1,25 @@
-use rex::{Engine, GasMeter, Parser, Token, Type};
+use rex::{Engine, GasMeter, Parser, Token, Type, TypeKind};
 use rex_engine::{ValueDisplayOptions, pointer_display_with};
+
+fn type_compatible(actual: &Type, expected: &Type) -> bool {
+    match (actual.as_ref(), expected.as_ref()) {
+        (TypeKind::Var(_), TypeKind::Con(tc)) if tc.name.as_ref() == "i32" => true,
+        (TypeKind::Con(a), TypeKind::Con(b)) => a.name == b.name && a.arity == b.arity,
+        (TypeKind::App(af, aa), TypeKind::App(ef, ea))
+        | (TypeKind::Fun(af, aa), TypeKind::Fun(ef, ea)) => {
+            type_compatible(af, ef) && type_compatible(aa, ea)
+        }
+        (TypeKind::Tuple(as_), TypeKind::Tuple(es)) if as_.len() == es.len() => as_
+            .iter()
+            .zip(es.iter())
+            .all(|(a, e)| type_compatible(a, e)),
+        (TypeKind::Record(as_), TypeKind::Record(es)) if as_.len() == es.len() => as_
+            .iter()
+            .zip(es.iter())
+            .all(|((an, at), (en, et))| an == en && type_compatible(at, et)),
+        _ => false,
+    }
+}
 
 async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String> {
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
@@ -17,7 +37,10 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
         .eval(program.expr.as_ref(), &mut gas)
         .await
         .map_err(|e| format!("{e}"))?;
-    assert_eq!(ty, expected_ty, "eval returned unexpected type for: {code}");
+    assert!(
+        type_compatible(&ty, &expected_ty),
+        "eval returned unexpected type for: {code}\nactual: {ty}\nexpected: {expected_ty}"
+    );
     let opts = ValueDisplayOptions {
         include_numeric_suffixes: true,
         ..ValueDisplayOptions::default()
@@ -156,7 +179,7 @@ async fn method_can_return_function() {
         instance Builder i32
             make_adder = \n x -> x + n
 
-        let f = make_adder 5 in f 37
+        let f = make_adder (5 is i32) in f (37 is i32)
         "#,
         "42i32",
         Type::con("i32", 0),

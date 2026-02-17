@@ -395,6 +395,38 @@ engine.export_value("answer", 42i32)?;
 engine.export("inc", |_state, x: i32| { Ok(x + 1) })?;
 ```
 
+### Integer Literal Overloading with Host Natives
+
+Integer literals are overloaded (`Integral a`) and can specialize at call sites. This works for
+direct calls, `let` bindings, and lambda wrappers:
+
+```rust
+use rex_engine::Engine;
+use rex_util::GasMeter;
+
+let mut engine = Engine::with_prelude(())?;
+engine.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
+engine.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
+
+for code in [
+    "num_u8 4",
+    "let x = 4 in num_u8 x",
+    "let f = \\x -> num_i64 x in f 4",
+] {
+    let tokens = rex_lexer::Token::tokenize(code)?;
+    let mut parser = rex_parser::Parser::new(tokens);
+    let program = parser
+        .parse_program(&mut GasMeter::default())
+        .map_err(|errs| format!("parse error: {errs:?}"))?;
+    let mut gas = GasMeter::default();
+    let value = engine.eval_with_gas(program.expr.as_ref(), &mut gas).await?;
+    println!("{value}");
+}
+```
+
+Negative literals specialize only to signed numeric types. For example, `num_i32 (-3)` is valid,
+while `num_u32 (-3)` is a type error.
+
 ### Async Natives
 
 If your host functions are async, inject them with `export_async` and evaluate with

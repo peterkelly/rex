@@ -35,6 +35,150 @@ fn check_cancelled<State: Clone + Send + Sync + 'static>(
     }
 }
 
+fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
+    engine: &Engine<State>,
+    value: u64,
+    typ: &Type,
+) -> Result<Pointer, EngineError> {
+    match typ.as_ref() {
+        TypeKind::Var(_) => {
+            engine
+                .heap
+                .alloc_i32(i32::try_from(value).map_err(|_| EngineError::NativeType {
+                    expected: "i32".into(),
+                    got: value.to_string(),
+                })?)
+        }
+        TypeKind::Con(tc) => {
+            match tc.name.as_ref() {
+                "u8" => engine.heap.alloc_u8(u8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "u8".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "u16" => engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "u16".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "u32" => engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "u32".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "u64" => engine.heap.alloc_u64(value),
+                "i8" => engine.heap.alloc_i8(i8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "i8".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "i16" => engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "i16".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "i32" => engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "i32".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "i64" => engine.heap.alloc_i64(i64::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "i64".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                _ => Err(EngineError::NativeType {
+                    expected: "integral".into(),
+                    got: typ.to_string(),
+                }),
+            }
+        }
+        _ => Err(EngineError::NativeType {
+            expected: "integral".into(),
+            got: typ.to_string(),
+        }),
+    }
+}
+
+fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
+    engine: &Engine<State>,
+    value: i64,
+    typ: &Type,
+) -> Result<Pointer, EngineError> {
+    match typ.as_ref() {
+        TypeKind::Var(_) => {
+            engine
+                .heap
+                .alloc_i32(i32::try_from(value).map_err(|_| EngineError::NativeType {
+                    expected: "i32".into(),
+                    got: value.to_string(),
+                })?)
+        }
+        TypeKind::Con(tc) => {
+            match tc.name.as_ref() {
+                "i8" => engine.heap.alloc_i8(i8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "i8".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "i16" => engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "i16".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "i32" => engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "i32".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "i64" => engine.heap.alloc_i64(value),
+                "u8" => engine.heap.alloc_u8(u8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "u8".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "u16" => engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "u16".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "u32" => engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "u32".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                "u64" => engine.heap.alloc_u64(u64::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
+                        expected: "u64".into(),
+                        got: value.to_string(),
+                    }
+                })?),
+                _ => Err(EngineError::NativeType {
+                    expected: "integral".into(),
+                    got: typ.to_string(),
+                }),
+            }
+        }
+        _ => Err(EngineError::NativeType {
+            expected: "integral".into(),
+            got: typ.to_string(),
+        }),
+    }
+}
+
 fn type_head_is_var(typ: &Type) -> bool {
     let mut cur = typ;
     while let TypeKind::App(head, _) = cur.as_ref() {
@@ -2689,8 +2833,8 @@ where
     gas.charge(gas.costs.eval_node)?;
     match &cur.kind {
         TypedExprKind::Bool(v) => engine.heap.alloc_bool(*v),
-        TypedExprKind::Uint(v) => engine.heap.alloc_i32(*v as i32),
-        TypedExprKind::Int(v) => engine.heap.alloc_i32(*v as i32),
+        TypedExprKind::Uint(v) => alloc_uint_literal_as(engine, *v, &cur.typ),
+        TypedExprKind::Int(v) => alloc_int_literal_as(engine, *v, &cur.typ),
         TypedExprKind::Float(v) => engine.heap.alloc_f32(*v as f32),
         TypedExprKind::String(v) => engine.heap.alloc_string(v.clone()),
         TypedExprKind::Uuid(v) => engine.heap.alloc_uuid(*v),

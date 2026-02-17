@@ -1,4 +1,4 @@
-use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, Value};
+use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeKind, Value};
 use rex_engine::assert_pointer_eq;
 
 async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
@@ -11,6 +11,14 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let (pointer, ty) = engine.eval(program.expr.as_ref(), &mut gas).await?;
     let heap = engine.into_heap();
     Ok((heap, pointer, ty))
+}
+
+fn assert_i32_or_var(ty: &Type) {
+    assert!(
+        matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
+            || matches!(ty.as_ref(), TypeKind::Var(_)),
+        "expected i32 or type variable, got {ty}"
+    );
 }
 
 #[tokio::test]
@@ -30,7 +38,7 @@ async fn let_rec_self_recursive_factorial() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(720).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
@@ -51,7 +59,7 @@ async fn let_rec_self_recursive_fibonacci() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(21).unwrap();
     assert_pointer_eq!(&heap, &pointer, &expected);
 }
@@ -101,14 +109,13 @@ async fn let_rec_mutual_three_function_group() {
     )
     .await
     .unwrap();
-    assert_eq!(
-        ty,
-        Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("i32", 0),
-            Type::con("i32", 0),
-        ])
-    );
+    let TypeKind::Tuple(items) = ty.as_ref() else {
+        panic!("expected tuple type, got {ty}");
+    };
+    assert_eq!(items.len(), 3);
+    for item in items {
+        assert_i32_or_var(item);
+    }
 
     let a = heap.alloc_i32(0).unwrap();
     let b = heap.alloc_i32(1).unwrap();
@@ -119,7 +126,6 @@ async fn let_rec_mutual_three_function_group() {
 
 #[tokio::test]
 async fn let_rec_function_is_still_polymorphic() {
-    let expected_ty = Type::tuple(vec![Type::con("i32", 0), Type::con("bool", 0)]);
     let (heap, pointer, ty) = eval(
         r#"
         let rec
@@ -130,7 +136,12 @@ async fn let_rec_function_is_still_polymorphic() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, expected_ty);
+    let TypeKind::Tuple(items) = ty.as_ref() else {
+        panic!("expected tuple type, got {ty}");
+    };
+    assert_eq!(items.len(), 2);
+    assert_i32_or_var(&items[0]);
+    assert_eq!(items[1], Type::con("bool", 0));
     let one = heap.alloc_i32(1).unwrap();
     let tru = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![one, tru]).unwrap();

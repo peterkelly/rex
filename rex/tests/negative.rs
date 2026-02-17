@@ -88,16 +88,13 @@ async fn compile_rejects_invalid_programs() {
             |e| matches!(e, TypeError::UnknownVar(name) if name.as_ref() == "x"),
         ),
         ("if_condition_not_bool", "if 1 then 2 else 3", |e| {
-            matches!(e, TypeError::Unification(..))
+            matches!(e, TypeError::Unification(..) | TypeError::NoInstance(..))
         }),
         ("if_branches_must_match", "if true then 1 else false", |e| {
-            matches!(e, TypeError::Unification(..))
+            matches!(e, TypeError::Unification(..) | TypeError::NoInstance(..))
         }),
         ("self_application_occurs_check", "\\x -> x x", |e| {
             matches!(e, TypeError::Occurs(..))
-        }),
-        ("apply_non_function", "1 2", |e| {
-            matches!(e, TypeError::Unification(..))
         }),
         (
             "unknown_constructor_in_pattern",
@@ -127,7 +124,7 @@ async fn compile_rejects_invalid_programs() {
             |e| matches!(e, TypeError::NonExhaustiveMatch { .. }),
         ),
         ("type_annotation_must_match", "let x: bool = 1 in x", |e| {
-            matches!(e, TypeError::Unification(..))
+            matches!(e, TypeError::Unification(..) | TypeError::NoInstance(..))
         }),
         (
             "unknown_field_projection",
@@ -246,7 +243,10 @@ async fn compile_rejects_invalid_programs() {
                 m : a -> i32
             let x = m 1 in x
             "#,
-            |e| matches!(e, TypeError::NoInstance(class, _) if class.as_ref() == "C"),
+            |e| {
+                matches!(e, TypeError::NoInstance(class, _) if class.as_ref() == "C")
+                    || matches!(e, TypeError::AmbiguousTypeVars { constraints, .. } if constraints.contains("C"))
+            },
         ),
         ("projection_requires_record_like_base", "1.x", |e| {
             matches!(
@@ -352,6 +352,12 @@ async fn compile_rejects_invalid_programs() {
 async fn compile_rejects_invalid_programs_engine_errors() {
     type EngineErrorCase = (&'static str, &'static str, fn(&EngineError) -> bool);
     let cases: &[EngineErrorCase] = &[
+        ("apply_non_function", "1 2", |e| {
+            matches!(
+                e,
+                EngineError::NativeType { expected, .. } if expected.as_str() == "integral"
+            )
+        }),
         (
             "ambiguous_overload_requires_application",
             "prim_fold",

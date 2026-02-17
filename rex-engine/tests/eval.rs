@@ -92,7 +92,7 @@ async fn eval_let_lambda() {
             id (id 1, id 2)
         "#,
     );
-    let mut engine = Engine::new(());
+    let mut engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -1044,9 +1044,9 @@ async fn eval_option_result_helpers() {
     let expr = parse(
         r#"
         let
-            opt = map (\x -> x + 1) (Some 1),
+            opt = map (\x -> x + 1) (Some (1 is i32)),
             opt2 = bind (\x -> Some (x + 1)) opt,
-            res = map (\x -> x + 1) (Ok 1),
+            res = map (\x -> x + 1) ((Ok (1 is i32)) is Result i32 string),
             ok = is_ok res,
             err = is_err (Err "nope")
         in
@@ -1082,10 +1082,10 @@ async fn eval_order_ops() {
     let expr = parse(
         r#"
         let
-            a = 1 < 2,
-            b = 2 <= 2,
-            c = 3 > 2,
-            d = 2 >= 3,
+            a = (1 is i32) < (2 is i32),
+            b = (2 is i32) <= (2 is i32),
+            c = (3 is i32) > (2 is i32),
+            d = (2 is i32) >= (3 is i32),
             e = "a" < "b"
         in
             (a, b, c, d, e)

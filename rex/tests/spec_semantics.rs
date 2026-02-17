@@ -94,6 +94,17 @@ async fn spec_defaulting_picks_a_concrete_type_for_numeric_classes() {
 }
 
 #[tokio::test]
+async fn spec_integer_literals_unify_with_integral_context() {
+    let (heap, pointer, ty) = eval("let x: u64 = 4 in x").await.unwrap();
+    assert_eq!(ty, Type::con("u64", 0));
+    let value = heap.get(&pointer).unwrap();
+    match value.as_ref() {
+        Value::U64(n) => assert_eq!(*n, 4),
+        _ => panic!("expected u64, got {}", heap.type_name(&pointer).unwrap()),
+    }
+}
+
+#[tokio::test]
 async fn test_let_tuple_destructuring() {
     let (heap, pointer, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in x")
         .await

@@ -22,7 +22,7 @@ let
     sum = λ xs →
         match xs
             when [] → 0
-            when x:xs → x + sum xs,
+            when x::xs → x + sum xs,
     pick = λ flag a b →
         if flag then a else b,
     use_dict = λ d →

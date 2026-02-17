@@ -250,6 +250,31 @@ Rules:
 This is what makes instance methods predictable and prevents “magical” selection based on unifying
 type variables with arbitrary instance heads.
 
+## Integer Literals
+
+Integer literals are overloaded over integral types.
+
+- A literal like `4` introduces a fresh type variable `α` with predicate `Integral α`.
+- A negative literal like `-3` introduces `α` with predicates `Integral α` and `AdditiveGroup α`
+  (so it can only specialize to signed numeric types).
+- Context can specialize `α` (for example, `let x: u64 = 4 in x`).
+- Unannotated `let` bindings whose definition is an integer literal are kept monomorphic. This lets
+  use sites specialize the binding consistently in that scope (for example, `let x = 4 in (x + 1,
+  x + 2)`).
+- If `α` remains ambiguous, normal defaulting rules apply.
+
+Examples:
+
+```rex
+let x: u8 = 4 in x
+let f: i64 -> i64 = \x -> x in f 4
+let x = 4 in (x is u16)
+let x: i16 = -3 in x
+```
+
+Attempting to use a negative literal at an unsigned type is a type error (for example
+`let x: u8 = -3 in x`).
+
 ## Defaulting
 
 Defaulting runs after type inference and before evaluation.
@@ -292,10 +317,3 @@ zero
 ```
 
 Regression: `spec_defaulting_picks_a_concrete_type_for_numeric_classes` (`rex/tests/spec_semantics.rs`).
-
-Example: adding an `i32` literal causes `i32` to become an earlier candidate, so defaulting picks
-`i32`:
-
-```rex,interactive
-let _ = 1 in zero
-```
