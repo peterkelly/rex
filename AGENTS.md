@@ -98,6 +98,7 @@ Install mdBook: `cargo install mdbook`
 - First line should be no more than 50 characters in total
 - Rest of the commit message should contain a summary of the changes, beginning with the reasons
   why the changes were made.
+- Before making a commit, run `./build.sh` and ensure it completes successfully.
 - When making a commit, leave untracked files untouched
 - **IMPORTANT**: Only create commits when explicitly requested by the user. Do not commit automatically after completing tasks.
 
