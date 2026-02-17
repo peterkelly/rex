@@ -1575,6 +1575,10 @@ impl TypeSystem {
         }
     }
 
+    pub fn fresh_type_var(&mut self, name: Option<Symbol>) -> TypeVar {
+        self.supply.fresh(name)
+    }
+
     pub fn set_limits(&mut self, limits: TypeSystemLimits) {
         self.limits = limits;
     }
