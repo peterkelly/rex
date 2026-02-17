@@ -12,17 +12,16 @@ The primary use case is executing scientific workflows, where host functions inv
 pieces of software. Rex provides a language for coordinating these and performing intermediate
 computations and data manipulation.
 
-## Pipeline for executing a rex programs
+## Pipeline for executing Rex programs
 
 - lexer (`rex-lexer`)
 - parser (`rex-parser`)
 - type inference (`rex-ts`)
-- evaluator (`rex-engine`).
+- evaluator (`rex-engine`)
 
 ## Crates in this workspace
 
-- `rex`: Library acting as entry point for embedding in other rust programs, CLI tool for testing.
-   Also contains examples and integration tests.
+- `rex`: Library acting as entry point for embedding in other Rust programs, CLI tool for testing. Also contains examples and integration tests.
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `Program`, symbols).
 - `rex-lexer`: tokenizer + spans.
 - `rex-parser`: recursive-descent parser producing `Program { decls, expr }`.
@@ -48,7 +47,7 @@ computations and data manipulation.
 cargo test
 REX_FUZZ_ITERS=2000 cargo test -p rex --test fuzz_smoke
 cargo fmt
-cargo cargo clippy --tests
+cargo clippy --tests
 ```
 
 ## CLI Usage
@@ -92,13 +91,12 @@ Install mdBook: `cargo install mdbook`
 
 ## Commit messages
 
-- First line should contain a keyword, followed by a colon, a space, then a message that starts
-  with a capital letter.
-- Acceptable keywords: keywords: feat, fix, docs, style, refactor, test, chore
-- First line should be no more than 50 characters in total
-- Rest of the commit message should contain a summary of the changes, beginning with the reasons
-  why the changes were made.
 - Before making a commit, run `./build.sh` and ensure it completes successfully.
+- First line should contain a keyword, followed by a colon, a space, then a message that starts with a capital letter.
+- Acceptable keywords: feat, fix, docs, style, test, chore. Refactors should use the chore keyword.
+- First line should be no more than 50 characters in total
+- Rest of the commit message should contain a summary of the changes. Use the body to explain what and why, not how.
+- Wrap the body at 72 characters
 - When making a commit, leave untracked files untouched
 - **IMPORTANT**: Only create commits when explicitly requested by the user. Do not commit automatically after completing tasks.
 
