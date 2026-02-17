@@ -988,17 +988,17 @@ pub fn value_debug(heap: &Heap, value: &Value) -> Result<String, EngineError> {
     value_debug_inner(heap, value, &mut active)
 }
 
-pub fn value_display(heap: &Heap, value: &Value) -> Result<String, EngineError> {
-    value_display_with(heap, value, ValueDisplayOptions::default())
+pub fn pointer_display(heap: &Heap, pointer: &Pointer) -> Result<String, EngineError> {
+    pointer_display_with(heap, pointer, ValueDisplayOptions::default())
 }
 
-pub fn value_display_with(
+pub fn pointer_display_with(
     heap: &Heap,
-    value: &Value,
+    pointer: &Pointer,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     let mut active = HashSet::new();
-    value_display_inner(heap, value, &mut active, opts)
+    pointer_display_inner(heap, pointer, &mut active, opts)
 }
 
 pub fn closure_debug(heap: &Heap, closure: &Closure) -> Result<String, EngineError> {
@@ -1760,11 +1760,14 @@ mod tests {
     #[test]
     fn value_display_default_keeps_suffixes_and_names() {
         let heap = Heap::new();
-        let got_num = value_display(&heap, &Value::I32(2)).expect("display i32");
+        let num = heap.alloc_i32(2).expect("alloc i32");
+        let got_num = pointer_display(&heap, &num).expect("display i32");
         assert_eq!(got_num, "2");
 
-        let got_ctor =
-            value_display(&heap, &Value::Adt(sym("@snippetabc.A"), vec![])).expect("display adt");
+        let ctor = heap
+            .alloc_adt(sym("@snippetabc.A"), vec![])
+            .expect("alloc adt");
+        let got_ctor = pointer_display(&heap, &ctor).expect("display adt");
         assert_eq!(got_ctor, "A");
     }
 
@@ -1772,11 +1775,14 @@ mod tests {
     fn value_display_unsanitized_keeps_suffixes_and_names() {
         let heap = Heap::new();
         let opts = ValueDisplayOptions::unsanitized();
-        let got_num = value_display_with(&heap, &Value::I32(2), opts).expect("display i32");
+        let num = heap.alloc_i32(2).expect("alloc i32");
+        let got_num = pointer_display_with(&heap, &num, opts).expect("display i32");
         assert_eq!(got_num, "2i32");
 
-        let got_ctor = value_display_with(&heap, &Value::Adt(sym("@snippetabc.A"), vec![]), opts)
-            .expect("display adt");
+        let ctor = heap
+            .alloc_adt(sym("@snippetabc.A"), vec![])
+            .expect("alloc adt");
+        let got_ctor = pointer_display_with(&heap, &ctor, opts).expect("display adt");
         assert_eq!(got_ctor, "@snippetabc.A");
     }
 
@@ -1784,15 +1790,19 @@ mod tests {
     fn value_display_docs_mode_strips_internal_noise() {
         let heap = Heap::new();
         let opts = ValueDisplayOptions::docs();
-        let got_num = value_display_with(&heap, &Value::I32(2), opts).expect("display i32 docs");
+        let num = heap.alloc_i32(2).expect("alloc i32");
+        let got_num = pointer_display_with(&heap, &num, opts).expect("display i32 docs");
         assert_eq!(got_num, "2");
 
-        let got_ctor = value_display_with(&heap, &Value::Adt(sym("@snippetabc.A"), vec![]), opts)
-            .expect("display adt docs");
+        let ctor = heap
+            .alloc_adt(sym("@snippetabc.A"), vec![])
+            .expect("alloc adt");
+        let got_ctor = pointer_display_with(&heap, &ctor, opts).expect("display adt docs");
         assert_eq!(got_ctor, "A");
 
-        let got_non_snippet = value_display_with(&heap, &Value::Adt(sym("pkg.A"), vec![]), opts)
-            .expect("display non-snippet adt docs");
+        let non_snippet = heap.alloc_adt(sym("pkg.A"), vec![]).expect("alloc adt");
+        let got_non_snippet =
+            pointer_display_with(&heap, &non_snippet, opts).expect("display non-snippet adt docs");
         assert_eq!(got_non_snippet, "pkg.A");
     }
 }

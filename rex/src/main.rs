@@ -6,7 +6,7 @@ use std::io::IsTerminal;
 use std::io::{self, BufRead, Read, Write};
 
 use clap::{Args, Parser, Subcommand};
-use rex_engine::{Engine, ReplState, ValueDisplayOptions, value_display_with};
+use rex_engine::{Engine, ReplState, ValueDisplayOptions, pointer_display_with};
 use rex_lexer::Token;
 use rex_parser::{Parser as RexParser, ParserLimits};
 use rex_util::{GasCosts, GasMeter};
@@ -326,17 +326,9 @@ async fn repl_loop(
             .await
         {
             Ok((v, _)) => {
-                let rendered = engine
-                    .heap
-                    .get(&v)
-                    .and_then(|value| {
-                        value_display_with(
-                            &engine.heap,
-                            value.as_ref(),
-                            ValueDisplayOptions::unsanitized(),
-                        )
-                    })
-                    .unwrap_or_else(|e| format!("<display error: {e}>"));
+                let rendered =
+                    pointer_display_with(&engine.heap, &v, ValueDisplayOptions::unsanitized())
+                        .unwrap_or_else(|e| format!("<display error: {e}>"));
                 println!("{rendered}");
             }
             Err(e) => eprintln!("error: {e}"),
@@ -439,16 +431,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
             .await
             .map_err(|e| format!("{e}"))?
     };
-    let rendered = engine
-        .heap
-        .get(&pointer)
-        .and_then(|value| {
-            value_display_with(
-                &engine.heap,
-                value.as_ref(),
-                ValueDisplayOptions::unsanitized(),
-            )
-        })
+    let rendered = pointer_display_with(&engine.heap, &pointer, ValueDisplayOptions::unsanitized())
         .unwrap_or_else(|e| format!("<display error: {e}>"));
     println!("{rendered}");
     Ok(())

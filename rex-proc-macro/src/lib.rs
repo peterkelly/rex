@@ -505,7 +505,7 @@ fn from_value_expr(
                         Ok((#(#decs?,)*))
                     }
                     other => Err(::rex::EngineError::NativeType { expected: "tuple".into(),
-                        got: ::rex::value_display(heap, &other)
+                        got: ::rex::value_debug(heap, &other)
                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                     }),
                 }
@@ -555,7 +555,7 @@ fn from_value_expr(
                                 }
                                 other => {
                                     break Err(::rex::EngineError::NativeType { expected: "list".into(),
-                                        got: ::rex::value_display(heap, &other)
+                                        got: ::rex::value_debug(heap, &other)
                                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                                     });
                                 }
@@ -589,7 +589,7 @@ fn from_value_expr(
                                 Ok(out)
                             }
                             other => Err(::rex::EngineError::NativeType { expected: "dict".into(),
-                                got: ::rex::value_display(heap, &other)
+                                got: ::rex::value_debug(heap, &other)
                                     .unwrap_or_else(|err| format!("<display error: {err}>")),
                             }),
                         }
@@ -609,7 +609,7 @@ fn from_value_expr(
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => Ok(None),
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => Ok(Some(#inner_decode?)),
                             other => Err(::rex::EngineError::NativeType { expected: "option".into(),
-                                got: ::rex::value_display(heap, &other)
+                                got: ::rex::value_debug(heap, &other)
                                     .unwrap_or_else(|err| format!("<display error: {err}>")),
                             }),
                         }
@@ -634,7 +634,7 @@ fn from_value_expr(
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "Ok" && args.len() == 1 => Ok(Ok(#ok_decode?)),
                             ::rex::Value::Adt(tag, args) if tag.as_ref() == "Err" && args.len() == 1 => Ok(Err(#err_decode?)),
                             other => Err(::rex::EngineError::NativeType { expected: "result".into(),
-                                got: ::rex::value_display(heap, &other)
+                                got: ::rex::value_debug(heap, &other)
                                     .unwrap_or_else(|err| format!("<display error: {err}>")),
                             }),
                         }
@@ -847,13 +847,13 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                                     Ok(Self { #(#field_idents,)* })
                                 }
                                 other => Err(::rex::EngineError::NativeType { expected: "dict".into(),
-                                    got: ::rex::value_display(heap, &other)
+                                    got: ::rex::value_debug(heap, &other)
                                         .unwrap_or_else(|err| format!("<display error: {err}>")),
                                 }),
                             }
                         }
                         other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
-                            got: ::rex::value_display(heap, &other)
+                            got: ::rex::value_debug(heap, &other)
                                 .unwrap_or_else(|err| format!("<display error: {err}>")),
                         }),
                     }
@@ -876,7 +876,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             Ok(Self(#(#decs,)*))
                         }
                         other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
-                            got: ::rex::value_display(heap, &other)
+                            got: ::rex::value_debug(heap, &other)
                                 .unwrap_or_else(|err| format!("<display error: {err}>")),
                         }),
                     }
@@ -886,7 +886,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 match value {
                     ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.is_empty() => Ok(Self),
                     other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
-                        got: ::rex::value_display(heap, &other)
+                        got: ::rex::value_debug(heap, &other)
                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                     }),
                 }
@@ -961,7 +961,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                                         Ok(Self::#variant_ident { #(#fields_init,)* })
                                     }
                                     other => Err(::rex::EngineError::NativeType { expected: "dict".into(),
-                                        got: ::rex::value_display(heap, &other)
+                                        got: ::rex::value_debug(heap, &other)
                                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                                     }),
                                 }
@@ -976,7 +976,7 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 match value {
                     #(#arms,)*
                     other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
-                        got: ::rex::value_display(heap, &other)
+                        got: ::rex::value_debug(heap, &other)
                             .unwrap_or_else(|err| format!("<display error: {err}>")),
                     }),
                 }

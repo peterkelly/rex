@@ -7,8 +7,8 @@ pub use rex_ast::expr::{Program, intern, sym};
 pub use rex_engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineError, Export,
     FromPointer, Handler, Heap, IntoPointer, Module, NativeFuture, Pointer, RexType,
-    SyncNativeCallable, Value, ValueDisplayOptions, closure_debug, closure_eq, value_debug,
-    value_display, value_display_with, value_eq,
+    SyncNativeCallable, Value, ValueDisplayOptions, closure_debug, closure_eq, pointer_display,
+    pointer_display_with, value_debug, value_eq,
 };
 pub use rex_lexer::Token;
 pub use rex_parser::{Parser, ParserLimits, error::ParserErr};

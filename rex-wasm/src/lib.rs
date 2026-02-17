@@ -2,7 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use futures::executor::block_on;
-use rex_engine::{Engine, EngineError, ValueDisplayOptions, value_display_with};
+use rex_engine::{Engine, EngineError, ValueDisplayOptions, pointer_display_with};
 use rex_lexer::Token;
 use rex_lsp::{
     completion_for_source, diagnostics_for_source, document_symbols_for_source_public,
@@ -207,16 +207,8 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
 
-    let value_ref = engine
-        .heap
-        .get(&value_ptr)
-        .map_err(|e| format!("heap error: {e}"))?;
-    value_display_with(
-        &engine.heap,
-        value_ref.as_ref(),
-        ValueDisplayOptions::docs(),
-    )
-    .map_err(|e| format!("display error: {e}"))
+    pointer_display_with(&engine.heap, &value_ptr, ValueDisplayOptions::docs())
+        .map_err(|e| format!("display error: {e}"))
 }
 
 fn as_js_err(err: String) -> JsValue {
@@ -307,16 +299,9 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
             .eval_snippet(source, &mut gas)
             .await
             .map_err(|e| format!("runtime error: {e}"))?;
-        let value_ref = engine
-            .heap
-            .get(&value_ptr)
-            .map_err(|e| format!("heap error: {e}"))?;
-        let rendered = value_display_with(
-            &engine.heap,
-            value_ref.as_ref(),
-            ValueDisplayOptions::unsanitized(),
-        )
-        .map_err(|e| format!("display error: {e}"))?;
+        let rendered =
+            pointer_display_with(&engine.heap, &value_ptr, ValueDisplayOptions::unsanitized())
+                .map_err(|e| format!("display error: {e}"))?;
         let payload = serde_json::json!({ "value": rendered });
         serde_json::to_string(&payload).map_err(|e| format!("serialization error: {e}"))
     };
