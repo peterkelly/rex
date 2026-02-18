@@ -67,9 +67,6 @@ async fn assert_err_contains(code: &str, needle: &str) {
 async fn default_record_dispatch() {
     assert_eval(
         r#"
-        class Default a
-            default : a
-
         type Foo = Foo { x: i32, y: i32 } | Bar { z: f32 }
 
         instance Default Foo
@@ -87,18 +84,9 @@ async fn default_record_dispatch() {
 async fn default_nested_context_list() {
     assert_eval(
         r#"
-        class Default a
-            default : a
-
-        instance Default i32
-            default = 0
-
-        instance Default (List a) <= Default a
-            default = [default, default]
-
         let xs: List i32 = default in xs
         "#,
-        "[0i32, 0i32]",
+        "[]",
         Type::list(Type::con("i32", 0)),
     )
     .await;
@@ -128,19 +116,203 @@ async fn pattern_field_renaming() {
 async fn default_nested_context_option() {
     assert_eval(
         r#"
-        class Default a
-            default : a
-
-        instance Default i32
-            default = 0
-
-        instance Default (Option a) <= Default a
-            default = Some default
-
         let x: Option i32 = default in x
         "#,
-        "Some 0i32",
+        "None",
         Type::option(Type::con("i32", 0)),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_custom_adt_single_ctor_unnamed_fields() {
+    assert_eval(
+        r#"
+        type Pair = Pair i32 bool
+
+        instance Default Pair
+            default = Pair 42 true
+
+        let x: Pair = default in x
+        "#,
+        "Pair 42i32 true",
+        Type::con("Pair", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_custom_adt_single_ctor_named_fields() {
+    assert_eval(
+        r#"
+        type Config = Config { retries: i32, enabled: bool }
+
+        instance Default Config
+            default = Config { retries = 3, enabled = false }
+
+        let x: Config = default in x
+        "#,
+        "Config {enabled = false, retries = 3i32}",
+        Type::con("Config", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_custom_adt_enum_unit_variants() {
+    assert_eval(
+        r#"
+        type Mode = Fast | Safe | Debug
+
+        instance Default Mode
+            default = Safe
+
+        let x: Mode = default in x
+        "#,
+        "Safe",
+        Type::con("Mode", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_custom_adt_enum_mixed_variant_payloads() {
+    assert_eval(
+        r#"
+        type Token = Eof | IntLit i32 | Meta { line: i32, col: i32 }
+
+        instance Default Token
+            default = Meta { line = 1, col = 1 }
+
+        let x: Token = default in x
+        "#,
+        "Meta {col = 1i32, line = 1i32}",
+        Type::con("Token", 0),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_custom_adt_generic_instance_uses_constraint() {
+    assert_eval(
+        r#"
+        type Box a = Box a | Missing
+
+        instance Default (Box a) <= Default a
+            default = Box default
+
+        let x: Box i32 = default in x
+        "#,
+        "Box 0i32",
+        Type::app(Type::con("Box", 1), Type::con("i32", 0)),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_multiple_adts_same_named_fields_then_record_update_without_is_fails() {
+    // Without contextual type information, `default` is still polymorphic at
+    // `{ default with ... }`, so record update cannot prove field availability.
+    assert_err_contains(
+        r#"
+        type A = A { x: i32, y: i32 }
+        type B = B { x: i32, y: i32 }
+
+        instance Default A
+            default = A { x = 1, y = 2 }
+
+        instance Default B
+            default = B { x = 10, y = 20 }
+
+        let
+            a = { default with { x = 9 } },
+            b = { default with { y = 8 } }
+        in
+            (a, b)
+        "#,
+        "field `x` is not definitely available",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_multiple_adts_same_named_fields_then_record_update_uses_let_annotations() {
+    // The `let` annotations provide expected types (`A` and `B`), so record
+    // updates can resolve `default` without requiring explicit `is`.
+    assert_eval(
+        r#"
+        type A = A { x: i32, y: i32 }
+        type B = B { x: i32, y: i32 }
+
+        instance Default A
+            default = A { x = 1, y = 2 }
+
+        instance Default B
+            default = B { x = 10, y = 20 }
+
+        let
+            a: A = { default with { x = 9 } },
+            b: B = { default with { y = 8 } }
+        in
+            (a, b)
+        "#,
+        "(A {x = 9i32, y = 2i32}, B {x = 10i32, y = 8i32})",
+        Type::tuple(vec![Type::con("A", 0), Type::con("B", 0)]),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_multiple_adts_same_named_fields_then_record_update() {
+    // Even with shared field names, this works because each `default` call is
+    // explicitly pinned to a concrete ADT (`A`/`B`) before record update.
+    assert_eval(
+        r#"
+        type A = A { x: i32, y: i32 }
+        type B = B { x: i32, y: i32 }
+
+        instance Default A
+            default = A { x = 1, y = 2 }
+
+        instance Default B
+            default = B { x = 10, y = 20 }
+
+        let
+            a: A = { (default is A) with { x = 9 } },
+            b: B = { (default is B) with { y = 8 } }
+        in
+            (a, b)
+        "#,
+        "(A {x = 9i32, y = 2i32}, B {x = 10i32, y = 8i32})",
+        Type::tuple(vec![Type::con("A", 0), Type::con("B", 0)]),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn default_multiple_adts_same_named_fields_with_is_disambiguates_without_let_types() {
+    // `is` is necessary here to choose which `Default` instance to use before
+    // record update checks field availability. Without it, the base type stays
+    // ambiguous even though `A` and `B` share the same field names.
+    assert_eval(
+        r#"
+        type A = A { x: i32, y: i32 }
+        type B = B { x: i32, y: i32 }
+
+        instance Default A
+            default = A { x = 1, y = 2 }
+
+        instance Default B
+            default = B { x = 10, y = 20 }
+
+        let
+            a = { (default is A) with { x = 9 } },
+            b = { (default is B) with { y = 8 } }
+        in
+            (a, b)
+        "#,
+        "(A {x = 9i32, y = 2i32}, B {x = 10i32, y = 8i32})",
+        Type::tuple(vec![Type::con("A", 0), Type::con("B", 0)]),
     )
     .await;
 }
@@ -314,13 +486,13 @@ async fn superclass_and_instance_context() {
 async fn missing_instance_method_is_error() {
     assert_err_contains(
         r#"
-        class Default a
-            default : a
+        class NeedsMethod a
+            needs : a
 
-        instance Default i32
+        instance NeedsMethod i32
         0
         "#,
-        "missing implementation of `default`",
+        "missing implementation of `needs`",
     )
     .await;
 }
@@ -329,10 +501,10 @@ async fn missing_instance_method_is_error() {
 async fn unknown_instance_method_is_error() {
     assert_err_contains(
         r#"
-        class Default a
-            default : a
+        class NeedsMethod a
+            needs : a
 
-        instance Default i32
+        instance NeedsMethod i32
             not_a_method = 0
         0
         "#,
@@ -345,11 +517,11 @@ async fn unknown_instance_method_is_error() {
 async fn missing_instance_constraint_is_error() {
     assert_err_contains(
         r#"
-        class Default a
-            default : a
+        class NeedsCtx a
+            make : a
 
-        instance Default (List a)
-            default = [default]
+        instance NeedsCtx (List a)
+            make = [make]
         0
         "#,
         "not in the instance context",
@@ -361,14 +533,14 @@ async fn missing_instance_constraint_is_error() {
 async fn duplicate_instances_are_rejected() {
     assert_err_contains(
         r#"
-        class Default a
-            default : a
+        class Dup a
+            dup : a
 
-        instance Default i32
-            default = 0
+        instance Dup i32
+            dup = 0
 
-        instance Default i32
-            default = 1
+        instance Dup i32
+            dup = 1
 
         0
         "#,
@@ -381,13 +553,13 @@ async fn duplicate_instances_are_rejected() {
 async fn ambiguous_class_method_use_is_error() {
     assert_err_contains(
         r#"
-        class Default a
-            default : a
+        class Pick a
+            pick : a
 
-        instance Default i32
-            default = 0
+        instance Pick i32
+            pick = 0
 
-        default
+        pick
         "#,
         "ambiguous overload",
     )

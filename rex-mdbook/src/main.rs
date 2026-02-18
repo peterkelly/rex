@@ -514,6 +514,7 @@ function setRunState(root, running) {
     setButtonIcon(toggleButton, "play", "Run");
   }
   toggleButton.setAttribute("aria-pressed", running ? "true" : "false");
+  toggleButton.disabled = false;
 }
 
 function resetRepl(root) {
@@ -559,11 +560,33 @@ async function runRepl(root) {
   out.hidden = false;
   const state = rexRuns.get(root);
   if (state?.running) return;
-  out.textContent = "Running...";
-  setRunState(root, true);
 
   const editor = rexEditors.get(root);
   const code = editor?.getModel()?.getValue() ?? "";
+  let wasm = null;
+  try {
+    wasm = await ensureWasm();
+    const diagnostics = JSON.parse(wasm.lspDiagnosticsToJson(code));
+    const typeErrors = diagnostics.filter((diag) => Number(diag?.severity ?? 1) === 1);
+    if (typeErrors.length > 0) {
+      const formatDiag = (diag) => {
+        const start = diag?.range?.start;
+        const loc = start
+          ? `line ${start.line + 1}, col ${start.character + 1}: `
+          : "";
+        return loc + String(diag?.message ?? "Type checking failed.");
+      };
+      out.textContent = typeErrors.map(formatDiag).join("\n");
+      return;
+    }
+  } catch (e) {
+    out.textContent = String(e);
+    return;
+  }
+
+  out.textContent = "Running...";
+  setRunState(root, true);
+
   const runId = (state?.runId ?? 0) + 1;
   const worker = createEvalWorker();
   rexRuns.set(root, { worker, runId, running: true });

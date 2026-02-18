@@ -26,6 +26,7 @@ class:AdditiveGroup	Types supporting additive inverse and subtraction.
 class:AdditiveMonoid	Types with additive identity and associative addition.
 class:Alternative	Applicative types with a fallback choice operation.
 class:Applicative	Functors that can lift values and apply wrapped functions.
+class:Default	Types with a canonical default value.
 class:Eq	Types supporting equality/inequality comparison.
 class:Field	Types supporting division in addition to ring operations.
 class:Filterable	Functors supporting filtering and partial mapping.
@@ -62,6 +63,7 @@ fn:ap	Apply wrapped functions to wrapped values.
 fn:bind	Monadic flat-map/sequencing operation.
 fn:cmp	Three-way comparison returning negative/zero/positive `i32`.
 fn:count	Count elements in a foldable container.
+fn:default	Canonical default value for a type. For `Result a e`, this requires `Default a`.
 fn:filter	Keep elements that satisfy a predicate.
 fn:filter_map	Map and drop missing results in one pass.
 fn:fold	Left-style fold over a container.

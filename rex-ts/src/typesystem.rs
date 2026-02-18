@@ -2839,6 +2839,18 @@ fn infer_app_arg_type(
     arg: &Expr,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
     match (arg_hint, arg) {
+        (Some(arg_hint), Expr::RecordUpdate(_, base, updates)) => {
+            infer_record_update_type_with_hint(
+                unifier,
+                supply,
+                env,
+                adts,
+                known,
+                base.as_ref(),
+                updates,
+                &arg_hint,
+            )
+        }
         (Some(arg_hint), Expr::Dict(_, kvs))
             if matches!(arg_hint.as_ref(), TypeKind::Record(..)) =>
         {
@@ -2892,6 +2904,18 @@ fn infer_app_arg_typed(
     arg: &Expr,
 ) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
     match (arg_hint, arg) {
+        (Some(arg_hint), Expr::RecordUpdate(_, base, updates)) => {
+            infer_record_update_typed_with_hint(
+                unifier,
+                supply,
+                env,
+                adts,
+                known,
+                base.as_ref(),
+                updates,
+                &arg_hint,
+            )
+        }
         (Some(arg_hint), Expr::Dict(_, kvs))
             if matches!(arg_hint.as_ref(), TypeKind::Record(..)) =>
         {
@@ -2934,6 +2958,94 @@ fn infer_app_arg_typed(
         }
         _ => infer_expr(unifier, supply, env, adts, known, arg),
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn infer_record_update_type_with_hint(
+    unifier: &mut Unifier<'_>,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &HashMap<Symbol, AdtDecl>,
+    known: &KnownVariants,
+    base: &Expr,
+    updates: &BTreeMap<Symbol, Arc<Expr>>,
+    hint_ty: &Type,
+) -> Result<(Vec<Predicate>, Type), TypeError> {
+    let (p_base, t_base) = infer_expr_type(unifier, supply, env, adts, known, base)?;
+    unifier.unify(&t_base, hint_ty)?;
+    let base_ty = unifier.apply_type(&t_base);
+    let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
+    let update_fields: Vec<Symbol> = updates.keys().cloned().collect();
+    let (result_ty, fields) = resolve_record_update(
+        unifier,
+        supply,
+        adts,
+        &base_ty,
+        known_variant,
+        &update_fields,
+    )?;
+    let expected: HashMap<_, _> = fields.into_iter().collect();
+
+    let mut preds = p_base;
+    for (k, v) in updates {
+        let expected_ty = expected.get(k).ok_or_else(|| TypeError::UnknownField {
+            field: k.clone(),
+            typ: result_ty.to_string(),
+        })?;
+        let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
+        unifier.unify(&t1, expected_ty)?;
+        preds.extend(p1);
+    }
+    Ok((preds, result_ty))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn infer_record_update_typed_with_hint(
+    unifier: &mut Unifier<'_>,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &HashMap<Symbol, AdtDecl>,
+    known: &KnownVariants,
+    base: &Expr,
+    updates: &BTreeMap<Symbol, Arc<Expr>>,
+    hint_ty: &Type,
+) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
+    let (p_base, t_base, typed_base) = infer_expr(unifier, supply, env, adts, known, base)?;
+    unifier.unify(&t_base, hint_ty)?;
+    let base_ty = unifier.apply_type(&t_base);
+    let known_variant = known_variant_from_expr_with_known(base, &base_ty, adts, known);
+    let update_fields: Vec<Symbol> = updates.keys().cloned().collect();
+    let (result_ty, fields) = resolve_record_update(
+        unifier,
+        supply,
+        adts,
+        &base_ty,
+        known_variant,
+        &update_fields,
+    )?;
+    let expected: HashMap<_, _> = fields.into_iter().collect();
+
+    let mut preds = p_base;
+    let mut typed_updates = BTreeMap::new();
+    for (k, v) in updates {
+        let expected_ty = expected.get(k).ok_or_else(|| TypeError::UnknownField {
+            field: k.clone(),
+            typ: result_ty.to_string(),
+        })?;
+        let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
+        unifier.unify(&t1, expected_ty)?;
+        preds.extend(p1);
+        typed_updates.insert(k.clone(), typed_v);
+    }
+
+    let typed = TypedExpr::new(
+        result_ty.clone(),
+        TypedExprKind::RecordUpdate {
+            base: Box::new(typed_base),
+            updates: typed_updates,
+        },
+    );
+    Ok((preds, result_ty, typed))
 }
 
 fn infer_expr_type(
@@ -3144,12 +3256,31 @@ fn infer_expr_type_inner(
             let mut env_cur = env.clone();
             let mut known_cur = known.clone();
             for (v, ann, d) in bindings {
-                let (p1, t1) = infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?;
-                if let Some(ref ann) = ann {
+                let (p1, t1) = if let Some(ref ann_expr) = ann {
                     let mut ann_vars = HashMap::new();
-                    let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
-                    unifier.unify(&t1, &ann_ty)?;
-                }
+                    let ann_ty =
+                        type_from_annotation_expr_vars(adts, ann_expr, &mut ann_vars, supply)?;
+                    match d.as_ref() {
+                        Expr::RecordUpdate(_, base, updates) => infer_record_update_type_with_hint(
+                            unifier,
+                            supply,
+                            &env_cur,
+                            adts,
+                            &known_cur,
+                            base.as_ref(),
+                            updates,
+                            &ann_ty,
+                        )?,
+                        _ => {
+                            let (p1, t1) =
+                                infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?;
+                            unifier.unify(&t1, &ann_ty)?;
+                            (p1, t1)
+                        }
+                    }
+                } else {
+                    infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?
+                };
                 let def_ty = unifier.apply_type(&t1);
                 let scheme = if ann.is_none() && is_integral_literal_expr(&d) {
                     monomorphic_scheme_with_unifier(p1, def_ty.clone(), unifier)
@@ -3325,11 +3456,29 @@ fn infer_expr_type_inner(
             Ok((preds, out_ty))
         }
         Expr::Ann(_, expr, ann) => {
-            let (preds, expr_ty) = infer_expr_type(unifier, supply, env, adts, known, expr)?;
             let ann_ty = type_from_annotation_expr(adts, ann)?;
-            unifier.unify(&expr_ty, &ann_ty)?;
-            let out_ty = unifier.apply_type(&ann_ty);
-            Ok((preds, out_ty))
+            match expr.as_ref() {
+                Expr::RecordUpdate(_, base, updates) => {
+                    let (preds, out_ty) = infer_record_update_type_with_hint(
+                        unifier,
+                        supply,
+                        env,
+                        adts,
+                        known,
+                        base.as_ref(),
+                        updates,
+                        &ann_ty,
+                    )?;
+                    Ok((preds, out_ty))
+                }
+                _ => {
+                    let (preds, expr_ty) =
+                        infer_expr_type(unifier, supply, env, adts, known, expr)?;
+                    unifier.unify(&expr_ty, &ann_ty)?;
+                    let out_ty = unifier.apply_type(&ann_ty);
+                    Ok((preds, out_ty))
+                }
+            }
         }
     }
 }
@@ -3619,14 +3768,38 @@ fn infer_expr(
                     let mut known_cur = known.clone();
                     let mut typed_defs = Vec::new();
                     for (v, ann, d) in bindings {
-                        let (p1, t1, typed_def) =
-                            infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?;
-                        if let Some(ref ann) = ann {
+                        let (p1, t1, typed_def) = if let Some(ref ann_expr) = ann {
                             let mut ann_vars = HashMap::new();
-                            let ann_ty =
-                                type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
-                            unifier.unify(&t1, &ann_ty)?;
-                        }
+                            let ann_ty = type_from_annotation_expr_vars(
+                                adts,
+                                ann_expr,
+                                &mut ann_vars,
+                                supply,
+                            )?;
+                            match d.as_ref() {
+                                Expr::RecordUpdate(_, base, updates) => {
+                                    infer_record_update_typed_with_hint(
+                                        unifier,
+                                        supply,
+                                        &env_cur,
+                                        adts,
+                                        &known_cur,
+                                        base.as_ref(),
+                                        updates,
+                                        &ann_ty,
+                                    )?
+                                }
+                                _ => {
+                                    let (p1, t1, typed_def) = infer_expr(
+                                        unifier, supply, &env_cur, adts, &known_cur, &d,
+                                    )?;
+                                    unifier.unify(&t1, &ann_ty)?;
+                                    (p1, t1, typed_def)
+                                }
+                            }
+                        } else {
+                            infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?
+                        };
                         let def_ty = unifier.apply_type(&t1);
                         let scheme = if ann.is_none() && is_integral_literal_expr(&d) {
                             monomorphic_scheme_with_unifier(p1, def_ty.clone(), unifier)
@@ -3859,12 +4032,28 @@ fn infer_expr(
                     Ok((preds, out_ty, typed))
                 }
                 Expr::Ann(_, expr, ann) => {
-                    let (preds, expr_ty, typed_expr) =
-                        infer_expr(unifier, supply, env, adts, known, expr)?;
                     let ann_ty = type_from_annotation_expr(adts, ann)?;
-                    unifier.unify(&expr_ty, &ann_ty)?;
-                    let out_ty = unifier.apply_type(&ann_ty);
-                    Ok((preds, out_ty, typed_expr))
+                    match expr.as_ref() {
+                        Expr::RecordUpdate(_, base, updates) => {
+                            infer_record_update_typed_with_hint(
+                                unifier,
+                                supply,
+                                env,
+                                adts,
+                                known,
+                                base.as_ref(),
+                                updates,
+                                &ann_ty,
+                            )
+                        }
+                        _ => {
+                            let (preds, expr_ty, typed_expr) =
+                                infer_expr(unifier, supply, env, adts, known, expr)?;
+                            unifier.unify(&expr_ty, &ann_ty)?;
+                            let out_ty = unifier.apply_type(&ann_ty);
+                            Ok((preds, out_ty, typed_expr))
+                        }
+                    }
                 }
             }
         })()

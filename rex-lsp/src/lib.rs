@@ -2030,6 +2030,38 @@ fn code_actions_for_diagnostic(
         ));
     }
 
+    if let Some(field) = field_not_definitely_available_from_message(&diagnostic.message)
+        && let Some(program) = program
+        && let Some(selected) = text_for_range(text, target_range)
+    {
+        let candidates = default_record_candidates_for_field(program, field);
+        for ty_name in &candidates {
+            if let Some(new_text) = replace_first_default_with_is(&selected, ty_name) {
+                actions.push(code_action_replace(
+                    format!("Disambiguate `default` as `{ty_name}`"),
+                    uri,
+                    target_range,
+                    new_text,
+                    diagnostic.clone(),
+                ));
+            }
+        }
+
+        if let Some((binding_name, insert_pos)) =
+            find_let_binding_for_def_range(program, target_range)
+        {
+            for ty_name in &candidates {
+                actions.push(code_action_insert(
+                    format!("Annotate `{binding_name}` as `{ty_name}`"),
+                    uri,
+                    insert_pos,
+                    format!(": {ty_name}"),
+                    diagnostic.clone(),
+                ));
+            }
+        }
+    }
+
     actions
 }
 
@@ -2118,6 +2150,88 @@ fn range_is_empty(range: Range) -> bool {
 
 fn unknown_var_name_from_message(message: &str) -> Option<&str> {
     message.strip_prefix("unbound variable ").map(str::trim)
+}
+
+fn field_not_definitely_available_from_message(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("field `")?;
+    let (field, tail) = rest.split_once('`')?;
+    tail.contains("is not definitely available on")
+        .then_some(field)
+}
+
+fn default_record_candidates_for_field(program: &Program, field: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for decl in &program.decls {
+        let Decl::Instance(inst) = decl else {
+            continue;
+        };
+        if inst.class.as_ref() != "Default" {
+            continue;
+        }
+        let TypeExpr::Name(_, ty_name) = &inst.head else {
+            continue;
+        };
+        if !type_decl_has_record_field(program, ty_name.as_ref(), field) {
+            continue;
+        }
+        let ty_name = ty_name.as_ref().to_string();
+        if seen.insert(ty_name.clone()) {
+            out.push(ty_name);
+        }
+    }
+    out
+}
+
+fn type_decl_has_record_field(program: &Program, type_name: &str, field: &str) -> bool {
+    program.decls.iter().any(|decl| {
+        let Decl::Type(td) = decl else {
+            return false;
+        };
+        if td.name.as_ref() != type_name {
+            return false;
+        }
+        td.variants.iter().any(|variant| {
+            variant.args.iter().any(|arg| {
+                let TypeExpr::Record(_, fields) = arg else {
+                    return false;
+                };
+                fields.iter().any(|(name, _)| name.as_ref() == field)
+            })
+        })
+    })
+}
+
+fn replace_first_default_with_is(source: &str, ty_name: &str) -> Option<String> {
+    for (idx, _) in source.match_indices("default") {
+        let left_ok = if idx == 0 {
+            true
+        } else {
+            !is_ident_char(source[..idx].chars().next_back().unwrap_or('_'))
+        };
+        let right_idx = idx + "default".len();
+        let right_ok = if right_idx >= source.len() {
+            true
+        } else {
+            !is_ident_char(source[right_idx..].chars().next().unwrap_or('_'))
+        };
+        if !(left_ok && right_ok) {
+            continue;
+        }
+
+        let mut replaced = String::with_capacity(source.len() + ty_name.len() + 8);
+        replaced.push_str(&source[..idx]);
+        replaced.push_str("(default is ");
+        replaced.push_str(ty_name);
+        replaced.push(')');
+        replaced.push_str(&source[right_idx..]);
+        return Some(replaced);
+    }
+    None
+}
+
+fn is_ident_char(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_'
 }
 
 fn is_hole_name(name: &str) -> bool {
@@ -4692,6 +4806,7 @@ fn push_type_diagnostics(
     }
 
     if let Err(err) = ts.infer(program.expr.as_ref()) {
+        let before = diagnostics.len();
         push_ts_error(
             err,
             diagnostics,
@@ -4699,6 +4814,13 @@ fn push_type_diagnostics(
             Some(&ts),
             None,
         );
+        if let Some(primary) = diagnostics.get(before).cloned() {
+            push_additional_default_record_update_ambiguity_diagnostics(
+                program.expr.as_ref(),
+                &primary.message,
+                diagnostics,
+            );
+        }
         return;
     }
 
@@ -4742,6 +4864,188 @@ fn unknown_var_name(err: &TsTypeError) -> Option<Symbol> {
         TsTypeError::UnknownVar(name) => Some(name.clone()),
         TsTypeError::Spanned { error, .. } => unknown_var_name(error),
         _ => None,
+    }
+}
+
+fn field_not_definitely_available_tail(message: &str) -> Option<(&str, &str)> {
+    let rest = message.strip_prefix("field `")?;
+    let (field, tail) = rest.split_once('`')?;
+    tail.contains("is not definitely available on")
+        .then_some((field, tail))
+}
+
+fn push_additional_default_record_update_ambiguity_diagnostics(
+    expr: &Expr,
+    primary_message: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some((_field, tail)) = field_not_definitely_available_tail(primary_message) else {
+        return;
+    };
+    let mut updates = Vec::new();
+    collect_default_record_updates(expr, &mut updates);
+    for (span, fields) in updates {
+        if diagnostics.len() >= MAX_DIAGNOSTICS {
+            break;
+        }
+        let Some(field) = fields.first() else {
+            continue;
+        };
+        let message = format!("field `{field}`{tail}");
+        let range = span_to_range(span);
+        if diagnostics
+            .iter()
+            .any(|d| d.range == range && d.message == message)
+        {
+            continue;
+        }
+        diagnostics.push(Diagnostic {
+            range,
+            severity: Some(DiagnosticSeverity::ERROR),
+            message,
+            source: Some("rex-ts".to_string()),
+            ..Diagnostic::default()
+        });
+    }
+}
+
+fn collect_default_record_updates(expr: &Expr, out: &mut Vec<(Span, Vec<String>)>) {
+    match expr {
+        Expr::RecordUpdate(span, base, updates) => {
+            if matches!(base.as_ref(), Expr::Var(v) if v.name.as_ref() == "default") {
+                let fields = updates
+                    .keys()
+                    .map(|name| name.as_ref().to_string())
+                    .collect::<Vec<_>>();
+                if !fields.is_empty() {
+                    out.push((*span, fields));
+                }
+            }
+            collect_default_record_updates(base, out);
+            for value in updates.values() {
+                collect_default_record_updates(value, out);
+            }
+        }
+        Expr::App(_, fun, arg) => {
+            collect_default_record_updates(fun, out);
+            collect_default_record_updates(arg, out);
+        }
+        Expr::Project(_, base, _) => collect_default_record_updates(base, out),
+        Expr::Lam(_, _, _, _, _, body) => collect_default_record_updates(body, out),
+        Expr::Let(_, _, _, def, body) => {
+            collect_default_record_updates(def, out);
+            collect_default_record_updates(body, out);
+        }
+        Expr::LetRec(_, bindings, body) => {
+            for (_var, _ann, def) in bindings {
+                collect_default_record_updates(def, out);
+            }
+            collect_default_record_updates(body, out);
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            collect_default_record_updates(cond, out);
+            collect_default_record_updates(then_expr, out);
+            collect_default_record_updates(else_expr, out);
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            collect_default_record_updates(scrutinee, out);
+            for (_pat, arm) in arms {
+                collect_default_record_updates(arm, out);
+            }
+        }
+        Expr::Ann(_, inner, _) => collect_default_record_updates(inner, out),
+        Expr::Tuple(_, items) | Expr::List(_, items) => {
+            for item in items {
+                collect_default_record_updates(item, out);
+            }
+        }
+        Expr::Dict(_, entries) => {
+            for value in entries.values() {
+                collect_default_record_updates(value, out);
+            }
+        }
+        Expr::Var(..)
+        | Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..)
+        | Expr::Hole(..) => {}
+    }
+}
+
+fn find_let_binding_for_def_range(program: &Program, target: Range) -> Option<(String, Position)> {
+    find_let_binding_for_def_range_in_expr(program.expr_with_fns().as_ref(), target)
+}
+
+fn find_let_binding_for_def_range_in_expr(
+    expr: &Expr,
+    target: Range,
+) -> Option<(String, Position)> {
+    match expr {
+        Expr::Let(_, var, ann, def, body) => {
+            let def_range = span_to_range(*def.span());
+            if ranges_overlap(def_range, target) && ann.is_none() {
+                return Some((var.name.as_ref().to_string(), span_to_range(var.span).end));
+            }
+            find_let_binding_for_def_range_in_expr(def.as_ref(), target)
+                .or_else(|| find_let_binding_for_def_range_in_expr(body.as_ref(), target))
+        }
+        Expr::LetRec(_, bindings, body) => {
+            for (var, ann, def) in bindings {
+                let def_range = span_to_range(*def.span());
+                if ranges_overlap(def_range, target) && ann.is_none() {
+                    return Some((var.name.as_ref().to_string(), span_to_range(var.span).end));
+                }
+                if let Some(found) = find_let_binding_for_def_range_in_expr(def.as_ref(), target) {
+                    return Some(found);
+                }
+            }
+            find_let_binding_for_def_range_in_expr(body.as_ref(), target)
+        }
+        Expr::App(_, fun, arg) => find_let_binding_for_def_range_in_expr(fun.as_ref(), target)
+            .or_else(|| find_let_binding_for_def_range_in_expr(arg.as_ref(), target)),
+        Expr::Project(_, base, _) => find_let_binding_for_def_range_in_expr(base.as_ref(), target),
+        Expr::RecordUpdate(_, base, updates) => {
+            find_let_binding_for_def_range_in_expr(base.as_ref(), target).or_else(|| {
+                updates
+                    .values()
+                    .find_map(|expr| find_let_binding_for_def_range_in_expr(expr.as_ref(), target))
+            })
+        }
+        Expr::Lam(_, _, _, _, _, body) => {
+            find_let_binding_for_def_range_in_expr(body.as_ref(), target)
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            find_let_binding_for_def_range_in_expr(cond.as_ref(), target)
+                .or_else(|| find_let_binding_for_def_range_in_expr(then_expr.as_ref(), target))
+                .or_else(|| find_let_binding_for_def_range_in_expr(else_expr.as_ref(), target))
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            find_let_binding_for_def_range_in_expr(scrutinee.as_ref(), target).or_else(|| {
+                arms.iter().find_map(|(_, arm)| {
+                    find_let_binding_for_def_range_in_expr(arm.as_ref(), target)
+                })
+            })
+        }
+        Expr::Ann(_, inner, _) => find_let_binding_for_def_range_in_expr(inner.as_ref(), target),
+        Expr::Tuple(_, items) | Expr::List(_, items) => items
+            .iter()
+            .find_map(|item| find_let_binding_for_def_range_in_expr(item.as_ref(), target)),
+        Expr::Dict(_, entries) => entries
+            .values()
+            .find_map(|value| find_let_binding_for_def_range_in_expr(value.as_ref(), target)),
+        Expr::Var(..)
+        | Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..)
+        | Expr::Hole(..) => None,
     }
 }
 
@@ -6590,6 +6894,8 @@ pub async fn run_stdio() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rex::{Engine, GasMeter, Parser, Token};
+    use rex_engine::{ValueDisplayOptions, pointer_display_with};
     use serde_json::Map;
 
     fn expect_object(value: &Value) -> &Map<String, Value> {
@@ -6608,6 +6914,30 @@ mod tests {
             .unwrap_or_else(|| panic!("missing `{key}`"))
             .as_str()
             .unwrap_or_else(|| panic!("`{key}` should be string"))
+    }
+
+    async fn eval_source_to_display(code: &str) -> (String, String) {
+        let tokens = Token::tokenize(code).expect("tokenize source");
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program(&mut GasMeter::default())
+            .expect("parse source");
+        let mut engine = Engine::with_prelude(()).expect("build engine");
+        engine.inject_decls(&program.decls).expect("inject decls");
+        let (ptr, ty) = engine
+            .eval(program.expr.as_ref(), &mut GasMeter::default())
+            .await
+            .expect("evaluate source");
+        let display = pointer_display_with(
+            &engine.heap,
+            &ptr,
+            ValueDisplayOptions {
+                include_numeric_suffixes: true,
+                ..ValueDisplayOptions::default()
+            },
+        )
+        .expect("display value");
+        (display, ty.to_string())
     }
 
     #[test]
@@ -6653,6 +6983,170 @@ in
                 .contains("typed hole `?` must be filled before evaluation")),
             "diagnostics: {diags:#?}"
         );
+    }
+
+    #[test]
+    fn diagnostics_report_both_default_record_update_ambiguities() {
+        let text = r#"
+type A = A { x: i32, y: i32 }
+type B = B { x: i32, y: i32 }
+
+instance Default A
+    default = A { x = 1, y = 2 }
+
+instance Default B
+    default = B { x = 10, y = 20 }
+
+let
+    a = { default with { x = 9 } },
+    b = { default with { y = 8 } }
+in
+    (a, b)
+"#;
+        let diags = diagnostics_for_source(text);
+        let field_diags: Vec<&Diagnostic> = diags
+            .iter()
+            .filter(|d| d.message.contains("is not definitely available on"))
+            .collect();
+        assert_eq!(field_diags.len(), 2, "diagnostics: {diags:#?}");
+        assert!(
+            field_diags.iter().any(|d| d.message.contains("field `x`")),
+            "diagnostics: {diags:#?}"
+        );
+        assert!(
+            field_diags.iter().any(|d| d.message.contains("field `y`")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn e2e_ambiguous_default_record_updates_two_quick_fix_styles_then_eval() {
+        let text = r#"type A = A { x: i32, y: i32 }
+type B = B { x: i32, y: i32 }
+
+instance Default A
+    default = A { x = 1, y = 2 }
+
+instance Default B
+    default = B { x = 10, y = 20 }
+
+let
+    a = { default with { x = 9 } },
+    b = { default with { y = 8 } }
+in
+    (a, b)
+"#;
+        let uri = in_memory_doc_uri();
+        clear_parse_cache(&uri);
+
+        let mut field_diags: Vec<Diagnostic> = diagnostics_from_text(&uri, text)
+            .into_iter()
+            .filter(|diag| diag.message.contains("is not definitely available on"))
+            .collect();
+        field_diags.sort_by_key(|diag| {
+            (
+                diag.range.start.line,
+                diag.range.start.character,
+                diag.range.end.line,
+                diag.range.end.character,
+                diag.message.clone(),
+            )
+        });
+        assert_eq!(field_diags.len(), 2, "diagnostics: {field_diags:#?}");
+        assert_eq!(
+            field_diags[0].message,
+            "field `x` is not definitely available on a"
+        );
+        assert_eq!(
+            field_diags[0].range,
+            Range {
+                start: Position {
+                    line: 10,
+                    character: 8,
+                },
+                end: Position {
+                    line: 10,
+                    character: 34,
+                },
+            }
+        );
+        assert_eq!(
+            field_diags[1].message,
+            "field `y` is not definitely available on a"
+        );
+        assert_eq!(
+            field_diags[1].range,
+            Range {
+                start: Position {
+                    line: 11,
+                    character: 8,
+                },
+                end: Position {
+                    line: 11,
+                    character: 34,
+                },
+            }
+        );
+
+        let step_a = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 10,
+                character: 25,
+            },
+        )
+        .expect("step for a");
+        let quick_fix_a = step_a
+            .get("quickFixes")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("title").and_then(Value::as_str)
+                        == Some("Disambiguate `default` as `A`")
+                })
+            })
+            .cloned()
+            .expect("quick fix for a using `is`");
+        let edit_a: WorkspaceEdit =
+            serde_json::from_value(quick_fix_a.get("edit").cloned().expect("edit for a"))
+                .expect("workspace edit for a");
+        let after_a = apply_workspace_edit_to_text(&uri, text, &edit_a).expect("apply edit for a");
+
+        let step_b = execute_semantic_loop_step(
+            &uri,
+            &after_a,
+            Position {
+                line: 11,
+                character: 25,
+            },
+        )
+        .expect("step for b");
+        let quick_fix_b = step_b
+            .get("quickFixes")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("title").and_then(Value::as_str) == Some("Annotate `b` as `B`")
+                })
+            })
+            .cloned()
+            .expect("quick fix for b using let annotation");
+        let edit_b: WorkspaceEdit =
+            serde_json::from_value(quick_fix_b.get("edit").cloned().expect("edit for b"))
+                .expect("workspace edit for b");
+        let after_b =
+            apply_workspace_edit_to_text(&uri, &after_a, &edit_b).expect("apply edit for b");
+
+        let diagnostics_after = diagnostics_from_text(&uri, &after_b);
+        assert!(
+            diagnostics_after.is_empty(),
+            "unexpected diagnostics after fixes: {diagnostics_after:#?}\nupdated=\n{after_b}"
+        );
+
+        let (value, ty) = eval_source_to_display(&after_b).await;
+        assert_eq!(value, "(A {x = 9i32, y = 2i32}, B {x = 10i32, y = 8i32})");
+        assert_eq!(ty, "(A, B)");
     }
 
     #[test]
@@ -6840,6 +7334,84 @@ in
                 .any(|title| title == "Wrap expression in lambda"),
             "titles: {titles:#?}"
         );
+    }
+
+    #[test]
+    fn code_actions_offer_default_disambiguation_with_is_for_record_update() {
+        let text = r#"
+type A = A { x: i32, y: i32 }
+type B = B { x: i32, y: i32 }
+
+instance Default A
+    default = A { x = 1, y = 2 }
+
+instance Default B
+    default = B { x = 10, y = 20 }
+
+let
+    a = { default with { x = 9 } },
+    b = { default with { y = 8 } }
+in
+    (a, b)
+"#;
+        let uri = in_memory_doc_uri();
+        clear_parse_cache(&uri);
+        let diagnostics = diagnostics_from_text(&uri, text);
+        let diag = diagnostics
+            .into_iter()
+            .find(|d| d.message.contains("field `x` is not definitely available"))
+            .expect("expected field availability diagnostic");
+        let actions = code_actions_for_source(&uri, text, diag.range, std::slice::from_ref(&diag));
+        let code_actions: Vec<CodeAction> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+
+        let titles: Vec<String> = code_actions.iter().map(|a| a.title.clone()).collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Disambiguate `default` as `A`"),
+            "titles: {titles:#?}"
+        );
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Disambiguate `default` as `B`"),
+            "titles: {titles:#?}"
+        );
+        assert!(
+            titles.iter().any(|title| title == "Annotate `a` as `A`"),
+            "titles: {titles:#?}"
+        );
+        assert!(
+            titles.iter().any(|title| title == "Annotate `a` as `B`"),
+            "titles: {titles:#?}"
+        );
+
+        let contains_fix_for = |needle: &str| {
+            code_actions.iter().any(|action| {
+                action
+                    .edit
+                    .as_ref()
+                    .and_then(|edit| edit.changes.as_ref())
+                    .and_then(|changes| changes.get(&uri))
+                    .is_some_and(|edits| edits.iter().any(|e| e.new_text.contains(needle)))
+            })
+        };
+        assert!(
+            contains_fix_for("(default is A)"),
+            "expected `(default is A)` edit"
+        );
+        assert!(
+            contains_fix_for("(default is B)"),
+            "expected `(default is B)` edit"
+        );
+        assert!(contains_fix_for(": A"), "expected `: A` annotation edit");
+        assert!(contains_fix_for(": B"), "expected `: B` annotation edit");
     }
 
     #[test]

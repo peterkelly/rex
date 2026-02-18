@@ -63,6 +63,14 @@ Methods:
 - `pure`: `Applicative f => (a -> (f a))`. Lift a plain value into an applicative context.
 - `ap`: `Applicative f => ((f (a -> b)) -> ((f a) -> (f b)))`. Apply wrapped functions to wrapped values.
 
+### `Default`
+Types with a canonical default value.
+
+Superclasses: _none_
+
+Methods:
+- `default`: `Default a => a`. Canonical default value for a type. For `Result a e`, this requires `Default a`.
+
 ### `Eq`
 Types supporting equality/inequality comparison.
 
@@ -198,6 +206,7 @@ Methods:
 | `or_else` | `(((f a) -> (f a)) -> ((f a) ->`<br>`(f a)))` | `List`<br>`Option`<br>`Array`<br>`(Result e)` | Provide an alternative container value. |
 | `pure` | `(a -> (f a))` | `List`<br>`Option`<br>`Array`<br>`(Result e)` | Lift a plain value into an applicative context. |
 | `ap` | `((f (a -> b)) -> ((f a) -> (f`<br>`b)))` | `List`<br>`Option`<br>`Array`<br>`(Result e)` | Apply wrapped functions to wrapped values. |
+| `default` | `a` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`(List a)`<br>`(Array a)`<br>`(Option a)`<br>`(Result a e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
 | `==` | `(a -> (a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List a)`<br>`(Option a)`<br>`(Array a)`<br>`(Result a e)` | Equality comparison. |
 | `!=` | `(a -> (a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List a)`<br>`(Option a)`<br>`(Array a)`<br>`(Result a e)` | Inequality comparison. |
 | `/` | `(a -> (a -> a))` | `f32`<br>`f64` | Division. |

@@ -384,9 +384,10 @@ Notes:
 
 ## Prelude Type Classes (Selected)
 
-Rex ships a prelude that provides common abstractions and instances. Highlights:
+Rex ships a prelude with common abstractions and instances. Highlights:
 
 - numeric hierarchy: `AdditiveMonoid`, `Semiring`, `Ring`, `Field`, …
+- `Default` (`default`) for common scalar and container types
 - `Eq` / `Ord`
 - `Functor` / `Applicative` / `Monad` for `List`, `Array`, `Option`, `Result`
 - `Foldable`, `Filterable`, `Sequence`
@@ -409,8 +410,11 @@ get 0 [10, 20, 30]
 
 ## Defaulting (Ambiguous Types)
 
-Rex supports defaulting for certain numeric-like classes (e.g. `AdditiveMonoid`).
+Rex supports defaulting for variables constrained by defaultable classes
+(for example `AdditiveMonoid`).
 This matters for expressions like `zero` where no concrete type is otherwise forced.
+
+This defaulting pass is separate from the `Default` type class method `default`.
 
 Example:
 
@@ -418,5 +422,5 @@ Example:
 zero
 ```
 
-With no other constraints, `zero` defaults to a concrete numeric type (see [SPEC.md](SPEC.md) for the
-exact algorithm and order).
+With no other constraints, `zero` defaults to a concrete candidate type. See
+[SPEC.md](SPEC.md) for the exact algorithm and candidate order.

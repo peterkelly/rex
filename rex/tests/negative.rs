@@ -318,9 +318,6 @@ async fn compile_rejects_invalid_programs() {
         (
             "constraint_kind_mismatch_rejected",
             r#"
-            class Default a where
-                default : a
-
             fn my_fn (x: t i32) -> i32 where Foldable t, Default t =
                 0
 
@@ -331,9 +328,6 @@ async fn compile_rejects_invalid_programs() {
         (
             "fn_decl_missing_required_constraint_is_error",
             r#"
-            class Default a where
-                default : a
-
             fn my_fn (x: t a) -> a where Foldable t =
                 foldl (\_ acc -> acc) (default) x
 
@@ -366,9 +360,6 @@ async fn compile_rejects_invalid_programs_engine_errors() {
         (
             "ambiguous_type_variable_only_in_constraints",
             r#"
-            class Default a where
-                default : a
-
             fn my_fn (x: i32) -> i32 where Default b =
                 let y: b = default in x
 

@@ -47,6 +47,10 @@ class Ord a <= Eq a
 class Show a
     show : a -> string
 
+{- default values -}
+class Default a
+    default : a
+
 {- collection combinators -}
 class Functor f
     map : (a -> b) -> f a -> f b
@@ -398,6 +402,40 @@ instance Show uuid
     show = prim_show
 instance Show datetime
     show = prim_show
+
+{- Default instances -}
+instance Default bool
+    default = false
+instance Default u8
+    default = prim_zero
+instance Default u16
+    default = prim_zero
+instance Default u32
+    default = prim_zero
+instance Default u64
+    default = prim_zero
+instance Default i8
+    default = prim_zero
+instance Default i16
+    default = prim_zero
+instance Default i32
+    default = prim_zero
+instance Default i64
+    default = prim_zero
+instance Default f32
+    default = prim_zero
+instance Default f64
+    default = prim_zero
+instance Default string
+    default = prim_zero
+instance Default (List a)
+    default = []
+instance Default (Array a)
+    default = prim_array_from_list []
+instance Default (Option a)
+    default = None
+instance Default (Result a e) <= Default a
+    default = Ok default
 
 instance Show (List a) <= Show a
     show = \xs ->

@@ -31,6 +31,10 @@ These are available by default:
 
 - `Eq a` (`==`, `!=`)
 - `Ord a` (`cmp`, `<`, `<=`, `>`, `>=`)
+- `Default a` (`default`)
+
+`Default` gives you a value-level default for a type. It is separate from Rex's
+defaulting pass, which resolves ambiguous type variables for defaultable classes.
 
 ### Collections and effects
 
