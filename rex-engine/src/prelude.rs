@@ -944,25 +944,23 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_pretty_ops<State: Clone + Send + Sync + 'static>(
+pub(crate) fn inject_show_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
-    engine.export("prim_pretty", |_: &State, x: bool| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: u8| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: u16| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: u32| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: u64| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: i8| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: i16| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: i32| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: i64| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: f32| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: f64| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: String| Ok(x))?;
-    engine.export("prim_pretty", |_: &State, x: Uuid| Ok(x.to_string()))?;
-    engine.export("prim_pretty", |_: &State, x: DateTime<Utc>| {
-        Ok(x.to_string())
-    })?;
+    engine.export("prim_show", |_: &State, x: bool| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: u8| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: u16| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: u32| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: u64| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: i8| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: i16| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: i32| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: i64| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: f32| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: f64| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: String| Ok(x))?;
+    engine.export("prim_show", |_: &State, x: Uuid| Ok(x.to_string()))?;
+    engine.export("prim_show", |_: &State, x: DateTime<Utc>| Ok(x.to_string()))?;
     Ok(())
 }
 
@@ -1360,7 +1358,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 
     // prim_json_stringify : a -> string
     //
-    // Used by `std.json` to implement `Pretty Value` (JSON-encoded string).
+    // Used by `std.json` to implement `Show Value` (JSON-encoded string).
     {
         let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());

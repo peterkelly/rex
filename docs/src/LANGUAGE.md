@@ -359,19 +359,19 @@ instance Size (List t)
 Instance contexts use `<=`:
 
 ```rex
-class Pretty a
-  pretty : a -> string
+class Show a
+  show : a -> string
 
-instance Pretty i32
-  pretty = \_ -> "<i32>"
+instance Show i32
+  show = \_ -> "<i32>"
 
-instance Pretty (List a) <= Pretty a
-  pretty = \xs ->
+instance Show (List a) <= Show a
+  show = \xs ->
     let
       step = \out x ->
         if out == "["
-          then out + pretty x
-          else out + ", " + pretty x,
+          then out + show x
+          else out + ", " + show x,
       out = foldl step "[" xs
     in
       out + "]"

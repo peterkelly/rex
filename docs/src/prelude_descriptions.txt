@@ -36,7 +36,7 @@ class:Integral	Integral numeric types supporting modulo.
 class:Monad	Applicatives supporting dependent sequencing (`bind`).
 class:MultiplicativeMonoid	Types with multiplicative identity and associative multiplication.
 class:Ord	Types with total ordering comparisons.
-class:Pretty	Types that can be converted to user-facing strings.
+class:Show	Types that can be converted to user-facing strings (Haskell-style naming).
 class:Ring	Types supporting additive group plus multiplication.
 class:Semiring	Types supporting additive and multiplicative monoid operations.
 class:Sequence	Ordered containers with slicing/zipping operations.
@@ -79,7 +79,7 @@ fn:min	Minimum element by ordering.
 fn:negate	Additive inverse.
 fn:one	Multiplicative identity.
 fn:or_else	Provide an alternative container value.
-fn:pretty	Render a value as a human-readable string.
+fn:show	Render a value as a human-readable string.
 fn:pure	Lift a plain value into an applicative context.
 fn:skip	Drop the first `n` elements.
 fn:sum	Sum all elements in a foldable container.

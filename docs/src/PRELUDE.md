@@ -152,14 +152,6 @@ Methods:
 - `>`: `Ord a => (a -> (a -> bool))`. Greater-than comparison.
 - `>=`: `Ord a => (a -> (a -> bool))`. Greater-than-or-equal comparison.
 
-### `Pretty`
-Types that can be converted to user-facing strings.
-
-Superclasses: _none_
-
-Methods:
-- `pretty`: `Pretty a => (a -> string)`. Render a value as a human-readable string.
-
 ### `Ring`
 Types supporting additive group plus multiplication.
 
@@ -184,6 +176,14 @@ Methods:
 - `skip`: `Sequence f => (i32 -> ((f a) -> (f a)))`. Drop the first `n` elements.
 - `zip`: `Sequence f => ((f a) -> ((f b) -> (f (a, b))))`. Pair elements from two containers by position.
 - `unzip`: `Sequence f => ((f (a, b)) -> ((f a), (f b)))`. Split a container of pairs into a pair of containers.
+
+### `Show`
+Types that can be converted to user-facing strings (Haskell-style naming).
+
+Superclasses: _none_
+
+Methods:
+- `show`: `Show a => (a -> string)`. Render a value as a human-readable string.
 
 ## Built-in Functions
 
@@ -217,11 +217,11 @@ Methods:
 | `<=` | `(a -> (a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Less-than-or-equal comparison. |
 | `>` | `(a -> (a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Greater-than comparison. |
 | `>=` | `(a -> (a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string` | Greater-than-or-equal comparison. |
-| `pretty` | `(a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`datetime`<br>`(List a)`<br>`(Array a)`<br>`(Option a)`<br>`(Result a e)` | Render a value as a human-readable string. |
 | `take` | `(i32 -> ((f a) -> (f a)))` | `List`<br>`Array` | Keep only the first `n` elements. |
 | `skip` | `(i32 -> ((f a) -> (f a)))` | `List`<br>`Array` | Drop the first `n` elements. |
 | `zip` | `((f a) -> ((f b) -> (f (a,`<br>`b))))` | `List`<br>`Array` | Pair elements from two containers by position. |
 | `unzip` | `((f (a, b)) -> ((f a), (f b)))` | `List`<br>`Array` | Split a container of pairs into a pair of containers. |
+| `show` | `(a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`datetime`<br>`(List a)`<br>`(Array a)`<br>`(Option a)`<br>`(Result a e)` | Render a value as a human-readable string. |
 
 ### Other Built-ins
 

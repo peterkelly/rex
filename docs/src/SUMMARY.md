@@ -39,7 +39,7 @@
     - [Functor Polymorphism](tutorial/section3/05_functor_polymorphism.md)
     - [Option Pipelines](tutorial/section3/06_option_pipelines.md)
     - [Result Workflows](tutorial/section3/07_result_workflows.md)
-    - [Custom Pretty Printing](tutorial/section3/08_custom_pretty.md)
+    - [Custom Show Printing](tutorial/section3/08_custom_show.md)
     - [Custom Size](tutorial/section3/09_custom_size.md)
     - [Indexable](tutorial/section3/10_indexable.md)
     - [Small Standard Library](tutorial/section3/11_small_stdlib.md)

@@ -38,8 +38,8 @@ pub fn parse : string -> Result Value DecodeError
             when Err msg -> Err (DecodeError { message = msg })
       )
 
-instance Pretty Value
-    pretty = stringify
+instance Show Value
+    show = stringify
 
 fn fail : string -> Result a DecodeError
     = \msg -> Err (DecodeError { message = msg })
@@ -208,7 +208,7 @@ instance EncodeJson i64
             when _ -> Err (expected "number" v)
 
 instance EncodeJson uuid
-    encode_json = \u -> String (pretty u)
+    encode_json = \u -> String (show u)
 
 	instance DecodeJson uuid
 	    decode_json = \v ->
@@ -221,7 +221,7 @@ instance EncodeJson uuid
             when _ -> Err (expected "string" v)
 
 instance EncodeJson datetime
-    encode_json = \d -> String (pretty d)
+    encode_json = \d -> String (show d)
 
 	instance DecodeJson datetime
 	    decode_json = \v ->

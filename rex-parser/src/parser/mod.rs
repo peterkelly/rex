@@ -4146,7 +4146,7 @@ mod tests {
     #[test]
     fn test_parse_declare_fn_decl_bare_signature() {
         let code = r#"
-        declare fn info a -> string where Pretty a
+        declare fn info a -> string where Show a
         0
         "#;
         let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -4167,7 +4167,7 @@ mod tests {
                 assert_eq!(fd.constraints.len(), 1);
                 assert!(matches!(
                     fd.constraints[0].class,
-                    ref n if n.as_ref() == "Pretty"
+                    ref n if n.as_ref() == "Show"
                 ));
             }
             other => panic!("expected declare fn decl, got {other:?}"),
@@ -4177,7 +4177,7 @@ mod tests {
     #[test]
     fn test_parse_declare_fn_decl_bare_signature_with_colon() {
         let code = r#"
-        declare fn info : a -> string where Pretty a
+        declare fn info : a -> string where Show a
         0
         "#;
         let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -4198,7 +4198,7 @@ mod tests {
                 assert_eq!(fd.constraints.len(), 1);
                 assert!(matches!(
                     fd.constraints[0].class,
-                    ref n if n.as_ref() == "Pretty"
+                    ref n if n.as_ref() == "Show"
                 ));
             }
             other => panic!("expected declare fn decl, got {other:?}"),
@@ -4406,9 +4406,9 @@ mod tests {
 
     #[test]
     fn test_projection_binds_tighter_than_application() {
-        let expr = parse("pretty p.x");
+        let expr = parse("show p.x");
         let expected = app!(
-            v!("pretty"),
+            v!("show"),
             Arc::new(Expr::Project(Span::default(), v!("p"), intern("x")))
         );
         assert_expr_eq!(expr, expected; ignore span);

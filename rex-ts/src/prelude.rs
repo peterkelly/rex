@@ -217,22 +217,22 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         }
     }
 
-    // Pretty-printing intrinsics (monomorphic overloads).
+    // Show-printing intrinsics (monomorphic overloads).
     {
-        let pretty_types = [
+        let show_types = [
             "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
             "uuid", "datetime",
         ];
-        for prim in pretty_types {
+        for prim in show_types {
             let t = Type::con(prim, 0);
             ts.add_overload(
-                "prim_pretty",
+                "prim_show",
                 Scheme::new(vec![], vec![], Type::fun(t, string_ty.clone())),
             );
         }
     }
 
-    // JSON stringification (used by `std.json`'s `Pretty` instance).
+    // JSON stringification (used by `std.json`'s `Show` instance).
     //
     // This is intentionally a `prim_` helper with a polymorphic type so the
     // `std.json` module can stay purely-Rex at the surface level.

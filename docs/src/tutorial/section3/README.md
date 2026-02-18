@@ -19,7 +19,7 @@ These examples are interactive in the docs: edit and run them directly on each p
 5. [Functor Polymorphism](05_functor_polymorphism.md)
 6. [Option Pipelines](06_option_pipelines.md)
 7. [Result Workflows](07_result_workflows.md)
-8. [Custom Pretty Printing](08_custom_pretty.md)
+8. [Custom Show Printing](08_custom_show.md)
 9. [Custom Size](09_custom_size.md)
 10. [Indexable](10_indexable.md)
 11. [Small Standard Library](11_small_stdlib.md)

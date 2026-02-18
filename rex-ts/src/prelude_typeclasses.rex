@@ -43,9 +43,9 @@ class Ord a <= Eq a
     > : a -> a -> bool
     >= : a -> a -> bool
 
-{- pretty printing -}
-class Pretty a
-    pretty : a -> string
+{- show printing -}
+class Show a
+    show : a -> string
 
 {- collection combinators -}
 class Functor f
@@ -369,68 +369,68 @@ instance Ord string <= Eq string
     > = prim_gt
     >= = prim_ge
 
-{- Pretty instances -}
-instance Pretty bool
-    pretty = prim_pretty
-instance Pretty u8
-    pretty = prim_pretty
-instance Pretty u16
-    pretty = prim_pretty
-instance Pretty u32
-    pretty = prim_pretty
-instance Pretty u64
-    pretty = prim_pretty
-instance Pretty i8
-    pretty = prim_pretty
-instance Pretty i16
-    pretty = prim_pretty
-instance Pretty i32
-    pretty = prim_pretty
-instance Pretty i64
-    pretty = prim_pretty
-instance Pretty f32
-    pretty = prim_pretty
-instance Pretty f64
-    pretty = prim_pretty
-instance Pretty string
-    pretty = prim_pretty
-instance Pretty uuid
-    pretty = prim_pretty
-instance Pretty datetime
-    pretty = prim_pretty
+{- Show instances -}
+instance Show bool
+    show = prim_show
+instance Show u8
+    show = prim_show
+instance Show u16
+    show = prim_show
+instance Show u32
+    show = prim_show
+instance Show u64
+    show = prim_show
+instance Show i8
+    show = prim_show
+instance Show i16
+    show = prim_show
+instance Show i32
+    show = prim_show
+instance Show i64
+    show = prim_show
+instance Show f32
+    show = prim_show
+instance Show f64
+    show = prim_show
+instance Show string
+    show = prim_show
+instance Show uuid
+    show = prim_show
+instance Show datetime
+    show = prim_show
 
-instance Pretty (List a) <= Pretty a
-    pretty = \xs ->
+instance Show (List a) <= Show a
+    show = \xs ->
         match xs
             when [] -> "[]"
             when x::xs1 ->
                 let
-                    step = \out y -> out + ", " + pretty y
+                    step = \out y -> out + ", " + show y
                 in
-                    "[" + foldl step (pretty x) xs1 + "]"
+                    "[" + foldl step (show x) xs1 + "]"
 
-instance Pretty (Array a) <= Pretty a
-    pretty = \xs ->
+instance Show (Array a) <= Show a
+    show = \xs ->
         let
             step = \out x ->
                 if out == "<array "
-                    then out + pretty x
-                    else out + ", " + pretty x,
+                    then out + show x
+                    else out + ", " + show x,
             out = foldl step "<array " xs
         in
             out + ">"
 
-instance Pretty (Option a) <= Pretty a
-    pretty = \x ->
+instance Show (Option a) <= Show a
+    show = \x ->
         match x
-            when Some a0 -> "Some(" + pretty a0 + ")"
+            when Some a0 -> "Some(" + show a0 + ")"
             when None -> "None"
 
-instance Pretty (Result a e) <= Pretty a, Pretty e
-    pretty = \x ->
+instance Show (Result a e) <= Show a, Show e
+    show = \x ->
         match x
-            when Ok a0 -> "Ok(" + pretty a0 + ")"
-            when Err e0 -> "Err(" + pretty e0 + ")"
+            when Ok a0 -> "Ok(" + show a0 + ")"
+            when Err e0 -> "Err(" + show e0 + ")"
 
 {- Functor / Applicative / Monad / Foldable / Filterable / Sequence / Alternative instances -}
 instance Functor List

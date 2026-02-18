@@ -1034,7 +1034,7 @@ async fn std_json_numeric_decode_errors() {
 }
 
 #[tokio::test]
-async fn std_json_pretty_renders_valid_json() {
+async fn std_json_show_renders_valid_json() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet(
@@ -1055,7 +1055,7 @@ async fn std_json_pretty_renders_valid_json() {
                 ])
             }
         in
-          pretty v
+          show v
 "#,
     )
     .await
@@ -1110,8 +1110,8 @@ async fn std_json_parse_and_from_string_roundtrip() {
             },
 
           parsed_ok =
-            match (Json.parse (pretty v))
-              when Ok v2 -> if pretty v2 == pretty v then 1 else 0
+            match (Json.parse (show v))
+              when Ok v2 -> if show v2 == show v then 1 else 0
               when Err _ -> -1,
 
           xs: List i32 = [(1 is i32), (2 is i32), (3 is i32)],

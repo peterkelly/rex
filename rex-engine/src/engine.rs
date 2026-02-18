@@ -20,7 +20,7 @@ use crate::modules::{ModuleId, ModuleSystem, ResolveRequest, ResolvedModule, vir
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
     inject_numeric_ops, inject_option_result_builtins, inject_order_ops, inject_prelude_adts,
-    inject_pretty_ops,
+    inject_show_ops,
 };
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType};
@@ -1329,8 +1329,8 @@ where
 
     /// Inject `debug`/`info`/`warn`/`error` logging functions backed by `tracing`.
     ///
-    /// Each function has the Rex type `a -> str where Pretty a` and logs
-    /// `pretty x` at the corresponding level, returning the rendered string.
+    /// Each function has the Rex type `a -> str where Show a` and logs
+    /// `show x` at the corresponding level, returning the rendered string.
     pub fn inject_tracing_log_functions(&mut self) -> Result<(), EngineError> {
         let string = Type::con("string", 0);
 
@@ -1339,7 +1339,7 @@ where
             let a = Type::var(a_tv.clone());
             Scheme::new(
                 vec![a_tv],
-                vec![Predicate::new("Pretty", a.clone())],
+                vec![Predicate::new("Show", a.clone())],
                 Type::fun(a, string.clone()),
             )
         };
@@ -1373,7 +1373,7 @@ where
         let a = Type::var(a_tv.clone());
         let scheme = Scheme::new(
             vec![a_tv],
-            vec![Predicate::new("Pretty", a.clone())],
+            vec![Predicate::new("Show", a.clone())],
             Type::fun(a, string),
         );
         self.inject_tracing_log_function_with_scheme(name, scheme, log)
@@ -1399,16 +1399,16 @@ where
 
                 let (arg_ty, _ret_ty) = split_fun(&call_type)
                     .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
-                let pretty_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
+                let show_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
                 let mut gas = GasMeter::default();
-                let pretty_ptr = engine
-                    .resolve_class_method(&sym("pretty"), &pretty_ty, &mut gas)
+                let show_ptr = engine
+                    .resolve_class_method(&sym("show"), &show_ty, &mut gas)
                     .await?;
                 let rendered_ptr = apply(
                     engine,
-                    pretty_ptr,
+                    show_ptr,
                     args[0],
-                    Some(&pretty_ty),
+                    Some(&show_ty),
                     Some(&arg_ty),
                     &mut gas,
                 )
@@ -1851,7 +1851,7 @@ where
         inject_prelude_adts(self)?;
         inject_equality_ops(self)?;
         inject_order_ops(self)?;
-        inject_pretty_ops(self)?;
+        inject_show_ops(self)?;
         inject_boolean_ops(self)?;
         inject_numeric_ops(self)?;
         inject_list_builtins(self)?;
