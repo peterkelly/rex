@@ -242,6 +242,7 @@ async function initRexLanguage(monaco, wasm) {
   rexLanguageInit = true;
 
   monaco.languages.register({ id: "rex" });
+  const quickFixKind = monaco.languages?.CodeActionKind?.QuickFix ?? "quickfix";
   monaco.languages.setMonarchTokensProvider("rex", {
     keywords: ["declare", "import", "pub", "let", "in", "type", "match", "when", "if", "then", "else", "as", "for", "is", "fn"],
     operators: ["=", "->", "=>", "|", ":", ",", "."],
@@ -413,6 +414,43 @@ async function initRexLanguage(monaco, wasm) {
         }));
       } catch (_) {
         return [];
+      }
+    }
+  });
+
+  monaco.languages.registerCodeActionProvider("rex", {
+    providedCodeActionKinds: [quickFixKind],
+    provideCodeActions(model, range, context) {
+      try {
+        const json = wasm.lspCodeActionsToJson(
+          model.getValue(),
+          range.startLineNumber - 1,
+          range.startColumn - 1
+        );
+        const items = JSON.parse(json);
+        const key = "inmemory:///docs.rex";
+        const actions = items
+          .filter((item) => item && typeof item.title === "string")
+          .map((item) => {
+            const sourceEdits = item.edit?.changes?.[key] ?? [];
+            const edits = sourceEdits.map((e) => ({
+              resource: model.uri,
+              textEdit: {
+                range: lspRangeToMonacoRange(e.range, monaco),
+                text: e.newText
+              }
+            }));
+            return {
+              title: item.title,
+              kind: item.kind ?? quickFixKind,
+              diagnostics: context.markers ?? [],
+              edit: { edits },
+              isPreferred: false
+            };
+          });
+        return { actions, dispose() {} };
+      } catch (_) {
+        return { actions: [], dispose() {} };
       }
     }
   });
@@ -615,6 +653,13 @@ async function initRepls() {
       fontSize: 13,
       lineNumbers: "on",
       scrollBeyondLastLine: false
+    });
+    editor.addAction({
+      id: "rex.showCodeActions",
+      label: "Rex Code Actions...",
+      contextMenuGroupId: "1_modification",
+      contextMenuOrder: 0.1,
+      run: (ed) => ed.getAction("editor.action.quickFix").run()
     });
     rexEditors.set(root, editor);
     rexEditorNodes.set(root, editorNode);

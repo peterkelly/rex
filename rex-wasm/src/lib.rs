@@ -2,15 +2,15 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use futures::executor::block_on;
-use rex_engine::{Engine, EngineError, ValueDisplayOptions, pointer_display_with};
+use rex_engine::{Engine, ValueDisplayOptions, pointer_display_with};
 use rex_lexer::Token;
 use rex_lsp::{
-    completion_for_source, diagnostics_for_source, document_symbols_for_source_public,
-    format_for_source_public, goto_definition_for_source, hover_for_source,
-    references_for_source_public, rename_for_source_public,
+    code_actions_for_source_public, completion_for_source, diagnostics_for_source,
+    document_symbols_for_source_public, format_for_source_public, goto_definition_for_source,
+    hover_for_source, references_for_source_public, rename_for_source_public,
 };
 use rex_parser::{Parser, ParserLimits, error::ParserErr};
-use rex_ts::{TypeError as TsTypeError, TypeSystem, TypeSystemLimits};
+use rex_ts::{TypeSystem, TypeSystemLimits};
 use rex_util::{GasCosts, GasMeter};
 use wasm_bindgen::prelude::*;
 
@@ -80,63 +80,8 @@ pub fn infer_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, Str
 }
 
 pub fn lsp_diagnostics_to_json(source: &str) -> Result<String, String> {
-    let mut diagnostics = diagnostics_for_source(source);
-    // Replace rex-lsp type diagnostics with type diagnostics from the same
-    // engine snippet inference path used by evaluation.
-    diagnostics.retain(|d| d.source.as_deref() != Some("rex-ts"));
-
-    let mut payload =
-        serde_json::to_value(diagnostics).map_err(|e| format!("serialization error: {e}"))?;
-    let arr = payload
-        .as_array_mut()
-        .ok_or_else(|| "serialization error: expected diagnostics array".to_string())?;
-    arr.extend(engine_type_diagnostics_json(source));
-    serde_json::to_string(&payload).map_err(|e| format!("serialization error: {e}"))
-}
-
-fn engine_type_diagnostics_json(source: &str) -> Vec<serde_json::Value> {
-    let mut engine = match Engine::with_prelude(()) {
-        Ok(engine) => engine,
-        Err(err) => return vec![diagnostic_json(None, format!("engine init error: {err}"))],
-    };
-    engine.type_system.set_limits(TypeSystemLimits::unlimited());
-    let mut gas = GasMeter::unlimited(GasCosts::sensible_defaults());
-
-    match engine.infer_snippet(source, &mut gas) {
-        Ok(_) => Vec::new(),
-        Err(EngineError::Type(err)) => vec![type_error_diagnostic_json(&err)],
-        Err(err) => vec![diagnostic_json(None, format!("type error: {err}"))],
-    }
-}
-
-fn type_error_diagnostic_json(err: &TsTypeError) -> serde_json::Value {
-    match err {
-        TsTypeError::Spanned { span, error } => diagnostic_json(Some(*span), error.to_string()),
-        other => diagnostic_json(None, other.to_string()),
-    }
-}
-
-fn diagnostic_json(span: Option<rex_lexer::span::Span>, message: String) -> serde_json::Value {
-    let (start_line, start_char, end_line, end_char) = if let Some(span) = span {
-        (
-            span.begin.line.saturating_sub(1) as u32,
-            span.begin.column.saturating_sub(1) as u32,
-            span.end.line.saturating_sub(1) as u32,
-            span.end.column.saturating_sub(1) as u32,
-        )
-    } else {
-        (0, 0, 0, 1)
-    };
-
-    serde_json::json!({
-        "range": {
-            "start": { "line": start_line, "character": start_char },
-            "end": { "line": end_line, "character": end_char }
-        },
-        "severity": 1,
-        "message": message,
-        "source": "rex-ts"
-    })
+    let diagnostics = diagnostics_for_source(source);
+    serde_json::to_string(&diagnostics).map_err(|e| format!("serialization error: {e}"))
 }
 
 pub fn lsp_completions_to_json(source: &str, line: u32, character: u32) -> Result<String, String> {
@@ -186,6 +131,11 @@ pub fn lsp_document_symbols_to_json(source: &str) -> Result<String, String> {
 pub fn lsp_format_to_json(source: &str) -> Result<String, String> {
     let edits = format_for_source_public(source);
     serde_json::to_string(&edits).map_err(|e| format!("serialization error: {e}"))
+}
+
+pub fn lsp_code_actions_to_json(source: &str, line: u32, character: u32) -> Result<String, String> {
+    let actions = code_actions_for_source_public(source, line, character);
+    serde_json::to_string(&actions).map_err(|e| format!("serialization error: {e}"))
 }
 
 pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<String, String> {
@@ -283,6 +233,15 @@ pub fn wasm_lsp_format_to_json(source: &str) -> Result<String, JsValue> {
     lsp_format_to_json(source).map_err(as_js_err)
 }
 
+#[wasm_bindgen(js_name = lspCodeActionsToJson)]
+pub fn wasm_lsp_code_actions_to_json(
+    source: &str,
+    line: u32,
+    character: u32,
+) -> Result<String, JsValue> {
+    lsp_code_actions_to_json(source, line, character).map_err(as_js_err)
+}
+
 #[wasm_bindgen(js_name = evalToJson)]
 pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, JsValue> {
     let mut gas = if gas_limit.is_some() {
@@ -315,7 +274,9 @@ pub fn wasm_eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Strin
 
 #[cfg(test)]
 mod tests {
-    use super::{eval_to_string, wasm_eval_to_json};
+    use super::{
+        eval_to_string, lsp_code_actions_to_json, lsp_diagnostics_to_json, wasm_eval_to_json,
+    };
     use futures::executor::block_on;
 
     #[test]
@@ -334,5 +295,51 @@ in
 
         let sanitized = block_on(eval_to_string(source, None)).expect("wasm string eval failed");
         assert_eq!(sanitized, "(2, [A, B])");
+    }
+
+    #[test]
+    fn lsp_diagnostics_preserve_all_unknown_var_usages() {
+        let source = r#"
+let
+  f = \x -> missing + x
+in
+  missing + (f missing)
+"#;
+        let json = lsp_diagnostics_to_json(source).expect("diagnostics json");
+        let diagnostics: serde_json::Value =
+            serde_json::from_str(&json).expect("diagnostics parse");
+        let count = diagnostics
+            .as_array()
+            .expect("diagnostics array")
+            .iter()
+            .filter(|diag| {
+                diag.get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|m| m.contains("unbound variable missing"))
+            })
+            .count();
+        assert_eq!(count, 3, "diagnostics: {diagnostics:#?}");
+    }
+
+    #[test]
+    fn lsp_code_actions_include_unknown_var_fixes() {
+        let source = r#"
+let
+  x = 1
+in
+  y + x
+"#;
+        let json = lsp_code_actions_to_json(source, 4, 2).expect("code actions json");
+        let actions: serde_json::Value = serde_json::from_str(&json).expect("actions parse");
+        let has_replace = actions
+            .as_array()
+            .expect("actions array")
+            .iter()
+            .any(|item| {
+                item.get("title")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|title| title.contains("Replace `y` with `x`"))
+            });
+        assert!(has_replace, "actions: {actions:#?}");
     }
 }

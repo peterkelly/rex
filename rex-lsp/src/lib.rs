@@ -1846,14 +1846,13 @@ fn code_actions_for_source(
         .map(|(_tokens, program)| program);
     let mut actions = Vec::new();
 
-    if diagnostics.is_empty() {
-        actions.extend(code_actions_for_hole_fill(
-            uri,
-            text,
-            parsed.as_ref(),
-            request_range,
-        ));
-    }
+    // Hole fill is position-driven and should be available even when other diagnostics exist.
+    actions.extend(code_actions_for_hole_fill(
+        uri,
+        text,
+        parsed.as_ref(),
+        request_range,
+    ));
 
     for diag in diagnostics {
         let usable_diag_range = range_is_usable_for_text(text, diag.range);
@@ -6752,6 +6751,47 @@ fn aa_mk : i32 -> i32 = \x -> x
 let y : i32 = ? in y
 "#;
         let actions = code_actions_for_source_public(text, 2, 14);
+        let titles: Vec<String> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title.contains("Fill hole with `aa_mk`")),
+            "titles: {titles:#?}"
+        );
+    }
+
+    #[test]
+    fn code_actions_offer_hole_fill_even_with_diagnostics_present() {
+        let text = r#"
+fn aa_mk : i32 -> i32 = \x -> x
+let y : i32 = ? in y
+"#;
+        let uri = in_memory_doc_uri();
+        clear_parse_cache(&uri);
+        let request_range = Range {
+            start: Position {
+                line: 2,
+                character: 14,
+            },
+            end: Position {
+                line: 2,
+                character: 14,
+            },
+        };
+        let diagnostics = vec![Diagnostic {
+            range: request_range,
+            severity: Some(DiagnosticSeverity::ERROR),
+            message: "synthetic diagnostic".to_string(),
+            source: Some("test".to_string()),
+            ..Diagnostic::default()
+        }];
+        let actions = code_actions_for_source(&uri, text, request_range, &diagnostics);
         let titles: Vec<String> = actions
             .into_iter()
             .filter_map(|action| match action {
