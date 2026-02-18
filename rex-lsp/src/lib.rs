@@ -1930,6 +1930,13 @@ fn code_actions_for_diagnostic(
         request_range
     };
 
+    if diagnostic
+        .message
+        .contains("typed hole `?` must be filled before evaluation")
+    {
+        actions.extend(code_actions_for_hole_fill(uri, text, program, target_range));
+    }
+
     if let Some(name) = unknown_var_name_from_message(&diagnostic.message) {
         if let Some(program) = program {
             let mut candidates: Vec<String> =
@@ -4674,6 +4681,29 @@ fn push_type_diagnostics(
 
     if let Err(err) = ts.infer(program.expr.as_ref()) {
         push_ts_error(err, diagnostics, Some(program.expr.as_ref()), Some(&ts));
+        return;
+    }
+
+    push_hole_diagnostics(&program, diagnostics);
+}
+
+fn push_hole_diagnostics(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+    let mut spans = Vec::new();
+    collect_hole_spans(program.expr_with_fns().as_ref(), &mut spans);
+    spans.sort_unstable_by_key(|s| (s.begin.line, s.begin.column, s.end.line, s.end.column));
+    spans.dedup();
+
+    for span in spans {
+        if diagnostics.len() >= MAX_DIAGNOSTICS {
+            break;
+        }
+        diagnostics.push(Diagnostic {
+            range: span_to_range(span),
+            severity: Some(DiagnosticSeverity::ERROR),
+            message: "typed hole `?` must be filled before evaluation".to_string(),
+            source: Some("rex-ts".to_string()),
+            ..Diagnostic::default()
+        });
     }
 }
 
@@ -6578,6 +6608,18 @@ in
     }
 
     #[test]
+    fn diagnostics_report_typed_hole_error() {
+        let text = "let y : i32 = ? in y";
+        let diags = diagnostics_for_source(text);
+        assert!(
+            diags.iter().any(|d| d
+                .message
+                .contains("typed hole `?` must be filled before evaluation")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
     fn references_find_all_usages() {
         let text = r#"
 let
@@ -6792,6 +6834,39 @@ let y : i32 = ? in y
             ..Diagnostic::default()
         }];
         let actions = code_actions_for_source(&uri, text, request_range, &diagnostics);
+        let titles: Vec<String> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title.contains("Fill hole with `aa_mk`")),
+            "titles: {titles:#?}"
+        );
+    }
+
+    #[test]
+    fn code_actions_offer_hole_fill_for_real_typed_hole_diagnostic() {
+        let text = r#"
+fn aa_mk : i32 -> i32 = \x -> x
+let y : i32 = ? in y
+"#;
+        let uri = in_memory_doc_uri();
+        clear_parse_cache(&uri);
+        let diagnostics = diagnostics_from_text(&uri, text);
+        let hole_diag = diagnostics
+            .iter()
+            .find(|d| {
+                d.message
+                    .contains("typed hole `?` must be filled before evaluation")
+            })
+            .expect("typed hole diagnostic")
+            .clone();
+        let actions = code_actions_for_source(&uri, text, hole_diag.range, &[hole_diag]);
         let titles: Vec<String> = actions
             .into_iter()
             .filter_map(|action| match action {

@@ -459,6 +459,28 @@ async fn eval_type_annotation_mismatch() {
 }
 
 #[tokio::test]
+async fn eval_typed_hole_reports_type_error_not_runtime_error() {
+    let expr = parse("let y : i32 = ? in y");
+    let mut engine = engine_with_arith();
+    match eval_expr(&mut engine, expr.as_ref()).await {
+        Err(EngineError::Type(err)) => {
+            let err = strip_span(err);
+            match err {
+                TypeError::UnsupportedExpr(msg) => {
+                    assert!(
+                        msg.contains("typed hole `?` must be filled before evaluation"),
+                        "msg={msg}"
+                    );
+                }
+                other => panic!("expected hole type error, got {other:?}"),
+            }
+        }
+        Err(other) => panic!("expected type error, got {other:?}"),
+        Ok(_) => panic!("expected type error, got Ok"),
+    }
+}
+
+#[tokio::test]
 async fn eval_sync_native_injection() {
     let mut engine = Engine::new(());
     engine.export("zero", |_: &()| Ok(0u32)).unwrap();

@@ -9,6 +9,7 @@ use futures::{FutureExt, future::BoxFuture, pin_mut};
 use rex_ast::expr::{
     ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, sym, sym_eq,
 };
+use rex_lexer::span::Span;
 use rex_ts::{
     AdtDecl, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type, TypeError, TypeKind,
     TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails,
@@ -1940,6 +1941,14 @@ where
     }
 
     fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
+        if let Some(span) = first_hole_span(expr) {
+            return Err(EngineError::Type(TypeError::Spanned {
+                span,
+                error: Box::new(TypeError::UnsupportedExpr(
+                    "typed hole `?` must be filled before evaluation",
+                )),
+            }));
+        }
         let (typed, preds, _ty) = self.type_system.infer_typed(expr)?;
         let (typed, preds) = default_ambiguous_types(self, typed, preds)?;
         self.check_predicates(&preds)?;
@@ -2372,6 +2381,76 @@ where
                 }
             }
         }
+    }
+}
+
+fn first_hole_span(expr: &Expr) -> Option<Span> {
+    match expr {
+        Expr::Hole(span) => Some(*span),
+        Expr::App(_, f, x) => first_hole_span(f).or_else(|| first_hole_span(x)),
+        Expr::Project(_, base, _) => first_hole_span(base),
+        Expr::Lam(_, _scope, _param, _ann, _constraints, body) => first_hole_span(body),
+        Expr::Let(_, _var, _ann, def, body) => {
+            first_hole_span(def).or_else(|| first_hole_span(body))
+        }
+        Expr::LetRec(_, bindings, body) => {
+            for (_var, _ann, def) in bindings {
+                if let Some(span) = first_hole_span(def) {
+                    return Some(span);
+                }
+            }
+            first_hole_span(body)
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => first_hole_span(cond)
+            .or_else(|| first_hole_span(then_expr))
+            .or_else(|| first_hole_span(else_expr)),
+        Expr::Match(_, scrutinee, arms) => {
+            if let Some(span) = first_hole_span(scrutinee) {
+                return Some(span);
+            }
+            for (_pat, arm) in arms {
+                if let Some(span) = first_hole_span(arm) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expr::Ann(_, inner, _) => first_hole_span(inner),
+        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+            for elem in elems {
+                if let Some(span) = first_hole_span(elem) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expr::Dict(_, kvs) => {
+            for value in kvs.values() {
+                if let Some(span) = first_hole_span(value) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expr::RecordUpdate(_, base, kvs) => {
+            if let Some(span) = first_hole_span(base) {
+                return Some(span);
+            }
+            for value in kvs.values() {
+                if let Some(span) = first_hole_span(value) {
+                    return Some(span);
+                }
+            }
+            None
+        }
+        Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..)
+        | Expr::Var(..) => None,
     }
 }
 
