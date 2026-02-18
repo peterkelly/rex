@@ -91,6 +91,16 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             ) -> Result<::rex::AdtDecl, ::rex::EngineError> {
                 <Self as ::rex::RexAdt>::rex_adt_decl(engine)
             }
+
+            pub fn inject_rex_with_default<State: Clone + Send + Sync + 'static>(
+                engine: &mut ::rex::Engine<State>,
+            ) -> Result<(), ::rex::EngineError>
+            where
+                Self: ::rex::RexDefault<State>,
+            {
+                <Self as ::rex::RexAdt>::inject_rex(engine)?;
+                engine.inject_rex_default_instance::<Self>()
+            }
         }
     };
 

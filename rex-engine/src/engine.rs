@@ -26,6 +26,13 @@ use crate::prelude::{
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType};
 
+pub trait RexDefault<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn rex_default(engine: &Engine<State>) -> Result<Pointer, EngineError>;
+}
+
 /// Shared ADT registration surface for derived and manually implemented Rust types.
 pub trait RexAdt: RexType {
     fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
@@ -200,6 +207,13 @@ fn type_head_is_var(typ: &Type) -> bool {
         cur = head;
     }
     matches!(cur.as_ref(), TypeKind::Var(..))
+}
+
+fn sanitize_type_name_for_symbol(typ: &Type) -> String {
+    typ.to_string()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
 }
 
 pub type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
@@ -1547,6 +1561,64 @@ where
             + 'static,
     {
         self.export_native_with_gas_cost(name, scheme, arity, 0, handler)
+    }
+
+    pub fn inject_rex_default_instance<T>(&mut self) -> Result<(), EngineError>
+    where
+        T: RexType + RexDefault<State>,
+    {
+        let class = sym("Default");
+        let method = sym("default");
+        let head_ty = T::rex_type();
+
+        if !self.type_system.class_methods.contains_key(&method) {
+            return Err(EngineError::UnknownVar(method));
+        }
+        if !head_ty.ftv().is_empty() {
+            return Err(EngineError::UnsupportedExpr);
+        }
+
+        if let Some(instances) = self.type_system.classes.instances.get(&class)
+            && instances
+                .iter()
+                .any(|existing| unify(&existing.head.typ, &head_ty).is_ok())
+        {
+            return Err(EngineError::DuplicateTypeclassImpl {
+                class,
+                typ: head_ty.to_string(),
+            });
+        }
+
+        let native_name = format!(
+            "__rex_default_for_{}",
+            sanitize_type_name_for_symbol(&head_ty)
+        );
+        let native_scheme = Scheme::new(vec![], vec![], head_ty.clone());
+        self.export_native(native_name.clone(), native_scheme, 0, |engine, _, _| {
+            T::rex_default(engine)
+        })?;
+
+        self.type_system.inject_instance(
+            "Default",
+            Instance::new(vec![], Predicate::new(class.clone(), head_ty.clone())),
+        );
+
+        let mut methods: HashMap<Symbol, Arc<TypedExpr>> = HashMap::new();
+        methods.insert(
+            method.clone(),
+            Arc::new(TypedExpr::new(
+                head_ty.clone(),
+                TypedExprKind::Var {
+                    name: sym(&native_name),
+                    overloads: vec![],
+                },
+            )),
+        );
+
+        self.typeclasses
+            .insert(class, head_ty, self.env.clone(), methods)?;
+
+        Ok(())
     }
 
     pub fn export_native_async<F>(

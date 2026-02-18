@@ -1,17 +1,50 @@
 use std::sync::Arc;
 
-use rex::{Engine, EngineError, GasMeter, Parser, Token, Type, TypeKind};
+use rex::{
+    Engine, EngineError, FromPointer, GasMeter, IntoPointer, Parser, Pointer, RexDefault, Token,
+    Type, TypeKind,
+};
 use rex_proc_macro::Rex;
+use uuid::Uuid;
+
+#[derive(Clone, Debug, PartialEq, Rex)]
+struct Entity {
+    account_id: Uuid,
+    project_id: Uuid,
+    name: String,
+    description: Option<String>,
+    tags: Option<Vec<String>>,
+    numbers: Vec<u32>,
+}
+
+impl RexDefault<HostState> for Entity {
+    fn rex_default(engine: &Engine<HostState>) -> Result<Pointer, EngineError> {
+        let entity = Entity {
+            account_id: engine.state.account_id,
+            project_id: engine.state.project_id,
+            name: "".to_string(),
+            description: None,
+            tags: None,
+            numbers: vec![],
+        };
+        entity.into_pointer(&engine.heap)
+    }
+}
 
 #[derive(Clone)]
 struct HostState {
-    user_id: String,
+    account_id: Uuid,
+    project_id: Uuid,
     is_admin: bool,
     roles: Vec<String>,
 }
 
-fn current_user_id(state: &HostState) -> Result<String, EngineError> {
-    Ok(state.user_id.clone())
+fn current_account_id(state: &HostState) -> Result<Uuid, EngineError> {
+    Ok(state.account_id)
+}
+
+fn current_project_id(state: &HostState) -> Result<Uuid, EngineError> {
+    Ok(state.project_id)
 }
 
 fn is_admin(state: &HostState) -> Result<bool, EngineError> {
@@ -68,24 +101,35 @@ struct EmbedRecord {
 
 #[tokio::test]
 async fn injected_functions_can_read_shared_state_fields() {
+    let account_id = uuid::uuid!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    let project_id = uuid::uuid!("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
     let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
-        user_id: "u-123".to_string(),
+        account_id,
+        project_id,
         is_admin: true,
         roles: vec!["admin".to_string(), "editor".to_string()],
     })
     .unwrap();
 
-    engine.export("current_user_id", current_user_id).unwrap();
+    engine
+        .export("current_account_id", current_account_id)
+        .unwrap();
+    engine
+        .export("current_project_id", current_project_id)
+        .unwrap();
     engine.export("is_admin", is_admin).unwrap();
     engine.export("have_role", have_role).unwrap();
 
-    let expr = parse("(current_user_id, is_admin, have_role \"admin\", have_role \"viewer\")");
+    let expr = parse(
+        "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
+    );
     let mut gas = unlimited_gas();
     let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("string", 0),
+            Type::con("uuid", 0),
+            Type::con("uuid", 0),
             Type::con("bool", 0),
             Type::con("bool", 0),
             Type::con("bool", 0),
@@ -93,17 +137,87 @@ async fn injected_functions_can_read_shared_state_fields() {
     );
 
     let items = engine.heap.pointer_as_tuple(&value).unwrap();
-    assert_eq!(items.len(), 4);
-    assert_eq!(engine.heap.pointer_as_string(&items[0]).unwrap(), "u-123");
-    assert!(engine.heap.pointer_as_bool(&items[1]).unwrap());
+    assert_eq!(items.len(), 5);
+    assert_eq!(engine.heap.pointer_as_uuid(&items[0]).unwrap(), account_id);
+    assert_eq!(engine.heap.pointer_as_uuid(&items[1]).unwrap(), project_id);
     assert!(engine.heap.pointer_as_bool(&items[2]).unwrap());
-    assert!(!engine.heap.pointer_as_bool(&items[3]).unwrap());
+    assert!(engine.heap.pointer_as_bool(&items[3]).unwrap());
+    assert!(!engine.heap.pointer_as_bool(&items[4]).unwrap());
+}
+
+#[tokio::test]
+async fn derived_rex_default_can_read_host_state() {
+    let account_id = uuid::uuid!("11111111-1111-4111-8111-111111111111");
+    let project_id = uuid::uuid!("22222222-2222-4222-8222-222222222222");
+    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+        account_id,
+        project_id,
+        is_admin: true,
+        roles: vec!["admin".to_string()],
+    })
+    .unwrap();
+
+    Entity::inject_rex_with_default(&mut engine).unwrap();
+
+    let expr = parse("let e: Entity = default in e");
+    let mut gas = unlimited_gas();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(ty, Type::con("Entity", 0));
+
+    let decoded = Entity::from_pointer(&engine.heap, &value).unwrap();
+    assert_eq!(
+        decoded,
+        Entity {
+            account_id,
+            project_id,
+            name: String::new(),
+            description: None,
+            tags: None,
+            numbers: vec![],
+        }
+    );
+}
+
+#[tokio::test]
+async fn derived_rex_default_record_update_can_override_fields() {
+    let account_id = uuid::uuid!("33333333-3333-4333-8333-333333333333");
+    let project_id = uuid::uuid!("44444444-4444-4444-8444-444444444444");
+    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+        account_id,
+        project_id,
+        is_admin: false,
+        roles: vec!["reader".to_string()],
+    })
+    .unwrap();
+
+    Entity::inject_rex_with_default(&mut engine).unwrap();
+
+    let expr = parse(
+        r#"let e: Entity = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
+    );
+    let mut gas = unlimited_gas();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(ty, Type::con("Entity", 0));
+
+    let decoded = Entity::from_pointer(&engine.heap, &value).unwrap();
+    assert_eq!(
+        decoded,
+        Entity {
+            account_id,
+            project_id,
+            name: "sample".to_string(),
+            description: None,
+            tags: Some(vec!["x".to_string(), "y".to_string()]),
+            numbers: vec![7, 11],
+        }
+    );
 }
 
 #[tokio::test]
 async fn async_injected_functions_can_read_shared_state_fields() {
     let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
-        user_id: "u-456".to_string(),
+        account_id: uuid::uuid!("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
+        project_id: uuid::uuid!("dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
         is_admin: false,
         roles: vec!["reader".to_string(), "editor".to_string()],
     })
