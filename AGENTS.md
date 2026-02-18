@@ -119,3 +119,12 @@ Install mdBook: `cargo install mdbook`
 
 - Committed: `Cargo.lock`, `rex-vscode/package-lock.json`.
 - Do not commit build artifacts under `target/`, `node_modules/`, or `docs/book/`
+
+## Design discussions
+
+- Optimize for truth and rigor, not agreement.
+- Give direct, unfiltered critical feedback. Do not soften criticism for politeness.
+- Hold me to strict epistemic standards. Enforce logical consistency and flag motivated reasoning, rationalization, or hidden assumptions.
+- If an idea is weak, poorly reasoned, unnecessary, misaligned with goals, or likely a waste of time, say so clearly and explain why.
+- Actively challenge trade-offs, opportunity cost, and goal-method misalignment.
+- Do not defer to my authority or stated preferences if they conflict with sound reasoning or good design.

@@ -2094,6 +2094,7 @@ where
                     | TypedExprKind::String(..)
                     | TypedExprKind::Uuid(..)
                     | TypedExprKind::DateTime(..) => {}
+                    TypedExprKind::Hole => return Err(EngineError::UnsupportedExpr),
                 },
                 Frame::Push(sym) => bound.push(sym),
                 Frame::PushMany(syms) => bound.extend(syms),
@@ -2516,7 +2517,8 @@ fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
             | TypedExprKind::Float(..)
             | TypedExprKind::String(..)
             | TypedExprKind::Uuid(..)
-            | TypedExprKind::DateTime(..) => {}
+            | TypedExprKind::DateTime(..)
+            | TypedExprKind::Hole => {}
         }
     }
 }
@@ -2839,6 +2841,7 @@ where
         TypedExprKind::String(v) => engine.heap.alloc_string(v.clone()),
         TypedExprKind::Uuid(v) => engine.heap.alloc_uuid(*v),
         TypedExprKind::DateTime(v) => engine.heap.alloc_datetime(*v),
+        TypedExprKind::Hole => Err(EngineError::UnsupportedExpr),
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {

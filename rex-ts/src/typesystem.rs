@@ -428,6 +428,7 @@ impl TypedExpr {
             TypedExprKind::String(v) => TypedExprKind::String(v.clone()),
             TypedExprKind::Uuid(v) => TypedExprKind::Uuid(*v),
             TypedExprKind::DateTime(v) => TypedExprKind::DateTime(*v),
+            TypedExprKind::Hole => TypedExprKind::Hole,
             TypedExprKind::Tuple(elems) => {
                 TypedExprKind::Tuple(elems.iter().map(|e| e.apply(s)).collect())
             }
@@ -505,6 +506,7 @@ pub enum TypedExprKind {
     String(String),
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
+    Hole,
     Tuple(Vec<TypedExpr>),
     List(Vec<TypedExpr>),
     Dict(BTreeMap<Symbol, TypedExpr>),
@@ -2978,6 +2980,10 @@ fn infer_expr_type_inner(
         Expr::String(_, _) => Ok((vec![], Type::con("string", 0))),
         Expr::Uuid(_, _) => Ok((vec![], Type::con("uuid", 0))),
         Expr::DateTime(_, _) => Ok((vec![], Type::con("datetime", 0))),
+        Expr::Hole(_) => {
+            let t = Type::var(supply.fresh(Some(sym("hole"))));
+            Ok((vec![], t))
+        }
         Expr::Var(var) => {
             let schemes = env
                 .lookup(&var.name)
@@ -3399,6 +3405,10 @@ fn infer_expr(
                         t.clone(),
                         TypedExpr::new(t, TypedExprKind::DateTime(*v)),
                     ))
+                }
+                Expr::Hole(_) => {
+                    let t = Type::var(supply.fresh(Some(sym("hole"))));
+                    Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Hole)))
                 }
                 Expr::Var(var) => {
                     let schemes = env
@@ -5526,5 +5536,48 @@ mod tests {
         ts.inject_decls(&program.decls).unwrap();
         let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(typ.to_string(), "{x: i32, y: i32}");
+    }
+
+    #[test]
+    fn infer_typed_hole_expr_is_hole_kind() {
+        let expr = parse_expr("?");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let (typed, _preds, _ty) = ts.infer_typed(expr.as_ref()).unwrap();
+        assert!(
+            matches!(typed.kind, TypedExprKind::Hole),
+            "typed={typed:#?}"
+        );
+    }
+
+    #[test]
+    fn infer_hole_with_annotation_unifies_to_annotation() {
+        let expr = parse_expr("let x : i32 = ? in x");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_hole_in_if_condition_is_bool_constrained() {
+        let expr = parse_expr("if ? then 1 else 2");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_hole_in_arithmetic_is_numeric_constrained() {
+        let expr = parse_expr("? + 1");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::con("i32", 0));
+    }
+
+    #[test]
+    fn infer_hole_arithmetic_conflicting_annotation_failure() {
+        let expr = parse_expr("let x : string = (? + 1) in x");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
+        assert!(matches!(err, TypeError::Unification(_, _)), "err={err:#?}");
     }
 }

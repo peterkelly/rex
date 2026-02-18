@@ -1,16 +1,16 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 use lsp_types::{
-    CompletionItem, CompletionItemKind, Diagnostic, DiagnosticSeverity, DocumentSymbol,
-    GotoDefinitionResponse, Hover, HoverContents, Location, MarkupContent, MarkupKind, Position,
-    Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CompletionItem, CompletionItemKind,
+    Diagnostic, DiagnosticSeverity, DocumentSymbol, GotoDefinitionResponse, Hover, HoverContents,
+    Location, MarkupContent, MarkupKind, Position, Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
 };
 use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
@@ -24,27 +24,45 @@ use rex_parser::Parser;
 use rex_parser::error::ParserErr;
 use rex_ts::Types;
 use rex_ts::{
-    Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr, TypedExprKind, instantiate,
-    unify,
+    Scheme, Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr, TypedExprKind,
+    instantiate, unify,
 };
 use rex_util::{GasMeter, sha256_hex};
+use serde_json::{Value, json, to_value};
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::sync::RwLock;
 #[cfg(not(target_arch = "wasm32"))]
 use tower_lsp::jsonrpc::Result;
 #[cfg(not(target_arch = "wasm32"))]
 use tower_lsp::lsp_types::{
-    CompletionOptions, CompletionParams, CompletionResponse, DidChangeTextDocumentParams,
-    DidCloseTextDocumentParams, DidOpenTextDocumentParams, DocumentFormattingParams,
-    DocumentSymbolParams, DocumentSymbolResponse, GotoDefinitionParams, HoverParams,
-    HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams, MessageType,
-    OneOf, ReferenceParams, RenameParams, ServerCapabilities, ServerInfo,
+    CodeActionOptions, CodeActionParams, CodeActionResponse, CompletionOptions, CompletionParams,
+    CompletionResponse, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
+    DidOpenTextDocumentParams, DocumentFormattingParams, DocumentSymbolParams,
+    DocumentSymbolResponse, ExecuteCommandOptions, ExecuteCommandParams, GotoDefinitionParams,
+    HoverParams, HoverProviderCapability, InitializeParams, InitializeResult, InitializedParams,
+    MessageType, OneOf, ReferenceParams, RenameParams, ServerCapabilities, ServerInfo,
     TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 #[cfg(not(target_arch = "wasm32"))]
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 const MAX_DIAGNOSTICS: usize = 50;
+const CMD_EXPECTED_TYPE_AT: &str = "rex.expectedTypeAt";
+const CMD_FUNCTIONS_PRODUCING_EXPECTED_TYPE_AT: &str = "rex.functionsProducingExpectedTypeAt";
+const CMD_FUNCTIONS_ACCEPTING_INFERRED_TYPE_AT: &str = "rex.functionsAcceptingInferredTypeAt";
+const CMD_ADAPTERS_FROM_INFERRED_TO_EXPECTED_AT: &str = "rex.adaptersFromInferredToExpectedAt";
+const CMD_FUNCTIONS_COMPATIBLE_WITH_IN_SCOPE_VALUES_AT: &str =
+    "rex.functionsCompatibleWithInScopeValuesAt";
+const CMD_HOLES_EXPECTED_TYPES: &str = "rex.holesExpectedTypes";
+const CMD_SEMANTIC_LOOP_STEP: &str = "rex.semanticLoopStep";
+const CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT: &str = "rex.semanticLoopApplyQuickFixAt";
+const CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT: &str = "rex.semanticLoopApplyBestQuickFixesAt";
+const NO_IMPROVEMENT_STREAK_LIMIT: usize = 2;
+const MAX_SEMANTIC_ENV_SCHEMES_SCAN: usize = 1024;
+const MAX_SEMANTIC_IN_SCOPE_VALUES: usize = 128;
+const MAX_SEMANTIC_CANDIDATES: usize = 64;
+const MAX_SEMANTIC_HOLE_FILL_ARITY: usize = 8;
+const MAX_SEMANTIC_HOLES: usize = 128;
 const BUILTIN_TYPES: &[&str] = &[
     "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string", "uuid",
     "datetime", "Dict", "List", "Array", "Option", "Result",
@@ -55,6 +73,29 @@ const BUILTIN_VALUES: &[&str] = &["true", "false", "null", "Some", "None", "Ok",
 enum TokenizeOrParseError {
     Lex(LexicalError),
     Parse(Vec<ParserErr>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BulkQuickFixStrategy {
+    Conservative,
+    Aggressive,
+}
+
+impl BulkQuickFixStrategy {
+    fn parse(s: &str) -> Self {
+        if s.eq_ignore_ascii_case("aggressive") {
+            Self::Aggressive
+        } else {
+            Self::Conservative
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Conservative => "conservative",
+            Self::Aggressive => "aggressive",
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -73,6 +114,24 @@ fn text_hash(text: &str) -> u64 {
 fn parse_cache() -> &'static Mutex<HashMap<Url, CachedParse>> {
     static CACHE: OnceLock<Mutex<HashMap<Url, CachedParse>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn semantic_candidate_values(ts: &TypeSystem) -> Vec<(Symbol, Vec<Scheme>)> {
+    let mut out = Vec::new();
+    let mut scanned = 0usize;
+    for (name, schemes) in &ts.env.values {
+        if scanned >= MAX_SEMANTIC_ENV_SCHEMES_SCAN {
+            break;
+        }
+        let remaining = MAX_SEMANTIC_ENV_SCHEMES_SCAN - scanned;
+        let kept = schemes.iter().take(remaining).cloned().collect::<Vec<_>>();
+        if kept.is_empty() {
+            continue;
+        }
+        scanned += kept.len();
+        out.push((name.clone(), kept));
+    }
+    out
 }
 
 fn clear_parse_cache(uri: &Url) {
@@ -341,6 +400,7 @@ fn rewrite_import_projections_expr(
         Expr::String(span, v) => Expr::String(*span, v.clone()),
         Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
         Expr::DateTime(span, v) => Expr::DateTime(*span, *v),
+        Expr::Hole(span) => Expr::Hole(*span),
         Expr::Tuple(span, elems) => Expr::Tuple(
             *span,
             elems
@@ -1060,6 +1120,28 @@ impl LanguageServer for RexServer {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..CompletionOptions::default()
                 }),
+                code_action_provider: Some(
+                    tower_lsp::lsp_types::CodeActionProviderCapability::Options(
+                        CodeActionOptions {
+                            code_action_kinds: Some(vec![CodeActionKind::QUICKFIX]),
+                            ..CodeActionOptions::default()
+                        },
+                    ),
+                ),
+                execute_command_provider: Some(ExecuteCommandOptions {
+                    commands: vec![
+                        CMD_EXPECTED_TYPE_AT.to_string(),
+                        CMD_FUNCTIONS_PRODUCING_EXPECTED_TYPE_AT.to_string(),
+                        CMD_FUNCTIONS_ACCEPTING_INFERRED_TYPE_AT.to_string(),
+                        CMD_ADAPTERS_FROM_INFERRED_TO_EXPECTED_AT.to_string(),
+                        CMD_FUNCTIONS_COMPATIBLE_WITH_IN_SCOPE_VALUES_AT.to_string(),
+                        CMD_HOLES_EXPECTED_TYPES.to_string(),
+                        CMD_SEMANTIC_LOOP_STEP.to_string(),
+                        CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT.to_string(),
+                        CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT.to_string(),
+                    ],
+                    ..ExecuteCommandOptions::default()
+                }),
                 definition_provider: Some(OneOf::Left(true)),
                 references_provider: Some(OneOf::Left(true)),
                 rename_provider: Some(OneOf::Left(true)),
@@ -1182,6 +1264,102 @@ impl LanguageServer for RexServer {
             }
         };
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let uri = params.text_document.uri;
+        let text = { self.documents.read().await.get(&uri).cloned() };
+        let Some(text) = text else {
+            return Ok(None);
+        };
+
+        let range = params.range;
+        let diagnostics = params.context.diagnostics;
+        let uri_for_job = uri.clone();
+        let text_for_job = text;
+        let actions = match tokio::task::spawn_blocking(move || {
+            code_actions_for_source(&uri_for_job, &text_for_job, range, &diagnostics)
+        })
+        .await
+        {
+            Ok(actions) => actions,
+            Err(err) => {
+                self.client
+                    .log_message(MessageType::ERROR, format!("code action failed: {err}"))
+                    .await;
+                Vec::new()
+            }
+        };
+
+        Ok(Some(actions))
+    }
+
+    async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
+        let arguments = params.arguments;
+        let command = params.command;
+        if command == CMD_HOLES_EXPECTED_TYPES {
+            let Some(uri) = command_uri(&arguments) else {
+                return Ok(None);
+            };
+            let text = { self.documents.read().await.get(&uri).cloned() };
+            let Some(text) = text else {
+                return Ok(None);
+            };
+            return Ok(execute_query_command_for_document_without_position(
+                &command, &uri, &text,
+            ));
+        }
+        if command == CMD_SEMANTIC_LOOP_STEP {
+            let Some((uri, position)) = command_uri_and_position(&arguments) else {
+                return Ok(None);
+            };
+            let text = { self.documents.read().await.get(&uri).cloned() };
+            let Some(text) = text else {
+                return Ok(None);
+            };
+            return Ok(execute_semantic_loop_step(&uri, &text, position));
+        }
+        if command == CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT {
+            let Some((uri, position, quick_fix_id)) = command_uri_position_and_id(&arguments)
+            else {
+                return Ok(None);
+            };
+            let text = { self.documents.read().await.get(&uri).cloned() };
+            let Some(text) = text else {
+                return Ok(None);
+            };
+            return Ok(execute_semantic_loop_apply_quick_fix(
+                &uri,
+                &text,
+                position,
+                &quick_fix_id,
+            ));
+        }
+        if command == CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT {
+            let Some((uri, position, max_steps, strategy, dry_run)) =
+                command_uri_position_max_steps_strategy_and_dry_run(&arguments)
+            else {
+                return Ok(None);
+            };
+            let text = { self.documents.read().await.get(&uri).cloned() };
+            let Some(text) = text else {
+                return Ok(None);
+            };
+            return Ok(execute_semantic_loop_apply_best_quick_fixes(
+                &uri, &text, position, max_steps, strategy, dry_run,
+            ));
+        }
+
+        let Some((uri, position)) = command_uri_and_position(&arguments) else {
+            return Ok(None);
+        };
+        let text = { self.documents.read().await.get(&uri).cloned() };
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        Ok(execute_query_command_for_document(
+            &command, &uri, &text, position,
+        ))
     }
 
     async fn goto_definition(
@@ -1569,7 +1747,8 @@ fn collect_references_in_expr(
         | Expr::Float(..)
         | Expr::String(..)
         | Expr::Uuid(..)
-        | Expr::DateTime(..) => {}
+        | Expr::DateTime(..)
+        | Expr::Hole(..) => {}
     }
 }
 
@@ -1654,6 +1833,678 @@ fn rename_for_source(
         document_changes: None,
         change_annotations: None,
     })
+}
+
+fn code_actions_for_source(
+    uri: &Url,
+    text: &str,
+    request_range: Range,
+    diagnostics: &[Diagnostic],
+) -> Vec<CodeActionOrCommand> {
+    let parsed = tokenize_and_parse_cached(uri, text)
+        .ok()
+        .map(|(_tokens, program)| program);
+    let mut actions = Vec::new();
+
+    if diagnostics.is_empty() {
+        actions.extend(code_actions_for_hole_fill(
+            uri,
+            text,
+            parsed.as_ref(),
+            request_range,
+        ));
+    }
+
+    for diag in diagnostics {
+        let usable_diag_range = range_is_usable_for_text(text, diag.range);
+        if usable_diag_range
+            && !range_is_empty(diag.range)
+            && !ranges_overlap(diag.range, request_range)
+            && !range_contains_position(diag.range, request_range.start)
+            && !range_contains_position(diag.range, request_range.end)
+        {
+            continue;
+        }
+        actions.extend(code_actions_for_diagnostic(
+            uri,
+            text,
+            parsed.as_ref(),
+            request_range,
+            diag,
+        ));
+    }
+
+    actions
+}
+
+fn code_actions_for_hole_fill(
+    uri: &Url,
+    text: &str,
+    program: Option<&Program>,
+    request_range: Range,
+) -> Vec<CodeActionOrCommand> {
+    let Some(program) = program else {
+        return Vec::new();
+    };
+    let mut hole_spans = Vec::new();
+    collect_hole_spans(program.expr_with_fns().as_ref(), &mut hole_spans);
+    let Some(hole_span) = hole_spans
+        .into_iter()
+        .find(|span| ranges_overlap(span_to_range(*span), request_range))
+    else {
+        return Vec::new();
+    };
+    let hole_range = span_to_range(hole_span);
+    let pos = hole_range.start;
+    let candidates = hole_fill_candidates_at_position(uri, text, pos);
+    let mut actions = Vec::new();
+    for (name, replacement) in candidates.into_iter().take(8) {
+        let diagnostic = Diagnostic {
+            range: hole_range,
+            severity: Some(DiagnosticSeverity::HINT),
+            message: "hole".to_string(),
+            source: Some("rex-lsp".to_string()),
+            ..Diagnostic::default()
+        };
+        actions.push(code_action_replace(
+            format!("Fill hole with `{name}`"),
+            uri,
+            hole_range,
+            replacement,
+            diagnostic,
+        ));
+    }
+    actions
+}
+
+fn code_actions_for_diagnostic(
+    uri: &Url,
+    text: &str,
+    program: Option<&Program>,
+    request_range: Range,
+    diagnostic: &Diagnostic,
+) -> Vec<CodeActionOrCommand> {
+    let mut actions = Vec::new();
+    let target_range = if range_is_usable_for_text(text, diagnostic.range) {
+        diagnostic.range
+    } else {
+        request_range
+    };
+
+    if let Some(name) = unknown_var_name_from_message(&diagnostic.message) {
+        if let Some(program) = program {
+            let mut candidates: Vec<String> =
+                values_in_scope_at_position(program, target_range.start)
+                    .into_keys()
+                    .filter(|candidate| candidate != name)
+                    .collect();
+            candidates.sort_by_key(|candidate| levenshtein_distance(candidate, name));
+            for candidate in candidates.into_iter().take(3) {
+                actions.push(code_action_replace(
+                    format!("Replace `{name}` with `{candidate}`"),
+                    uri,
+                    target_range,
+                    candidate,
+                    diagnostic.clone(),
+                ));
+            }
+        }
+
+        actions.push(code_action_insert(
+            format!("Introduce `let {name} = null`"),
+            uri,
+            Position {
+                line: 0,
+                character: 0,
+            },
+            format!("let {name} = null in\n"),
+            diagnostic.clone(),
+        ));
+    }
+
+    if is_list_scalar_unification_error(&diagnostic.message)
+        && let Some(selected) = text_for_range(text, target_range)
+    {
+        let trimmed = selected.trim();
+        if !trimmed.is_empty() {
+            actions.push(code_action_replace(
+                "Wrap expression in list literal".to_string(),
+                uri,
+                target_range,
+                format!("[{selected}]"),
+                diagnostic.clone(),
+            ));
+            if trimmed.starts_with('[') && trimmed.ends_with(']') && trimmed.len() >= 2 {
+                let unwrapped = trimmed[1..trimmed.len() - 1].to_string();
+                actions.push(code_action_replace(
+                    "Unwrap list literal".to_string(),
+                    uri,
+                    target_range,
+                    unwrapped,
+                    diagnostic.clone(),
+                ));
+            }
+        }
+    }
+
+    if is_function_value_unification_error(&diagnostic.message)
+        && let Some(selected) = text_for_range(text, target_range)
+    {
+        let trimmed = selected.trim();
+        if !trimmed.is_empty() {
+            actions.push(code_action_replace(
+                "Apply expression to missing argument".to_string(),
+                uri,
+                target_range,
+                format!("({selected} null)"),
+                diagnostic.clone(),
+            ));
+            actions.push(code_action_replace(
+                "Wrap expression in lambda".to_string(),
+                uri,
+                target_range,
+                format!("(\\_ -> {selected})"),
+                diagnostic.clone(),
+            ));
+        }
+    }
+
+    if diagnostic.message.starts_with("non-exhaustive match for ") {
+        let newline = if diagnostic.range.start.line == diagnostic.range.end.line {
+            " "
+        } else {
+            "\n"
+        };
+        actions.push(code_action_insert(
+            "Add wildcard arm to match".to_string(),
+            uri,
+            diagnostic.range.end,
+            format!("{newline}when _ -> null"),
+            diagnostic.clone(),
+        ));
+    }
+
+    actions
+}
+
+fn code_action_replace(
+    title: String,
+    uri: &Url,
+    range: Range,
+    new_text: String,
+    diagnostic: Diagnostic,
+) -> CodeActionOrCommand {
+    code_action_with_edit(title, uri, TextEdit { range, new_text }, diagnostic)
+}
+
+fn code_action_insert(
+    title: String,
+    uri: &Url,
+    position: Position,
+    new_text: String,
+    diagnostic: Diagnostic,
+) -> CodeActionOrCommand {
+    code_action_with_edit(
+        title,
+        uri,
+        TextEdit {
+            range: Range {
+                start: position,
+                end: position,
+            },
+            new_text,
+        },
+        diagnostic,
+    )
+}
+
+fn code_action_with_edit(
+    title: String,
+    uri: &Url,
+    edit: TextEdit,
+    diagnostic: Diagnostic,
+) -> CodeActionOrCommand {
+    let mut changes = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    CodeActionOrCommand::CodeAction(CodeAction {
+        title,
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diagnostic]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            document_changes: None,
+            change_annotations: None,
+        }),
+        command: None,
+        is_preferred: Some(true),
+        disabled: None,
+        data: None,
+    })
+}
+
+fn text_for_range(text: &str, range: Range) -> Option<String> {
+    let start = offset_at(text, range.start)?;
+    let end = offset_at(text, range.end)?;
+    (start <= end && end <= text.len()).then(|| text[start..end].to_string())
+}
+
+fn range_is_usable_for_text(text: &str, range: Range) -> bool {
+    let Some(start) = offset_at(text, range.start) else {
+        return false;
+    };
+    let Some(end) = offset_at(text, range.end) else {
+        return false;
+    };
+    start <= end && end <= text.len()
+}
+
+fn ranges_overlap(a: Range, b: Range) -> bool {
+    position_leq_lsp(a.start, b.end) && position_leq_lsp(b.start, a.end)
+}
+
+fn position_leq_lsp(left: Position, right: Position) -> bool {
+    left.line < right.line || (left.line == right.line && left.character <= right.character)
+}
+
+fn range_is_empty(range: Range) -> bool {
+    range.start.line == range.end.line && range.start.character == range.end.character
+}
+
+fn unknown_var_name_from_message(message: &str) -> Option<&str> {
+    message.strip_prefix("unbound variable ").map(str::trim)
+}
+
+fn is_hole_name(name: &str) -> bool {
+    name == "_" || name.starts_with('_')
+}
+
+fn is_list_scalar_unification_error(message: &str) -> bool {
+    let Some(rest) = message.strip_prefix("types do not unify: ") else {
+        return false;
+    };
+    let Some((left, right)) = rest.split_once(" vs ") else {
+        return false;
+    };
+    list_inner_type(left.trim()).is_some_and(|inner| inner == right.trim())
+        || list_inner_type(right.trim()).is_some_and(|inner| inner == left.trim())
+}
+
+fn list_inner_type(typ: &str) -> Option<&str> {
+    if let Some(inner) = typ
+        .strip_prefix("List<")
+        .and_then(|rest| rest.strip_suffix('>'))
+    {
+        return Some(inner);
+    }
+    typ.strip_prefix("(List ")
+        .and_then(|rest| rest.strip_suffix(')'))
+}
+
+fn is_function_value_unification_error(message: &str) -> bool {
+    let Some(rest) = message.strip_prefix("types do not unify: ") else {
+        return false;
+    };
+    let Some((left, right)) = rest.split_once(" vs ") else {
+        return false;
+    };
+    let left_is_fun = looks_like_fun_type(left.trim());
+    let right_is_fun = looks_like_fun_type(right.trim());
+    left_is_fun ^ right_is_fun
+}
+
+fn looks_like_fun_type(typ: &str) -> bool {
+    let mut depth = 0usize;
+    let bytes = typ.as_bytes();
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        match bytes[i] as char {
+            '(' | '{' | '[' => depth += 1,
+            ')' | '}' | ']' => depth = depth.saturating_sub(1),
+            '-' if bytes[i + 1] as char == '>' && depth == 0 => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+
+    if typ.starts_with('(') && typ.ends_with(')') {
+        return looks_like_fun_type(&typ[1..typ.len() - 1]);
+    }
+    false
+}
+
+fn split_fun_type(typ: &Type) -> (Vec<Type>, Type) {
+    let mut args = Vec::new();
+    let mut cur = typ.clone();
+    while let TypeKind::Fun(arg, ret) = cur.as_ref() {
+        args.push(arg.clone());
+        cur = ret.clone();
+    }
+    (args, cur)
+}
+
+fn in_scope_value_types_at_position(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Vec<(String, Type)> {
+    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return Vec::new();
+    };
+    let Ok((program, mut ts, _imports, _import_diags)) =
+        prepare_program_with_imports(uri, &program)
+    else {
+        return Vec::new();
+    };
+    if inject_program_decls(&mut ts, &program, None).is_err() {
+        return Vec::new();
+    }
+
+    let expr = program.expr_with_fns();
+    let Ok((typed, _preds, _ty)) = ts.infer_typed(expr.as_ref()) else {
+        return Vec::new();
+    };
+    let pos = lsp_to_rex_position(position);
+
+    fn visit(
+        expr: &Expr,
+        typed: &TypedExpr,
+        pos: RexPosition,
+        scope: &mut Vec<(String, Type)>,
+        best: &mut Option<Vec<(String, Type)>>,
+    ) {
+        if !position_in_span(pos, *expr.span()) {
+            return;
+        }
+        *best = Some(scope.clone());
+
+        match (expr, &typed.kind) {
+            (
+                Expr::Let(_span, var, _ann, def, body),
+                TypedExprKind::Let {
+                    def: tdef,
+                    body: tbody,
+                    ..
+                },
+            ) => {
+                if position_in_span(pos, *def.span()) {
+                    visit(def.as_ref(), tdef.as_ref(), pos, scope, best);
+                    return;
+                }
+                if position_in_span(pos, *body.span()) {
+                    scope.push((var.name.to_string(), tdef.typ.clone()));
+                    visit(body.as_ref(), tbody.as_ref(), pos, scope, best);
+                    scope.pop();
+                }
+            }
+            (
+                Expr::LetRec(_span, bindings, body),
+                TypedExprKind::LetRec {
+                    bindings: typed_bindings,
+                    body: typed_body,
+                },
+            ) => {
+                let base = scope.len();
+                for ((name, _ann, _def), (_typed_name, typed_def)) in
+                    bindings.iter().zip(typed_bindings.iter())
+                {
+                    scope.push((name.name.to_string(), typed_def.typ.clone()));
+                }
+                for ((_, _, def), (_, typed_def)) in bindings.iter().zip(typed_bindings.iter()) {
+                    if position_in_span(pos, *def.span()) {
+                        visit(def.as_ref(), typed_def, pos, scope, best);
+                        scope.truncate(base);
+                        return;
+                    }
+                }
+                if position_in_span(pos, *body.span()) {
+                    visit(body.as_ref(), typed_body.as_ref(), pos, scope, best);
+                }
+                scope.truncate(base);
+            }
+            (
+                Expr::Lam(_span, _scope, param, _ann, _constraints, body),
+                TypedExprKind::Lam {
+                    body: typed_body, ..
+                },
+            ) => {
+                if let TypeKind::Fun(arg, _ret) = typed.typ.as_ref() {
+                    scope.push((param.name.to_string(), arg.clone()));
+                    visit(body.as_ref(), typed_body.as_ref(), pos, scope, best);
+                    scope.pop();
+                }
+            }
+            (Expr::App(_span, fun, arg), TypedExprKind::App(tfun, targ)) => {
+                if position_in_span(pos, *fun.span()) {
+                    visit(fun.as_ref(), tfun.as_ref(), pos, scope, best);
+                } else if position_in_span(pos, *arg.span()) {
+                    visit(arg.as_ref(), targ.as_ref(), pos, scope, best);
+                }
+            }
+            (Expr::Project(_span, base, _field), TypedExprKind::Project { expr: tbase, .. }) => {
+                visit(base.as_ref(), tbase.as_ref(), pos, scope, best);
+            }
+            (
+                Expr::Ite(_span, cond, then_expr, else_expr),
+                TypedExprKind::Ite {
+                    cond: tcond,
+                    then_expr: tthen,
+                    else_expr: telse,
+                },
+            ) => {
+                if position_in_span(pos, *cond.span()) {
+                    visit(cond.as_ref(), tcond.as_ref(), pos, scope, best);
+                } else if position_in_span(pos, *then_expr.span()) {
+                    visit(then_expr.as_ref(), tthen.as_ref(), pos, scope, best);
+                } else if position_in_span(pos, *else_expr.span()) {
+                    visit(else_expr.as_ref(), telse.as_ref(), pos, scope, best);
+                }
+            }
+            (Expr::Tuple(_span, elems), TypedExprKind::Tuple(typed_elems))
+            | (Expr::List(_span, elems), TypedExprKind::List(typed_elems)) => {
+                for (elem, typed_elem) in elems.iter().zip(typed_elems.iter()) {
+                    if position_in_span(pos, *elem.span()) {
+                        visit(elem.as_ref(), typed_elem, pos, scope, best);
+                        break;
+                    }
+                }
+            }
+            (Expr::Dict(_span, kvs), TypedExprKind::Dict(typed_kvs)) => {
+                for (key, value) in kvs {
+                    if position_in_span(pos, *value.span())
+                        && let Some(typed_v) = typed_kvs.get(key)
+                    {
+                        visit(value.as_ref(), typed_v, pos, scope, best);
+                        break;
+                    }
+                }
+            }
+            (
+                Expr::RecordUpdate(_span, base, updates),
+                TypedExprKind::RecordUpdate {
+                    base: tbase,
+                    updates: typed_updates,
+                },
+            ) => {
+                if position_in_span(pos, *base.span()) {
+                    visit(base.as_ref(), tbase.as_ref(), pos, scope, best);
+                } else {
+                    for (key, value) in updates {
+                        if position_in_span(pos, *value.span())
+                            && let Some(typed_v) = typed_updates.get(key)
+                        {
+                            visit(value.as_ref(), typed_v, pos, scope, best);
+                            break;
+                        }
+                    }
+                }
+            }
+            (
+                Expr::Match(_span, scrutinee, arms),
+                TypedExprKind::Match {
+                    scrutinee: tscrutinee,
+                    arms: typed_arms,
+                },
+            ) => {
+                if position_in_span(pos, *scrutinee.span()) {
+                    visit(scrutinee.as_ref(), tscrutinee.as_ref(), pos, scope, best);
+                } else {
+                    for ((_pat, arm), (_typed_pat, typed_arm)) in arms.iter().zip(typed_arms.iter())
+                    {
+                        if position_in_span(pos, *arm.span()) {
+                            visit(arm.as_ref(), typed_arm, pos, scope, best);
+                            break;
+                        }
+                    }
+                }
+            }
+            (Expr::Ann(_span, inner, _), _) => visit(inner.as_ref(), typed, pos, scope, best),
+            _ => {}
+        }
+    }
+
+    let mut best = None;
+    visit(expr.as_ref(), &typed, pos, &mut Vec::new(), &mut best);
+    best.unwrap_or_default()
+}
+
+fn hole_fill_candidates_at_position(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Vec<(String, String)> {
+    let Some(target_type) = expected_type_at_position_type(uri, text, position) else {
+        return Vec::new();
+    };
+    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return Vec::new();
+    };
+    let Ok((program, mut ts, _imports, _import_diags)) =
+        prepare_program_with_imports(uri, &program)
+    else {
+        return Vec::new();
+    };
+    if inject_program_decls(&mut ts, &program, None).is_err() {
+        return Vec::new();
+    }
+    let mut in_scope = in_scope_value_types_at_position(uri, text, position)
+        .into_iter()
+        .filter(|(name, _)| is_ident_like(name))
+        .collect::<Vec<_>>();
+    if in_scope.len() > MAX_SEMANTIC_IN_SCOPE_VALUES {
+        in_scope = in_scope.split_off(in_scope.len().saturating_sub(MAX_SEMANTIC_IN_SCOPE_VALUES));
+    }
+
+    let values = semantic_candidate_values(&ts);
+
+    let mut adapters: Vec<(String, Type, Type)> = Vec::new();
+    for (name, schemes) in &values {
+        let name = name.to_string();
+        if !is_ident_like(&name) {
+            continue;
+        }
+        for scheme in schemes {
+            let (_preds, inst_ty) = instantiate(scheme, &mut ts.supply);
+            let (args, ret) = split_fun_type(&inst_ty);
+            if args.len() == 1 {
+                adapters.push((name.clone(), args[0].clone(), ret));
+            }
+        }
+    }
+
+    let mut out: Vec<(usize, usize, String, String)> = Vec::new();
+    for (name, schemes) in values {
+        let name = name.to_string();
+        if !is_ident_like(&name) {
+            continue;
+        }
+        for scheme in schemes {
+            let (_preds, inst_ty) = instantiate(&scheme, &mut ts.supply);
+            let (args, ret) = split_fun_type(&inst_ty);
+            if args.is_empty()
+                || args.len() > MAX_SEMANTIC_HOLE_FILL_ARITY
+                || unify(&ret, &target_type).is_err()
+            {
+                continue;
+            }
+
+            let mut unresolved = 0usize;
+            let mut adapter_uses = 0usize;
+            let mut rendered_args = Vec::new();
+            for arg_ty in args {
+                if let Some((value_name, _value_ty)) = in_scope
+                    .iter()
+                    .rev()
+                    .find(|(_, value_ty)| unify(value_ty, &arg_ty).is_ok())
+                {
+                    rendered_args.push(value_name.clone());
+                    continue;
+                }
+
+                let mut adapted = None;
+                for (adapter_name, adapter_arg, adapter_ret) in &adapters {
+                    if unify(adapter_ret, &arg_ty).is_err() {
+                        continue;
+                    }
+                    if let Some((value_name, _value_ty)) = in_scope
+                        .iter()
+                        .rev()
+                        .find(|(_, value_ty)| unify(value_ty, adapter_arg).is_ok())
+                    {
+                        adapted = Some(format!("({adapter_name} {value_name})"));
+                        break;
+                    }
+                }
+                if let Some(expr) = adapted {
+                    adapter_uses += 1;
+                    rendered_args.push(expr);
+                } else {
+                    unresolved += 1;
+                    rendered_args.push("?".to_string());
+                }
+            }
+
+            let replacement = format!("{name} {}", rendered_args.join(" "));
+            out.push((unresolved, adapter_uses, name.clone(), replacement));
+        }
+    }
+
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    out.dedup_by(|a, b| a.2 == b.2 && a.3 == b.3);
+    if out.len() > MAX_SEMANTIC_CANDIDATES {
+        out.truncate(MAX_SEMANTIC_CANDIDATES);
+    }
+    out.into_iter()
+        .map(|(_u, _a, name, replacement)| (name, replacement))
+        .collect()
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    if left == right {
+        return 0;
+    }
+    if left.is_empty() {
+        return right.chars().count();
+    }
+    if right.is_empty() {
+        return left.chars().count();
+    }
+
+    let right_len = right.chars().count();
+    let mut prev: Vec<usize> = (0..=right_len).collect();
+    let mut cur = vec![0usize; right_len + 1];
+
+    for (i, lc) in left.chars().enumerate() {
+        cur[0] = i + 1;
+        for (j, rc) in right.chars().enumerate() {
+            let insert_cost = cur[j] + 1;
+            let delete_cost = prev[j + 1] + 1;
+            let replace_cost = prev[j] + usize::from(lc != rc);
+            cur[j + 1] = insert_cost.min(delete_cost).min(replace_cost);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+
+    prev[right_len]
 }
 
 #[allow(deprecated)]
@@ -1949,6 +2800,1406 @@ fn hover_type_contents(uri: &Url, text: &str, position: Position) -> Option<Hove
         kind: MarkupKind::Markdown,
         value: md,
     }))
+}
+
+fn expected_type_at_position(uri: &Url, text: &str, position: Position) -> Option<String> {
+    expected_type_at_position_type(uri, text, position).map(|ty| ty.to_string())
+}
+
+fn inferred_type_at_position(uri: &Url, text: &str, position: Position) -> Option<String> {
+    inferred_type_at_position_type(uri, text, position).map(|ty| ty.to_string())
+}
+
+fn expected_type_at_position_type(uri: &Url, text: &str, position: Position) -> Option<Type> {
+    let (_tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
+    let (program, mut ts, _imports, _import_diags) =
+        prepare_program_with_imports(uri, &program).ok()?;
+
+    let pos = lsp_to_rex_position(position);
+
+    // Mirror hover behavior inside instance methods.
+    let mut target_instance: Option<(usize, usize)> = None;
+    for (decl_idx, decl) in program.decls.iter().enumerate() {
+        let Decl::Instance(inst) = decl else {
+            continue;
+        };
+        for (method_idx, method) in inst.methods.iter().enumerate() {
+            if position_in_span(pos, *method.body.span()) {
+                target_instance = Some((decl_idx, method_idx));
+                break;
+            }
+        }
+        if target_instance.is_some() {
+            break;
+        }
+    }
+
+    let (_instances, prepared_target_instance) = inject_program_decls(
+        &mut ts,
+        &program,
+        target_instance.map(|(decl_idx, _)| decl_idx),
+    )
+    .ok()?;
+
+    let expr_with_fns = program.expr_with_fns();
+    let root_expr: &Expr;
+    let typed_root: TypedExpr;
+
+    if let Some((decl_idx, method_idx)) = target_instance {
+        let Decl::Instance(inst) = &program.decls[decl_idx] else {
+            return None;
+        };
+        let prepared = prepared_target_instance?;
+        let method = inst.methods.get(method_idx)?;
+        typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
+        root_expr = method.body.as_ref();
+    } else {
+        let (typed, _preds, _) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
+        typed_root = typed;
+        root_expr = expr_with_fns.as_ref();
+    }
+
+    expected_type_in_expr(root_expr, &typed_root, pos)
+}
+
+fn inferred_type_at_position_type(uri: &Url, text: &str, position: Position) -> Option<Type> {
+    let (_tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
+    let (program, mut ts, _imports, _import_diags) =
+        prepare_program_with_imports(uri, &program).ok()?;
+
+    let pos = lsp_to_rex_position(position);
+
+    let mut target_instance: Option<(usize, usize)> = None;
+    for (decl_idx, decl) in program.decls.iter().enumerate() {
+        let Decl::Instance(inst) = decl else {
+            continue;
+        };
+        for (method_idx, method) in inst.methods.iter().enumerate() {
+            if position_in_span(pos, *method.body.span()) {
+                target_instance = Some((decl_idx, method_idx));
+                break;
+            }
+        }
+        if target_instance.is_some() {
+            break;
+        }
+    }
+
+    let (_instances, prepared_target_instance) = inject_program_decls(
+        &mut ts,
+        &program,
+        target_instance.map(|(decl_idx, _)| decl_idx),
+    )
+    .ok()?;
+
+    let expr_with_fns = program.expr_with_fns();
+    let root_expr: &Expr;
+    let typed_root: TypedExpr;
+
+    if let Some((decl_idx, method_idx)) = target_instance {
+        let Decl::Instance(inst) = &program.decls[decl_idx] else {
+            return None;
+        };
+        let prepared = prepared_target_instance?;
+        let method = inst.methods.get(method_idx)?;
+        typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
+        root_expr = method.body.as_ref();
+    } else {
+        let (typed, _preds, _) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
+        typed_root = typed;
+        root_expr = expr_with_fns.as_ref();
+    }
+
+    inferred_type_in_expr(root_expr, &typed_root, pos)
+}
+
+fn expected_type_in_expr(expr: &Expr, typed: &TypedExpr, pos: RexPosition) -> Option<Type> {
+    #[derive(Clone)]
+    struct Candidate {
+        span: Span,
+        typ: Type,
+    }
+
+    fn span_size(span: Span) -> (usize, usize) {
+        (
+            span.end.line.saturating_sub(span.begin.line),
+            span.end.column.saturating_sub(span.begin.column),
+        )
+    }
+
+    fn consider(best: &mut Option<Candidate>, span: Span, typ: &Type) {
+        let replace = best
+            .as_ref()
+            .is_none_or(|cur| span_size(span) < span_size(cur.span));
+        if replace {
+            *best = Some(Candidate {
+                span,
+                typ: typ.clone(),
+            });
+        }
+    }
+
+    fn visit(
+        expr: &Expr,
+        typed: &TypedExpr,
+        pos: RexPosition,
+        expected: Option<&Type>,
+        best: &mut Option<Candidate>,
+    ) {
+        if !position_in_span(pos, *expr.span()) {
+            return;
+        }
+
+        if let Some(expected) = expected {
+            consider(best, *expr.span(), expected);
+        }
+
+        match (expr, &typed.kind) {
+            (
+                Expr::Let(_span, _name, _ann, def, body),
+                TypedExprKind::Let {
+                    def: tdef,
+                    body: tbody,
+                    ..
+                },
+            ) => {
+                visit(def.as_ref(), tdef.as_ref(), pos, Some(&tdef.typ), best);
+                visit(body.as_ref(), tbody.as_ref(), pos, Some(&typed.typ), best);
+            }
+            (
+                Expr::LetRec(_span, bindings, body),
+                TypedExprKind::LetRec {
+                    bindings: typed_bindings,
+                    body: typed_body,
+                },
+            ) => {
+                for ((_name, _ann, def), (_typed_name, typed_def)) in
+                    bindings.iter().zip(typed_bindings.iter())
+                {
+                    visit(def.as_ref(), typed_def, pos, Some(&typed_def.typ), best);
+                }
+                visit(
+                    body.as_ref(),
+                    typed_body.as_ref(),
+                    pos,
+                    Some(&typed.typ),
+                    best,
+                );
+            }
+            (
+                Expr::Lam(_span, _scope, _param, _ann, _constraints, body),
+                TypedExprKind::Lam {
+                    body: typed_body, ..
+                },
+            ) => {
+                let body_expected = match typed.typ.as_ref() {
+                    TypeKind::Fun(_arg, ret) => Some(ret),
+                    _ => None,
+                };
+                visit(body.as_ref(), typed_body.as_ref(), pos, body_expected, best);
+            }
+            (Expr::App(_span, f, x), TypedExprKind::App(tf, tx)) => {
+                let expected_arg = match tf.typ.as_ref() {
+                    TypeKind::Fun(arg, _ret) => Some(arg),
+                    _ => None,
+                };
+                visit(x.as_ref(), tx.as_ref(), pos, expected_arg, best);
+
+                let expected_fun = Type::fun(tx.typ.clone(), typed.typ.clone());
+                visit(f.as_ref(), tf.as_ref(), pos, Some(&expected_fun), best);
+            }
+            (Expr::Project(_span, base, _field), TypedExprKind::Project { expr: tbase, .. }) => {
+                visit(base.as_ref(), tbase.as_ref(), pos, None, best);
+            }
+            (
+                Expr::Ite(_span, cond, then_expr, else_expr),
+                TypedExprKind::Ite {
+                    cond: tcond,
+                    then_expr: tthen,
+                    else_expr: telse,
+                },
+            ) => {
+                let bool_ty = Type::con("bool", 0);
+                visit(cond.as_ref(), tcond.as_ref(), pos, Some(&bool_ty), best);
+                visit(
+                    then_expr.as_ref(),
+                    tthen.as_ref(),
+                    pos,
+                    Some(&typed.typ),
+                    best,
+                );
+                visit(
+                    else_expr.as_ref(),
+                    telse.as_ref(),
+                    pos,
+                    Some(&typed.typ),
+                    best,
+                );
+            }
+            (Expr::Tuple(_span, elems), TypedExprKind::Tuple(typed_elems)) => {
+                for (elem, typed_elem) in elems.iter().zip(typed_elems.iter()) {
+                    visit(elem.as_ref(), typed_elem, pos, Some(&typed_elem.typ), best);
+                }
+            }
+            (Expr::List(_span, elems), TypedExprKind::List(typed_elems)) => {
+                let list_elem_expected = match typed.typ.as_ref() {
+                    TypeKind::App(head, elem) => match head.as_ref() {
+                        TypeKind::Con(tc) if tc.name.as_ref() == "List" && tc.arity == 1 => {
+                            Some(elem)
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                for (elem, typed_elem) in elems.iter().zip(typed_elems.iter()) {
+                    let expected = list_elem_expected.unwrap_or(&typed_elem.typ);
+                    visit(elem.as_ref(), typed_elem, pos, Some(expected), best);
+                }
+            }
+            (Expr::Dict(_span, kvs), TypedExprKind::Dict(typed_kvs)) => {
+                for (key, value) in kvs {
+                    if let Some(typed_value) = typed_kvs.get(key) {
+                        visit(
+                            value.as_ref(),
+                            typed_value,
+                            pos,
+                            Some(&typed_value.typ),
+                            best,
+                        );
+                    }
+                }
+            }
+            (
+                Expr::RecordUpdate(_span, base, updates),
+                TypedExprKind::RecordUpdate {
+                    base: typed_base,
+                    updates: typed_updates,
+                },
+            ) => {
+                visit(base.as_ref(), typed_base.as_ref(), pos, None, best);
+                for (key, value) in updates {
+                    if let Some(typed_value) = typed_updates.get(key) {
+                        visit(
+                            value.as_ref(),
+                            typed_value,
+                            pos,
+                            Some(&typed_value.typ),
+                            best,
+                        );
+                    }
+                }
+            }
+            (
+                Expr::Match(_span, scrutinee, arms),
+                TypedExprKind::Match {
+                    scrutinee: tscrutinee,
+                    arms: typed_arms,
+                },
+            ) => {
+                visit(
+                    scrutinee.as_ref(),
+                    tscrutinee.as_ref(),
+                    pos,
+                    Some(&tscrutinee.typ),
+                    best,
+                );
+                for ((_pat, arm), (_typed_pat, typed_arm)) in arms.iter().zip(typed_arms.iter()) {
+                    visit(arm.as_ref(), typed_arm, pos, Some(&typed.typ), best);
+                }
+            }
+            (Expr::Ann(_span, inner, _ann), _) => {
+                visit(inner.as_ref(), typed, pos, Some(&typed.typ), best);
+            }
+            _ => {}
+        }
+    }
+
+    let mut best: Option<Candidate> = None;
+    visit(expr, typed, pos, None, &mut best);
+    best.map(|candidate| candidate.typ)
+}
+
+fn inferred_type_in_expr(expr: &Expr, typed: &TypedExpr, pos: RexPosition) -> Option<Type> {
+    fn span_size(span: Span) -> (usize, usize) {
+        (
+            span.end.line.saturating_sub(span.begin.line),
+            span.end.column.saturating_sub(span.begin.column),
+        )
+    }
+
+    fn visit(expr: &Expr, typed: &TypedExpr, pos: RexPosition, best: &mut Option<(Span, Type)>) {
+        let span = *expr.span();
+        if !position_in_span(pos, span) {
+            return;
+        }
+        if best
+            .as_ref()
+            .is_none_or(|(best_span, _)| span_size(span) < span_size(*best_span))
+        {
+            *best = Some((span, typed.typ.clone()));
+        }
+
+        match (expr, &typed.kind) {
+            (
+                Expr::Let(_, _, _, def, body),
+                TypedExprKind::Let {
+                    def: tdef,
+                    body: tbody,
+                    ..
+                },
+            ) => {
+                visit(def.as_ref(), tdef.as_ref(), pos, best);
+                visit(body.as_ref(), tbody.as_ref(), pos, best);
+            }
+            (
+                Expr::LetRec(_, bindings, body),
+                TypedExprKind::LetRec {
+                    bindings: typed_bindings,
+                    body: typed_body,
+                },
+            ) => {
+                for ((_, _, def), (_, typed_def)) in bindings.iter().zip(typed_bindings.iter()) {
+                    visit(def.as_ref(), typed_def, pos, best);
+                }
+                visit(body.as_ref(), typed_body.as_ref(), pos, best);
+            }
+            (
+                Expr::Lam(_, _, _, _, _, body),
+                TypedExprKind::Lam {
+                    body: typed_body, ..
+                },
+            ) => {
+                visit(body.as_ref(), typed_body.as_ref(), pos, best);
+            }
+            (Expr::App(_, f, x), TypedExprKind::App(tf, tx)) => {
+                visit(f.as_ref(), tf.as_ref(), pos, best);
+                visit(x.as_ref(), tx.as_ref(), pos, best);
+            }
+            (Expr::Project(_, base, _), TypedExprKind::Project { expr: tbase, .. }) => {
+                visit(base.as_ref(), tbase.as_ref(), pos, best);
+            }
+            (
+                Expr::Ite(_, cond, then_expr, else_expr),
+                TypedExprKind::Ite {
+                    cond: tcond,
+                    then_expr: tthen,
+                    else_expr: telse,
+                },
+            ) => {
+                visit(cond.as_ref(), tcond.as_ref(), pos, best);
+                visit(then_expr.as_ref(), tthen.as_ref(), pos, best);
+                visit(else_expr.as_ref(), telse.as_ref(), pos, best);
+            }
+            (Expr::Tuple(_, elems), TypedExprKind::Tuple(typed_elems))
+            | (Expr::List(_, elems), TypedExprKind::List(typed_elems)) => {
+                for (elem, typed_elem) in elems.iter().zip(typed_elems.iter()) {
+                    visit(elem.as_ref(), typed_elem, pos, best);
+                }
+            }
+            (Expr::Dict(_, kvs), TypedExprKind::Dict(typed_kvs)) => {
+                for (key, value) in kvs {
+                    if let Some(typed_value) = typed_kvs.get(key) {
+                        visit(value.as_ref(), typed_value, pos, best);
+                    }
+                }
+            }
+            (
+                Expr::RecordUpdate(_, base, updates),
+                TypedExprKind::RecordUpdate {
+                    base: typed_base,
+                    updates: typed_updates,
+                },
+            ) => {
+                visit(base.as_ref(), typed_base.as_ref(), pos, best);
+                for (key, value) in updates {
+                    if let Some(typed_value) = typed_updates.get(key) {
+                        visit(value.as_ref(), typed_value, pos, best);
+                    }
+                }
+            }
+            (
+                Expr::Match(_, scrutinee, arms),
+                TypedExprKind::Match {
+                    scrutinee: tscrutinee,
+                    arms: typed_arms,
+                },
+            ) => {
+                visit(scrutinee.as_ref(), tscrutinee.as_ref(), pos, best);
+                for ((_pat, arm), (_typed_pat, typed_arm)) in arms.iter().zip(typed_arms.iter()) {
+                    visit(arm.as_ref(), typed_arm, pos, best);
+                }
+            }
+            (Expr::Ann(_, inner, _), _) => visit(inner.as_ref(), typed, pos, best),
+            _ => {}
+        }
+    }
+
+    let mut best: Option<(Span, Type)> = None;
+    visit(expr, typed, pos, &mut best);
+    best.map(|(_, ty)| ty)
+}
+
+fn functions_producing_expected_type_at_position(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Vec<(String, String)> {
+    let Some(target_type) = expected_type_at_position_type(uri, text, position) else {
+        return Vec::new();
+    };
+
+    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return Vec::new();
+    };
+    let Ok((program, mut ts, _imports, _import_diags)) =
+        prepare_program_with_imports(uri, &program)
+    else {
+        return Vec::new();
+    };
+    if inject_program_decls(&mut ts, &program, None).is_err() {
+        return Vec::new();
+    }
+
+    let values = semantic_candidate_values(&ts);
+
+    let mut out = Vec::new();
+    for (name, schemes) in values {
+        for scheme in schemes {
+            let (_preds, inst_ty) = instantiate(&scheme, &mut ts.supply);
+            let mut cur = &inst_ty;
+            let mut is_function = false;
+            while let TypeKind::Fun(_, ret) = cur.as_ref() {
+                is_function = true;
+                cur = ret;
+            }
+            if !is_function {
+                continue;
+            }
+            if unify(cur, &target_type).is_ok() {
+                out.push((name.to_string(), scheme.typ.to_string()));
+            }
+        }
+    }
+
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    out.dedup();
+    if out.len() > MAX_SEMANTIC_CANDIDATES {
+        out.truncate(MAX_SEMANTIC_CANDIDATES);
+    }
+    out
+}
+
+fn functions_accepting_inferred_type_at_position(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Vec<(String, String)> {
+    let Some(source_type) = inferred_type_at_position_type(uri, text, position) else {
+        return Vec::new();
+    };
+
+    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return Vec::new();
+    };
+    let Ok((program, mut ts, _imports, _import_diags)) =
+        prepare_program_with_imports(uri, &program)
+    else {
+        return Vec::new();
+    };
+    if inject_program_decls(&mut ts, &program, None).is_err() {
+        return Vec::new();
+    }
+
+    let values = semantic_candidate_values(&ts);
+
+    let mut out = Vec::new();
+    for (name, schemes) in values {
+        let name = name.to_string();
+        if !is_ident_like(&name) {
+            continue;
+        }
+        for scheme in schemes {
+            let (_preds, inst_ty) = instantiate(&scheme, &mut ts.supply);
+            let (args, _ret) = split_fun_type(&inst_ty);
+            if let Some(first_arg) = args.first()
+                && unify(first_arg, &source_type).is_ok()
+            {
+                out.push((name.clone(), scheme.typ.to_string()));
+            }
+        }
+    }
+
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    out.dedup();
+    if out.len() > MAX_SEMANTIC_CANDIDATES {
+        out.truncate(MAX_SEMANTIC_CANDIDATES);
+    }
+    out
+}
+
+fn adapters_from_inferred_to_expected_at_position(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Vec<(String, String)> {
+    let Some(source_type) = inferred_type_at_position_type(uri, text, position) else {
+        return Vec::new();
+    };
+    let Some(target_type) = expected_type_at_position_type(uri, text, position) else {
+        return Vec::new();
+    };
+
+    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+        return Vec::new();
+    };
+    let Ok((program, mut ts, _imports, _import_diags)) =
+        prepare_program_with_imports(uri, &program)
+    else {
+        return Vec::new();
+    };
+    if inject_program_decls(&mut ts, &program, None).is_err() {
+        return Vec::new();
+    }
+
+    let values = semantic_candidate_values(&ts);
+
+    let mut out = Vec::new();
+    for (name, schemes) in values {
+        let name = name.to_string();
+        if !is_ident_like(&name) {
+            continue;
+        }
+        for scheme in schemes {
+            let (_preds, inst_ty) = instantiate(&scheme, &mut ts.supply);
+            let (args, ret) = split_fun_type(&inst_ty);
+            if args.len() == 1
+                && unify(&args[0], &source_type).is_ok()
+                && unify(&ret, &target_type).is_ok()
+            {
+                out.push((name.clone(), scheme.typ.to_string()));
+            }
+        }
+    }
+
+    out.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+    out.dedup();
+    if out.len() > MAX_SEMANTIC_CANDIDATES {
+        out.truncate(MAX_SEMANTIC_CANDIDATES);
+    }
+    out
+}
+
+fn functions_compatible_with_in_scope_values_at_position(
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Vec<String> {
+    let produced = functions_producing_expected_type_at_position(uri, text, position);
+    let mut produced_by_name: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, typ) in produced {
+        produced_by_name.entry(name).or_default().push(typ);
+    }
+
+    let mut out = Vec::new();
+    for (name, replacement) in hole_fill_candidates_at_position(uri, text, position) {
+        if replacement.contains('?') {
+            continue;
+        }
+        if let Some(types) = produced_by_name.get(&name) {
+            for typ in types {
+                out.push(format!("{name} : {typ} => {replacement}"));
+            }
+        } else {
+            out.push(format!("{name} => {replacement}"));
+        }
+    }
+    out.sort();
+    out.dedup();
+    if out.len() > MAX_SEMANTIC_CANDIDATES {
+        out.truncate(MAX_SEMANTIC_CANDIDATES);
+    }
+    out
+}
+
+fn execute_query_command_for_document(
+    command: &str,
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Option<Value> {
+    match command {
+        CMD_EXPECTED_TYPE_AT => Some(match expected_type_at_position(uri, text, position) {
+            Some(typ) => json!({ "expectedType": typ }),
+            None => Value::Null,
+        }),
+        CMD_FUNCTIONS_ACCEPTING_INFERRED_TYPE_AT => Some(json!({
+            "inferredType": inferred_type_at_position(uri, text, position),
+            "items": functions_accepting_inferred_type_at_position(uri, text, position)
+                .into_iter()
+                .map(|(name, typ)| format!("{name} : {typ}"))
+                .collect::<Vec<_>>()
+        })),
+        CMD_ADAPTERS_FROM_INFERRED_TO_EXPECTED_AT => Some(json!({
+            "inferredType": inferred_type_at_position(uri, text, position),
+            "expectedType": expected_type_at_position(uri, text, position),
+            "items": adapters_from_inferred_to_expected_at_position(uri, text, position)
+                .into_iter()
+                .map(|(name, typ)| format!("{name} : {typ}"))
+                .collect::<Vec<_>>()
+        })),
+        CMD_FUNCTIONS_COMPATIBLE_WITH_IN_SCOPE_VALUES_AT => Some(json!({
+            "items": functions_compatible_with_in_scope_values_at_position(uri, text, position)
+        })),
+        CMD_FUNCTIONS_PRODUCING_EXPECTED_TYPE_AT => {
+            let items = functions_producing_expected_type_at_position(uri, text, position)
+                .into_iter()
+                .map(|(name, typ)| format!("{name} : {typ}"))
+                .collect::<Vec<_>>();
+            Some(json!({ "items": items }))
+        }
+        _ => None,
+    }
+}
+
+fn execute_query_command_for_document_without_position(
+    command: &str,
+    uri: &Url,
+    text: &str,
+) -> Option<Value> {
+    match command {
+        CMD_HOLES_EXPECTED_TYPES => Some(json!({
+            "holes": hole_expected_types_for_document(uri, text)
+        })),
+        _ => None,
+    }
+}
+
+fn workspace_edit_fingerprint(edit: &WorkspaceEdit) -> String {
+    let mut payload = String::new();
+    if let Some(changes) = &edit.changes {
+        let mut uris = changes.keys().cloned().collect::<Vec<_>>();
+        uris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        for uri in uris {
+            payload.push_str(uri.as_str());
+            payload.push('\n');
+            if let Some(edits) = changes.get(&uri) {
+                for edit in edits {
+                    payload.push_str(&format!(
+                        "{}:{}-{}:{}\n",
+                        edit.range.start.line,
+                        edit.range.start.character,
+                        edit.range.end.line,
+                        edit.range.end.character
+                    ));
+                    payload.push_str(&edit.new_text);
+                    payload.push('\n');
+                }
+            }
+        }
+    }
+    if let Some(document_changes) = &edit.document_changes
+        && let Ok(encoded) = serde_json::to_string(document_changes)
+    {
+        payload.push_str(&encoded);
+    }
+    if let Some(change_annotations) = &edit.change_annotations
+        && let Ok(encoded) = serde_json::to_string(change_annotations)
+    {
+        payload.push_str(&encoded);
+    }
+    sha256_hex(payload.as_bytes())
+}
+
+fn semantic_quick_fixes_for_range(
+    uri: &Url,
+    text: &str,
+    cursor_range: Range,
+    diagnostics: &[Diagnostic],
+) -> Vec<Value> {
+    let mut out = code_actions_for_source(uri, text, cursor_range, diagnostics)
+        .into_iter()
+        .filter_map(|action| match action {
+            CodeActionOrCommand::CodeAction(action) => Some(action),
+            CodeActionOrCommand::Command(_) => None,
+        })
+        .map(|action| {
+            let kind = action
+                .kind
+                .and_then(|k| to_value(k).ok())
+                .and_then(|v| v.as_str().map(str::to_string));
+            let edit = action.edit.unwrap_or(WorkspaceEdit {
+                changes: None,
+                document_changes: None,
+                change_annotations: None,
+            });
+            let fingerprint = workspace_edit_fingerprint(&edit);
+            json!({
+                "id": format!("qf-{}", &fingerprint[..16]),
+                "title": action.title,
+                "kind": kind,
+                "edit": to_value(edit).unwrap_or(Value::Null),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    out.sort_by_key(|item| {
+        (
+            item.get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            item.get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        )
+    });
+    out.dedup_by(|a, b| a.get("id") == b.get("id"));
+    out
+}
+
+fn execute_semantic_loop_step(uri: &Url, text: &str, position: Position) -> Option<Value> {
+    let expected_type = expected_type_at_position(uri, text, position)
+        .or_else(|| expected_type_from_syntax_context(uri, text, position));
+    let inferred_type = inferred_type_at_position(uri, text, position);
+
+    let mut in_scope_values = in_scope_value_types_at_position(uri, text, position)
+        .into_iter()
+        .filter(|(name, _)| is_ident_like(name))
+        .map(|(name, typ)| format!("{name} : {typ}"))
+        .collect::<Vec<_>>();
+    in_scope_values.sort();
+    in_scope_values.dedup();
+    if in_scope_values.len() > MAX_SEMANTIC_IN_SCOPE_VALUES {
+        in_scope_values.truncate(MAX_SEMANTIC_IN_SCOPE_VALUES);
+    }
+
+    let function_candidates = functions_producing_expected_type_at_position(uri, text, position)
+        .into_iter()
+        .map(|(name, typ)| format!("{name} : {typ}"))
+        .collect::<Vec<_>>();
+
+    let hole_fill_candidates = hole_fill_candidates_at_position(uri, text, position)
+        .into_iter()
+        .map(|(name, replacement)| json!({ "name": name, "replacement": replacement }))
+        .collect::<Vec<_>>();
+    let functions_accepting_inferred_type =
+        functions_accepting_inferred_type_at_position(uri, text, position)
+            .into_iter()
+            .map(|(name, typ)| format!("{name} : {typ}"))
+            .collect::<Vec<_>>();
+    let adapters_from_inferred_to_expected =
+        adapters_from_inferred_to_expected_at_position(uri, text, position)
+            .into_iter()
+            .map(|(name, typ)| format!("{name} : {typ}"))
+            .collect::<Vec<_>>();
+    let compatible_with_in_scope_values =
+        functions_compatible_with_in_scope_values_at_position(uri, text, position);
+
+    let cursor_range = Range {
+        start: position,
+        end: position,
+    };
+    let mut local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(uri, text)
+        .into_iter()
+        .filter(|diag| ranges_overlap(diag.range, cursor_range))
+        .collect();
+    local_diagnostics.sort_by_key(|diag| {
+        (
+            diag.range.start.line,
+            diag.range.start.character,
+            diag.range.end.line,
+            diag.range.end.character,
+            diag.message.clone(),
+        )
+    });
+
+    let quick_fixes = semantic_quick_fixes_for_range(uri, text, cursor_range, &local_diagnostics);
+    let mut quick_fix_titles = quick_fixes
+        .iter()
+        .filter_map(|item| item.get("title").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    quick_fix_titles.sort();
+    quick_fix_titles.dedup();
+
+    Some(json!({
+        "expectedType": expected_type,
+        "inferredType": inferred_type,
+        "inScopeValues": in_scope_values,
+        "functionCandidates": function_candidates,
+        "holeFillCandidates": hole_fill_candidates,
+        "functionsAcceptingInferredType": functions_accepting_inferred_type,
+        "adaptersFromInferredToExpectedType": adapters_from_inferred_to_expected,
+        "functionsCompatibleWithInScopeValues": compatible_with_in_scope_values,
+        "localDiagnostics": local_diagnostics.into_iter().map(|diag| {
+            json!({
+                "message": diag.message,
+                "line": diag.range.start.line,
+                "character": diag.range.start.character,
+            })
+        }).collect::<Vec<_>>(),
+        "quickFixes": quick_fixes,
+        "quickFixTitles": quick_fix_titles,
+        "holes": hole_expected_types_for_document(uri, text),
+    }))
+}
+
+fn execute_semantic_loop_apply_quick_fix(
+    uri: &Url,
+    text: &str,
+    position: Position,
+    quick_fix_id: &str,
+) -> Option<Value> {
+    let cursor_range = Range {
+        start: position,
+        end: position,
+    };
+    let local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(uri, text)
+        .into_iter()
+        .filter(|diag| ranges_overlap(diag.range, cursor_range))
+        .collect();
+    let quick_fixes = semantic_quick_fixes_for_range(uri, text, cursor_range, &local_diagnostics);
+    let quick_fix = quick_fixes.into_iter().find(|item| {
+        item.get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id == quick_fix_id)
+    });
+
+    Some(match quick_fix {
+        Some(quick_fix) => json!({ "quickFix": quick_fix }),
+        None => Value::Null,
+    })
+}
+
+fn quick_fix_priority(strategy: BulkQuickFixStrategy, title: &str) -> usize {
+    let aggressive_introduce =
+        strategy == BulkQuickFixStrategy::Aggressive && title.starts_with("Introduce `let ");
+    if title.starts_with("Fill hole with `") {
+        0
+    } else if title.starts_with("Replace `") || aggressive_introduce {
+        1
+    } else if title.starts_with("Add wildcard arm") {
+        2
+    } else if title.starts_with("Wrap expression in list literal") {
+        3
+    } else if title.starts_with("Unwrap single-item list literal") {
+        4
+    } else if title.starts_with("Apply expression to missing argument") {
+        5
+    } else if title.starts_with("Wrap expression in lambda") {
+        6
+    } else if title.starts_with("Introduce `let ") {
+        7
+    } else {
+        10
+    }
+}
+
+fn best_quick_fix_from_candidates(
+    candidates: &[Value],
+    strategy: BulkQuickFixStrategy,
+) -> Option<Value> {
+    candidates
+        .iter()
+        .min_by_key(|item| {
+            let title = item.get("title").and_then(Value::as_str).unwrap_or("");
+            let id = item.get("id").and_then(Value::as_str).unwrap_or("");
+            (
+                quick_fix_priority(strategy, title),
+                title.to_string(),
+                id.to_string(),
+            )
+        })
+        .cloned()
+}
+
+fn apply_workspace_edit_to_text(uri: &Url, text: &str, edit: &WorkspaceEdit) -> Option<String> {
+    let changes = edit.changes.as_ref()?;
+    let edits = changes.get(uri)?.clone();
+    if edits.is_empty() {
+        return Some(text.to_string());
+    }
+    let mut with_offsets = Vec::new();
+    for edit in edits {
+        let start = offset_at(text, edit.range.start)?;
+        let end = offset_at(text, edit.range.end)?;
+        if start > end || end > text.len() {
+            return None;
+        }
+        with_offsets.push((start, end, edit.new_text));
+    }
+    with_offsets.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)));
+
+    let mut out = text.to_string();
+    for (start, end, replacement) in with_offsets {
+        out.replace_range(start..end, &replacement);
+    }
+    Some(out)
+}
+
+fn text_state_hash(text: &str) -> String {
+    sha256_hex(text.as_bytes())
+}
+
+fn next_no_improvement_streak(streak: usize, diagnostics_delta: i64) -> usize {
+    if diagnostics_delta > 0 { 0 } else { streak + 1 }
+}
+
+fn execute_semantic_loop_apply_best_quick_fixes(
+    uri: &Url,
+    text: &str,
+    position: Position,
+    max_steps: usize,
+    strategy: BulkQuickFixStrategy,
+    dry_run: bool,
+) -> Option<Value> {
+    let cursor_range = Range {
+        start: position,
+        end: position,
+    };
+    let mut current_text = text.to_string();
+    let mut applied = Vec::new();
+    let mut steps = Vec::new();
+    let mut stopped_reason = "noQuickFix".to_string();
+    let mut stopped_reason_detail = "no quick-fixes available at cursor".to_string();
+    let mut no_improvement_streak = 0usize;
+    let mut last_diagnostics_delta = 0i64;
+    let mut seen_states: HashSet<String> = HashSet::new();
+    seen_states.insert(text_state_hash(&current_text));
+
+    for step_index in 0..max_steps {
+        let local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(uri, &current_text)
+            .into_iter()
+            .filter(|diag| ranges_overlap(diag.range, cursor_range))
+            .collect();
+        let diagnostics_before = local_diagnostics
+            .iter()
+            .map(|diag| {
+                json!({
+                    "message": diag.message,
+                    "line": diag.range.start.line,
+                    "character": diag.range.start.character,
+                })
+            })
+            .collect::<Vec<_>>();
+        let quick_fixes =
+            semantic_quick_fixes_for_range(uri, &current_text, cursor_range, &local_diagnostics);
+        let Some(best) = best_quick_fix_from_candidates(&quick_fixes, strategy) else {
+            stopped_reason = "noQuickFix".to_string();
+            stopped_reason_detail = "no candidate quick-fix was available".to_string();
+            break;
+        };
+        let edit_value = best.get("edit").cloned().unwrap_or(Value::Null);
+        let Ok(edit) = serde_json::from_value::<WorkspaceEdit>(edit_value) else {
+            stopped_reason = "invalidEdit".to_string();
+            stopped_reason_detail = "selected quick-fix edit was invalid".to_string();
+            break;
+        };
+        let Some(next_text) = apply_workspace_edit_to_text(uri, &current_text, &edit) else {
+            stopped_reason = "applyFailed".to_string();
+            stopped_reason_detail = "failed to apply selected workspace edit".to_string();
+            break;
+        };
+        if next_text == current_text {
+            stopped_reason = "noTextChange".to_string();
+            stopped_reason_detail = "selected quick-fix did not change text".to_string();
+            break;
+        }
+        let next_hash = text_state_hash(&next_text);
+        if seen_states.contains(&next_hash) {
+            stopped_reason = "cycleDetected".to_string();
+            stopped_reason_detail = "next text state already seen in this run".to_string();
+            break;
+        }
+        let diagnostics_after_step: Vec<Value> = diagnostics_from_text(uri, &next_text)
+            .into_iter()
+            .filter(|diag| ranges_overlap(diag.range, cursor_range))
+            .map(|diag| {
+                json!({
+                    "message": diag.message,
+                    "line": diag.range.start.line,
+                    "character": diag.range.start.character,
+                })
+            })
+            .collect();
+        let before_count = diagnostics_before.len();
+        let after_count = diagnostics_after_step.len();
+        let diagnostics_delta = (before_count as i64) - (after_count as i64);
+        last_diagnostics_delta = diagnostics_delta;
+        no_improvement_streak =
+            next_no_improvement_streak(no_improvement_streak, diagnostics_delta);
+        steps.push(json!({
+            "index": step_index,
+            "quickFix": best.clone(),
+            "diagnosticsBefore": diagnostics_before,
+            "diagnosticsAfter": diagnostics_after_step,
+            "diagnosticsBeforeCount": before_count,
+            "diagnosticsAfterCount": after_count,
+            "diagnosticsDelta": diagnostics_delta,
+            "noImprovementStreak": no_improvement_streak,
+        }));
+        applied.push(best);
+        current_text = next_text;
+        seen_states.insert(next_hash);
+        if no_improvement_streak >= NO_IMPROVEMENT_STREAK_LIMIT {
+            stopped_reason = "noImprovementStreak".to_string();
+            stopped_reason_detail =
+                format!("diagnostics did not improve for {NO_IMPROVEMENT_STREAK_LIMIT} step(s)");
+            break;
+        }
+        stopped_reason = "maxStepsReached".to_string();
+        stopped_reason_detail = format!("reached maxSteps={max_steps}");
+    }
+
+    let diagnostics_after: Vec<Value> = diagnostics_from_text(uri, &current_text)
+        .into_iter()
+        .filter(|diag| ranges_overlap(diag.range, cursor_range))
+        .map(|diag| {
+            json!({
+                "message": diag.message,
+                "line": diag.range.start.line,
+                "character": diag.range.start.character,
+            })
+        })
+        .collect();
+
+    Some(json!({
+        "strategy": strategy.as_str(),
+        "dryRun": dry_run,
+        "appliedQuickFixes": applied,
+        "appliedCount": applied.len(),
+        "steps": steps,
+        "updatedText": current_text,
+        "localDiagnosticsAfter": diagnostics_after,
+        "stoppedReason": stopped_reason,
+        "stoppedReasonDetail": stopped_reason_detail,
+        "lastDiagnosticsDelta": last_diagnostics_delta,
+        "noImprovementStreak": no_improvement_streak,
+        "seenStatesCount": seen_states.len(),
+    }))
+}
+
+fn hole_expected_types_for_document(uri: &Url, text: &str) -> Vec<Value> {
+    let mut holes = Vec::new();
+
+    // First-class holes: parse `?` nodes directly.
+    if let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) {
+        let mut spans = Vec::new();
+        collect_hole_spans(program.expr_with_fns().as_ref(), &mut spans);
+        for span in spans {
+            let pos = span_to_range(span).start;
+            if let Some(expected_type) = expected_type_at_position(uri, text, pos)
+                .or_else(|| expected_type_from_syntax_context(uri, text, pos))
+            {
+                holes.push(json!({
+                    "name": "?",
+                    "line": pos.line,
+                    "character": pos.character,
+                    "expectedType": expected_type
+                }));
+            }
+        }
+    }
+
+    // Backward-compat fallback: `_foo` placeholder variables still treated as holes.
+    let diagnostics = diagnostics_from_text(uri, text);
+    for diag in diagnostics {
+        let Some(name) = unknown_var_name_from_message(&diag.message) else {
+            continue;
+        };
+        if !is_hole_name(name) {
+            continue;
+        }
+        if !range_is_usable_for_text(text, diag.range) {
+            continue;
+        }
+        let pos = diag.range.start;
+        if let Some(expected_type) = expected_type_at_position(uri, text, pos)
+            .or_else(|| expected_type_from_syntax_context(uri, text, pos))
+        {
+            holes.push(json!({
+                "name": name,
+                "line": pos.line,
+                "character": pos.character,
+                "expectedType": expected_type
+            }));
+        }
+    }
+    holes.sort_by_key(|item| {
+        let line = item.get("line").and_then(Value::as_u64).unwrap_or(0);
+        let ch = item.get("character").and_then(Value::as_u64).unwrap_or(0);
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        (line, ch, name)
+    });
+    holes.dedup_by(|a, b| {
+        a.get("name") == b.get("name")
+            && a.get("line") == b.get("line")
+            && a.get("character") == b.get("character")
+    });
+    if holes.len() > MAX_SEMANTIC_HOLES {
+        holes.truncate(MAX_SEMANTIC_HOLES);
+    }
+    holes
+}
+
+fn collect_hole_spans(expr: &Expr, out: &mut Vec<Span>) {
+    match expr {
+        Expr::Hole(span) => out.push(*span),
+        Expr::App(_, f, x) => {
+            collect_hole_spans(f, out);
+            collect_hole_spans(x, out);
+        }
+        Expr::Project(_, base, _) => collect_hole_spans(base, out),
+        Expr::Lam(_, _scope, _param, _ann, _constraints, body) => collect_hole_spans(body, out),
+        Expr::Let(_, _var, _ann, def, body) => {
+            collect_hole_spans(def, out);
+            collect_hole_spans(body, out);
+        }
+        Expr::LetRec(_, bindings, body) => {
+            for (_var, _ann, def) in bindings {
+                collect_hole_spans(def, out);
+            }
+            collect_hole_spans(body, out);
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            collect_hole_spans(cond, out);
+            collect_hole_spans(then_expr, out);
+            collect_hole_spans(else_expr, out);
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            collect_hole_spans(scrutinee, out);
+            for (_pat, arm) in arms {
+                collect_hole_spans(arm, out);
+            }
+        }
+        Expr::Ann(_, inner, _) => collect_hole_spans(inner, out),
+        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+            for elem in elems {
+                collect_hole_spans(elem, out);
+            }
+        }
+        Expr::Dict(_, kvs) => {
+            for value in kvs.values() {
+                collect_hole_spans(value, out);
+            }
+        }
+        Expr::RecordUpdate(_, base, updates) => {
+            collect_hole_spans(base, out);
+            for value in updates.values() {
+                collect_hole_spans(value, out);
+            }
+        }
+        Expr::Var(_)
+        | Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..) => {}
+    }
+}
+
+fn expected_type_from_syntax_context(uri: &Url, text: &str, position: Position) -> Option<String> {
+    let (_tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
+    let pos = lsp_to_rex_position(position);
+
+    fn visit(expr: &Expr, pos: RexPosition) -> Option<String> {
+        if !position_in_span(pos, *expr.span()) {
+            return None;
+        }
+        match expr {
+            Expr::Let(_span, _name, ann, def, body) => {
+                if position_in_span(pos, *def.span())
+                    && let Some(ann) = ann
+                {
+                    return Some(ann.to_string());
+                }
+                visit(def.as_ref(), pos).or_else(|| visit(body.as_ref(), pos))
+            }
+            Expr::Ann(_span, inner, ann) => {
+                if position_in_span(pos, *inner.span()) {
+                    return Some(ann.to_string());
+                }
+                visit(inner.as_ref(), pos)
+            }
+            Expr::Ite(_span, cond, then_expr, else_expr) => {
+                if position_in_span(pos, *cond.span()) {
+                    return Some("bool".to_string());
+                }
+                visit(cond.as_ref(), pos)
+                    .or_else(|| visit(then_expr.as_ref(), pos))
+                    .or_else(|| visit(else_expr.as_ref(), pos))
+            }
+            Expr::App(_span, f, x) => visit(f.as_ref(), pos).or_else(|| visit(x.as_ref(), pos)),
+            Expr::Project(_span, base, _field) => visit(base.as_ref(), pos),
+            Expr::Lam(_span, _scope, _param, _ann, _constraints, body) => visit(body.as_ref(), pos),
+            Expr::LetRec(_span, bindings, body) => {
+                for (_name, _ann, def) in bindings {
+                    if let Some(found) = visit(def.as_ref(), pos) {
+                        return Some(found);
+                    }
+                }
+                visit(body.as_ref(), pos)
+            }
+            Expr::Match(_span, scrutinee, arms) => {
+                if let Some(found) = visit(scrutinee.as_ref(), pos) {
+                    return Some(found);
+                }
+                for (_pat, arm) in arms {
+                    if let Some(found) = visit(arm.as_ref(), pos) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Expr::Tuple(_span, elems) | Expr::List(_span, elems) => {
+                for elem in elems {
+                    if let Some(found) = visit(elem.as_ref(), pos) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Expr::Dict(_span, kvs) => {
+                for value in kvs.values() {
+                    if let Some(found) = visit(value.as_ref(), pos) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Expr::RecordUpdate(_span, base, updates) => {
+                if let Some(found) = visit(base.as_ref(), pos) {
+                    return Some(found);
+                }
+                for value in updates.values() {
+                    if let Some(found) = visit(value.as_ref(), pos) {
+                        return Some(found);
+                    }
+                }
+                None
+            }
+            Expr::Var(_)
+            | Expr::Bool(..)
+            | Expr::Uint(..)
+            | Expr::Int(..)
+            | Expr::Float(..)
+            | Expr::String(..)
+            | Expr::Uuid(..)
+            | Expr::DateTime(..)
+            | Expr::Hole(..) => None,
+        }
+    }
+
+    visit(program.expr_with_fns().as_ref(), pos)
+}
+
+fn command_uri_and_position(arguments: &[Value]) -> Option<(Url, Position)> {
+    if arguments.len() >= 3 {
+        let uri = arguments.first()?.as_str()?;
+        let line = arguments.get(1)?.as_u64()? as u32;
+        let character = arguments.get(2)?.as_u64()? as u32;
+        let uri = Url::parse(uri).ok()?;
+        return Some((uri, Position { line, character }));
+    }
+
+    let obj = arguments.first()?.as_object()?;
+    let uri = obj.get("uri")?.as_str()?;
+    let line = obj.get("line")?.as_u64()? as u32;
+    let character = obj.get("character")?.as_u64()? as u32;
+    let uri = Url::parse(uri).ok()?;
+    Some((uri, Position { line, character }))
+}
+
+fn command_uri(arguments: &[Value]) -> Option<Url> {
+    if arguments.is_empty() {
+        return None;
+    }
+    if let Some(uri) = arguments.first().and_then(Value::as_str) {
+        return Url::parse(uri).ok();
+    }
+    let obj = arguments.first()?.as_object()?;
+    let uri = obj.get("uri")?.as_str()?;
+    Url::parse(uri).ok()
+}
+
+fn command_uri_position_and_id(arguments: &[Value]) -> Option<(Url, Position, String)> {
+    if arguments.len() >= 4 {
+        let uri = arguments.first()?.as_str()?;
+        let line = arguments.get(1)?.as_u64()? as u32;
+        let character = arguments.get(2)?.as_u64()? as u32;
+        let id = arguments.get(3)?.as_str()?.to_string();
+        let uri = Url::parse(uri).ok()?;
+        return Some((uri, Position { line, character }, id));
+    }
+
+    let obj = arguments.first()?.as_object()?;
+    let uri = obj.get("uri")?.as_str()?;
+    let line = obj.get("line")?.as_u64()? as u32;
+    let character = obj.get("character")?.as_u64()? as u32;
+    let id = obj.get("id")?.as_str()?.to_string();
+    let uri = Url::parse(uri).ok()?;
+    Some((uri, Position { line, character }, id))
+}
+
+fn command_uri_position_max_steps_strategy_and_dry_run(
+    arguments: &[Value],
+) -> Option<(Url, Position, usize, BulkQuickFixStrategy, bool)> {
+    if arguments.len() >= 3 {
+        let uri = arguments.first()?.as_str()?;
+        let line = arguments.get(1)?.as_u64()? as u32;
+        let character = arguments.get(2)?.as_u64()? as u32;
+        let max_steps = arguments
+            .get(3)
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .unwrap_or(3);
+        let strategy = arguments
+            .get(4)
+            .and_then(Value::as_str)
+            .map(BulkQuickFixStrategy::parse)
+            .unwrap_or(BulkQuickFixStrategy::Conservative);
+        let dry_run = arguments.get(5).and_then(Value::as_bool).unwrap_or(false);
+        let uri = Url::parse(uri).ok()?;
+        return Some((
+            uri,
+            Position { line, character },
+            max_steps.clamp(1, 20),
+            strategy,
+            dry_run,
+        ));
+    }
+
+    let obj = arguments.first()?.as_object()?;
+    let uri = obj.get("uri")?.as_str()?;
+    let line = obj.get("line")?.as_u64()? as u32;
+    let character = obj.get("character")?.as_u64()? as u32;
+    let max_steps = obj
+        .get("maxSteps")
+        .and_then(Value::as_u64)
+        .map(|n| n as usize)
+        .unwrap_or(3)
+        .clamp(1, 20);
+    let strategy = obj
+        .get("strategy")
+        .and_then(Value::as_str)
+        .map(BulkQuickFixStrategy::parse)
+        .unwrap_or(BulkQuickFixStrategy::Conservative);
+    let dry_run = obj.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
+    let uri = Url::parse(uri).ok()?;
+    Some((
+        uri,
+        Position { line, character },
+        max_steps,
+        strategy,
+        dry_run,
+    ))
 }
 
 fn hover_type_in_expr(
@@ -2514,7 +4765,8 @@ fn collect_unbound_var_spans(
         | Expr::Float(..)
         | Expr::String(..)
         | Expr::Uuid(..)
-        | Expr::DateTime(..) => {}
+        | Expr::DateTime(..)
+        | Expr::Hole(..) => {}
     }
 }
 
@@ -4168,6 +6420,25 @@ pub fn hover_for_source(source: &str, line: u32, character: u32) -> Option<Hover
     })
 }
 
+pub fn expected_type_for_source_public(source: &str, line: u32, character: u32) -> Option<String> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    expected_type_at_position(&uri, source, Position { line, character })
+}
+
+pub fn functions_producing_expected_type_for_source_public(
+    source: &str,
+    line: u32,
+    character: u32,
+) -> Vec<String> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    functions_producing_expected_type_at_position(&uri, source, Position { line, character })
+        .into_iter()
+        .map(|(name, typ)| format!("{name} : {typ}"))
+        .collect()
+}
+
 pub fn references_for_source_public(
     source: &str,
     line: u32,
@@ -4205,6 +6476,28 @@ pub fn format_for_source_public(source: &str) -> Option<Vec<TextEdit>> {
     format_edits_for_source(source)
 }
 
+pub fn code_actions_for_source_public(
+    source: &str,
+    line: u32,
+    character: u32,
+) -> Vec<CodeActionOrCommand> {
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    let position = Position { line, character };
+    let range = Range {
+        start: position,
+        end: position,
+    };
+    let diagnostics: Vec<Diagnostic> = diagnostics_from_text(&uri, source)
+        .into_iter()
+        .filter(|diag| {
+            range_contains_position(diag.range, position)
+                || range_touches_position(diag.range, position)
+        })
+        .collect();
+    code_actions_for_source(&uri, source, range, &diagnostics)
+}
+
 pub fn goto_definition_for_source(source: &str, line: u32, character: u32) -> Option<Location> {
     let uri = in_memory_doc_uri();
     clear_parse_cache(&uri);
@@ -4232,6 +6525,25 @@ pub async fn run_stdio() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Map;
+
+    fn expect_object(value: &Value) -> &Map<String, Value> {
+        value.as_object().expect("object")
+    }
+
+    fn expect_array_field<'a>(obj: &'a Map<String, Value>, key: &str) -> &'a Vec<Value> {
+        obj.get(key)
+            .unwrap_or_else(|| panic!("missing `{key}`"))
+            .as_array()
+            .unwrap_or_else(|| panic!("`{key}` should be array"))
+    }
+
+    fn expect_string_field<'a>(obj: &'a Map<String, Value>, key: &str) -> &'a str {
+        obj.get(key)
+            .unwrap_or_else(|| panic!("missing `{key}`"))
+            .as_str()
+            .unwrap_or_else(|| panic!("`{key}` should be string"))
+    }
 
     #[test]
     fn stdlib_imports_typecheck_for_non_file_uri() {
@@ -4317,5 +6629,1381 @@ let x = 0 in f x
         let edits = format_for_source_public(text).expect("format edits");
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].new_text, "let x = 1\n");
+    }
+
+    #[test]
+    fn code_actions_offer_unknown_var_replacement() {
+        let text = r#"
+let
+  x = 1
+in
+  y + x
+"#;
+        let actions = code_actions_for_source_public(text, 4, 2);
+        let titles: Vec<String> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title.contains("Replace `y` with `x`")),
+            "titles: {titles:#?}"
+        );
+    }
+
+    #[test]
+    fn code_actions_offer_list_wrap_fix() {
+        let text = r#"
+let
+  xs : List i32 = 1
+in
+  xs
+"#;
+        let uri = in_memory_doc_uri();
+        clear_parse_cache(&uri);
+        let diagnostics = diagnostics_from_text(&uri, text);
+        let list_diag = diagnostics
+            .into_iter()
+            .find(|diag| diag.message.contains("types do not unify"))
+            .expect("expected unification diagnostic");
+        let list_diag_message = list_diag.message.clone();
+        assert!(
+            is_list_scalar_unification_error(&list_diag_message),
+            "expected list/scalar mismatch, got: {list_diag_message}"
+        );
+        let request_range = full_document_range(text);
+        let actions = code_actions_for_source(&uri, text, request_range, &[list_diag]);
+        let titles: Vec<String> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Wrap expression in list literal"),
+            "diag: {:?}; titles: {titles:#?}",
+            list_diag_message
+        );
+    }
+
+    #[test]
+    fn code_actions_offer_non_exhaustive_match_fix() {
+        let text = "match (Some 1) when Some x -> x";
+        let actions = code_actions_for_source_public(text, 0, 2);
+        let titles: Vec<String> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Add wildcard arm to match"),
+            "titles: {titles:#?}"
+        );
+    }
+
+    #[test]
+    fn code_actions_offer_function_value_mismatch_fixes() {
+        let text = "let f = \\x -> x in f + 1";
+        let uri = in_memory_doc_uri();
+        clear_parse_cache(&uri);
+        let diagnostics = diagnostics_from_text(&uri, text);
+        let fun_mismatch = diagnostics
+            .into_iter()
+            .find(|diag| is_function_value_unification_error(&diag.message))
+            .expect("expected function/value mismatch diagnostic");
+        let actions =
+            code_actions_for_source(&uri, text, full_document_range(text), &[fun_mismatch]);
+        let titles: Vec<String> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Apply expression to missing argument"),
+            "titles: {titles:#?}"
+        );
+        assert!(
+            titles
+                .iter()
+                .any(|title| title == "Wrap expression in lambda"),
+            "titles: {titles:#?}"
+        );
+    }
+
+    #[test]
+    fn code_actions_offer_hole_fill_candidates() {
+        let text = r#"
+fn aa_mk : i32 -> i32 = \x -> x
+let y : i32 = ? in y
+"#;
+        let actions = code_actions_for_source_public(text, 2, 14);
+        let titles: Vec<String> = actions
+            .into_iter()
+            .filter_map(|action| match action {
+                CodeActionOrCommand::CodeAction(action) => Some(action.title),
+                CodeActionOrCommand::Command(_) => None,
+            })
+            .collect();
+        assert!(
+            titles
+                .iter()
+                .any(|title| title.contains("Fill hole with `aa_mk`")),
+            "titles: {titles:#?}"
+        );
+    }
+
+    #[test]
+    fn expected_type_reports_if_condition_bool() {
+        let text = "if true then 1 else 2";
+        let ty = expected_type_for_source_public(text, 0, 3).expect("expected type at condition");
+        assert_eq!(ty, "bool");
+    }
+
+    #[test]
+    fn expected_type_reports_if_branch_type() {
+        let text = "let x : i32 = if true then 1 else 2 in x";
+        let ty = expected_type_for_source_public(text, 0, 27).expect("expected type at branch");
+        assert_eq!(ty, "i32");
+    }
+
+    #[test]
+    fn expected_type_reports_function_argument_type() {
+        let text = "let f = \\x -> x + 1 in f 2";
+        let ty = expected_type_for_source_public(text, 0, 26).expect("expected type at argument");
+        assert_eq!(ty, "r");
+    }
+
+    #[test]
+    fn functions_producing_expected_type_include_user_fn() {
+        let text = r#"
+fn mk : i32 -> i32 = \x -> x
+if true then 0 else 1
+"#;
+        let items = functions_producing_expected_type_for_source_public(text, 2, 13);
+        assert!(
+            items.iter().any(|item| item.starts_with("mk : ")),
+            "items: {items:#?}"
+        );
+    }
+
+    #[test]
+    fn command_parses_uri_position_tuple_args() {
+        let args = vec![
+            Value::String("inmemory:///docs.rex".to_string()),
+            Value::from(2u64),
+            Value::from(3u64),
+        ];
+        let (uri, pos) = command_uri_and_position(&args).expect("parsed command args");
+        assert_eq!(uri.as_str(), "inmemory:///docs.rex");
+        assert_eq!(pos.line, 2);
+        assert_eq!(pos.character, 3);
+    }
+
+    #[test]
+    fn command_parses_uri_position_and_id_tuple_args() {
+        let args = vec![
+            Value::String("inmemory:///docs.rex".to_string()),
+            Value::from(2u64),
+            Value::from(3u64),
+            Value::String("qf-abc".to_string()),
+        ];
+        let (uri, pos, id) = command_uri_position_and_id(&args).expect("parsed command args");
+        assert_eq!(uri.as_str(), "inmemory:///docs.rex");
+        assert_eq!(pos.line, 2);
+        assert_eq!(pos.character, 3);
+        assert_eq!(id, "qf-abc");
+    }
+
+    #[test]
+    fn command_parses_uri_position_max_steps_strategy_and_dry_run_tuple_args() {
+        let args = vec![
+            Value::String("inmemory:///docs.rex".to_string()),
+            Value::from(2u64),
+            Value::from(3u64),
+            Value::from(5u64),
+            Value::String("aggressive".to_string()),
+            Value::Bool(true),
+        ];
+        let (uri, pos, max_steps, strategy, dry_run) =
+            command_uri_position_max_steps_strategy_and_dry_run(&args)
+                .expect("parsed command args");
+        assert_eq!(uri.as_str(), "inmemory:///docs.rex");
+        assert_eq!(pos.line, 2);
+        assert_eq!(pos.character, 3);
+        assert_eq!(max_steps, 5);
+        assert_eq!(strategy, BulkQuickFixStrategy::Aggressive);
+        assert!(dry_run);
+    }
+
+    #[test]
+    fn command_parses_uri_position_max_steps_strategy_and_dry_run_object_args() {
+        let args = vec![json!({
+            "uri": "inmemory:///docs.rex",
+            "line": 4,
+            "character": 9,
+            "maxSteps": 99,
+            "strategy": "conservative",
+            "dryRun": false
+        })];
+        let (uri, pos, max_steps, strategy, dry_run) =
+            command_uri_position_max_steps_strategy_and_dry_run(&args)
+                .expect("parsed command args");
+        assert_eq!(uri.as_str(), "inmemory:///docs.rex");
+        assert_eq!(pos.line, 4);
+        assert_eq!(pos.character, 9);
+        assert_eq!(max_steps, 20, "maxSteps should clamp to upper bound");
+        assert_eq!(strategy, BulkQuickFixStrategy::Conservative);
+        assert!(!dry_run);
+    }
+
+    #[test]
+    fn execute_expected_type_command_returns_object() {
+        let uri = in_memory_doc_uri();
+        let text = "if true then 1 else 2";
+        let out = execute_query_command_for_document(
+            CMD_EXPECTED_TYPE_AT,
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 3,
+            },
+        )
+        .expect("command output");
+        let expected = out
+            .as_object()
+            .and_then(|o| o.get("expectedType"))
+            .and_then(Value::as_str)
+            .expect("expectedType");
+        assert_eq!(expected, "bool");
+    }
+
+    #[test]
+    fn execute_functions_command_returns_items() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+fn mk : i32 -> i32 = \x -> x
+if true then 0 else 1
+"#;
+        let out = execute_query_command_for_document(
+            CMD_FUNCTIONS_PRODUCING_EXPECTED_TYPE_AT,
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 13,
+            },
+        )
+        .expect("command output");
+        let items = out
+            .as_object()
+            .and_then(|o| o.get("items"))
+            .and_then(Value::as_array)
+            .expect("items array");
+        assert!(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|item| item.starts_with("mk : ")),
+            "items: {items:#?}"
+        );
+    }
+
+    #[test]
+    fn semantic_functions_command_caps_items_count() {
+        let uri = in_memory_doc_uri();
+        let mut lines = Vec::new();
+        for i in 0..200usize {
+            lines.push(format!("fn mk_{i} : i32 -> i32 = \\x -> x"));
+        }
+        lines.push("let y : i32 = ? in y".to_string());
+        let line = (lines.len() - 1) as u32;
+        let text = lines.join("\n");
+        let out = execute_query_command_for_document(
+            CMD_FUNCTIONS_PRODUCING_EXPECTED_TYPE_AT,
+            &uri,
+            &text,
+            Position {
+                line,
+                character: 14,
+            },
+        )
+        .expect("command output");
+        let items = out
+            .as_object()
+            .and_then(|o| o.get("items"))
+            .and_then(Value::as_array)
+            .expect("items array");
+        assert!(
+            items.len() <= MAX_SEMANTIC_CANDIDATES,
+            "items_len={}; max={MAX_SEMANTIC_CANDIDATES}",
+            items.len()
+        );
+    }
+
+    #[test]
+    fn execute_functions_accepting_inferred_type_command_returns_items() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+fn use_bool : bool -> i32 = \x -> 0
+let x = true in x
+"#;
+        let out = execute_query_command_for_document(
+            CMD_FUNCTIONS_ACCEPTING_INFERRED_TYPE_AT,
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 8,
+            },
+        )
+        .expect("command output");
+        let obj = out.as_object().expect("object");
+        let inferred = obj
+            .get("inferredType")
+            .and_then(Value::as_str)
+            .expect("inferredType");
+        assert_eq!(inferred, "bool");
+        let items = obj
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("items array");
+        assert!(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|item| item.starts_with("use_bool : ")),
+            "items: {items:#?}"
+        );
+    }
+
+    #[test]
+    fn execute_adapters_from_inferred_to_expected_command_returns_items() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+fn id_i32 : i32 -> i32 = \x -> x
+let x = 1 in let y : i32 = x in y
+"#;
+        let out = execute_query_command_for_document(
+            CMD_ADAPTERS_FROM_INFERRED_TO_EXPECTED_AT,
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 30,
+            },
+        )
+        .expect("command output");
+        let obj = out.as_object().expect("object");
+        let inferred = obj
+            .get("inferredType")
+            .and_then(Value::as_str)
+            .expect("inferredType");
+        assert_eq!(inferred, "i32");
+        let expected = obj
+            .get("expectedType")
+            .and_then(Value::as_str)
+            .expect("expectedType");
+        assert_eq!(expected, "i32");
+        let items = obj
+            .get("items")
+            .and_then(Value::as_array)
+            .expect("items array");
+        assert!(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|item| item.starts_with("id_i32 : ")),
+            "items: {items:#?}"
+        );
+    }
+
+    #[test]
+    fn semantic_holes_command_caps_hole_count() {
+        let uri = in_memory_doc_uri();
+        let mut text = String::from("let ys : List i32 = [");
+        for i in 0..160usize {
+            if i > 0 {
+                text.push_str(", ");
+            }
+            text.push('?');
+        }
+        text.push_str("] in ys");
+        let out = execute_query_command_for_document_without_position(
+            CMD_HOLES_EXPECTED_TYPES,
+            &uri,
+            &text,
+        )
+        .expect("command output");
+        let holes = out
+            .as_object()
+            .and_then(|o| o.get("holes"))
+            .and_then(Value::as_array)
+            .expect("holes array");
+        assert!(
+            holes.len() <= MAX_SEMANTIC_HOLES,
+            "holes_len={}; max={MAX_SEMANTIC_HOLES}",
+            holes.len()
+        );
+    }
+
+    #[test]
+    fn execute_functions_compatible_with_in_scope_values_command_returns_items() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+fn to_string_i32 : i32 -> string = \x -> "ok"
+let x = 1 in let y : string = ? in y
+"#;
+        let out = execute_query_command_for_document(
+            CMD_FUNCTIONS_COMPATIBLE_WITH_IN_SCOPE_VALUES_AT,
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 30,
+            },
+        )
+        .expect("command output");
+        let items = out
+            .as_object()
+            .and_then(|o| o.get("items"))
+            .and_then(Value::as_array)
+            .expect("items array");
+        assert!(
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|item| item.contains("to_string_i32") && item.contains("to_string_i32 x")),
+            "items: {items:#?}"
+        );
+    }
+
+    #[test]
+    fn semantic_loop_step_caps_in_scope_values() {
+        let uri = in_memory_doc_uri();
+        let mut lines = Vec::new();
+        for i in 0..160usize {
+            lines.push(format!("fn x{i} : i32 -> i32 = \\v -> v"));
+        }
+        lines.push("let y : i32 = ? in y".to_string());
+        let line = (lines.len() - 1) as u32;
+        let text = lines.join("\n");
+        let out = execute_semantic_loop_step(
+            &uri,
+            &text,
+            Position {
+                line,
+                character: 14,
+            },
+        )
+        .expect("step output");
+        let in_scope_values = out
+            .as_object()
+            .and_then(|o| o.get("inScopeValues"))
+            .and_then(Value::as_array)
+            .expect("inScopeValues");
+        assert!(
+            in_scope_values.len() <= MAX_SEMANTIC_IN_SCOPE_VALUES,
+            "in_scope_values_len={}; max={MAX_SEMANTIC_IN_SCOPE_VALUES}",
+            in_scope_values.len()
+        );
+    }
+
+    #[test]
+    fn hole_expected_types_detects_placeholder_vars() {
+        let uri = in_memory_doc_uri();
+        let text = "let y : i32 = _ in y";
+        let holes = hole_expected_types_for_document(&uri, text);
+        assert!(!holes.is_empty(), "holes: {holes:#?}");
+        let expected = holes
+            .iter()
+            .find_map(|hole| hole.get("expectedType").and_then(Value::as_str));
+        assert_eq!(expected, Some("i32"));
+    }
+
+    #[test]
+    fn hole_expected_types_detects_question_holes() {
+        let uri = in_memory_doc_uri();
+        let text = "let y : i32 = ? in y";
+        let holes = hole_expected_types_for_document(&uri, text);
+        assert!(!holes.is_empty(), "holes: {holes:#?}");
+        let hole_name = holes
+            .iter()
+            .find_map(|hole| hole.get("name").and_then(Value::as_str));
+        assert_eq!(hole_name, Some("?"));
+        let expected = holes
+            .iter()
+            .find_map(|hole| hole.get("expectedType").and_then(Value::as_str));
+        assert_eq!(expected, Some("i32"));
+    }
+
+    #[test]
+    fn execute_holes_command_returns_holes_array() {
+        let uri = in_memory_doc_uri();
+        let text = "let y : i32 = _ in y";
+        let out = execute_query_command_for_document_without_position(
+            CMD_HOLES_EXPECTED_TYPES,
+            &uri,
+            text,
+        )
+        .expect("command output");
+        let holes = out
+            .as_object()
+            .and_then(|o| o.get("holes"))
+            .and_then(Value::as_array)
+            .expect("holes array");
+        assert!(!holes.is_empty(), "holes: {holes:#?}");
+    }
+
+    #[test]
+    fn semantic_loop_step_reports_expected_type_and_candidates() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+fn mk : i32 -> i32 = \x -> x
+let y : i32 = ? in y
+"#;
+        let out = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 14,
+            },
+        )
+        .expect("command output");
+        let obj = out.as_object().expect("object");
+
+        let expected = obj
+            .get("expectedType")
+            .and_then(Value::as_str)
+            .expect("expectedType");
+        assert_eq!(expected, "i32");
+
+        let function_candidates = obj
+            .get("functionCandidates")
+            .and_then(Value::as_array)
+            .expect("functionCandidates");
+        assert!(
+            function_candidates
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|item| item.starts_with("mk : ")),
+            "function candidates: {function_candidates:#?}"
+        );
+
+        let quick_fix_titles = obj
+            .get("quickFixTitles")
+            .and_then(Value::as_array)
+            .expect("quickFixTitles");
+        assert!(
+            quick_fix_titles
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|title| title == "Fill hole with `mk`"),
+            "quick fixes: {quick_fix_titles:#?}"
+        );
+        let quick_fixes = obj
+            .get("quickFixes")
+            .and_then(Value::as_array)
+            .expect("quickFixes");
+        assert!(
+            quick_fixes.iter().any(|qf| {
+                qf.get("id").and_then(Value::as_str).is_some()
+                    && qf.get("title").and_then(Value::as_str) == Some("Fill hole with `mk`")
+                    && qf.get("kind").and_then(Value::as_str) == Some("quickfix")
+                    && qf.get("edit").is_some()
+            }),
+            "quickFixes: {quick_fixes:#?}"
+        );
+
+        let accepting = obj
+            .get("functionsAcceptingInferredType")
+            .and_then(Value::as_array)
+            .expect("functionsAcceptingInferredType");
+        assert!(
+            accepting
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|item| item.starts_with("mk : ")),
+            "accepting: {accepting:#?}"
+        );
+    }
+
+    #[test]
+    fn semantic_loop_step_reports_local_diagnostics_and_fixes() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let out = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+        )
+        .expect("command output");
+        let obj = out.as_object().expect("object");
+
+        let local_diagnostics = obj
+            .get("localDiagnostics")
+            .and_then(Value::as_array)
+            .expect("localDiagnostics");
+        assert!(
+            local_diagnostics.iter().any(|diag| {
+                diag.get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| message.contains("unbound variable z"))
+            }),
+            "diagnostics: {local_diagnostics:#?}"
+        );
+
+        let quick_fix_titles = obj
+            .get("quickFixTitles")
+            .and_then(Value::as_array)
+            .expect("quickFixTitles");
+        assert!(
+            quick_fix_titles
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|title| title.contains("Introduce `let z = null`")),
+            "quick fixes: {quick_fix_titles:#?}"
+        );
+        let quick_fixes = obj
+            .get("quickFixes")
+            .and_then(Value::as_array)
+            .expect("quickFixes");
+        assert!(
+            quick_fixes.iter().any(|qf| {
+                qf.get("id").and_then(Value::as_str).is_some()
+                    && qf
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .is_some_and(|title| title.contains("Introduce `let z = null`"))
+                    && qf.get("kind").and_then(Value::as_str) == Some("quickfix")
+            }),
+            "quickFixes: {quick_fixes:#?}"
+        );
+    }
+
+    #[test]
+    fn semantic_loop_step_json_contract_is_stable() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+fn mk : i32 -> i32 = \x -> x
+let y : i32 = ? in y
+"#;
+        let out = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 14,
+            },
+        )
+        .expect("step output");
+        let obj = expect_object(&out);
+
+        // Required top-level fields and types.
+        assert!(obj.contains_key("expectedType"));
+        assert!(obj.contains_key("inferredType"));
+        expect_array_field(obj, "inScopeValues");
+        expect_array_field(obj, "functionCandidates");
+        expect_array_field(obj, "holeFillCandidates");
+        expect_array_field(obj, "functionsAcceptingInferredType");
+        expect_array_field(obj, "adaptersFromInferredToExpectedType");
+        expect_array_field(obj, "functionsCompatibleWithInScopeValues");
+        expect_array_field(obj, "localDiagnostics");
+        expect_array_field(obj, "quickFixes");
+        expect_array_field(obj, "quickFixTitles");
+        expect_array_field(obj, "holes");
+
+        let quick_fixes = expect_array_field(obj, "quickFixes");
+        assert!(
+            !quick_fixes.is_empty(),
+            "quickFixes should not be empty: {obj:#?}"
+        );
+        let first_quick_fix = expect_object(quick_fixes.first().expect("first quick fix"));
+        expect_string_field(first_quick_fix, "id");
+        expect_string_field(first_quick_fix, "title");
+        // `kind` may be null for some future quick-fix types, but key should exist.
+        assert!(
+            first_quick_fix.contains_key("kind"),
+            "quickFix should include `kind`: {first_quick_fix:#?}"
+        );
+        assert!(
+            first_quick_fix.contains_key("edit"),
+            "quickFix should include `edit`: {first_quick_fix:#?}"
+        );
+    }
+
+    #[test]
+    fn semantic_loop_apply_quick_fix_resolves_by_id() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let step = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+        )
+        .expect("step output");
+        let quick_fix_id = step
+            .get("quickFixes")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("id"))
+            .and_then(Value::as_str)
+            .expect("quick fix id")
+            .to_string();
+
+        let out = execute_semantic_loop_apply_quick_fix(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            &quick_fix_id,
+        )
+        .expect("apply output");
+        let quick_fix = out
+            .get("quickFix")
+            .and_then(Value::as_object)
+            .expect("quickFix object");
+        assert_eq!(
+            quick_fix
+                .get("id")
+                .and_then(Value::as_str)
+                .expect("quickFix.id"),
+            quick_fix_id
+        );
+        assert!(quick_fix.get("edit").is_some(), "quickFix: {quick_fix:#?}");
+    }
+
+    #[test]
+    fn semantic_loop_apply_quick_fix_json_contract_is_stable() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let step = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+        )
+        .expect("step output");
+        let quick_fix_id = step
+            .get("quickFixes")
+            .and_then(Value::as_array)
+            .and_then(|arr| arr.first())
+            .and_then(|item| item.get("id"))
+            .and_then(Value::as_str)
+            .expect("quick fix id")
+            .to_string();
+
+        let out = execute_semantic_loop_apply_quick_fix(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            &quick_fix_id,
+        )
+        .expect("apply output");
+        let obj = expect_object(&out);
+        let quick_fix = expect_object(obj.get("quickFix").expect("quickFix"));
+        expect_string_field(quick_fix, "id");
+        expect_string_field(quick_fix, "title");
+        assert!(quick_fix.contains_key("kind"));
+        assert!(quick_fix.contains_key("edit"));
+    }
+
+    #[test]
+    fn semantic_loop_apply_quick_fix_unknown_id_returns_null() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let out = execute_semantic_loop_apply_quick_fix(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            "qf-does-not-exist",
+        )
+        .expect("apply output");
+        assert_eq!(out, Value::Null);
+    }
+
+    #[test]
+    fn semantic_loop_apply_best_quick_fixes_updates_text_and_reduces_errors() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            3,
+            BulkQuickFixStrategy::Conservative,
+            false,
+        )
+        .expect("bulk output");
+
+        let applied_count = out
+            .get("appliedCount")
+            .and_then(Value::as_u64)
+            .expect("appliedCount");
+        assert!(applied_count >= 1, "out: {out:#?}");
+
+        let updated_text = out
+            .get("updatedText")
+            .and_then(Value::as_str)
+            .expect("updatedText");
+        assert_ne!(updated_text, text, "out: {out:#?}");
+
+        let diagnostics_after = out
+            .get("localDiagnosticsAfter")
+            .and_then(Value::as_array)
+            .expect("localDiagnosticsAfter");
+        assert!(
+            diagnostics_after.iter().all(|diag| {
+                !diag
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|m| m.contains("unbound variable z"))
+            }),
+            "diagnostics_after: {diagnostics_after:#?}"
+        );
+        let steps = out.get("steps").and_then(Value::as_array).expect("steps");
+        assert!(!steps.is_empty(), "out: {out:#?}");
+        let strategy = out
+            .get("strategy")
+            .and_then(Value::as_str)
+            .expect("strategy");
+        assert_eq!(strategy, "conservative");
+        let first_step = steps
+            .first()
+            .and_then(Value::as_object)
+            .expect("first step");
+        assert!(
+            first_step.get("quickFix").is_some(),
+            "step: {first_step:#?}"
+        );
+        let before_count = first_step
+            .get("diagnosticsBeforeCount")
+            .and_then(Value::as_u64)
+            .expect("diagnosticsBeforeCount");
+        let after_count = first_step
+            .get("diagnosticsAfterCount")
+            .and_then(Value::as_u64)
+            .expect("diagnosticsAfterCount");
+        assert!(after_count <= before_count, "step: {first_step:#?}");
+    }
+
+    #[test]
+    fn semantic_loop_apply_best_quick_fixes_json_contract_is_stable() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            2,
+            BulkQuickFixStrategy::Conservative,
+            true,
+        )
+        .expect("bulk output");
+        let obj = expect_object(&out);
+
+        assert_eq!(expect_string_field(obj, "strategy"), "conservative");
+        obj.get("dryRun")
+            .and_then(Value::as_bool)
+            .expect("dryRun bool");
+        obj.get("appliedCount")
+            .and_then(Value::as_u64)
+            .expect("appliedCount u64");
+        obj.get("updatedText")
+            .and_then(Value::as_str)
+            .expect("updatedText string");
+        expect_array_field(obj, "appliedQuickFixes");
+        expect_array_field(obj, "steps");
+        expect_array_field(obj, "localDiagnosticsAfter");
+        expect_string_field(obj, "stoppedReason");
+        expect_string_field(obj, "stoppedReasonDetail");
+        obj.get("lastDiagnosticsDelta")
+            .and_then(Value::as_i64)
+            .expect("lastDiagnosticsDelta i64");
+        obj.get("noImprovementStreak")
+            .and_then(Value::as_u64)
+            .expect("noImprovementStreak u64");
+        obj.get("seenStatesCount")
+            .and_then(Value::as_u64)
+            .expect("seenStatesCount u64");
+
+        if let Some(first_step) = expect_array_field(obj, "steps").first() {
+            let step_obj = expect_object(first_step);
+            step_obj
+                .get("index")
+                .and_then(Value::as_u64)
+                .expect("step.index");
+            assert!(step_obj.contains_key("quickFix"));
+            expect_array_field(step_obj, "diagnosticsBefore");
+            expect_array_field(step_obj, "diagnosticsAfter");
+            step_obj
+                .get("diagnosticsBeforeCount")
+                .and_then(Value::as_u64)
+                .expect("step diagnosticsBeforeCount");
+            step_obj
+                .get("diagnosticsAfterCount")
+                .and_then(Value::as_u64)
+                .expect("step diagnosticsAfterCount");
+            step_obj
+                .get("diagnosticsDelta")
+                .and_then(Value::as_i64)
+                .expect("step diagnosticsDelta");
+            step_obj
+                .get("noImprovementStreak")
+                .and_then(Value::as_u64)
+                .expect("step noImprovementStreak");
+        }
+    }
+
+    #[test]
+    fn semantic_loop_apply_best_quick_fixes_no_context_returns_no_quickfix() {
+        let uri = in_memory_doc_uri();
+        let text = "let x = 1 in x";
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 4,
+            },
+            3,
+            BulkQuickFixStrategy::Conservative,
+            false,
+        )
+        .expect("bulk output");
+        let obj = expect_object(&out);
+        assert_eq!(expect_string_field(obj, "stoppedReason"), "noQuickFix");
+        assert_eq!(
+            obj.get("appliedCount")
+                .and_then(Value::as_u64)
+                .expect("appliedCount"),
+            0
+        );
+        assert!(expect_array_field(obj, "steps").is_empty(), "out={out:#?}");
+    }
+
+    #[test]
+    fn semantic_loop_step_parse_error_still_returns_contract_shape() {
+        let uri = in_memory_doc_uri();
+        let text = "let x =";
+        let out = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 6,
+            },
+        )
+        .expect("step output");
+        let obj = expect_object(&out);
+        // On parse failure we still return the same top-level contract shape.
+        expect_array_field(obj, "quickFixes");
+        expect_array_field(obj, "quickFixTitles");
+        expect_array_field(obj, "localDiagnostics");
+        expect_array_field(obj, "holes");
+    }
+
+    #[test]
+    fn golden_flow_hole_to_apply_by_id_reduces_hole_count() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+fn mk : i32 -> i32 = \x -> x
+let y : i32 = ? in y
+"#;
+        let step = execute_semantic_loop_step(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 14,
+            },
+        )
+        .expect("step output");
+        let quick_fix_id = step
+            .get("quickFixes")
+            .and_then(Value::as_array)
+            .and_then(|arr| {
+                arr.iter().find(|item| {
+                    item.get("title")
+                        .and_then(Value::as_str)
+                        .is_some_and(|title| title == "Fill hole with `mk`")
+                })
+            })
+            .and_then(|item| item.get("id"))
+            .and_then(Value::as_str)
+            .expect("hole fill quick-fix id")
+            .to_string();
+        let apply = execute_semantic_loop_apply_quick_fix(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 14,
+            },
+            &quick_fix_id,
+        )
+        .expect("apply output");
+        let quick_fix = apply.get("quickFix").expect("quickFix returned").clone();
+        let edit: WorkspaceEdit =
+            serde_json::from_value(quick_fix.get("edit").cloned().expect("quickFix.edit"))
+                .expect("workspace edit");
+        let updated = apply_workspace_edit_to_text(&uri, text, &edit).expect("apply edit");
+
+        let holes_before = hole_expected_types_for_document(&uri, text);
+        let holes_after = hole_expected_types_for_document(&uri, &updated);
+        assert!(
+            holes_after.len() < holes_before.len(),
+            "before={holes_before:#?}; after={holes_after:#?}; updated=\n{updated}"
+        );
+    }
+
+    #[test]
+    fn golden_flow_unknown_var_bulk_repairs_local_error() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            3,
+            BulkQuickFixStrategy::Conservative,
+            false,
+        )
+        .expect("bulk output");
+        let diagnostics_after = out
+            .get("localDiagnosticsAfter")
+            .and_then(Value::as_array)
+            .expect("localDiagnosticsAfter");
+        assert!(
+            diagnostics_after.iter().all(|diag| {
+                !diag
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|msg| msg.contains("unbound variable z"))
+            }),
+            "out={out:#?}"
+        );
+    }
+
+    #[test]
+    fn golden_flow_complex_bulk_preview_then_apply_same_projection() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+let
+  y = z
+in
+  match y when Some x -> x
+"#;
+        let preview = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 6,
+            },
+            3,
+            BulkQuickFixStrategy::Aggressive,
+            true,
+        )
+        .expect("preview output");
+        let apply = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 6,
+            },
+            3,
+            BulkQuickFixStrategy::Aggressive,
+            false,
+        )
+        .expect("apply output");
+
+        let preview_text = preview
+            .get("updatedText")
+            .and_then(Value::as_str)
+            .expect("preview updatedText");
+        let apply_text = apply
+            .get("updatedText")
+            .and_then(Value::as_str)
+            .expect("apply updatedText");
+        assert_eq!(
+            preview_text, apply_text,
+            "preview={preview:#?}\napply={apply:#?}"
+        );
+
+        let preview_steps = preview
+            .get("steps")
+            .and_then(Value::as_array)
+            .expect("preview steps");
+        let apply_steps = apply
+            .get("steps")
+            .and_then(Value::as_array)
+            .expect("apply steps");
+        assert_eq!(preview_steps.len(), apply_steps.len());
+    }
+
+    #[test]
+    fn bulk_strategy_simple_unknown_var_applies_introduce_fix() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            1,
+            BulkQuickFixStrategy::Conservative,
+            false,
+        )
+        .expect("bulk output");
+        let first_title = out
+            .get("steps")
+            .and_then(Value::as_array)
+            .and_then(|steps| steps.first())
+            .and_then(|step| step.get("quickFix"))
+            .and_then(|qf| qf.get("title"))
+            .and_then(Value::as_str)
+            .expect("first quick-fix title");
+        assert!(
+            first_title.contains("Introduce `let z = null`"),
+            "first_title={first_title}; out={out:#?}"
+        );
+    }
+
+    #[test]
+    fn bulk_strategy_medium_distinguishes_conservative_vs_aggressive_ranking() {
+        let candidates = vec![
+            json!({
+                "id": "qf-add",
+                "title": "Add wildcard arm to match",
+                "kind": "quickfix",
+                "edit": Value::Null,
+            }),
+            json!({
+                "id": "qf-intro",
+                "title": "Introduce `let z = null`",
+                "kind": "quickfix",
+                "edit": Value::Null,
+            }),
+        ];
+        let conservative =
+            best_quick_fix_from_candidates(&candidates, BulkQuickFixStrategy::Conservative)
+                .expect("conservative choice");
+        let aggressive =
+            best_quick_fix_from_candidates(&candidates, BulkQuickFixStrategy::Aggressive)
+                .expect("aggressive choice");
+        assert_eq!(
+            conservative
+                .get("title")
+                .and_then(Value::as_str)
+                .expect("conservative title"),
+            "Add wildcard arm to match"
+        );
+        assert_eq!(
+            aggressive
+                .get("title")
+                .and_then(Value::as_str)
+                .expect("aggressive title"),
+            "Introduce `let z = null`"
+        );
+    }
+
+    #[test]
+    fn bulk_strategy_complex_returns_step_telemetry_for_each_step() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+let
+  y = z
+in
+  match y when Some x -> x
+"#;
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 6,
+            },
+            3,
+            BulkQuickFixStrategy::Aggressive,
+            false,
+        )
+        .expect("bulk output");
+
+        let steps = out
+            .get("steps")
+            .and_then(Value::as_array)
+            .expect("steps array");
+        assert!(!steps.is_empty(), "out: {out:#?}");
+        for (i, step) in steps.iter().enumerate() {
+            let diagnostics_before = step
+                .get("diagnosticsBefore")
+                .and_then(Value::as_array)
+                .expect("diagnosticsBefore");
+            let diagnostics_after = step
+                .get("diagnosticsAfter")
+                .and_then(Value::as_array)
+                .expect("diagnosticsAfter");
+            let before_count = step
+                .get("diagnosticsBeforeCount")
+                .and_then(Value::as_u64)
+                .expect("diagnosticsBeforeCount");
+            let after_count = step
+                .get("diagnosticsAfterCount")
+                .and_then(Value::as_u64)
+                .expect("diagnosticsAfterCount");
+            let delta = step
+                .get("diagnosticsDelta")
+                .and_then(Value::as_i64)
+                .expect("diagnosticsDelta");
+            assert_eq!(
+                diagnostics_before.len() as u64,
+                before_count,
+                "step[{i}]={step:#?}"
+            );
+            assert_eq!(
+                diagnostics_after.len() as u64,
+                after_count,
+                "step[{i}]={step:#?}"
+            );
+            assert_eq!(
+                before_count as i64 - after_count as i64,
+                delta,
+                "step[{i}]={step:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bulk_strategy_stops_after_requested_step_limit() {
+        let uri = in_memory_doc_uri();
+        let text = r#"
+let
+  y = z
+in
+  match y when Some x -> x
+"#;
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 2,
+                character: 6,
+            },
+            1,
+            BulkQuickFixStrategy::Aggressive,
+            false,
+        )
+        .expect("bulk output");
+        let applied_count = out
+            .get("appliedCount")
+            .and_then(Value::as_u64)
+            .expect("appliedCount");
+        let steps = out.get("steps").and_then(Value::as_array).expect("steps");
+        let stopped_reason = out
+            .get("stoppedReason")
+            .and_then(Value::as_str)
+            .expect("stoppedReason");
+        let stopped_detail = out
+            .get("stoppedReasonDetail")
+            .and_then(Value::as_str)
+            .expect("stoppedReasonDetail");
+        let seen_states = out
+            .get("seenStatesCount")
+            .and_then(Value::as_u64)
+            .expect("seenStatesCount");
+        assert_eq!(applied_count, 1, "out: {out:#?}");
+        assert_eq!(steps.len(), 1, "out: {out:#?}");
+        assert_eq!(stopped_reason, "maxStepsReached", "out: {out:#?}");
+        assert!(
+            stopped_detail.contains("maxSteps"),
+            "stopped_detail={stopped_detail}; out={out:#?}"
+        );
+        assert!(seen_states >= 2, "out: {out:#?}");
+    }
+
+    #[test]
+    fn bulk_mode_dry_run_reports_flag_and_predicted_text() {
+        let uri = in_memory_doc_uri();
+        let text = "let y = z in y";
+        let out = execute_semantic_loop_apply_best_quick_fixes(
+            &uri,
+            text,
+            Position {
+                line: 0,
+                character: 8,
+            },
+            2,
+            BulkQuickFixStrategy::Conservative,
+            true,
+        )
+        .expect("bulk output");
+        let dry_run = out.get("dryRun").and_then(Value::as_bool).expect("dryRun");
+        assert!(dry_run, "out: {out:#?}");
+        let updated_text = out
+            .get("updatedText")
+            .and_then(Value::as_str)
+            .expect("updatedText");
+        assert_ne!(updated_text, text, "out: {out:#?}");
+    }
+
+    #[test]
+    fn bulk_progress_guard_no_improvement_streak_logic() {
+        assert_eq!(next_no_improvement_streak(0, 1), 0);
+        assert_eq!(next_no_improvement_streak(0, 0), 1);
+        assert_eq!(next_no_improvement_streak(1, -1), 2);
+    }
+
+    #[test]
+    fn bulk_progress_guard_cycle_detection_hashes_equal_texts() {
+        let a = text_state_hash("let y = z in y");
+        let b = text_state_hash("let y = z in y");
+        let c = text_state_hash("let y = null in y");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 }

@@ -311,6 +311,7 @@ fn rename_expr(
         Expr::String(span, v) => Expr::String(*span, v.clone()),
         Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
         Expr::DateTime(span, v) => Expr::DateTime(*span, *v),
+        Expr::Hole(span) => Expr::Hole(*span),
         Expr::Tuple(span, elems) => Expr::Tuple(
             *span,
             elems
@@ -770,6 +771,7 @@ fn rewrite_import_uses_expr(
         Expr::String(span, v) => Expr::String(*span, v.clone()),
         Expr::Uuid(span, v) => Expr::Uuid(*span, *v),
         Expr::DateTime(span, v) => Expr::DateTime(*span, *v),
+        Expr::Hole(span) => Expr::Hole(*span),
         Expr::Project(span, base, field) => {
             if let Expr::Var(v) = base.as_ref()
                 && alias_is_visible(&v.name, bound, shadowed_values)
@@ -1211,7 +1213,8 @@ fn validate_import_uses_expr(
         | Expr::Float(..)
         | Expr::String(..)
         | Expr::Uuid(..)
-        | Expr::DateTime(..) => Ok(()),
+        | Expr::DateTime(..)
+        | Expr::Hole(..) => Ok(()),
     }
 }
 

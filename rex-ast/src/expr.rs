@@ -575,6 +575,7 @@ pub enum Expr {
     String(Span, String),          // "hello"
     Uuid(Span, Uuid),              // a550c18e-36e1-4f6d-8c8e-2d2b1e5f3c3a
     DateTime(Span, DateTime<Utc>), // 2023-01-01T12:00:00Z
+    Hole(Span),                    // ?
 
     Tuple(Span, Vec<Arc<Expr>>),             // (e1, e2, e3)
     List(Span, Vec<Arc<Expr>>),              // [e1, e2, e3]
@@ -609,6 +610,7 @@ impl Expr {
             | Self::String(span, ..)
             | Self::Uuid(span, ..)
             | Self::DateTime(span, ..)
+            | Self::Hole(span, ..)
             | Self::Tuple(span, ..)
             | Self::List(span, ..)
             | Self::Dict(span, ..)
@@ -634,6 +636,7 @@ impl Expr {
             | Self::String(span, ..)
             | Self::Uuid(span, ..)
             | Self::DateTime(span, ..)
+            | Self::Hole(span, ..)
             | Self::Tuple(span, ..)
             | Self::List(span, ..)
             | Self::Dict(span, ..)
@@ -673,6 +676,7 @@ impl Expr {
             Expr::String(_, x) => Expr::String(span, x.clone()),
             Expr::Uuid(_, x) => Expr::Uuid(span, *x),
             Expr::DateTime(_, x) => Expr::DateTime(span, *x),
+            Expr::Hole(_) => Expr::Hole(span),
             Expr::Tuple(_, elems) => Expr::Tuple(span, elems.clone()),
             Expr::List(_, elems) => Expr::List(span, elems.clone()),
             Expr::Dict(_, kvs) => Expr::Dict(
@@ -732,6 +736,7 @@ impl Expr {
             Expr::String(_, x) => Expr::String(Span::default(), x.clone()),
             Expr::Uuid(_, x) => Expr::Uuid(Span::default(), *x),
             Expr::DateTime(_, x) => Expr::DateTime(Span::default(), *x),
+            Expr::Hole(_) => Expr::Hole(Span::default()),
             Expr::Tuple(_, elems) => Expr::Tuple(
                 Span::default(),
                 elems.iter().map(|x| Arc::new(x.reset_spans())).collect(),
@@ -832,6 +837,7 @@ impl Display for Expr {
             Self::String(_span, x) => write!(f, "{:?}", x),
             Self::Uuid(_span, x) => x.fmt(f),
             Self::DateTime(_span, x) => x.fmt(f),
+            Self::Hole(_span) => '?'.fmt(f),
             Self::List(_span, xs) => {
                 '['.fmt(f)?;
                 for (i, x) in xs.iter().enumerate() {

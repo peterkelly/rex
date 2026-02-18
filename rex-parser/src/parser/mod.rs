@@ -743,6 +743,7 @@ impl Parser {
                 | Token::Float(..)
                 | Token::Int(..)
                 | Token::String(..)
+                | Token::Question(..)
                 | Token::Ident(..)
                 | Token::BackSlash(..)
                 | Token::Let(..)
@@ -811,6 +812,7 @@ impl Parser {
             Token::Float(..) => self.parse_literal_float_expr(),
             Token::Int(..) => self.parse_literal_int_expr(),
             Token::String(..) => self.parse_literal_str_expr(),
+            Token::Question(..) => self.parse_hole_expr(),
             Token::Ident(..) => self.parse_ident_expr(),
             Token::BackSlash(..) => self.parse_lambda_expr(),
             Token::Let(..) => self.parse_let_expr(),
@@ -3547,6 +3549,18 @@ impl Parser {
             )),
         }
     }
+
+    fn parse_hole_expr(&mut self) -> Result<Expr, ParserErr> {
+        let token = self.current_token();
+        self.next_token();
+        match token {
+            Token::Question(span, ..) => Ok(Expr::Hole(span)),
+            token => Err(ParserErr::new(
+                *token.span(),
+                format!("expected `?` got {}", token),
+            )),
+        }
+    }
 }
 
 fn find_layout_expr_end(
@@ -3640,6 +3654,7 @@ fn count_expr_nodes(expr: &Expr) -> u64 {
         | Expr::String(..)
         | Expr::Uuid(..)
         | Expr::DateTime(..)
+        | Expr::Hole(..)
         | Expr::Var(..) => 1,
         Expr::Tuple(_, xs) | Expr::List(_, xs) => {
             1 + xs.iter().map(|e| count_expr_nodes(e)).sum::<u64>()
@@ -4999,5 +5014,56 @@ instance Marker i32
         let program = parser.parse_program(&mut GasMeter::default()).unwrap();
         assert_eq!(program.decls.len(), 2);
         assert!(matches!(program.expr.as_ref(), Expr::Bool(..)));
+    }
+
+    #[test]
+    fn test_parse_top_level_hole_expr() {
+        let expr = parse("?");
+        assert!(matches!(expr.as_ref(), Expr::Hole(..)), "expr={expr:#?}");
+    }
+
+    #[test]
+    fn test_parse_hole_in_let_with_annotation() {
+        let expr = parse("let x : i32 = ? in x");
+        match expr.as_ref() {
+            Expr::Let(_, _var, ann, def, body) => {
+                assert!(ann.is_some(), "expected annotation");
+                assert!(matches!(def.as_ref(), Expr::Hole(..)), "def={def:#?}");
+                assert!(matches!(body.as_ref(), Expr::Var(..)), "body={body:#?}");
+            }
+            other => panic!("expected let expr, got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_hole_in_nested_expression_positions() {
+        let expr = parse("(\\f -> f ?) (\\x -> x)");
+        match expr.as_ref() {
+            Expr::App(_, lhs, rhs) => {
+                assert!(matches!(rhs.as_ref(), Expr::Lam(..)), "rhs={rhs:#?}");
+                match lhs.as_ref() {
+                    Expr::Lam(_, _, _param, _ann, _constraints, body) => match body.as_ref() {
+                        Expr::App(_, f, arg) => {
+                            assert!(matches!(f.as_ref(), Expr::Var(..)), "f={f:#?}");
+                            assert!(matches!(arg.as_ref(), Expr::Hole(..)), "arg={arg:#?}");
+                        }
+                        other => panic!("expected app in lambda body, got {other:#?}"),
+                    },
+                    other => panic!("expected lambda lhs, got {other:#?}"),
+                }
+            }
+            other => panic!("expected top-level app, got {other:#?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_hole_not_allowed_in_type_annotation_failure_case() {
+        let mut parser = Parser::new(Token::tokenize("let x : ? = 1 in x").unwrap());
+        let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("expected type") || e.message.contains("unexpected")),
+            "errs={errs:#?}"
+        );
     }
 }

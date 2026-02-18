@@ -8,7 +8,8 @@ Because Rex programs are pure and free of side effects in the language itself, t
 
 All Rex code samples in this documentation are interactive. Edit them, run them, and use the output to learn by experimentation. A good place to start is the sample below.
 
-If you are using Rex as a code-generation target, read **[LLM Guidance](LLMS.md)** early. It captures syntax pitfalls and validation workflow that reduce iteration time.
+If you are using Rex as a code-generation target, read **[LLMs](LLMS.md)** early. It covers the
+LLM-first semantic workflow, syntax pitfalls, and validation steps that reduce iteration time.
 
 Try editing and running this intro data-processing demo:
 
@@ -32,7 +33,7 @@ This documentation is organized into several sections:
 - **[Memory Management](MEMORY_MANAGEMENT.md)** — Memory management implementation
 - **[Embedding](EMBEDDING.md)** — Embedding Rex in other applications
 - **[Contributing](CONTRIBUTING.md)** — How to contribute to Rex
-- **[LLM Guidance](LLMS.md)** — Practical rules for generating valid Rex code quickly
+- **[LLMs](LLMS.md)** — LLM-first semantic workflow and generation guidance
 
 ## Rex as a target for LLMs
 

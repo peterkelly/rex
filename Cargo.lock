@@ -833,6 +833,7 @@ dependencies = [
  "rex-parser",
  "rex-ts",
  "rex-util",
+ "serde_json",
  "tokio",
  "tower-lsp",
 ]
