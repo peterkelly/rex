@@ -200,7 +200,7 @@ impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self.as_ref() {
             TypeKind::Var(tv) => match &tv.name {
-                Some(name) => write!(f, "{}", name),
+                Some(name) => write!(f, "'{}", name),
                 None => write!(f, "t{}", tv.id),
             },
             TypeKind::Con(c) => write!(f, "{}", c.name),

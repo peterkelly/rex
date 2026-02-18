@@ -7055,7 +7055,7 @@ in
         assert_eq!(field_diags.len(), 2, "diagnostics: {field_diags:#?}");
         assert_eq!(
             field_diags[0].message,
-            "field `x` is not definitely available on a"
+            "field `x` is not definitely available on 'a"
         );
         assert_eq!(
             field_diags[0].range,
@@ -7072,7 +7072,7 @@ in
         );
         assert_eq!(
             field_diags[1].message,
-            "field `y` is not definitely available on a"
+            "field `y` is not definitely available on 'a"
         );
         assert_eq!(
             field_diags[1].range,
@@ -7528,7 +7528,7 @@ let y : i32 = ? in y
     fn expected_type_reports_function_argument_type() {
         let text = "let f = \\x -> x + 1 in f 2";
         let ty = expected_type_for_source_public(text, 0, 26).expect("expected type at argument");
-        assert_eq!(ty, "r");
+        assert_eq!(ty, "'r");
     }
 
     #[test]
