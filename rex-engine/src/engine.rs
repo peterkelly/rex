@@ -26,6 +26,20 @@ use crate::prelude::{
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType};
 
+/// Shared ADT registration surface for derived and manually implemented Rust types.
+pub trait RexAdt: RexType {
+    fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
+        engine: &mut Engine<State>,
+    ) -> Result<AdtDecl, EngineError>;
+
+    fn inject_rex<State: Clone + Send + Sync + 'static>(
+        engine: &mut Engine<State>,
+    ) -> Result<(), EngineError> {
+        let adt = Self::rex_adt_decl(engine)?;
+        engine.inject_adt(adt)
+    }
+}
+
 fn check_cancelled<State: Clone + Send + Sync + 'static>(
     engine: &Engine<State>,
 ) -> Result<(), EngineError> {
@@ -1683,6 +1697,59 @@ where
         AdtDecl::new(&name_sym, &param_syms, &mut self.type_system.supply)
     }
 
+    /// Seed an `AdtDecl` from a Rex type constructor.
+    ///
+    /// Accepted shapes:
+    /// - `Type::con("Foo", 0)` -> `Foo` with no params
+    /// - `Foo a b` (where args are type vars) -> `Foo` with params inferred from vars
+    /// - `Type::con("Foo", n)` (bare higher-kinded head) -> `Foo` with generated params `t0..t{n-1}`
+    pub fn adt_decl_from_type(&mut self, typ: &Type) -> Result<AdtDecl, EngineError> {
+        let (name, arity, args) = type_head_and_args(typ)?;
+        let param_names: Vec<String> = if args.is_empty() {
+            (0..arity).map(|i| format!("t{i}")).collect()
+        } else {
+            let mut names = Vec::with_capacity(args.len());
+            for arg in args {
+                match arg.as_ref() {
+                    TypeKind::Var(tv) => {
+                        let name = tv
+                            .name
+                            .as_ref()
+                            .map(|s| s.to_string())
+                            .unwrap_or_else(|| format!("t{}", tv.id));
+                        names.push(name);
+                    }
+                    _ => {
+                        return Err(EngineError::Custom(format!(
+                            "cannot infer ADT params from `{typ}`: expected type variables, got `{arg}`"
+                        )));
+                    }
+                }
+            }
+            names
+        };
+        let param_refs: Vec<&str> = param_names.iter().map(|s| s.as_str()).collect();
+        Ok(self.adt_decl(name.as_ref(), &param_refs))
+    }
+
+    /// Same as `adt_decl_from_type`, but uses explicit parameter names.
+    pub fn adt_decl_from_type_with_params(
+        &mut self,
+        typ: &Type,
+        params: &[&str],
+    ) -> Result<AdtDecl, EngineError> {
+        let (name, arity, _args) = type_head_and_args(typ)?;
+        if arity != params.len() {
+            return Err(EngineError::Custom(format!(
+                "type `{}` expects {} parameters, got {}",
+                name,
+                arity,
+                params.len()
+            )));
+        }
+        Ok(self.adt_decl(name.as_ref(), params))
+    }
+
     pub fn inject_adt(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
         // Type system gets the constructor schemes; runtime gets constructor functions
         // that build `Value::Adt` with the constructor tag and evaluated args.
@@ -2681,6 +2748,31 @@ fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
             }
         }
     }
+}
+
+fn type_head_and_args(typ: &Type) -> Result<(Symbol, usize, Vec<Type>), EngineError> {
+    let mut args = Vec::new();
+    let mut head = typ;
+    while let TypeKind::App(f, arg) = head.as_ref() {
+        args.push(arg.clone());
+        head = f;
+    }
+    args.reverse();
+
+    let TypeKind::Con(con) = head.as_ref() else {
+        return Err(EngineError::Custom(format!(
+            "cannot build ADT declaration from non-constructor type `{typ}`"
+        )));
+    };
+    if !args.is_empty() && args.len() != con.arity {
+        return Err(EngineError::Custom(format!(
+            "constructor `{}` expected {} type arguments but got {} in `{typ}`",
+            con.name,
+            con.arity,
+            args.len()
+        )));
+    }
+    Ok((con.name.clone(), con.arity, args))
 }
 
 fn type_arity(typ: &Type) -> usize {

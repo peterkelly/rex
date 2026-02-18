@@ -517,12 +517,11 @@ let program = parser.parse_program(&mut GasMeter::default())?;
 The derive:
 - declares an ADT in the Rex type system
 - injects runtime constructors (so Rex can *build* values)
-- implements `FromValue`/`IntoValue` for converting Rust ↔ Rex
+- implements `FromPointer`/`IntoPointer` for converting Rust ↔ Rex
 
 ```rust
-use rex_engine::{Engine, FromValue};
+use rex::{Engine, FromPointer, GasMeter, Parser, Token};
 use rex_proc_macro::Rex;
-use rex_util::{GasCosts, GasMeter};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -533,13 +532,63 @@ enum Maybe<T> {
 let mut engine = Engine::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
-let expr = rex_parser::Parser::new(rex_lexer::Token::tokenize("Just 1")?)
+let expr = Parser::new(Token::tokenize("Just 1")?)
     .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .expr;
 let mut gas = GasMeter::default();
-let v = engine.eval_with_gas(expr.as_ref(), &mut gas).await?;
-assert_eq!(Maybe::<i32>::from_value(&v, "v")?, Maybe::Just(1));
+let (v, _ty) = engine.eval_with_gas(expr.as_ref(), &mut gas).await?;
+assert_eq!(Maybe::<i32>::from_pointer(&engine.heap, &v)?, Maybe::Just(1));
+```
+
+## Register ADTs Without Derive
+
+If your type metadata is data-driven (for example loaded from JSON), you can build ADTs
+without `#[derive(Rex)]`.
+
+- Use `Engine::adt_decl_from_type(...)` to seed an ADT declaration from a Rex type head.
+- Add variants with `AdtDecl::add_variant(...)`.
+- Register with `Engine::inject_adt(...)`.
+
+```rust
+use rex::{Engine, RexType, Type, sym};
+
+let mut engine = Engine::with_prelude(())?;
+
+let mut adt = engine.adt_decl_from_type(&Type::con("PrimitiveEither", 0))?;
+adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
+adt.add_variant(sym("Count"), vec![i32::rex_type()]);
+engine.inject_adt(adt)?;
+```
+
+If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls, implement
+`RexAdt` and provide `rex_adt_decl(...)`. Then `RexAdt::inject_rex(...)` gives the same
+registration workflow as derived types.
+
+```rust
+use rex::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, sym};
+
+struct PrimitiveEither;
+
+impl RexType for PrimitiveEither {
+    fn rex_type() -> Type {
+        Type::con("PrimitiveEither", 0)
+    }
+}
+
+impl RexAdt for PrimitiveEither {
+    fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
+        engine: &mut Engine<State>,
+    ) -> Result<AdtDecl, EngineError> {
+        let mut adt = engine.adt_decl_from_type(&Self::rex_type())?;
+        adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
+        adt.add_variant(sym("Count"), vec![i32::rex_type()]);
+        Ok(adt)
+    }
+}
+
+let mut engine = Engine::with_prelude(())?;
+PrimitiveEither::inject_rex(&mut engine)?;
 ```
 
 ## Depth Limits

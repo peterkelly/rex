@@ -6,7 +6,7 @@ pub mod json;
 pub use rex_ast::expr::{Program, intern, sym};
 pub use rex_engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineError, Export,
-    FromPointer, Handler, Heap, IntoPointer, Module, NativeFuture, Pointer, RexType,
+    FromPointer, Handler, Heap, IntoPointer, Module, NativeFuture, Pointer, RexAdt, RexType,
     SyncNativeCallable, Value, ValueDisplayOptions, closure_debug, closure_eq, pointer_display,
     pointer_display_with, value_debug, value_eq,
 };

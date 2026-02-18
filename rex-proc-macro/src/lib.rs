@@ -65,16 +65,31 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     };
 
     let adt_decl_fn = adt_decl_fn(ast, &type_name, &type_param_idents)?;
-    let (impl_generics, ty_generics, where_clause) = ast.generics.split_for_impl();
+    let mut rex_adt_generics = ast.generics.clone();
+    add_bound_to_type_params(&mut rex_adt_generics, parse_quote!(::rex::RexType));
+    let (rex_adt_impl_generics, rex_adt_ty_generics, rex_adt_where_clause) =
+        rex_adt_generics.split_for_impl();
+    let rex_adt_impl = quote! {
+        impl #rex_adt_impl_generics ::rex::RexAdt for #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
+            fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
+                engine: &mut ::rex::Engine<State>,
+            ) -> Result<::rex::AdtDecl, ::rex::EngineError> {
+                #adt_decl_fn
+            }
+        }
+    };
     let inject_fn = quote! {
-        impl #impl_generics #rust_ident #ty_generics #where_clause {
-            pub fn inject_rex(engine: &mut ::rex::Engine) -> Result<(), ::rex::EngineError> {
-                let adt = Self::rex_adt_decl(engine)?;
-                engine.inject_adt(adt)
+        impl #rex_adt_impl_generics #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
+            pub fn inject_rex<State: Clone + Send + Sync + 'static>(
+                engine: &mut ::rex::Engine<State>,
+            ) -> Result<(), ::rex::EngineError> {
+                <Self as ::rex::RexAdt>::inject_rex(engine)
             }
 
-            pub fn rex_adt_decl(engine: &mut ::rex::Engine) -> Result<::rex::AdtDecl, ::rex::EngineError> {
-                #adt_decl_fn
+            pub fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
+                engine: &mut ::rex::Engine<State>,
+            ) -> Result<::rex::AdtDecl, ::rex::EngineError> {
+                <Self as ::rex::RexAdt>::rex_adt_decl(engine)
             }
         }
     };
@@ -84,6 +99,7 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
 
     Ok(quote! {
         #rex_type_impl
+        #rex_adt_impl
         #inject_fn
         #into_value_impl
         #from_value_impl
@@ -147,10 +163,17 @@ fn adt_decl_fn(
         .iter()
         .map(|p| LitStr::new(&p.to_string(), Span::call_site()))
         .collect();
+    let param_count = param_names.len();
     let adt_decl = if param_names.is_empty() {
-        quote!(let mut adt = engine.adt_decl(#type_name, &[]);)
+        quote! {
+            let head = ::rex::Type::con(#type_name, 0);
+            let mut adt = engine.adt_decl_from_type_with_params(&head, &[])?;
+        }
     } else {
-        quote!(let mut adt = engine.adt_decl(#type_name, &[#(#param_names,)*]);)
+        quote! {
+            let head = ::rex::Type::con(#type_name, #param_count);
+            let mut adt = engine.adt_decl_from_type_with_params(&head, &[#(#param_names,)*])?;
+        }
     };
 
     let mut param_bindings = Vec::new();

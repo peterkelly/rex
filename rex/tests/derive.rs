@@ -1,6 +1,6 @@
 use rex::{
-    Engine, EngineError, FromPointer, GasMeter, Heap, JsonOptions, Parser, Pointer, Rex, RexType,
-    Token, Type, Value, rex_to_json,
+    Engine, EngineError, FromPointer, GasMeter, Heap, JsonOptions, Parser, Pointer, Rex, RexAdt,
+    RexType, Token, Type, Value, rex_to_json,
 };
 use rex_engine::assert_pointer_eq;
 use serde::Serialize;
@@ -338,6 +338,28 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     assert_eq!(ty, Type::con("i32", 0));
     let heap = &engine.heap;
     assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
+}
+
+#[tokio::test]
+async fn derive_types_implement_rex_adt_trait() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    <Shape as RexAdt>::inject_rex(&mut engine).unwrap();
+
+    let tokens = Token::tokenize(
+        r#"
+        match (Rectangle 2 5)
+            when Rectangle w h -> w * h
+            when Circle r -> r
+        "#,
+    )
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+
+    let mut gas = GasMeter::default();
+    let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(ty, Type::con("i32", 0));
+    assert_pointer_eq!(&engine.heap, v, engine.heap.alloc_i32(10).unwrap());
 }
 
 #[tokio::test]
