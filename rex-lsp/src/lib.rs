@@ -4642,7 +4642,7 @@ fn push_type_diagnostics(
     {
         Ok(v) => v,
         Err(err) => {
-            diagnostics.push(diagnostic_for_span(Span::default(), err));
+            diagnostics.push(diagnostic_for_span(primary_program_span(program), err));
             return;
         }
     };
@@ -4655,7 +4655,13 @@ fn push_type_diagnostics(
     let (instances, _prepared_target) = match inject_program_decls(&mut ts, &program, None) {
         Ok(v) => v,
         Err(err) => {
-            push_ts_error(err, diagnostics, None, Some(&ts));
+            push_ts_error(
+                err,
+                diagnostics,
+                None,
+                Some(&ts),
+                Some(primary_program_span(&program)),
+            );
             return;
         }
     };
@@ -4671,7 +4677,13 @@ fn push_type_diagnostics(
         };
         for method in &inst_decl.methods {
             if let Err(err) = ts.typecheck_instance_method(&prepared, method) {
-                push_ts_error(err, diagnostics, Some(method.body.as_ref()), Some(&ts));
+                push_ts_error(
+                    err,
+                    diagnostics,
+                    Some(method.body.as_ref()),
+                    Some(&ts),
+                    None,
+                );
                 if diagnostics.len() >= MAX_DIAGNOSTICS {
                     break;
                 }
@@ -4680,11 +4692,29 @@ fn push_type_diagnostics(
     }
 
     if let Err(err) = ts.infer(program.expr.as_ref()) {
-        push_ts_error(err, diagnostics, Some(program.expr.as_ref()), Some(&ts));
+        push_ts_error(
+            err,
+            diagnostics,
+            Some(program.expr.as_ref()),
+            Some(&ts),
+            None,
+        );
         return;
     }
 
     push_hole_diagnostics(&program, diagnostics);
+}
+
+fn primary_program_span(program: &Program) -> Span {
+    match program.decls.first() {
+        Some(Decl::Type(d)) => d.span,
+        Some(Decl::Fn(d)) => d.span,
+        Some(Decl::DeclareFn(d)) => d.span,
+        Some(Decl::Import(d)) => d.span,
+        Some(Decl::Class(d)) => d.span,
+        Some(Decl::Instance(d)) => d.span,
+        None => *program.expr.span(),
+    }
 }
 
 fn push_hole_diagnostics(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
@@ -4804,11 +4834,17 @@ fn push_ts_error(
     diagnostics: &mut Vec<Diagnostic>,
     expr: Option<&Expr>,
     ts: Option<&TypeSystem>,
+    fallback_span: Option<Span>,
 ) {
     let unknown_target = unknown_var_name(&err);
     let (span, message) = match &err {
         TsTypeError::Spanned { span, error } => (*span, error.to_string()),
-        other => (Span::default(), other.to_string()),
+        other => (
+            fallback_span
+                .or_else(|| expr.map(|e| *e.span()))
+                .unwrap_or_default(),
+            other.to_string(),
+        ),
     };
 
     if let (Some(target), Some(expr), Some(ts)) = (unknown_target, expr, ts)
@@ -6616,6 +6652,26 @@ in
                 .message
                 .contains("typed hole `?` must be filled before evaluation")),
             "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_for_decl_type_errors_are_not_whole_document() {
+        let text = r#"
+fn parse_ph : string -> Result string f64 = \raw ->
+  if raw == "7.3" then Ok 7.3 else Err "bad reading"
+"#;
+        let uri = in_memory_doc_uri();
+        clear_parse_cache(&uri);
+        let diags = diagnostics_from_text(&uri, text);
+        let full = full_document_range(text);
+        let unification = diags
+            .iter()
+            .find(|d| d.message.contains("types do not unify"))
+            .expect("unification diagnostic");
+        assert_ne!(
+            unification.range, full,
+            "diagnostic unexpectedly spans whole document: {unification:#?}"
         );
     }
 

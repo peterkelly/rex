@@ -26,13 +26,29 @@ obligations." For LLMs, this is a better fit: the model can produce a coarse str
 expected type at the hole, retrieve candidate repairs, and select one.
 
 ```rex,interactive
-fn inc : i32 -> i32 = \x -> x + 1
-let y : i32 = ? in y
+fn parse_ph : string -> Result f32 string = \raw ->
+  if raw == "7.3" then Ok 7.3 else Err "bad reading"
+
+fn classify_ph : f32 -> string = \ph ->
+  if ph < 6.8 then "acidic"
+  else if ph > 7.8 then "alkaline"
+  else "stable"
+
+fn qc_label_from_sensor : string -> Result string string = \raw ->
+  match (parse_ph raw)
+    when Ok ph -> Ok (classify_ph ph)
+    when Err e -> Err e
+
+let sensor_reading = "7.3" in
+let qc_label : Result string string = ? in
+qc_label
 ```
 
 In an LSP-enabled editor (including the browser playground), placing the cursor on `?` exposes
-hole-filling actions and semantic candidates. The same machinery is consumed by VS Code and by
-external LLM tooling.
+hole-filling actions and semantic candidates such as `qc_label_from_sensor sensor_reading`. The
+expected type at the hole is `Result string string`, so the model can fill a semantically meaningful
+real-world step without guessing. The same machinery is consumed by VS Code and by external LLM
+tooling.
 
 ## Semantic Loop Endpoints
 
