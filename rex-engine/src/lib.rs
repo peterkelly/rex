@@ -14,8 +14,9 @@ mod value;
 
 pub use cancel::CancellationToken;
 pub use engine::{
-    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, Export, Handler,
-    Module, NativeFn, NativeFuture, OverloadedFn, RexAdt, RexDefault, SyncNativeCallable,
+    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineHandler,
+    Export, Handler, Module, NativeFn, NativeFuture, OverloadedFn, RexAdt, RexDefault,
+    SyncNativeCallable,
 };
 pub use env::Env;
 pub use error::{EngineError, ModuleError};
@@ -25,9 +26,9 @@ pub use modules::{
 };
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
 pub use value::{
-    Closure, FromPointer, Heap, IntoPointer, Pointer, RexType, Value, ValueDisplayOptions,
-    ValueRef, closure_debug, closure_eq, pointer_display, pointer_display_with, pointer_eq,
-    value_debug, value_eq,
+    Closure, FromPointer, Heap, IntoPointer, Pointer, RexConstructArg, RexType, Value,
+    ValueDisplayOptions, ValueRef, closure_debug, closure_eq, pointer_display,
+    pointer_display_with, pointer_eq, value_debug, value_eq,
 };
 
 #[macro_export]

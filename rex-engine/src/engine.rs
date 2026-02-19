@@ -24,7 +24,9 @@ use crate::prelude::{
     inject_show_ops,
 };
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
-use crate::{CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType};
+use crate::{
+    CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexConstructArg, RexType,
+};
 
 pub trait RexDefault<State>
 where
@@ -303,6 +305,28 @@ pub trait AsyncHandler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync +
     -> Result<(), EngineError>;
 }
 
+/// Host-callable export surface for functions that need full engine access.
+///
+/// Unlike [`Handler`], this trait passes `&Engine<State>` to the Rust function
+/// so constructor-like exports can read engine state and other engine context
+/// during value construction.
+///
+/// `EngineHandler` also decodes arguments through `RexConstructArg`, which lets
+/// constructor exports use Rex-friendly argument shapes (for example, mapping
+/// `Vec<T>` constructor arguments from Rex `List T`) without changing the
+/// behavior of regular [`Handler`] exports.
+pub trait EngineHandler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
+    fn declaration(export_name: &str) -> String;
+    fn declaration_for(&self, export_name: &str) -> String {
+        Self::declaration(export_name)
+    }
+    fn inject_with_engine(
+        self,
+        engine: &mut Engine<State>,
+        export_name: &str,
+    ) -> Result<(), EngineError>;
+}
+
 #[derive(Debug, Clone, Copy)]
 struct NativeCallableSig;
 
@@ -360,6 +384,22 @@ where
         let declaration = handler.declaration_for(&normalized);
         let injector: ExportInjector<State> =
             Box::new(move |engine, qualified_name| handler.inject_async(engine, qualified_name));
+        Self::from_injector(name, declaration, injector)
+    }
+
+    pub fn from_engine_handler<Sig, H>(
+        name: impl Into<String>,
+        handler: H,
+    ) -> Result<Self, EngineError>
+    where
+        H: EngineHandler<State, Sig>,
+    {
+        let name = name.into();
+        let normalized = normalize_name(&name).to_string();
+        let declaration = handler.declaration_for(&normalized);
+        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
+            handler.inject_with_engine(engine, qualified_name)
+        });
         Self::from_injector(name, declaration, injector)
     }
 
@@ -444,6 +484,19 @@ where
     {
         self.exports
             .push(Export::from_async_handler(name, handler)?);
+        Ok(())
+    }
+
+    pub fn export_with_engine<Sig, H>(
+        &mut self,
+        name: impl Into<String>,
+        handler: H,
+    ) -> Result<(), EngineError>
+    where
+        H: EngineHandler<State, Sig>,
+    {
+        self.exports
+            .push(Export::from_engine_handler::<Sig, _>(name, handler)?);
         Ok(())
     }
 
@@ -728,6 +781,85 @@ macro_rules! define_async_handler_impl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
                 let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
+                engine.register_native_registration(export_name, registration)
+            }
+        }
+    };
+}
+
+macro_rules! define_engine_handler_impl {
+    ([] ; $arity:literal ; $sig:ty) => {
+        impl<State, F, R> EngineHandler<State, $sig> for F
+        where
+            State: Clone + Send + Sync + 'static,
+            F: for<'a> Fn(&'a Engine<State>) -> R + Send + Sync + 'static,
+            R: IntoPointer + RexType,
+        {
+            fn declaration(export_name: &str) -> String {
+                declaration_line(export_name, &[], R::rex_type())
+            }
+
+            fn inject_with_engine(
+                self,
+                engine: &mut Engine<State>,
+                export_name: &str,
+            ) -> Result<(), EngineError> {
+                let name_sym = normalize_name(export_name);
+                let func: SyncNativeCallable<State> = Arc::new(
+                    move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
+                        if args.len() != $arity {
+                            return Err(EngineError::NativeArity {
+                                name: name_sym.clone(),
+                                expected: $arity,
+                                got: args.len(),
+                            });
+                        }
+                        let value = self(engine);
+                        value.into_pointer(&engine.heap)
+                    },
+                );
+                let scheme = Scheme::new(vec![], vec![], R::rex_type());
+                let registration = NativeRegistration::sync(scheme, $arity, func, 0);
+                engine.register_native_registration(export_name, registration)
+            }
+        }
+    };
+    ([ $(($arg_ty:ident, $arg_name:ident, $idx:tt)),+ ] ; $arity:literal ; $sig:ty) => {
+        impl<State, F, R, $($arg_ty),+> EngineHandler<State, $sig> for F
+        where
+            State: Clone + Send + Sync + 'static,
+            F: for<'a> Fn(&'a Engine<State>, $($arg_ty),+) -> R + Send + Sync + 'static,
+            R: IntoPointer + RexType,
+            $($arg_ty: RexConstructArg),+
+        {
+            fn declaration(export_name: &str) -> String {
+                let args = vec![$($arg_ty::rex_construct_type()),+];
+                declaration_line(export_name, &args, R::rex_type())
+            }
+
+            fn inject_with_engine(
+                self,
+                engine: &mut Engine<State>,
+                export_name: &str,
+            ) -> Result<(), EngineError> {
+                let name_sym = normalize_name(export_name);
+                let func: SyncNativeCallable<State> = Arc::new(
+                    move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
+                        if args.len() != $arity {
+                            return Err(EngineError::NativeArity {
+                                name: name_sym.clone(),
+                                expected: $arity,
+                                got: args.len(),
+                            });
+                        }
+                        $(let $arg_name = $arg_ty::from_construct_pointer(&engine.heap, &args[$idx])?;)*
+                        let value = self(engine, $($arg_name),+);
+                        value.into_pointer(&engine.heap)
+                    },
+                );
+                let typ = constructor_fn_type!($($arg_ty),+ ; R);
+                let scheme = Scheme::new(vec![], vec![], typ);
+                let registration = NativeRegistration::sync(scheme, $arity, func, 0);
                 engine.register_native_registration(export_name, registration)
             }
         }
@@ -1275,6 +1407,15 @@ macro_rules! native_fn_type {
     };
 }
 
+macro_rules! constructor_fn_type {
+    (; $ret:ident) => {
+        $ret::rex_type()
+    };
+    ($arg_ty:ident $(, $rest:ident)* ; $ret:ident) => {
+        Type::fun($arg_ty::rex_construct_type(), constructor_fn_type!($($rest),* ; $ret))
+    };
+}
+
 define_handler_impl!([] ; 0 ; fn() -> R);
 define_handler_impl!([(A, a, 0)] ; 1 ; fn(A) -> R);
 define_handler_impl!([(A, a, 0), (B, b, 1)] ; 2 ; fn(A, B) -> R);
@@ -1312,6 +1453,26 @@ define_async_handler_impl!(
     [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6)] ; 7 ; fn(A, B, C, D, E, G, H) -> R
 );
 define_async_handler_impl!(
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6), (I, i, 7)] ; 8 ; fn(A, B, C, D, E, G, H, I) -> R
+);
+
+define_engine_handler_impl!([] ; 0 ; fn() -> R);
+define_engine_handler_impl!([(A, a, 0)] ; 1 ; fn(A) -> R);
+define_engine_handler_impl!([(A, a, 0), (B, b, 1)] ; 2 ; fn(A, B) -> R);
+define_engine_handler_impl!([(A, a, 0), (B, b, 1), (C, c, 2)] ; 3 ; fn(A, B, C) -> R);
+define_engine_handler_impl!(
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3)] ; 4 ; fn(A, B, C, D) -> R
+);
+define_engine_handler_impl!(
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4)] ; 5 ; fn(A, B, C, D, E) -> R
+);
+define_engine_handler_impl!(
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5)] ; 6 ; fn(A, B, C, D, E, G) -> R
+);
+define_engine_handler_impl!(
+    [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6)] ; 7 ; fn(A, B, C, D, E, G, H) -> R
+);
+define_engine_handler_impl!(
     [(A, a, 0), (B, b, 1), (C, c, 2), (D, d, 3), (E, e, 4), (G, g, 5), (H, h, 6), (I, i, 7)] ; 8 ; fn(A, B, C, D, E, G, H, I) -> R
 );
 
@@ -1545,6 +1706,17 @@ where
         H: AsyncHandler<State, Sig>,
     {
         self.inject_root_export(Export::from_async_handler(name, handler)?)
+    }
+
+    pub fn export_with_engine<Sig, H>(
+        &mut self,
+        name: impl Into<String>,
+        handler: H,
+    ) -> Result<(), EngineError>
+    where
+        H: EngineHandler<State, Sig>,
+    {
+        self.inject_root_export(Export::from_engine_handler(name, handler)?)
     }
 
     pub fn export_native<F>(

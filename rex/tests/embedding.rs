@@ -8,7 +8,7 @@ use rex_proc_macro::Rex;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
-struct Entity {
+struct Entity1 {
     account_id: Uuid,
     project_id: Uuid,
     name: String,
@@ -17,9 +17,32 @@ struct Entity {
     numbers: Vec<u32>,
 }
 
-impl RexDefault<HostState> for Entity {
+#[derive(Clone, Debug, PartialEq, Rex)]
+struct Entity2 {
+    account_id: Uuid,
+    project_id: Uuid,
+    name: String,
+    description: Option<String>,
+    tags: Option<Vec<String>>,
+    numbers: Vec<u32>,
+}
+
+impl Entity2 {
+    fn rex_new(engine: &Engine<HostState>, name: String, numbers: Vec<u32>) -> Entity2 {
+        Entity2 {
+            account_id: engine.state.account_id,
+            project_id: engine.state.project_id,
+            name,
+            description: None,
+            tags: None,
+            numbers,
+        }
+    }
+}
+
+impl RexDefault<HostState> for Entity1 {
     fn rex_default(engine: &Engine<HostState>) -> Result<Pointer, EngineError> {
-        let entity = Entity {
+        let entity = Entity1 {
             account_id: engine.state.account_id,
             project_id: engine.state.project_id,
             name: "".to_string(),
@@ -157,17 +180,17 @@ async fn derived_rex_default_can_read_host_state() {
     })
     .unwrap();
 
-    Entity::inject_rex_with_default(&mut engine).unwrap();
+    Entity1::inject_rex_with_default(&mut engine).unwrap();
 
-    let expr = parse("let e: Entity = default in e");
+    let expr = parse("let e: Entity1 = default in e");
     let mut gas = unlimited_gas();
     let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::con("Entity", 0));
+    assert_eq!(ty, Type::con("Entity1", 0));
 
-    let decoded = Entity::from_pointer(&engine.heap, &value).unwrap();
+    let decoded = Entity1::from_pointer(&engine.heap, &value).unwrap();
     assert_eq!(
         decoded,
-        Entity {
+        Entity1 {
             account_id,
             project_id,
             name: String::new(),
@@ -190,23 +213,97 @@ async fn derived_rex_default_record_update_can_override_fields() {
     })
     .unwrap();
 
-    Entity::inject_rex_with_default(&mut engine).unwrap();
+    Entity1::inject_rex_with_default(&mut engine).unwrap();
 
     let expr = parse(
-        r#"let e: Entity = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
+        r#"let e: Entity1 = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
     );
     let mut gas = unlimited_gas();
     let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::con("Entity", 0));
+    assert_eq!(ty, Type::con("Entity1", 0));
 
-    let decoded = Entity::from_pointer(&engine.heap, &value).unwrap();
+    let decoded = Entity1::from_pointer(&engine.heap, &value).unwrap();
     assert_eq!(
         decoded,
-        Entity {
+        Entity1 {
             account_id,
             project_id,
             name: "sample".to_string(),
             description: None,
+            tags: Some(vec!["x".to_string(), "y".to_string()]),
+            numbers: vec![7, 11],
+        }
+    );
+}
+
+#[tokio::test]
+async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
+    let account_id = uuid::uuid!("55555555-5555-4555-8555-555555555555");
+    let project_id = uuid::uuid!("66666666-6666-4666-8666-666666666666");
+    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+        account_id,
+        project_id,
+        is_admin: false,
+        roles: vec!["reader".to_string()],
+    })
+    .unwrap();
+
+    Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
+
+    let expr = parse(r#"Entity2 "sample" [7, 11]"#);
+    let mut gas = unlimited_gas();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(ty, Type::con("Entity2", 0));
+
+    let decoded = Entity2::from_pointer(&engine.heap, &value).unwrap();
+    assert_eq!(
+        decoded,
+        Entity2 {
+            account_id,
+            project_id,
+            name: "sample".to_string(),
+            description: None,
+            tags: None,
+            numbers: vec![7, 11],
+        }
+    );
+}
+
+#[tokio::test]
+async fn entity2_constructor_result_can_be_record_updated() {
+    let account_id = uuid::uuid!("77777777-7777-4777-8777-777777777777");
+    let project_id = uuid::uuid!("88888888-8888-4888-8888-888888888888");
+    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+        account_id,
+        project_id,
+        is_admin: true,
+        roles: vec!["admin".to_string()],
+    })
+    .unwrap();
+
+    Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
+
+    let expr = parse(
+        r#"{
+            (Entity2 "sample" [7, 11])
+            with {
+                description = Some "desc",
+                tags = Some ["x", "y"]
+            }
+        }"#,
+    );
+    let mut gas = unlimited_gas();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(ty, Type::con("Entity2", 0));
+
+    let decoded = Entity2::from_pointer(&engine.heap, &value).unwrap();
+    assert_eq!(
+        decoded,
+        Entity2 {
+            account_id,
+            project_id,
+            name: "sample".to_string(),
+            description: Some("desc".to_string()),
             tags: Some(vec!["x".to_string(), "y".to_string()]),
             numbers: vec![7, 11],
         }

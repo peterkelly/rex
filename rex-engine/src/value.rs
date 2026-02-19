@@ -1215,6 +1215,11 @@ pub trait RexType {
     fn rex_type() -> Type;
 }
 
+pub trait RexConstructArg: Sized {
+    fn rex_construct_type() -> Type;
+    fn from_construct_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError>;
+}
+
 impl IntoPointer for Value {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
         heap.alloc_value(self)
@@ -1438,6 +1443,87 @@ impl RexType for Uuid {
 impl RexType for DateTime<Utc> {
     fn rex_type() -> Type {
         Type::con("datetime", 0)
+    }
+}
+
+macro_rules! impl_rex_construct_arg_from_pointer {
+    ($t:ty) => {
+        impl RexConstructArg for $t {
+            fn rex_construct_type() -> Type {
+                <$t as RexType>::rex_type()
+            }
+
+            fn from_construct_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+                <$t as FromPointer>::from_pointer(heap, pointer)
+            }
+        }
+    };
+}
+
+impl_rex_construct_arg_from_pointer!(bool);
+impl_rex_construct_arg_from_pointer!(u8);
+impl_rex_construct_arg_from_pointer!(u16);
+impl_rex_construct_arg_from_pointer!(u32);
+impl_rex_construct_arg_from_pointer!(u64);
+impl_rex_construct_arg_from_pointer!(i8);
+impl_rex_construct_arg_from_pointer!(i16);
+impl_rex_construct_arg_from_pointer!(i32);
+impl_rex_construct_arg_from_pointer!(i64);
+impl_rex_construct_arg_from_pointer!(f32);
+impl_rex_construct_arg_from_pointer!(f64);
+impl_rex_construct_arg_from_pointer!(String);
+impl_rex_construct_arg_from_pointer!(Uuid);
+impl_rex_construct_arg_from_pointer!(DateTime<Utc>);
+
+impl<T> RexConstructArg for Option<T>
+where
+    T: RexConstructArg,
+{
+    fn rex_construct_type() -> Type {
+        Type::option(T::rex_construct_type())
+    }
+
+    fn from_construct_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let (tag, args) = heap.pointer_as_adt(pointer)?;
+        if sym_eq(&tag, "Some") && args.len() == 1 {
+            return Ok(Some(T::from_construct_pointer(heap, &args[0])?));
+        }
+        if sym_eq(&tag, "None") && args.is_empty() {
+            return Ok(None);
+        }
+        Err(EngineError::NativeType {
+            expected: "option".into(),
+            got: heap.type_name(pointer)?.into(),
+        })
+    }
+}
+
+impl<T> RexConstructArg for Vec<T>
+where
+    T: RexConstructArg,
+{
+    fn rex_construct_type() -> Type {
+        Type::list(T::rex_construct_type())
+    }
+
+    fn from_construct_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let mut out = Vec::new();
+        let mut cursor = *pointer;
+        loop {
+            let (tag, args) = heap.pointer_as_adt(&cursor)?;
+            if sym_eq(&tag, "Empty") && args.is_empty() {
+                return Ok(out);
+            }
+            if sym_eq(&tag, "Cons") && args.len() == 2 {
+                out.push(T::from_construct_pointer(heap, &args[0])?);
+                cursor = args[1];
+                continue;
+            }
+            return Err(EngineError::NativeType {
+                expected: "list".into(),
+                got: heap.type_name(&cursor)?.into(),
+            });
+        }
     }
 }
 
