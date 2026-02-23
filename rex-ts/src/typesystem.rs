@@ -2829,6 +2829,16 @@ fn narrow_overload_candidates(candidates: &[Type], arg_ty: &Type) -> Vec<Type> {
     out
 }
 
+fn unary_app_arg(typ: &Type, ctor_name: &str) -> Option<Type> {
+    let TypeKind::App(head, arg) = typ.as_ref() else {
+        return None;
+    };
+    let TypeKind::Con(tc) = head.as_ref() else {
+        return None;
+    };
+    (tc.name.as_ref() == ctor_name && tc.arity == 1).then(|| arg.clone())
+}
+
 fn infer_app_arg_type(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
@@ -3660,13 +3670,46 @@ fn infer_expr(
                         _ => None,
                     };
                     for arg in args {
+                        let expected_arg = match unifier.apply_type(&func_ty).as_ref() {
+                            TypeKind::Fun(arg, _) => Some(arg.clone()),
+                            _ => None,
+                        };
                         let arg_hint = match unifier.apply_type(&func_ty).as_ref() {
                             TypeKind::Fun(arg, _) => Some(arg.clone()),
                             _ => None,
                         };
                         let (p_arg, arg_ty, typed_arg) =
                             infer_app_arg_typed(unifier, supply, env, adts, known, arg_hint, arg)?;
-                        let arg_ty = unifier.apply_type(&arg_ty);
+                        let mut arg_ty = unifier.apply_type(&arg_ty);
+                        let mut typed_arg = typed_arg;
+
+                        // Narrow implicit coercion: in function argument position only,
+                        // coerce `List a` to `Array a` when the callee expects `Array a`.
+                        if let Some(expected_arg) = expected_arg {
+                            let expected_arg = unifier.apply_type(&expected_arg);
+                            if let (Some(expected_elem), Some(arg_elem)) = (
+                                unary_app_arg(&expected_arg, "Array"),
+                                unary_app_arg(&arg_ty, "List"),
+                            ) {
+                                unifier.unify(&expected_elem, &arg_elem)?;
+                                let elem_ty = unifier.apply_type(&expected_elem);
+                                let list_ty = Type::list(elem_ty.clone());
+                                let array_ty = Type::array(elem_ty);
+                                let coercion_ty = Type::fun(list_ty, array_ty.clone());
+                                let coercion_fn = TypedExpr::new(
+                                    coercion_ty,
+                                    TypedExprKind::Var {
+                                        name: sym("prim_array_from_list"),
+                                        overloads: vec![],
+                                    },
+                                );
+                                typed_arg = TypedExpr::new(
+                                    array_ty.clone(),
+                                    TypedExprKind::App(Box::new(coercion_fn), Box::new(typed_arg)),
+                                );
+                                arg_ty = array_ty;
+                            }
+                        }
                         if let Some(candidates) = overload_candidates.take() {
                             let candidates = candidates
                                 .into_iter()

@@ -262,6 +262,52 @@ engine.export("have_role", |state, role: String| {
 })?;
 ```
 
+## Array/List Interop at Host Boundaries
+
+Rex keeps both `List a` and `Array a` because they serve different goals:
+
+- `List a` is ergonomic for user-authored functional code and pattern matching.
+- `Array a` is the host-facing contiguous representation (for example `Vec<u8>`
+  from filesystem reads).
+
+At host function call sites, Rex performs a narrow implicit coercion from
+`List a` to `Array a` in argument position. This means users can pass list
+literals to host functions that accept `Vec<T>` without writing conversions.
+
+```rex
+accept_bytes [1, 2, 3]
+```
+
+where `accept_bytes` is exported from Rust with a `Vec<u8>` parameter.
+
+For the opposite direction, Rex exposes explicit helpers:
+
+- `to_list : Array a -> List a`
+- `to_array : List a -> Array a`
+
+### Why `to_list` Is Explicit (Not Implicit)
+
+`Array -> List` conversion is intentionally explicit to keep runtime costs
+predictable in user code. Converting an array into a list allocates a new
+linked structure and changes performance characteristics for downstream
+operations.
+
+If this conversion were implicit everywhere, the compiler could silently insert
+it in places where users do not expect allocation or complexity changes (for
+example inside control-flow joins, nested expressions, or polymorphic code).
+That would make performance harder to reason about and make type errors less
+transparent.
+
+By requiring `to_list` explicitly, we keep intent and cost visible at the exact
+program point where representation changes. This preserves ergonomics while
+avoiding hidden work:
+
+```rex
+match (to_list bytes) with
+    when Cons head _ -> head
+    when Empty -> 0
+```
+
 ## Typecheck Without Evaluating
 
 ```rust

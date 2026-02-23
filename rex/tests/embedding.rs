@@ -28,15 +28,15 @@ struct Entity2 {
 }
 
 impl Entity2 {
-    fn rex_new(engine: &Engine<HostState>, name: String, numbers: Vec<u32>) -> Entity2 {
-        Entity2 {
-            account_id: engine.state.account_id,
-            project_id: engine.state.project_id,
+    fn rex_new(state: &HostState, name: String, numbers: Vec<u32>) -> Result<Entity2, EngineError> {
+        Ok(Entity2 {
+            account_id: state.account_id,
+            project_id: state.project_id,
             name,
             description: None,
             tags: None,
             numbers,
-        }
+        })
     }
 }
 

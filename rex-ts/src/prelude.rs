@@ -578,17 +578,39 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             }
         }
 
-        // prim_array_from_list
+        // List/Array conversion helpers.
         {
             let a_tv = ts.supply.fresh(Some(sym("a")));
             let a = Type::var(a_tv.clone());
+            let list_a = list_of(a.clone());
+            let array_a = array_of(a.clone());
             ts.add_value(
                 "prim_array_from_list",
                 Scheme::new(
-                    vec![a_tv],
+                    vec![a_tv.clone()],
                     vec![],
-                    Type::fun(list_of(a.clone()), array_of(a)),
+                    Type::fun(list_a.clone(), array_a.clone()),
                 ),
+            );
+            ts.add_value(
+                "prim_list_from_array",
+                Scheme::new(
+                    vec![a_tv.clone()],
+                    vec![],
+                    Type::fun(array_a.clone(), list_a.clone()),
+                ),
+            );
+            ts.add_value(
+                "to_array",
+                Scheme::new(
+                    vec![a_tv.clone()],
+                    vec![],
+                    Type::fun(list_a.clone(), array_a.clone()),
+                ),
+            );
+            ts.add_value(
+                "to_list",
+                Scheme::new(vec![a_tv], vec![], Type::fun(array_a, list_a)),
             );
         }
 

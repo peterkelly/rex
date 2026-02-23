@@ -86,6 +86,8 @@ fn:pure	Lift a plain value into an applicative context.
 fn:skip	Drop the first `n` elements.
 fn:sum	Sum all elements in a foldable container.
 fn:take	Keep only the first `n` elements.
+fn:to_array	Convert a list to an array.
+fn:to_list	Convert an array to a list.
 fn:unzip	Split a container of pairs into a pair of containers.
 fn:zero	Additive identity.
 fn:zip	Pair elements from two containers by position.

@@ -1218,16 +1218,45 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
 pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
-    // List -> Array conversion.
+    // List/Array conversion helpers.
     {
         let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let array_a = Type::array(a);
-        let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(list_a, array_a));
-        engine.export_native("prim_array_from_list", scheme, 1, |engine, _, args| {
+
+        let list_to_array_scheme = Scheme::new(
+            vec![a_tv.clone()],
+            vec![],
+            Type::fun(list_a.clone(), array_a.clone()),
+        );
+        engine.export_native(
+            "prim_array_from_list",
+            list_to_array_scheme.clone(),
+            1,
+            |engine, _, args| {
+                let values = expect_list(&engine.heap, &args[0])?;
+                engine.heap.alloc_array(values)
+            },
+        )?;
+        engine.export_native("to_array", list_to_array_scheme, 1, |engine, _, args| {
             let values = expect_list(&engine.heap, &args[0])?;
             engine.heap.alloc_array(values)
+        })?;
+
+        let array_to_list_scheme = Scheme::new(vec![a_tv], vec![], Type::fun(array_a, list_a));
+        engine.export_native(
+            "prim_list_from_array",
+            array_to_list_scheme.clone(),
+            1,
+            |engine, _, args| {
+                let values = expect_array(&engine.heap, &args[0])?;
+                list_from_pointers(&engine.heap, values)
+            },
+        )?;
+        engine.export_native("to_list", array_to_list_scheme, 1, |engine, _, args| {
+            let values = expect_array(&engine.heap, &args[0])?;
+            list_from_pointers(&engine.heap, values)
         })?;
     }
 

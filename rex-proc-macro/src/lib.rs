@@ -63,35 +63,6 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             }
         }
     };
-    let mut rex_constructor_arg_generics = ast.generics.clone();
-    add_bound_to_type_params(
-        &mut rex_constructor_arg_generics,
-        parse_quote!(::rex::RexType),
-    );
-    add_bound_to_type_params(
-        &mut rex_constructor_arg_generics,
-        parse_quote!(::rex::FromPointer),
-    );
-    let (
-        rex_constructor_arg_impl_generics,
-        rex_constructor_arg_ty_generics,
-        rex_constructor_arg_where_clause,
-    ) = rex_constructor_arg_generics.split_for_impl();
-    let rex_constructor_arg_impl = quote! {
-        impl #rex_constructor_arg_impl_generics ::rex::RexConstructArg for #rust_ident #rex_constructor_arg_ty_generics #rex_constructor_arg_where_clause {
-            fn rex_construct_type() -> ::rex::Type {
-                <Self as ::rex::RexType>::rex_type()
-            }
-
-            fn from_construct_pointer(
-                heap: &::rex::Heap,
-                pointer: &::rex::Pointer,
-            ) -> Result<Self, ::rex::EngineError> {
-                <Self as ::rex::FromPointer>::from_pointer(heap, pointer)
-            }
-        }
-    };
-
     let adt_decl_fn = adt_decl_fn(ast, &type_name, &type_param_idents)?;
     let mut rex_adt_generics = ast.generics.clone();
     add_bound_to_type_params(&mut rex_adt_generics, parse_quote!(::rex::RexType));
@@ -136,10 +107,10 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             ) -> Result<(), ::rex::EngineError>
             where
                 State: Clone + Send + Sync + 'static,
-                H: ::rex::EngineHandler<State, Sig>,
+                H: ::rex::Handler<State, Sig>,
             {
                 <Self as ::rex::RexAdt>::inject_rex(engine)?;
-                engine.export_with_engine(#type_name, constructor)
+                engine.export(#type_name, constructor)
             }
         }
     };
@@ -149,7 +120,6 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
 
     Ok(quote! {
         #rex_type_impl
-        #rex_constructor_arg_impl
         #rex_adt_impl
         #inject_fn
         #into_value_impl

@@ -45,6 +45,25 @@ async fn vec_from_value() {
 }
 
 #[tokio::test]
+async fn vec_from_value_accepts_list_literal_without_conversion() {
+    fn accept_vec(_state: &(), items: Vec<i32>) -> Result<String, EngineError> {
+        Ok(format!("accept_vec: {:?}", items))
+    }
+
+    let mut engine = Engine::with_prelude(()).unwrap();
+    engine.export("accept_vec", accept_vec).unwrap();
+
+    let (result, heap, ty) = eval_expr(engine, r#"accept_vec [1, 2, 3]"#).await;
+    assert_eq!(ty, Type::con("string", 0));
+    assert_pointer_eq!(
+        &heap,
+        result,
+        heap.alloc_string("accept_vec: [1, 2, 3]".to_string())
+            .unwrap(),
+    );
+}
+
+#[tokio::test]
 async fn vec_to_value() {
     fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
         Ok((0..input.len()).map(|i| i as i32).collect())
@@ -80,6 +99,26 @@ async fn vec_rex_type() {
 
     let ty = infer_type(&mut engine, r#"return_vec "hello""#);
     assert_eq!(ty, Type::app(Type::con("Array", 1), Type::con("i32", 0)));
+}
+
+#[tokio::test]
+async fn to_list_allows_pattern_matching_host_arrays() {
+    fn return_vec(_state: &(), input: String) -> Result<Vec<i32>, EngineError> {
+        Ok((0..input.len()).map(|i| i as i32).collect())
+    }
+
+    let mut engine = Engine::with_prelude(()).unwrap();
+    engine.export("return_vec", return_vec).unwrap();
+
+    let (result, heap, ty) = eval_expr(
+        engine,
+        r#"match (to_list (return_vec "abc"))
+            when Cons x _ -> x
+            when Empty -> -1"#,
+    )
+    .await;
+    assert_eq!(ty, Type::con("i32", 0));
+    assert_pointer_eq!(&heap, result, heap.alloc_i32(0).unwrap());
 }
 
 #[tokio::test]

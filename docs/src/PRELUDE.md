@@ -252,4 +252,6 @@ Methods:
 | `mean` | `Foldable 'f, Field 'a => (('f`<br>`'a) -> 'a)` | Arithmetic mean over numeric foldables. |
 | `min` | `Foldable 'f, Ord 'a => (('f`<br>`'a) -> 'a)` | Minimum element by ordering. |
 | `sum` | `Foldable 'f, AdditiveMonoid 'a`<br>`=> (('f 'a) -> 'a)` | Sum all elements in a foldable container. |
+| `to_array` | `((List 'a) -> (Array 'a))` | Convert a list to an array. |
+| `to_list` | `((Array 'a) -> (List 'a))` | Convert an array to a list. |
 | `||` | `(bool -> (bool -> bool))` | Boolean disjunction. |
