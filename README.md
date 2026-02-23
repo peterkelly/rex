@@ -12,13 +12,14 @@
   <img src="logo.jpg" width="400">
 </p>
 
-Rex (short for *Rush Expressions*) is a strongly-typed, pure functional
-language built to be an excellent target for LLM-generated programs, with a
-focus on data processing. At a high level, you write transformations over
-lists, records, ADTs, and other values using familiar functional building
-blocks like `map`, `filter`, folds, pattern matching, and composition. The
-language is designed to make dataflow clear and predictable, with types and
-pure expressions doing most of the heavy lifting.
+Rex (short for *[Rush](https://rush.cloud/) Expressions*) is a strongly-typed,
+pure, implicitly parallel functional programming language built to be an
+excellent target for LLM-generated programs, with a focus on scientific
+workflows and data analysis pipelines. At a high level, you write
+transformations over lists, records, ADTs, and other values using familiar
+functional building blocks like `map`, `filter`, folds, pattern matching, and
+composition. The language is designed to make dataflow clear and predictable,
+with types and pure expressions doing most of the heavy lifting.
 
 Rex is designed first and foremost to be embedded inside Rust applications. In
 that model, your Rust program acts as the host runtime and injects native
@@ -49,7 +50,13 @@ in
   (values, selected, adjusted, total)
 ```
 
+[Try it yourself in the interactive browser-based playground](https://talo.github.io/rex/)
+
 ## Rex as a target for LLMs
+
+<p align="center">
+  <img src="agents_rex.jpg" width="600">
+</p>
 
 Rex is the world’s first parallel functional language explicitly designed to be
 a useful target for LLMs. Its strong static type system gives rapid,
@@ -128,9 +135,10 @@ The prelude surface definitions and type-class wiring live primarily in:
 - `rex-ts/src/prelude.rs`
 - `rex-engine/src/prelude.rs`
 
-For full details and usage patterns, see the docs:
+For full details and usage patterns, see the [docs](https://talo.github.io/rex/):
 
-- Prelude tour: [Section 1.12](https://talo.github.io/rex/tutorial/section1/12_prelude_tour.html)
-- Language reference: [LANGUAGE](https://talo.github.io/rex/LANGUAGE.html)
+- [Prelude tour](https://talo.github.io/rex/tutorial/section1/12_prelude_tour.html)
+- [Language reference](https://talo.github.io/rex/LANGUAGE.html)
+- [LLM usage guidelines](https://talo.github.io/rex/LLMS.html)
 
 Made with ❤️ by [QDX](https://qdx.co/)
