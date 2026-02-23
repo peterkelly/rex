@@ -91,12 +91,9 @@ Install mdBook: `cargo install mdbook`
 
 ## Commit messages
 
+- See CONTRIBUTING.md for rules on git usage and commit messages
 - Before making a commit, run `./build.sh` and ensure it completes successfully.
-- First line should contain a keyword, followed by a colon, a space, then a message that starts with a capital letter.
 - Acceptable keywords: feat, fix, docs, style, test, chore. Refactors should use the chore keyword.
-- First line should be no more than 50 characters in total
-- Rest of the commit message should contain a summary of the changes. Use the body to explain what and why, not how.
-- Wrap the body at 72 characters
 - When making a commit, leave untracked files untouched
 - **IMPORTANT**: Only create commits when explicitly requested by the user. Do not commit automatically after completing tasks.
 
