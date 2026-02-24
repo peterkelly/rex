@@ -14,8 +14,9 @@ mod value;
 
 pub use cancel::CancellationToken;
 pub use engine::{
-    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, Export, Handler,
-    Module, NativeFn, NativeFuture, OverloadedFn, RexAdt, RexDefault, SyncNativeCallable,
+    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineOptions,
+    Export, Handler, Module, NativeFn, NativeFuture, OverloadedFn, PRELUDE_MODULE_NAME,
+    PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault, SyncNativeCallable,
 };
 pub use env::Env;
 pub use error::{EngineError, ModuleError};

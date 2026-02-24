@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_recursion::async_recursion;
 use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl, ImportPath, InstanceDecl, Pattern,
-    Program, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
+    Program, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
 };
 use rex_lexer::Token;
 use rex_parser::Parser as RexParser;
@@ -62,6 +62,30 @@ fn import_specifier(path: &ImportPath) -> String {
                 url.clone()
             }
         }
+    }
+}
+
+fn spec_base_name(spec: &str) -> &str {
+    spec.split_once('#').map_or(spec, |(base, _)| base)
+}
+
+fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
+    decls.iter().any(|decl| match decl {
+        Decl::Import(import_decl) => import_decl.alias == *alias,
+        _ => false,
+    })
+}
+
+fn default_import_decl(module_name: &str) -> ImportDecl {
+    ImportDecl {
+        span: rex_lexer::span::Span::default(),
+        is_pub: false,
+        path: ImportPath::Local {
+            segments: vec![intern(module_name)],
+            sha: None,
+        },
+        alias: intern(module_name),
+        clause: Some(ImportClause::All),
     }
 }
 
@@ -813,8 +837,20 @@ fn rewrite_import_uses_expr(
                 *span,
                 scope.clone(),
                 param.clone(),
-                ann.clone(),
-                constraints.clone(),
+                ann.as_ref()
+                    .map(|t| rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values)),
+                constraints
+                    .iter()
+                    .map(|c| TypeConstraint {
+                        class: rewrite_import_uses_class_name(
+                            &c.class,
+                            bound,
+                            aliases,
+                            shadowed_values,
+                        ),
+                        typ: rewrite_import_uses_type_expr(&c.typ, bound, aliases, shadowed_values),
+                    })
+                    .collect(),
                 Arc::new(rewrite_import_uses_expr(
                     body,
                     bound,
@@ -843,7 +879,14 @@ fn rewrite_import_uses_expr(
                 shadowed_values,
             ));
             bound.remove(&var.name);
-            Expr::Let(*span, var.clone(), ann.clone(), val, body)
+            Expr::Let(
+                *span,
+                var.clone(),
+                ann.as_ref()
+                    .map(|t| rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values)),
+                val,
+                body,
+            )
         }
         Expr::LetRec(span, bindings, body) => {
             let names: Vec<Symbol> = bindings
@@ -858,7 +901,9 @@ fn rewrite_import_uses_expr(
                 .map(|(var, ann, def)| {
                     (
                         var.clone(),
-                        ann.clone(),
+                        ann.as_ref().map(|t| {
+                            rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values)
+                        }),
                         Arc::new(rewrite_import_uses_expr(
                             def,
                             bound,
@@ -891,8 +936,9 @@ fn rewrite_import_uses_expr(
             ));
             let mut renamed_arms = Vec::new();
             for (pat, arm_expr) in arms {
+                let pat = rewrite_import_uses_pattern(pat, imported_values);
                 let mut binds = Vec::new();
-                collect_pattern_bindings(pat, &mut binds);
+                collect_pattern_bindings(&pat, &mut binds);
                 for b in &binds {
                     bound.insert(b.clone());
                 }
@@ -906,7 +952,7 @@ fn rewrite_import_uses_expr(
                 for b in &binds {
                     bound.remove(b);
                 }
-                renamed_arms.push((pat.clone(), arm_expr));
+                renamed_arms.push((pat, arm_expr));
             }
             Expr::Match(*span, scrutinee, renamed_arms)
         }
@@ -1032,7 +1078,162 @@ fn rewrite_import_uses_expr(
                 imported_values,
                 shadowed_values,
             )),
-            t.clone(),
+            rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values),
+        ),
+    }
+}
+
+fn rewrite_import_uses_pattern(
+    pat: &Pattern,
+    imported_values: &HashMap<Symbol, Symbol>,
+) -> Pattern {
+    match pat {
+        Pattern::Wildcard(span) => Pattern::Wildcard(*span),
+        Pattern::Var(v) => Pattern::Var(v.clone()),
+        Pattern::Named(span, name, args) => {
+            let name = imported_values
+                .get(name)
+                .cloned()
+                .unwrap_or_else(|| name.clone());
+            let args = args
+                .iter()
+                .map(|p| rewrite_import_uses_pattern(p, imported_values))
+                .collect();
+            Pattern::Named(*span, name, args)
+        }
+        Pattern::Tuple(span, elems) => Pattern::Tuple(
+            *span,
+            elems
+                .iter()
+                .map(|p| rewrite_import_uses_pattern(p, imported_values))
+                .collect(),
+        ),
+        Pattern::List(span, elems) => Pattern::List(
+            *span,
+            elems
+                .iter()
+                .map(|p| rewrite_import_uses_pattern(p, imported_values))
+                .collect(),
+        ),
+        Pattern::Cons(span, head, tail) => Pattern::Cons(
+            *span,
+            Box::new(rewrite_import_uses_pattern(head, imported_values)),
+            Box::new(rewrite_import_uses_pattern(tail, imported_values)),
+        ),
+        Pattern::Dict(span, fields) => Pattern::Dict(
+            *span,
+            fields
+                .iter()
+                .map(|(name, p)| {
+                    (
+                        name.clone(),
+                        rewrite_import_uses_pattern(p, imported_values),
+                    )
+                })
+                .collect(),
+        ),
+    }
+}
+
+fn rewrite_import_uses_class_name(
+    class: &Symbol,
+    bound: &HashSet<Symbol>,
+    aliases: &HashMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&HashSet<Symbol>>,
+) -> Symbol {
+    let Some((alias, member)) = class.as_ref().split_once('.') else {
+        return class.clone();
+    };
+    let alias_sym = intern(alias);
+    if !alias_is_visible(&alias_sym, bound, shadowed_values) {
+        return class.clone();
+    }
+    let Some(exports) = aliases.get(&alias_sym) else {
+        return class.clone();
+    };
+    let member_sym = intern(member);
+    exports
+        .classes
+        .get(&member_sym)
+        .cloned()
+        .unwrap_or_else(|| class.clone())
+}
+
+fn rewrite_import_uses_type_expr(
+    ty: &TypeExpr,
+    bound: &HashSet<Symbol>,
+    aliases: &HashMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&HashSet<Symbol>>,
+) -> TypeExpr {
+    match ty {
+        TypeExpr::Name(span, name) => {
+            let Some((alias, member)) = name.as_ref().split_once('.') else {
+                return TypeExpr::Name(*span, name.clone());
+            };
+            let alias_sym = intern(alias);
+            if !alias_is_visible(&alias_sym, bound, shadowed_values) {
+                return TypeExpr::Name(*span, name.clone());
+            }
+            let Some(exports) = aliases.get(&alias_sym) else {
+                return TypeExpr::Name(*span, name.clone());
+            };
+            let member_sym = intern(member);
+            if let Some(new) = exports.types.get(&member_sym) {
+                TypeExpr::Name(*span, new.clone())
+            } else if let Some(new) = exports.classes.get(&member_sym) {
+                TypeExpr::Name(*span, new.clone())
+            } else {
+                TypeExpr::Name(*span, name.clone())
+            }
+        }
+        TypeExpr::App(span, f, x) => TypeExpr::App(
+            *span,
+            Box::new(rewrite_import_uses_type_expr(
+                f,
+                bound,
+                aliases,
+                shadowed_values,
+            )),
+            Box::new(rewrite_import_uses_type_expr(
+                x,
+                bound,
+                aliases,
+                shadowed_values,
+            )),
+        ),
+        TypeExpr::Fun(span, a, b) => TypeExpr::Fun(
+            *span,
+            Box::new(rewrite_import_uses_type_expr(
+                a,
+                bound,
+                aliases,
+                shadowed_values,
+            )),
+            Box::new(rewrite_import_uses_type_expr(
+                b,
+                bound,
+                aliases,
+                shadowed_values,
+            )),
+        ),
+        TypeExpr::Tuple(span, elems) => TypeExpr::Tuple(
+            *span,
+            elems
+                .iter()
+                .map(|e| rewrite_import_uses_type_expr(e, bound, aliases, shadowed_values))
+                .collect(),
+        ),
+        TypeExpr::Record(span, fields) => TypeExpr::Record(
+            *span,
+            fields
+                .iter()
+                .map(|(name, ty)| {
+                    (
+                        name.clone(),
+                        rewrite_import_uses_type_expr(ty, bound, aliases, shadowed_values),
+                    )
+                })
+                .collect(),
         ),
     }
 }
@@ -1350,6 +1551,57 @@ impl<State> Engine<State>
 where
     State: Clone + Send + Sync + 'static,
 {
+    #[async_recursion]
+    async fn resolve_module_exports_from_import_decl_async(
+        &mut self,
+        import_decl: &ImportDecl,
+        importer: Option<ModuleId>,
+        gas: &mut GasMeter,
+    ) -> Result<ModuleExports, EngineError> {
+        let spec = import_specifier(&import_decl.path);
+        if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
+            return Ok(exports);
+        }
+        let imported = self.modules.resolve(ResolveRequest {
+            module_name: spec,
+            importer,
+        })?;
+        let inst = self.load_module_from_resolved(imported, gas).await?;
+        Ok(inst.exports)
+    }
+
+    async fn add_default_import_bindings(
+        &mut self,
+        bindings: &mut ImportBindings,
+        decls: &[Decl],
+        importer: Option<ModuleId>,
+        forbidden_locals: &HashSet<Symbol>,
+        existing_imported: Option<&HashSet<Symbol>>,
+        gas: &mut GasMeter,
+    ) -> Result<(), EngineError> {
+        let existing_names: HashSet<Symbol> = existing_imported.cloned().unwrap_or_default();
+        let default_imports = self.default_imports().to_vec();
+        for module_name in default_imports {
+            let alias = intern(&module_name);
+            if contains_import_alias(decls, &alias) {
+                continue;
+            }
+            let import_decl = default_import_decl(&module_name);
+            let exports = self
+                .resolve_module_exports_from_import_decl_async(&import_decl, importer.clone(), gas)
+                .await?;
+            for (local, target) in exports.values {
+                if !forbidden_locals.contains(&local)
+                    && !existing_names.contains(&local)
+                    && !bindings.imported_values.contains_key(&local)
+                {
+                    bindings.imported_values.insert(local, target);
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn add_resolver<F>(&mut self, name: impl Into<String>, f: F)
     where
         F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError>
@@ -1409,20 +1661,26 @@ where
             let Decl::Import(import_decl) = decl else {
                 continue;
             };
-            let spec = import_specifier(&import_decl.path);
-            let imported = self.modules.resolve(ResolveRequest {
-                module_name: spec,
-                importer: importer.clone(),
-            })?;
-            let inst = self.load_module_from_resolved(imported, gas).await?;
+            let exports = self
+                .resolve_module_exports_from_import_decl_async(import_decl, importer.clone(), gas)
+                .await?;
             add_import_bindings(
                 &mut bindings,
                 import_decl,
-                &inst.exports,
+                &exports,
                 forbidden_locals,
                 existing_imported,
             )?;
         }
+        self.add_default_import_bindings(
+            &mut bindings,
+            decls,
+            importer,
+            forbidden_locals,
+            existing_imported,
+            gas,
+        )
+        .await?;
         Ok(bindings)
     }
 
@@ -1516,6 +1774,25 @@ where
         Ok(exports)
     }
 
+    fn resolve_module_exports_for_rewrite(
+        &mut self,
+        import_decl: &ImportDecl,
+        importer: Option<ModuleId>,
+        gas: &mut GasMeter,
+        loaded: &mut HashMap<ModuleId, ModuleExports>,
+        loading: &mut HashSet<ModuleId>,
+    ) -> Result<ModuleExports, EngineError> {
+        let spec = import_specifier(&import_decl.path);
+        if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
+            return Ok(exports);
+        }
+        let imported = self.modules.resolve(ResolveRequest {
+            module_name: spec,
+            importer,
+        })?;
+        self.load_module_types_from_resolved(imported, gas, loaded, loading)
+    }
+
     fn rewrite_program_with_imports(
         &mut self,
         program: &Program,
@@ -1531,13 +1808,36 @@ where
             let Decl::Import(import_decl) = decl else {
                 continue;
             };
-            let spec = import_specifier(&import_decl.path);
-            let imported = self.modules.resolve(ResolveRequest {
-                module_name: spec,
-                importer: importer.clone(),
-            })?;
-            let exports = self.load_module_types_from_resolved(imported, gas, loaded, loading)?;
+            let exports = self.resolve_module_exports_for_rewrite(
+                import_decl,
+                importer.clone(),
+                gas,
+                loaded,
+                loading,
+            )?;
             add_import_bindings(&mut bindings, import_decl, &exports, &local_values, None)?;
+        }
+
+        let default_imports = self.default_imports().to_vec();
+        for module_name in default_imports {
+            let alias = intern(&module_name);
+            if contains_import_alias(&program.decls, &alias) {
+                continue;
+            }
+            let import_decl = default_import_decl(&module_name);
+            let exports = self.resolve_module_exports_for_rewrite(
+                &import_decl,
+                importer.clone(),
+                gas,
+                loaded,
+                loading,
+            )?;
+            for (local, target) in exports.values {
+                if !local_values.contains(&local) && !bindings.imported_values.contains_key(&local)
+                {
+                    bindings.imported_values.insert(local, target);
+                }
+            }
         }
 
         let qualified = qualify_program(program, prefix);

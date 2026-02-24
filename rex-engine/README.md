@@ -26,7 +26,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .eval_with_gas(program.expr.as_ref(), &mut gas)
         .await?;
 
-    assert_eq!(engine.heap().pointer_as_i32(&value)?, 43);
+    assert_eq!(engine.heap.pointer_as_i32(&value)?, 43);
     Ok(())
 }
 ```
@@ -55,6 +55,12 @@ Pointer-level APIs (`export_native*`) receive `&Engine<State>` so they can acces
 
 `Engine::with_prelude(())?` injects the standard runtime helpers. If you need host state, pass
 your state value instead: `Engine::with_prelude(state)?`.
+
+For explicit control, use:
+
+- `Engine::with_options(state, EngineOptions { ... })`
+- `PreludeMode::{Enabled, Disabled}`
+- `default_imports` (defaults to importing `Prelude` weakly)
 
 - **Constructors**: `Empty`, `Cons`, `Some`, `None`, `Ok`, `Err`
 - **Arithmetic**: `+`, `-`, `*`, `/`, `negate`, `zero`, `one`

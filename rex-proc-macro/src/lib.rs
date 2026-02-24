@@ -884,7 +884,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
                 Ok(quote! {{
                     match value {
-                        ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == 1 => {
+                        ::rex::Value::Adt(tag, args)
+                            if (tag.as_ref() == #type_name
+                                || tag.as_ref().rsplit('.').next() == Some(#type_name))
+                                && args.len() == 1 =>
+                        {
                             match heap.get(&args[0])?.as_ref().clone() {
                                 ::rex::Value::Dict(map) => {
                                     #(#field_decodes)*
@@ -916,7 +920,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 let len = fields.unnamed.len();
                 Ok(quote! {{
                     match value {
-                        ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.len() == #len => {
+                        ::rex::Value::Adt(tag, args)
+                            if (tag.as_ref() == #type_name
+                                || tag.as_ref().rsplit('.').next() == Some(#type_name))
+                                && args.len() == #len =>
+                        {
                             Ok(Self(#(#decs,)*))
                         }
                         other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
@@ -928,7 +936,13 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
             }
             Fields::Unit => Ok(quote! {{
                 match value {
-                    ::rex::Value::Adt(tag, args) if tag.as_ref() == #type_name && args.is_empty() => Ok(Self),
+                    ::rex::Value::Adt(tag, args)
+                        if (tag.as_ref() == #type_name
+                            || tag.as_ref().rsplit('.').next() == Some(#type_name))
+                            && args.is_empty() =>
+                    {
+                        Ok(Self)
+                    }
                     other => Err(::rex::EngineError::NativeType { expected: #type_name.into(),
                         got: ::rex::value_debug(heap, &other)
                             .unwrap_or_else(|err| format!("<display error: {err}>")),
@@ -946,7 +960,13 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                 }
                 let arm = match &variant.fields {
                     Fields::Unit => quote! {
-                        ::rex::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.is_empty() => Ok(Self::#variant_ident)
+                        ::rex::Value::Adt(tag, args)
+                            if (tag.as_ref() == #variant_name
+                                || tag.as_ref().rsplit('.').next() == Some(#variant_name))
+                                && args.is_empty() =>
+                        {
+                            Ok(Self::#variant_ident)
+                        }
                     },
                     Fields::Unnamed(fields) => {
                         let len = fields.unnamed.len();
@@ -966,7 +986,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             .map(|d| quote!(#d?))
                             .collect::<Vec<_>>();
                         quote! {
-                            ::rex::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == #len => {
+                            ::rex::Value::Adt(tag, args)
+                                if (tag.as_ref() == #variant_name
+                                    || tag.as_ref().rsplit('.').next() == Some(#variant_name))
+                                    && args.len() == #len =>
+                            {
                                 Ok(Self::#variant_ident(#(#vals,)*))
                             }
                         }
@@ -998,7 +1022,11 @@ fn from_value_impl(ast: &DeriveInput, type_name: &str) -> Result<TokenStream2, E
                             });
                         }
                         quote! {
-                            ::rex::Value::Adt(tag, args) if tag.as_ref() == #variant_name && args.len() == 1 => {
+                            ::rex::Value::Adt(tag, args)
+                                if (tag.as_ref() == #variant_name
+                                    || tag.as_ref().rsplit('.').next() == Some(#variant_name))
+                                    && args.len() == 1 =>
+                            {
                                 match heap.get(&args[0])?.as_ref().clone() {
                                     ::rex::Value::Dict(map) => {
                                         #(#field_decodes)*

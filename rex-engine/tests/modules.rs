@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
-use rex_engine::{Engine, Module, Pointer, Value};
+use rex_engine::{Engine, EngineOptions, Module, Pointer, PreludeMode, Value, pointer_display};
 use rex_ts::{Scheme, Type, TypeKind};
 use rex_util::GasMeter;
 use uuid::Uuid;
@@ -45,6 +45,41 @@ fn i32_binop_scheme() -> Scheme {
 
 fn i32_value_scheme() -> Scheme {
     Scheme::new(vec![], vec![], i32_type())
+}
+
+#[tokio::test]
+async fn prelude_module_can_be_imported_explicitly() {
+    let mut engine = engine_with_prelude();
+    let (value_ptr, ty) = eval_snippet(
+        &mut engine,
+        r#"
+        import Prelude (map)
+        map ((+) 1) [1, 2]
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::app(Type::con("List", 1), Type::con("i32", 0)));
+    let rendered = pointer_display(&engine.heap, &value_ptr).unwrap();
+    assert_eq!(rendered, "[2, 3]");
+}
+
+#[tokio::test]
+async fn engine_options_can_disable_prelude() {
+    let mut engine = Engine::with_options(
+        (),
+        EngineOptions {
+            prelude: PreludeMode::Disabled,
+            default_imports: vec![],
+        },
+    )
+    .unwrap();
+    let err = eval_snippet(&mut engine, "map ((+) 1) [1, 2]")
+        .await
+        .expect_err("prelude should be unavailable when disabled");
+    let msg = err.to_string();
+    assert!(msg.contains("map"), "unexpected error: {msg}");
 }
 
 async fn eval_module_file<State: Clone + Send + Sync + 'static>(

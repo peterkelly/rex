@@ -3053,9 +3053,30 @@ impl Parser {
     fn parse_type_atom(&mut self) -> Result<TypeExpr, ParserErr> {
         match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let name = intern(&name);
+                let start = span.begin;
+                let mut end = span.end;
+                let mut parts = vec![name.to_string()];
                 self.next_token();
-                Ok(TypeExpr::Name(span, name))
+
+                while let Token::Dot(..) = self.current_token() {
+                    self.next_token();
+                    match self.current_token() {
+                        Token::Ident(seg, seg_span, ..) => {
+                            parts.push(seg.to_string());
+                            end = seg_span.end;
+                            self.next_token();
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                "expected identifier after `.` in type",
+                            ));
+                        }
+                    }
+                }
+
+                let name = intern(&parts.join("."));
+                Ok(TypeExpr::Name(Span::from_begin_end(start, end), name))
             }
             Token::ParenL(..) => self.parse_type_paren(),
             Token::BraceL(..) => self.parse_type_record(),
@@ -4607,6 +4628,15 @@ mod tests {
                 assert!(matches!(inner.as_ref(), Expr::App(..)));
             }
             other => panic!("expected type assertion, got {other:?}"),
+        }
+
+        let expr = parse("foo is Sample.Correctness");
+        match expr.as_ref() {
+            Expr::Ann(_, inner, TypeExpr::Name(_, name)) => {
+                assert_eq!(name.as_ref(), "Sample.Correctness");
+                assert!(matches!(inner.as_ref(), Expr::Var(_)));
+            }
+            other => panic!("expected qualified type assertion, got {other:?}"),
         }
 
         let expr = parse("\\ (a : f32) -> a");

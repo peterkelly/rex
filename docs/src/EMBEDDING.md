@@ -47,6 +47,29 @@ let value = engine
 println!("{value}");
 ```
 
+## Engine Initialization and Default Imports
+
+`Engine::with_prelude(state)` is shorthand for `Engine::with_options(state, EngineOptions::default())`.
+
+- Prelude is enabled by default.
+- `Prelude` is default-imported.
+- Default imports are weak: they fill missing names, but never override local declarations
+  or explicit imports.
+
+If you want full control:
+
+```rust
+use rex_engine::{Engine, EngineOptions, PreludeMode};
+
+let mut engine = Engine::with_options(
+    (),
+    EngineOptions {
+        prelude: PreludeMode::Disabled,
+        default_imports: vec![],
+    },
+)?;
+```
+
 ## Inject Modules (Embedder Patterns)
 
 This is fully supported in `rex-engine`. You can compose module loading from:
@@ -130,6 +153,7 @@ Use `Module` + `Engine::inject_module(...)`:
 2. Add exports:
    - typed exports with `export` / `export_async`
    - runtime/native exports with `export_native` / `export_native_async`
+   - optional Rex declarations with `add_declaration` (for example `pub type ...`)
 3. Inject it into the engine.
 
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
@@ -159,6 +183,28 @@ let value = engine
 println!("{value}");
 ```
 
+You can declare ADTs directly inside an injected host module:
+
+```rust
+use rex_engine::{Engine, Module};
+
+let mut engine = Engine::with_prelude(())?;
+engine.add_default_resolvers();
+
+let mut m = Module::new("acme.status");
+m.add_declaration("pub type Status = Ready | Failed string")?;
+engine.inject_module(m)?;
+```
+
+Then Rex code can import and use those constructors from the module:
+
+```rex
+import acme.status (Failed)
+match (Failed "boom")
+  when Failed msg -> length msg
+  when _ -> 0
+```
+
 Internally this generates module declarations and injects host implementations under qualified
 module export symbols.
 
@@ -169,6 +215,63 @@ you can use:
 - `Export::from_native` / `Export::from_native_async` (runtime pointer handlers)
 
 Then add them via `Module::add_export`.
+
+This example shows how to use Rust enums and structs as Rex-facing types with ADTs declared inside
+the module itself. The host function accepts a Rust `Label` (containing a Rust `Side` enum), and
+Rex code calls it through `sample.render_label`.
+
+Example:
+
+```rust
+use rex::{Engine, EngineError, Module};
+use rex_proc_macro::Rex;
+use rex_util::GasMeter;
+
+#[derive(Clone, Debug, PartialEq, Rex)]
+enum Side {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug, PartialEq, Rex)]
+struct Label {
+    text: String,
+    side: Side,
+}
+
+fn render_label(label: Label) -> String {
+    match label.side {
+        Side::Left => format!("{:<12}", label.text),
+        Side::Right => format!("{:>12}", label.text),
+    }
+}
+
+let mut engine = Engine::with_prelude(())?;
+engine.add_default_resolvers();
+
+let mut m = Module::new("sample");
+m.inject_rex_adt::<Side>(&mut engine)?;
+m.inject_rex_adt::<Label>(&mut engine)?;
+m.export("render_label", |_state: &(), label: Label| {
+    Ok::<String, EngineError>(render_label(label))
+})?;
+engine.inject_module(m)?;
+
+let mut gas = GasMeter::default();
+let value = engine
+    .eval_snippet(
+        r#"
+        import sample (Label, Left, Right, render_label)
+        (
+            render_label (Label { text = "left", side = Left }),
+            render_label (Label { text = "right", side = Right })
+        )
+        "#,
+        &mut gas,
+    )
+    .await?;
+println!("{value}"); // ("left        ", "       right")
+```
 
 ### 3a) Runtime-Defined Signatures (`Pointer` APIs)
 
@@ -181,7 +284,7 @@ APIs and provide an explicit `Scheme` + arity:
 These callbacks receive `&Engine<State>` (not just `&State`), so they can:
 
 - read state via `engine.state`
-- allocate new values via `engine.heap()`
+- allocate new values via `engine.heap`
 - inspect typed call information via the explicit `&Type` / `Type` callback parameter
 
 ```rust
@@ -200,7 +303,7 @@ m.export_native("id_ptr", scheme.clone(), 1, |_engine: &Engine<()>, _typ: &Type,
 })?;
 
 m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::con("i32", 0)), 0, |engine: &Engine<()>, _typ: Type, _args: Vec<Pointer>| {
-    async move { engine.heap().alloc_i32(42) }.boxed_local()
+    async move { engine.heap.alloc_i32(42) }.boxed_local()
 })?;
 
 engine.inject_module(m)?;
@@ -431,7 +534,8 @@ println!("{value}");
 `rex-engine` is the boundary where Rust provides implementations for Rex values.
 
 For host-provided *modules*, prefer `Module` + `inject_module` (above). The direct injection APIs
-below are still useful for global values/functions that are not grouped under a module namespace.
+below register exports into the root scope (the engine's root module), which is useful for values
+or functions you want available without importing a host module.
 
 ```rust
 use rex_engine::Engine;
@@ -522,7 +626,7 @@ engine.export_native_async_cancellable(
     |engine, token: CancellationToken, _, _args| {
         async move {
             token.cancelled().await;
-            engine.heap().alloc_i32(0)
+            engine.heap.alloc_i32(0)
         }
         .boxed_local()
     },

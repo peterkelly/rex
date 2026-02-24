@@ -1,11 +1,157 @@
 use std::sync::Arc;
 
 use rex::{
-    Engine, EngineError, FromPointer, GasMeter, IntoPointer, Parser, Pointer, RexDefault, Token,
-    Type, TypeKind,
+    Engine, EngineError, FromPointer, GasMeter, IntoPointer, Module, Parser, Pointer, RexDefault,
+    Token, Type, TypeError, TypeKind, Value,
 };
+use rex_engine::virtual_export_name;
 use rex_proc_macro::Rex;
 use uuid::Uuid;
+
+#[derive(Clone, Debug, PartialEq, Rex)]
+enum Side {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug, PartialEq, Rex)]
+enum Correctness {
+    Right,
+    Wrong,
+}
+
+#[derive(Clone, Debug, PartialEq, Rex)]
+struct Label {
+    text: String,
+    side: Side,
+}
+
+fn render_label(label: Label) -> String {
+    match label.side {
+        Side::Left => format!("{:<12}", label.text),
+        Side::Right => format!("{:>12}", label.text),
+    }
+}
+
+#[tokio::test]
+async fn module_render_label_with_module_scoped_adts_left_and_right() {
+    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    engine.add_default_resolvers();
+
+    let mut module = Module::new("sample");
+    module.inject_rex_adt::<Side>(&mut engine).unwrap();
+    module.inject_rex_adt::<Correctness>(&mut engine).unwrap();
+    module.inject_rex_adt::<Label>(&mut engine).unwrap();
+    module
+        .export("render_label", |_: &(), label: Label| {
+            Ok::<String, EngineError>(render_label(label))
+        })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let mut gas = unlimited_gas();
+    let (value, ty) = engine
+        .eval_snippet(
+            r#"
+            import sample (Label, Left, Right, Wrong, render_label)
+            import sample as Sample
+            (
+                render_label (Label { text = "left", side = Left }),
+                render_label (Label { text = "right", side = (Right is Sample.Side) }),
+                (Right is Sample.Correctness),
+                (Wrong is Sample.Correctness)
+            )
+            "#,
+            &mut gas,
+        )
+        .await
+        .unwrap();
+
+    // `Side` and `Correctness` both provide a `Right` constructor in the same module.
+    // This ensures Rex keeps them distinct via explicit type ascription (`is Side` vs `is Sample.Correctness`).
+    let correctness_ty = Type::con(virtual_export_name("sample", "Correctness"), 0);
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::con("string", 0),
+            Type::con("string", 0),
+            correctness_ty.clone(),
+            correctness_ty,
+        ])
+    );
+    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    assert_eq!(items.len(), 4);
+    assert_eq!(
+        engine.heap.pointer_as_string(&items[0]).unwrap(),
+        format!("{:<12}", "left")
+    );
+    assert_eq!(
+        engine.heap.pointer_as_string(&items[1]).unwrap(),
+        format!("{:>12}", "right")
+    );
+    let right = engine.heap.get(&items[2]).unwrap();
+    match right.as_ref() {
+        Value::Adt(tag, args) => {
+            assert!(tag.as_ref().ends_with(".Right"));
+            assert!(args.is_empty());
+        }
+        _ => panic!("expected ADT value for Correctness.Right"),
+    }
+    let wrong = engine.heap.get(&items[3]).unwrap();
+    match wrong.as_ref() {
+        Value::Adt(tag, args) => {
+            assert!(tag.as_ref().ends_with(".Wrong"));
+            assert!(args.is_empty());
+        }
+        _ => panic!("expected ADT value for Correctness.Wrong"),
+    }
+}
+
+#[tokio::test]
+async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_regression() {
+    // Regression guard: when two module ADTs expose overlapping constructor names
+    // (e.g. both have `Right`), `match` arms that use the bare constructor after an
+    // `is Sample.Correctness` ascription currently remain ambiguous. This test ensures
+    // we keep surfacing that ambiguity instead of silently picking one constructor.
+    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    engine.add_default_resolvers();
+
+    let mut module = Module::new("sample");
+    module.inject_rex_adt::<Side>(&mut engine).unwrap();
+    module.inject_rex_adt::<Correctness>(&mut engine).unwrap();
+    engine.inject_module(module).unwrap();
+
+    let mut gas = unlimited_gas();
+    let err = engine
+        .eval_snippet(
+            r#"
+            import sample (Right, Wrong)
+            import sample as Sample
+            let x = (Right is Sample.Correctness) in
+            match (x is Sample.Correctness)
+              when Right -> true
+              when Wrong -> false
+            "#,
+            &mut gas,
+        )
+        .await
+        .expect_err("expected ambiguity error for overlapping constructor in match pattern");
+
+    match err {
+        EngineError::Type(mut e) => {
+            while let TypeError::Spanned { error, .. } = e {
+                e = *error;
+            }
+            match e {
+                TypeError::AmbiguousOverload(name) => {
+                    assert!(name.as_ref().ends_with(".Right"));
+                }
+                other => panic!("expected ambiguous overload error, got {other:?}"),
+            }
+        }
+        other => panic!("expected type error, got {other:?}"),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Rex)]
 struct Entity1 {

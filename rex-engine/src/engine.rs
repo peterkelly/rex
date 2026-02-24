@@ -17,7 +17,9 @@ use rex_ts::{
 };
 use rex_util::GasMeter;
 
-use crate::modules::{ModuleId, ModuleSystem, ResolveRequest, ResolvedModule, virtual_export_name};
+use crate::modules::{
+    ModuleExports, ModuleId, ModuleSystem, ResolveRequest, ResolvedModule, virtual_export_name,
+};
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
     inject_numeric_ops, inject_option_result_builtins, inject_order_ops, inject_prelude_adts,
@@ -31,6 +33,30 @@ where
     State: Clone + Send + Sync + 'static,
 {
     fn rex_default(engine: &Engine<State>) -> Result<Pointer, EngineError>;
+}
+
+pub const ROOT_MODULE_NAME: &str = "__root__";
+pub const PRELUDE_MODULE_NAME: &str = "Prelude";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PreludeMode {
+    Enabled,
+    Disabled,
+}
+
+#[derive(Clone, Debug)]
+pub struct EngineOptions {
+    pub prelude: PreludeMode,
+    pub default_imports: Vec<String>,
+}
+
+impl Default for EngineOptions {
+    fn default() -> Self {
+        Self {
+            prelude: PreludeMode::Enabled,
+            default_imports: vec![PRELUDE_MODULE_NAME.to_string()],
+        }
+    }
 }
 
 /// Shared ADT registration surface for derived and manually implemented Rust types.
@@ -408,6 +434,7 @@ where
 
 pub struct Module<State: Clone + Send + Sync + 'static> {
     pub name: String,
+    declarations: Vec<String>,
     exports: Vec<Export<State>>,
 }
 
@@ -418,8 +445,37 @@ where
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            declarations: Vec::new(),
             exports: Vec::new(),
         }
+    }
+
+    /// Add raw Rex declarations to this module (for example `pub type ...`).
+    ///
+    /// Declarations are concatenated into the module source exactly as provided.
+    pub fn add_declaration(&mut self, declaration: impl Into<String>) -> Result<(), EngineError> {
+        let declaration = declaration.into();
+        if declaration.trim().is_empty() {
+            return Err(EngineError::Internal(
+                "module declaration cannot be empty".into(),
+            ));
+        }
+        self.declarations.push(declaration);
+        Ok(())
+    }
+
+    /// Add an ADT declaration to this module.
+    pub fn add_adt_decl(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
+        self.add_declaration(adt_declaration_line(&adt))
+    }
+
+    /// Build and add a Rust-backed ADT declaration into this module.
+    pub fn inject_rex_adt<T>(&mut self, engine: &mut Engine<State>) -> Result<(), EngineError>
+    where
+        T: RexAdt,
+    {
+        let adt = T::rex_adt_decl(engine)?;
+        self.add_adt_decl(adt)
     }
 
     pub fn add_export(&mut self, export: Export<State>) {
@@ -517,6 +573,128 @@ fn declaration_line_from_scheme(export_name: &str, scheme: &Scheme) -> String {
     out
 }
 
+fn adt_variant_arg_string(typ: &Type) -> String {
+    match typ.as_ref() {
+        TypeKind::Fun(..) => format!("({typ})"),
+        _ => typ.to_string(),
+    }
+}
+
+fn module_local_type_names_from_declarations(declarations: &[String]) -> HashSet<Symbol> {
+    let mut out = HashSet::new();
+    for declaration in declarations {
+        let mut s = declaration.trim_start();
+        if let Some(rest) = s.strip_prefix("pub ") {
+            s = rest.trim_start();
+        }
+        let Some(rest) = s.strip_prefix("type ") else {
+            continue;
+        };
+        let name: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            out.insert(sym(&name));
+        }
+    }
+    out
+}
+
+fn qualify_module_type_refs(
+    typ: &Type,
+    module_name: &str,
+    local_type_names: &HashSet<Symbol>,
+) -> Type {
+    match typ.as_ref() {
+        TypeKind::Con(tc) => {
+            if local_type_names.contains(&tc.name) {
+                Type::con(virtual_export_name(module_name, tc.name.as_ref()), tc.arity)
+            } else {
+                typ.clone()
+            }
+        }
+        TypeKind::App(f, x) => Type::app(
+            qualify_module_type_refs(f, module_name, local_type_names),
+            qualify_module_type_refs(x, module_name, local_type_names),
+        ),
+        TypeKind::Fun(a, b) => Type::fun(
+            qualify_module_type_refs(a, module_name, local_type_names),
+            qualify_module_type_refs(b, module_name, local_type_names),
+        ),
+        TypeKind::Tuple(elems) => Type::tuple(
+            elems
+                .iter()
+                .map(|t| qualify_module_type_refs(t, module_name, local_type_names))
+                .collect(),
+        ),
+        TypeKind::Record(fields) => Type::new(TypeKind::Record(
+            fields
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        qualify_module_type_refs(v, module_name, local_type_names),
+                    )
+                })
+                .collect(),
+        )),
+        TypeKind::Var(_) => typ.clone(),
+    }
+}
+
+fn qualify_module_scheme_refs(
+    scheme: &Scheme,
+    module_name: &str,
+    local_type_names: &HashSet<Symbol>,
+) -> Scheme {
+    let typ = qualify_module_type_refs(&scheme.typ, module_name, local_type_names);
+    let preds = scheme
+        .preds
+        .iter()
+        .map(|pred| {
+            Predicate::new(
+                pred.class.clone(),
+                qualify_module_type_refs(&pred.typ, module_name, local_type_names),
+            )
+        })
+        .collect();
+    Scheme::new(scheme.vars.clone(), preds, typ)
+}
+
+fn adt_declaration_line(adt: &AdtDecl) -> String {
+    let head = if adt.params.is_empty() {
+        adt.name.to_string()
+    } else {
+        let params = adt
+            .params
+            .iter()
+            .map(|p| p.name.to_string())
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("{} {}", adt.name, params)
+    };
+    let variants = adt
+        .variants
+        .iter()
+        .map(|variant| {
+            if variant.args.is_empty() {
+                variant.name.to_string()
+            } else {
+                let args = variant
+                    .args
+                    .iter()
+                    .map(adt_variant_arg_string)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                format!("{} {}", variant.name, args)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!("pub type {head} = {variants}")
+}
+
 fn native_export_arg_types(
     scheme: &Scheme,
     arity: usize,
@@ -574,7 +752,7 @@ macro_rules! define_handler_impl {
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
                 let registration = NativeRegistration::sync(scheme, $arity, func, 0);
-                engine.register_native_registration(export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
 
@@ -615,7 +793,7 @@ macro_rules! define_handler_impl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
                 let registration = NativeRegistration::sync(scheme, $arity, func, 0);
-                engine.register_native_registration(export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
 
@@ -639,7 +817,7 @@ where
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
         let registration = NativeRegistration::sync(scheme, arity, func, 0);
-        engine.register_native_registration(export_name, registration)
+        engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
 
@@ -683,7 +861,7 @@ macro_rules! define_async_handler_impl {
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
                 let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
-                engine.register_native_registration(export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
     };
@@ -730,7 +908,7 @@ macro_rules! define_async_handler_impl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
                 let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
-                engine.register_native_registration(export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
     };
@@ -758,7 +936,7 @@ where
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
         let registration = NativeRegistration::r#async(scheme, arity, func, 0);
-        engine.register_native_registration(export_name, registration)
+        engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
 
@@ -1255,6 +1433,10 @@ where
     typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
     pub(crate) modules: ModuleSystem,
     injected_modules: HashSet<String>,
+    default_imports: Vec<String>,
+    virtual_modules: HashMap<String, ModuleExports>,
+    module_local_type_names: HashMap<String, HashSet<Symbol>>,
+    registration_module_context: Option<String>,
     cancel: CancellationToken,
     pub heap: Heap,
 }
@@ -1331,13 +1513,24 @@ where
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
             modules: ModuleSystem::default(),
             injected_modules: HashSet::new(),
+            default_imports: Vec::new(),
+            virtual_modules: HashMap::new(),
+            module_local_type_names: HashMap::new(),
+            registration_module_context: None,
             cancel: CancellationToken::new(),
             heap: Heap::new(),
         }
     }
 
     pub fn with_prelude(state: State) -> Result<Self, EngineError> {
-        let type_system = TypeSystem::with_prelude()?;
+        Self::with_options(state, EngineOptions::default())
+    }
+
+    pub fn with_options(state: State, options: EngineOptions) -> Result<Self, EngineError> {
+        let type_system = match options.prelude {
+            PreludeMode::Enabled => TypeSystem::with_prelude()?,
+            PreludeMode::Disabled => TypeSystem::new(),
+        };
         let mut engine = Engine {
             state: Arc::new(state),
             env: Env::new(),
@@ -1347,10 +1540,17 @@ where
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
             modules: ModuleSystem::default(),
             injected_modules: HashSet::new(),
+            default_imports: options.default_imports,
+            virtual_modules: HashMap::new(),
+            module_local_type_names: HashMap::new(),
+            registration_module_context: None,
             cancel: CancellationToken::new(),
             heap: Heap::new(),
         };
-        engine.inject_prelude()?;
+        if matches!(options.prelude, PreludeMode::Enabled) {
+            engine.inject_prelude()?;
+            engine.inject_prelude_virtual_module()?;
+        }
         Ok(engine)
     }
 
@@ -1457,6 +1657,14 @@ where
         self.cancel.clone()
     }
 
+    pub fn set_default_imports(&mut self, imports: Vec<String>) {
+        self.default_imports = imports;
+    }
+
+    pub fn default_imports(&self) -> &[String] {
+        &self.default_imports
+    }
+
     pub fn cancel(&self) {
         self.cancel.cancel();
     }
@@ -1473,14 +1681,21 @@ where
         }
 
         let mut source = String::new();
+        for declaration in &module.declarations {
+            source.push_str(declaration);
+            source.push('\n');
+        }
         for export in &module.exports {
             source.push_str(&export.declaration);
             source.push('\n');
         }
 
+        let local_type_names = module_local_type_names_from_declarations(&module.declarations);
+        self.module_local_type_names
+            .insert(module_name.clone(), local_type_names);
+
         for export in module.exports {
-            let qualified = virtual_export_name(&module_name, &export.name);
-            (export.injector)(self, &qualified)?;
+            self.inject_module_export(&module_name, export)?;
         }
 
         let resolver_module_name = module_name.clone();
@@ -1507,27 +1722,65 @@ where
         Ok(())
     }
 
-    fn inject_root_export(&mut self, export: Export<State>) -> Result<(), EngineError> {
+    fn module_export_symbol(module_name: &str, export_name: &str) -> String {
+        if module_name == ROOT_MODULE_NAME {
+            normalize_name(export_name).to_string()
+        } else {
+            virtual_export_name(module_name, export_name)
+        }
+    }
+
+    fn inject_module_export(
+        &mut self,
+        module_name: &str,
+        export: Export<State>,
+    ) -> Result<(), EngineError> {
         let Export {
             name,
             declaration: _,
             injector,
         } = export;
-        injector(self, &name)
+        let qualified_name = Self::module_export_symbol(module_name, &name);
+        let previous_context = self.registration_module_context.clone();
+        self.registration_module_context = if module_name == ROOT_MODULE_NAME {
+            None
+        } else {
+            Some(module_name.to_string())
+        };
+        let result = injector(self, &qualified_name);
+        self.registration_module_context = previous_context;
+        result
+    }
+
+    fn inject_root_export(&mut self, export: Export<State>) -> Result<(), EngineError> {
+        self.inject_module_export(ROOT_MODULE_NAME, export)
     }
 
     fn register_native_registration(
         &mut self,
+        module_name: &str,
         export_name: &str,
         registration: NativeRegistration<State>,
     ) -> Result<(), EngineError> {
         let NativeRegistration {
-            scheme,
+            mut scheme,
             arity,
             callable,
             gas_cost,
         } = registration;
-        let name = normalize_name(export_name);
+        let scheme_module = if module_name == ROOT_MODULE_NAME {
+            self.registration_module_context
+                .as_deref()
+                .unwrap_or(ROOT_MODULE_NAME)
+        } else {
+            module_name
+        };
+        if scheme_module != ROOT_MODULE_NAME
+            && let Some(local_type_names) = self.module_local_type_names.get(scheme_module)
+        {
+            scheme = qualify_module_scheme_refs(&scheme, scheme_module, local_type_names);
+        }
+        let name = normalize_name(&Self::module_export_symbol(module_name, export_name));
         self.register_native(name, scheme, arity, callable, gas_cost)
     }
 
@@ -1650,7 +1903,7 @@ where
             Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func, 0);
-        self.register_native_registration(name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, name, registration)
     }
 
     pub fn export_value_typed(
@@ -1664,7 +1917,7 @@ where
             Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func, 0);
-        self.register_native_registration(name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, name, registration)
     }
 
     pub fn export_native_with_gas_cost<F>(
@@ -1688,7 +1941,7 @@ where
             move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| handler(engine, typ, args),
         );
         let registration = NativeRegistration::sync(scheme, arity, func, gas_cost);
-        self.register_native_registration(&name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub fn export_native_async_with_gas_cost<F>(
@@ -1713,7 +1966,7 @@ where
             handler(engine, typ, args.to_vec())
         });
         let registration = NativeRegistration::r#async(scheme, arity, func, gas_cost);
-        self.register_native_registration(&name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub fn export_native_async_cancellable<F>(
@@ -1762,7 +2015,7 @@ where
         let func: AsyncNativeCallableCancellable<State> =
             Arc::new(move |engine, token, typ, args| handler(engine, token, typ, args));
         let registration = NativeRegistration::async_cancellable(scheme, arity, func, gas_cost);
-        self.register_native_registration(&name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
@@ -2001,6 +2254,47 @@ where
         inject_json_primops(self)?;
         self.register_prelude_typeclass_instances()?;
         Ok(())
+    }
+
+    fn inject_prelude_virtual_module(&mut self) -> Result<(), EngineError> {
+        if self.virtual_modules.contains_key(PRELUDE_MODULE_NAME) {
+            return Ok(());
+        }
+
+        let mut values: HashMap<Symbol, Symbol> = HashMap::new();
+        for (name, _) in self.type_system.env.values.iter() {
+            if !name.as_ref().starts_with("@m") {
+                values.insert(name.clone(), name.clone());
+            }
+        }
+
+        let mut types: HashMap<Symbol, Symbol> = HashMap::new();
+        for name in self.type_system.adts.keys() {
+            if !name.as_ref().starts_with("@m") {
+                types.insert(name.clone(), name.clone());
+            }
+        }
+
+        let mut classes: HashMap<Symbol, Symbol> = HashMap::new();
+        for name in self.type_system.class_info.keys() {
+            if !name.as_ref().starts_with("@m") {
+                classes.insert(name.clone(), name.clone());
+            }
+        }
+
+        self.virtual_modules.insert(
+            PRELUDE_MODULE_NAME.to_string(),
+            ModuleExports {
+                values,
+                types,
+                classes,
+            },
+        );
+        Ok(())
+    }
+
+    pub(crate) fn virtual_module_exports(&self, module_name: &str) -> Option<ModuleExports> {
+        self.virtual_modules.get(module_name).cloned()
     }
 
     fn register_prelude_typeclass_instances(&mut self) -> Result<(), EngineError> {
@@ -3508,6 +3802,39 @@ mod tests {
         assert_eq!(t2, Type::con("i32", 0));
         let expected = engine.heap.alloc_i32(30).unwrap();
         assert!(crate::pointer_eq(&engine.heap, &v2, &expected).unwrap());
+    }
+
+    #[tokio::test]
+    async fn injected_module_can_define_pub_adt_declarations() {
+        let mut gas = unlimited_gas();
+        let mut engine = Engine::with_prelude(()).unwrap();
+        engine.add_default_resolvers();
+
+        let mut module = Module::new("acme.status");
+        module
+            .add_declaration("pub type Status = Ready | Failed string")
+            .unwrap();
+        engine.inject_module(module).unwrap();
+
+        let (value, _ty) = engine
+            .eval_snippet(
+                r#"
+                import acme.status (Failed)
+                Failed "boom"
+                "#,
+                &mut gas,
+            )
+            .await
+            .unwrap();
+
+        let v = engine.heap.get(&value).unwrap();
+        match v.as_ref() {
+            Value::Adt(tag, args) => {
+                assert!(tag.as_ref().ends_with(".Failed"));
+                assert_eq!(args.len(), 1);
+            }
+            _ => panic!("expected ADT value"),
+        }
     }
 
     #[tokio::test]
