@@ -219,11 +219,41 @@ function applyReplBackground(root) {
   }
 }
 
-function installThemeWatcher() {
+function isDarkMdbookTheme() {
+  const html = document.documentElement;
+  const attrTheme = html.getAttribute("data-theme");
+  const storedTheme = localStorage.getItem("mdbook-theme");
+  const theme = String(attrTheme || storedTheme || "").toLowerCase();
+  const darkThemes = new Set(["ayu", "coal", "navy", "dark"]);
+
+  if (theme.length > 0) {
+    if (theme === "default_theme") {
+      return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+    }
+    return darkThemes.has(theme);
+  }
+
+  if (html.classList.contains("ayu") || html.classList.contains("coal") || html.classList.contains("navy")) {
+    return true;
+  }
+  if (html.classList.contains("light") || html.classList.contains("rust")) {
+    return false;
+  }
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+}
+
+function applyMonacoTheme(monaco) {
+  if (!monaco?.editor?.setTheme) return;
+  monaco.editor.setTheme(isDarkMdbookTheme() ? "vs-dark" : "vs");
+}
+
+function installThemeWatcher(monaco) {
   if (rexThemeObserver) return;
   const applyAll = () => {
     document.querySelectorAll("[data-rex-repl]").forEach((root) => applyReplBackground(root));
+    applyMonacoTheme(monaco);
   };
+  applyAll();
   rexThemeObserver = new MutationObserver(() => applyAll());
   rexThemeObserver.observe(document.documentElement, {
     attributes: true,
@@ -628,9 +658,9 @@ async function runRepl(root) {
 
 async function initRepls() {
   installStyles();
-  installThemeWatcher();
   const wasm = await ensureWasm();
   const monaco = await ensureMonaco();
+  installThemeWatcher(monaco);
   await initRexLanguage(monaco, wasm);
 
   document.querySelectorAll("[data-rex-repl]").forEach((root) => {

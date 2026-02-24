@@ -17,6 +17,7 @@ preferred-dark-theme = "ayu"
 git-repository-url = "https://github.com/talo/rex"
 edit-url-template = "https://github.com/talo/rex/edit/v4/docs/{path}"
 site-url = "/rex/"
+additional-js = ["disable_help_shortcut.js"]
 
 [output.html.playground]
 editable = false

@@ -1,9 +1,3 @@
-Here is the reordered `CONTRIBUTING.md` with **Commit Message Style**
-moved above **Commit Signing**, and minor flow adjustments to keep the
-rhythm clean.
-
-You can drop this directly into the repository root.
-
 # Contributing
 
 This project maintains a strictly linear, cryptographically verifiable history.
