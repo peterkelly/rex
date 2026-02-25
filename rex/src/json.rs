@@ -1,6 +1,6 @@
 use rex_ast::expr::{Symbol, sym};
 use rex_engine::{EngineError, Heap, Pointer};
-use rex_ts::{AdtDecl, Type, TypeKind, TypeSystem};
+use rex_ts::{AdtDecl, BuiltinTypeId, Type, TypeKind, TypeSystem};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 
@@ -165,7 +165,10 @@ fn json_to_pointer_for_con(
     match (con_name.as_ref(), con_args) {
         ("bool", []) => match json {
             Value::Bool(v) => heap.alloc_bool(*v),
-            _ => Err(type_mismatch_json(json, &Type::con("bool", 0))),
+            _ => Err(type_mismatch_json(
+                json,
+                &Type::builtin(BuiltinTypeId::Bool),
+            )),
         },
 
         ("u8", []) => {
@@ -213,7 +216,10 @@ fn json_to_pointer_for_con(
 
         ("string", []) => match json {
             Value::String(s) => heap.alloc_string(s.clone()),
-            _ => Err(type_mismatch_json(json, &Type::con("string", 0))),
+            _ => Err(type_mismatch_json(
+                json,
+                &Type::builtin(BuiltinTypeId::String),
+            )),
         },
         ("uuid", []) => {
             let u = serde_json::from_value(json.clone())
@@ -351,7 +357,7 @@ fn pointer_to_json_for_con(
                 _ => Err(type_mismatch_pointer(
                     heap,
                     pointer,
-                    &Type::app(Type::con("Option", 1), inner_t.clone()),
+                    &Type::app(Type::builtin(BuiltinTypeId::Option), inner_t.clone()),
                 )),
             }
         }
@@ -374,7 +380,7 @@ fn pointer_to_json_for_con(
                     heap,
                     pointer,
                     &Type::app(
-                        Type::app(Type::con("Result", 2), err_t.clone()),
+                        Type::app(Type::builtin(BuiltinTypeId::Result), err_t.clone()),
                         ok_t.clone(),
                     ),
                 )),

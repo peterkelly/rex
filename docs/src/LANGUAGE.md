@@ -30,6 +30,8 @@ in
 ## Modules and Imports
 
 Rex modules are `.rex` files. Imports are top-level declarations.
+Module files are declaration-only: they do not have a top-level expression result. To evaluate an
+expression, use snippet/REPL/program entrypoints.
 
 Supported forms:
 
@@ -42,14 +44,20 @@ import foo.bar (x, y as z)
 Semantics:
 
 - `import foo.bar as Bar` imports a module alias; use qualified access (`Bar.name`).
+- Alias-qualified lookup is namespace-aware:
+  - expression/pattern positions use exported values and constructors (`Bar.value`).
+  - type positions use exported types (`Bar.Type`).
+  - class-constraint positions use exported classes (`Bar.Class`).
 - `import foo.bar (*)` imports all exported values into local unqualified scope.
 - `import foo.bar (x, y as z)` imports selected exported values; `y` is bound locally as `z`.
 - Module alias imports and clause imports are mutually exclusive in one import declaration.
-- Only `pub` values are importable from another module.
+- Only `pub` values are importable into unqualified local scope via `(*)` / item clauses.
 - If two imports introduce the same unqualified name (including via `(*)`), resolution fails with
   a module error.
 - Importing a name that conflicts with a local top-level declaration is a module error.
 - Lexical bindings (`let`, lambda params, pattern bindings) can shadow imported names.
+- For binder forms with annotations, the annotation is resolved before the new binder name enters
+  expression scope.
 
 Path resolution:
 
@@ -195,6 +203,7 @@ Patterns include:
 - wildcards: `_`
 - variables: `x`
 - constructors: `Ok x`, `Cons h t`, `Pair a b`
+- qualified constructors via module alias: `Sample.Right x`
 - list patterns: `[]`, `[x]`, `[x, y]`
 - cons patterns: `h::t` (equivalent to `Cons h t`)
 - dict key presence: `{foo, bar}` (keys are identifiers)
@@ -269,6 +278,13 @@ Annotations can mention ADTs and prelude types:
 
 ```rex,interactive
 let xs: List i32 = [1, 2, 3] in xs
+```
+
+They can also use module-qualified type names:
+
+```rex
+import dep as D
+fn id x: D.Boxed -> D.Boxed = x
 ```
 
 ## Records: Projection and Update
@@ -354,6 +370,15 @@ instance Size (List t)
     match xs
       when Empty -> 0
       when Cons _ rest -> 1 + size rest
+```
+
+The class in an instance header may be module-qualified:
+
+```rex
+import dep as D
+
+instance D.Pick i32 where
+  pick = 7
 ```
 
 Instance contexts use `<=`:

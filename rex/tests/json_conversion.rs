@@ -70,9 +70,9 @@ fn primitive_roundtrip() {
     let opts = JsonOptions::default();
 
     let cases = vec![
-        (Type::con("bool", 0), json!(true)),
-        (Type::con("i32", 0), json!(-7)),
-        (Type::con("string", 0), json!("hello")),
+        (Type::builtin(rex::BuiltinTypeId::Bool), json!(true)),
+        (Type::builtin(rex::BuiltinTypeId::I32), json!(-7)),
+        (Type::builtin(rex::BuiltinTypeId::String), json!("hello")),
     ];
 
     for (ty, expected_json) in cases {
@@ -88,7 +88,7 @@ fn option_and_result_roundtrip() {
     let heap = Heap::new();
     let opts = JsonOptions::default();
 
-    let opt_ty = Type::option(Type::con("i32", 0));
+    let opt_ty = Type::option(Type::builtin(rex::BuiltinTypeId::I32));
     let some = json!(9);
     let none = serde_json::Value::Null;
 
@@ -103,7 +103,10 @@ fn option_and_result_roundtrip() {
         none
     );
 
-    let res_ty = Type::result(Type::con("i32", 0), Type::con("string", 0));
+    let res_ty = Type::result(
+        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(rex::BuiltinTypeId::String),
+    );
     let ok_json = json!({ "Ok": 1 });
     let err_json = json!({ "Err": "bad" });
     let ok_ptr = json_to_rex(&heap, &ok_json, &res_ty, &ts, &opts).unwrap();
@@ -125,7 +128,7 @@ fn json_array_maps_to_array_not_list() {
     let opts = JsonOptions::default();
     let array_json = json!([1, 2, 3]);
 
-    let array_ty = Type::array(Type::con("i32", 0));
+    let array_ty = Type::array(Type::builtin(rex::BuiltinTypeId::I32));
     let array_ptr = json_to_rex(&heap, &array_json, &array_ty, &ts, &opts).unwrap();
     let items = heap.pointer_as_array(&array_ptr).unwrap();
     assert_eq!(items.len(), 3);
@@ -134,7 +137,7 @@ fn json_array_maps_to_array_not_list() {
         array_json
     );
 
-    let list_ty = Type::list(Type::con("i32", 0));
+    let list_ty = Type::list(Type::builtin(rex::BuiltinTypeId::I32));
     let list_ptr = json_to_rex(&heap, &array_json, &list_ty, &ts, &opts).unwrap();
     let (tag, _args) = heap.pointer_as_adt(&list_ptr).unwrap();
     assert_eq!(tag.as_ref(), "Cons");
@@ -151,8 +154,8 @@ fn struct_like_single_variant_adt_roundtrip() {
     foo.add_variant(
         sym("Foo"),
         vec![Type::record(vec![
-            (sym("a"), Type::con("u64", 0)),
-            (sym("b"), Type::con("string", 0)),
+            (sym("a"), Type::builtin(rex::BuiltinTypeId::U64)),
+            (sym("b"), Type::builtin(rex::BuiltinTypeId::String)),
         ])],
     );
     ts.inject_adt(&foo);
@@ -312,25 +315,6 @@ async fn eval_entry_points_return_type_for_json_eval() {
         &engine,
         &ptr_snippet_at,
         &ty_snippet_at,
-        expected_json.clone(),
-    );
-
-    let module_file = dir.join("mod.rex");
-    fs::write(&module_file, rex_code).unwrap();
-    let mut gas = GasMeter::default();
-    let (ptr_mod_file, ty_mod_file) = engine
-        .eval_module_file(&module_file, &mut gas)
-        .await
-        .unwrap();
-    assert_eval_json(&engine, &ptr_mod_file, &ty_mod_file, expected_json.clone());
-
-    let mut gas = GasMeter::default();
-    let (ptr_mod_source, ty_mod_source) =
-        engine.eval_module_source(rex_code, &mut gas).await.unwrap();
-    assert_eval_json(
-        &engine,
-        &ptr_mod_source,
-        &ty_mod_source,
         expected_json.clone(),
     );
 

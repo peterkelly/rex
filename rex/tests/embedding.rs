@@ -73,8 +73,8 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("string", 0),
-            Type::con("string", 0),
+            Type::builtin(rex::BuiltinTypeId::String),
+            Type::builtin(rex::BuiltinTypeId::String),
             correctness_ty.clone(),
             correctness_ty,
         ])
@@ -252,15 +252,15 @@ fn assert_overload_tuple_type_shape(ty: &Type) {
         "expected i32/var at index 0, got {}",
         items[0]
     );
-    assert_eq!(items[1], Type::con("string", 0));
-    assert_eq!(items[2], Type::con("bool", 0));
+    assert_eq!(items[1], Type::builtin(rex::BuiltinTypeId::String));
+    assert_eq!(items[2], Type::builtin(rex::BuiltinTypeId::Bool));
     assert!(
         is_i32_or_var(&items[3]),
         "expected i32/var at index 3, got {}",
         items[3]
     );
-    assert_eq!(items[4], Type::con("bool", 0));
-    assert_eq!(items[5], Type::con("string", 0));
+    assert_eq!(items[4], Type::builtin(rex::BuiltinTypeId::Bool));
+    assert_eq!(items[5], Type::builtin(rex::BuiltinTypeId::String));
 }
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -297,11 +297,11 @@ async fn injected_functions_can_read_shared_state_fields() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("uuid", 0),
-            Type::con("uuid", 0),
-            Type::con("bool", 0),
-            Type::con("bool", 0),
-            Type::con("bool", 0),
+            Type::builtin(rex::BuiltinTypeId::Uuid),
+            Type::builtin(rex::BuiltinTypeId::Uuid),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool),
         ])
     );
 
@@ -477,7 +477,10 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(
         ty,
-        Type::tuple(vec![Type::con("bool", 0), Type::con("bool", 0)])
+        Type::tuple(vec![
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool)
+        ])
     );
 
     let items = engine.heap.pointer_as_tuple(&value).unwrap();

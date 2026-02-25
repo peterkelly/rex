@@ -548,18 +548,13 @@ mod tests {
             "#,
         )
         .expect("write bar.rex");
-        let main_path = root.join("main.rex");
-        std::fs::write(
-            &main_path,
-            r#"
-                import foo.bar
+        let source = r#"
+            import foo.bar
 
-                bar.add (bar.triple 10) 2
-            "#,
-        )
-        .expect("write main.rex");
-
-        let json = infer_type_json("", main_path.to_str(), &[], &mut gas).expect("infer");
+            bar.add (bar.triple 10) 2
+        "#;
+        let include = vec![root.to_string_lossy().to_string()];
+        let json = infer_type_json(source, None, &include, &mut gas).expect("infer");
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
     }

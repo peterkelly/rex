@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use rex_ast::expr::{Symbol, intern, sym, sym_eq};
-use rex_ts::{Scheme, Type, TypeKind, Types, unify};
+use rex_ts::{BuiltinTypeId, Scheme, Type, TypeKind, Types, unify};
 use uuid::Uuid;
 
 use crate::Engine;
@@ -454,8 +454,8 @@ fn cmp_value_by_type(
     }
 
     match typ.as_ref() {
-        TypeKind::Con(tc) => match tc.name.as_ref() {
-            "u8" => {
+        TypeKind::Con(tc) => match tc.builtin_id {
+            Some(BuiltinTypeId::U8) => {
                 let a = lhs
                     .value_as_u8()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -464,7 +464,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "u16" => {
+            Some(BuiltinTypeId::U16) => {
                 let a = lhs
                     .value_as_u16()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -473,7 +473,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "u32" => {
+            Some(BuiltinTypeId::U32) => {
                 let a = lhs
                     .value_as_u32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -482,7 +482,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "u64" => {
+            Some(BuiltinTypeId::U64) => {
                 let a = lhs
                     .value_as_u64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -491,7 +491,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "i8" => {
+            Some(BuiltinTypeId::I8) => {
                 let a = lhs
                     .value_as_i8()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -500,7 +500,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "i16" => {
+            Some(BuiltinTypeId::I16) => {
                 let a = lhs
                     .value_as_i16()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -509,7 +509,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "i32" => {
+            Some(BuiltinTypeId::I32) => {
                 let a = lhs
                     .value_as_i32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -518,7 +518,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "i64" => {
+            Some(BuiltinTypeId::I64) => {
                 let a = lhs
                     .value_as_i64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -527,7 +527,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "f32" => {
+            Some(BuiltinTypeId::F32) => {
                 let a = lhs
                     .value_as_f32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -539,7 +539,7 @@ fn cmp_value_by_type(
                     got: "nan".into(),
                 })
             }
-            "f64" => {
+            Some(BuiltinTypeId::F64) => {
                 let a = lhs
                     .value_as_f64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -551,7 +551,7 @@ fn cmp_value_by_type(
                     got: "nan".into(),
                 })
             }
-            "string" => {
+            Some(BuiltinTypeId::String) => {
                 let a = lhs
                     .value_as_string()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -560,7 +560,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "uuid" => {
+            Some(BuiltinTypeId::Uuid) => {
                 let a = lhs
                     .value_as_uuid()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -569,7 +569,7 @@ fn cmp_value_by_type(
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            "datetime" => {
+            Some(BuiltinTypeId::DateTime) => {
                 let a = lhs
                     .value_as_datetime()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
@@ -671,8 +671,8 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     {
         let a_tv = engine.type_system.fresh_type_var(Some(sym("a")));
         let a = Type::var(a_tv.clone());
-        let array_a = Type::app(Type::con("Array", 1), a);
-        let bool_ty = Type::con("bool", 0);
+        let array_a = Type::app(Type::builtin(BuiltinTypeId::Array), a);
+        let bool_ty = Type::builtin(BuiltinTypeId::Bool);
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
@@ -697,7 +697,7 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                         return engine.heap.alloc_bool(false);
                     }
 
-                    let bool_ty = Type::con("bool", 0);
+                    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
                     let eq_ty =
                         Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), bool_ty.clone()));
                     let step_ty = Type::fun(elem_ty.clone(), bool_ty);
@@ -830,10 +830,10 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     })?;
 
     // Floats: preserve the existing “NaN is a type error” semantics.
-    let bool_ty = Type::con("bool", 0);
-    let i32_ty = Type::con("i32", 0);
+    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
+    let i32_ty = Type::builtin(BuiltinTypeId::I32);
 
-    let f32_ty = Type::con("f32", 0);
+    let f32_ty = Type::builtin(BuiltinTypeId::F32);
     let f32_bool = Scheme::new(
         vec![],
         vec![],
@@ -887,7 +887,7 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
         engine.heap.alloc_i32(cmp_to_i32(ord))
     })?;
 
-    let f64_ty = Type::con("f64", 0);
+    let f64_ty = Type::builtin(BuiltinTypeId::F64);
     let f64_bool = Scheme::new(
         vec![],
         vec![],
@@ -1074,7 +1074,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
                 let scheme = Scheme::new(
                     vec![],
                     vec![],
-                    Type::fun(Type::con("f64", 0), Type::option($dst_ty)),
+                    Type::fun(Type::builtin(BuiltinTypeId::F64), Type::option($dst_ty)),
                 );
                 engine.export_native($name, scheme, 1, move |engine, _t, args| {
                     let x = f64::from_pointer(&engine.heap, &args[0])?;
@@ -1084,132 +1084,111 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
             }};
         }
 
-        inject_f64_to!("prim_f64_to_u8", Type::con("u8", 0), |engine: &Engine<
-            State,
-        >,
-                                                              x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
-                Ok(Some(engine.heap.alloc_u8(x as u8)?))
-            } else {
-                Ok(None)
+        inject_f64_to!(
+            "prim_f64_to_u8",
+            Type::builtin(BuiltinTypeId::U8),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
+                    Ok(Some(engine.heap.alloc_u8(x as u8)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_u16", Type::con("u16", 0), |engine: &Engine<
-            State,
-        >,
-                                                                x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64 {
-                Ok(Some(engine.heap.alloc_u16(x as u16)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_u16",
+            Type::builtin(BuiltinTypeId::U16),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64
+                {
+                    Ok(Some(engine.heap.alloc_u16(x as u16)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_u32", Type::con("u32", 0), |engine: &Engine<
-            State,
-        >,
-                                                                x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64 {
-                Ok(Some(engine.heap.alloc_u32(x as u32)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_u32",
+            Type::builtin(BuiltinTypeId::U32),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64
+                {
+                    Ok(Some(engine.heap.alloc_u32(x as u32)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_u64", Type::con("u64", 0), |engine: &Engine<
-            State,
-        >,
-                                                                x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64 {
-                Ok(Some(engine.heap.alloc_u64(x as u64)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_u64",
+            Type::builtin(BuiltinTypeId::U64),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64
+                {
+                    Ok(Some(engine.heap.alloc_u64(x as u64)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_i8", Type::con("i8", 0), |engine: &Engine<
-            State,
-        >,
-                                                              x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
-                Ok(Some(engine.heap.alloc_i8(x as i8)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_i8",
+            Type::builtin(BuiltinTypeId::I8),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
+                    Ok(Some(engine.heap.alloc_i8(x as i8)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_i16", Type::con("i16", 0), |engine: &Engine<
-            State,
-        >,
-                                                                x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64 {
-                Ok(Some(engine.heap.alloc_i16(x as i16)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_i16",
+            Type::builtin(BuiltinTypeId::I16),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64
+                {
+                    Ok(Some(engine.heap.alloc_i16(x as i16)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_i32", Type::con("i32", 0), |engine: &Engine<
-            State,
-        >,
-                                                                x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64 {
-                Ok(Some(engine.heap.alloc_i32(x as i32)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_i32",
+            Type::builtin(BuiltinTypeId::I32),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64
+                {
+                    Ok(Some(engine.heap.alloc_i32(x as i32)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_i64", Type::con("i64", 0), |engine: &Engine<
-            State,
-        >,
-                                                                x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64 {
-                Ok(Some(engine.heap.alloc_i64(x as i64)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_i64",
+            Type::builtin(BuiltinTypeId::I64),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64
+                {
+                    Ok(Some(engine.heap.alloc_i64(x as i64)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
-        inject_f64_to!("prim_f64_to_f32", Type::con("f32", 0), |engine: &Engine<
-            State,
-        >,
-                                                                x: f64|
-         -> Result<
-            Option<Pointer>,
-            EngineError,
-        > {
-            if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
-                Ok(Some(engine.heap.alloc_f32(x as f32)?))
-            } else {
-                Ok(None)
+        );
+        inject_f64_to!(
+            "prim_f64_to_f32",
+            Type::builtin(BuiltinTypeId::F32),
+            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+                if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
+                    Ok(Some(engine.heap.alloc_f32(x as f32)?))
+                } else {
+                    Ok(None)
+                }
             }
-        });
+        );
     }
 
     Ok(())
@@ -1349,8 +1328,8 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 
     // Parsing helpers used by `std.json` instances.
     {
-        let string_ty = Type::con("string", 0);
-        let uuid_ty = Type::con("uuid", 0);
+        let string_ty = Type::builtin(BuiltinTypeId::String);
+        let uuid_ty = Type::builtin(BuiltinTypeId::Uuid);
         let scheme = Scheme::new(
             vec![],
             vec![],
@@ -1367,8 +1346,8 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let string_ty = Type::con("string", 0);
-        let dt_ty = Type::con("datetime", 0);
+        let string_ty = Type::builtin(BuiltinTypeId::String);
+        let dt_ty = Type::builtin(BuiltinTypeId::DateTime);
         let scheme = Scheme::new(
             vec![],
             vec![],
@@ -1391,7 +1370,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     {
         let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
-        let string_ty = Type::con("string", 0);
+        let string_ty = Type::builtin(BuiltinTypeId::String);
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, string_ty));
 
         #[derive(Clone)]
@@ -1493,8 +1472,8 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     {
         let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
         let a = Type::var(a_tv.clone());
-        let string_ty = Type::con("string", 0);
-        let result_con = Type::con("Result", 2);
+        let string_ty = Type::builtin(BuiltinTypeId::String);
+        let result_con = Type::builtin(BuiltinTypeId::Result);
         let result_as = Type::app(Type::app(result_con, string_ty.clone()), a);
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(string_ty.clone(), result_as));
 
@@ -2091,7 +2070,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             vec![a_tv.clone()],
             vec![],
             Type::fun(
-                Type::fun(a.clone(), Type::con("bool", 0)),
+                Type::fun(a.clone(), Type::builtin(BuiltinTypeId::Bool)),
                 Type::fun(list_a.clone(), list_a),
             ),
         );
@@ -2118,7 +2097,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             vec![a_tv.clone()],
             vec![],
             Type::fun(
-                Type::fun(a.clone(), Type::con("bool", 0)),
+                Type::fun(a.clone(), Type::builtin(BuiltinTypeId::Bool)),
                 Type::fun(array_a.clone(), array_a),
             ),
         );
@@ -2145,7 +2124,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             vec![a_tv.clone()],
             vec![],
             Type::fun(
-                Type::fun(a.clone(), Type::con("bool", 0)),
+                Type::fun(a.clone(), Type::builtin(BuiltinTypeId::Bool)),
                 Type::fun(opt_a.clone(), opt_a),
             ),
         );
@@ -2717,7 +2696,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(list_a.clone(), Type::con("i32", 0)),
+            Type::fun(list_a.clone(), Type::builtin(BuiltinTypeId::I32)),
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
@@ -2733,7 +2712,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(array_a.clone(), Type::con("i32", 0)),
+            Type::fun(array_a.clone(), Type::builtin(BuiltinTypeId::I32)),
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
@@ -2749,7 +2728,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(opt_a.clone(), Type::con("i32", 0)),
+            Type::fun(opt_a.clone(), Type::builtin(BuiltinTypeId::I32)),
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
@@ -2765,7 +2744,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::con("i32", 0), Type::fun(list_a.clone(), list_a)),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(list_a.clone(), list_a),
+            ),
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
@@ -2783,7 +2765,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::con("i32", 0), Type::fun(array_a.clone(), array_a)),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(array_a.clone(), array_a),
+            ),
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
@@ -2802,7 +2787,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::con("i32", 0), Type::fun(list_a.clone(), list_a)),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(list_a.clone(), list_a),
+            ),
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
@@ -2820,7 +2808,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::con("i32", 0), Type::fun(array_a.clone(), array_a)),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(array_a.clone(), array_a),
+            ),
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
@@ -2839,7 +2830,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::con("i32", 0), Type::fun(list_a.clone(), a.clone())),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(list_a.clone(), a.clone()),
+            ),
         );
         engine.export_native("prim_get", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
@@ -2860,7 +2854,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv.clone()],
             vec![],
-            Type::fun(Type::con("i32", 0), Type::fun(array_a.clone(), a.clone())),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(array_a.clone(), a.clone()),
+            ),
         );
         engine.export_native("prim_get", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
@@ -2881,7 +2878,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(
             vec![a_tv],
             vec![],
-            Type::fun(Type::con("i32", 0), Type::fun(tuple.clone(), a.clone())),
+            Type::fun(
+                Type::builtin(BuiltinTypeId::I32),
+                Type::fun(tuple.clone(), a.clone()),
+            ),
         );
         engine.export_native("prim_get", scheme, 2, move |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;

@@ -7,18 +7,20 @@ use std::sync::{Arc, Mutex};
 use async_recursion::async_recursion;
 use futures::{FutureExt, future::BoxFuture, pin_mut};
 use rex_ast::expr::{
-    ClassDecl, Decl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl, sym, sym_eq,
+    ClassDecl, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl,
+    sym, sym_eq,
 };
 use rex_lexer::span::Span;
 use rex_ts::{
-    AdtDecl, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type, TypeError, TypeKind,
-    TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst, entails,
-    instantiate, unify,
+    AdtDecl, BuiltinTypeId, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type,
+    TypeError, TypeKind, TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst,
+    entails, instantiate, unify,
 };
 use rex_util::GasMeter;
 
 use crate::modules::{
-    ModuleExports, ModuleId, ModuleSystem, ResolveRequest, ResolvedModule, virtual_export_name,
+    CanonicalSymbol, ModuleExports, ModuleId, ModuleSystem, ResolveRequest, ResolvedModule,
+    SymbolKind, module_key_for_module, virtual_export_name,
 };
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
@@ -97,57 +99,69 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
                     got: value.to_string(),
                 })?)
         }
-        TypeKind::Con(tc) => {
-            match tc.name.as_ref() {
-                "u8" => engine.heap.alloc_u8(u8::try_from(value).map_err(|_| {
-                    EngineError::NativeType {
+        TypeKind::Con(tc) => match tc.builtin_id {
+            Some(BuiltinTypeId::U8) => {
+                engine
+                    .heap
+                    .alloc_u8(u8::try_from(value).map_err(|_| EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
-                    }
-                })?),
-                "u16" => engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
+                    })?)
+            }
+            Some(BuiltinTypeId::U16) => {
+                engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "u32" => engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
+                })?)
+            }
+            Some(BuiltinTypeId::U32) => {
+                engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "u64" => engine.heap.alloc_u64(value),
-                "i8" => engine.heap.alloc_i8(i8::try_from(value).map_err(|_| {
-                    EngineError::NativeType {
+                })?)
+            }
+            Some(BuiltinTypeId::U64) => engine.heap.alloc_u64(value),
+            Some(BuiltinTypeId::I8) => {
+                engine
+                    .heap
+                    .alloc_i8(i8::try_from(value).map_err(|_| EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
-                    }
-                })?),
-                "i16" => engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
+                    })?)
+            }
+            Some(BuiltinTypeId::I16) => {
+                engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "i32" => engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
+                })?)
+            }
+            Some(BuiltinTypeId::I32) => {
+                engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "i64" => engine.heap.alloc_i64(i64::try_from(value).map_err(|_| {
+                })?)
+            }
+            Some(BuiltinTypeId::I64) => {
+                engine.heap.alloc_i64(i64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i64".into(),
                         got: value.to_string(),
                     }
-                })?),
-                _ => Err(EngineError::NativeType {
-                    expected: "integral".into(),
-                    got: typ.to_string(),
-                }),
+                })?)
             }
-        }
+            _ => Err(EngineError::NativeType {
+                expected: "integral".into(),
+                got: typ.to_string(),
+            }),
+        },
         _ => Err(EngineError::NativeType {
             expected: "integral".into(),
             got: typ.to_string(),
@@ -169,57 +183,69 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
                     got: value.to_string(),
                 })?)
         }
-        TypeKind::Con(tc) => {
-            match tc.name.as_ref() {
-                "i8" => engine.heap.alloc_i8(i8::try_from(value).map_err(|_| {
-                    EngineError::NativeType {
+        TypeKind::Con(tc) => match tc.builtin_id {
+            Some(BuiltinTypeId::I8) => {
+                engine
+                    .heap
+                    .alloc_i8(i8::try_from(value).map_err(|_| EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
-                    }
-                })?),
-                "i16" => engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
+                    })?)
+            }
+            Some(BuiltinTypeId::I16) => {
+                engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "i32" => engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
+                })?)
+            }
+            Some(BuiltinTypeId::I32) => {
+                engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "i64" => engine.heap.alloc_i64(value),
-                "u8" => engine.heap.alloc_u8(u8::try_from(value).map_err(|_| {
-                    EngineError::NativeType {
+                })?)
+            }
+            Some(BuiltinTypeId::I64) => engine.heap.alloc_i64(value),
+            Some(BuiltinTypeId::U8) => {
+                engine
+                    .heap
+                    .alloc_u8(u8::try_from(value).map_err(|_| EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
-                    }
-                })?),
-                "u16" => engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
+                    })?)
+            }
+            Some(BuiltinTypeId::U16) => {
+                engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "u32" => engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
+                })?)
+            }
+            Some(BuiltinTypeId::U32) => {
+                engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
                     }
-                })?),
-                "u64" => engine.heap.alloc_u64(u64::try_from(value).map_err(|_| {
+                })?)
+            }
+            Some(BuiltinTypeId::U64) => {
+                engine.heap.alloc_u64(u64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u64".into(),
                         got: value.to_string(),
                     }
-                })?),
-                _ => Err(EngineError::NativeType {
-                    expected: "integral".into(),
-                    got: typ.to_string(),
-                }),
+                })?)
             }
-        }
+            _ => Err(EngineError::NativeType {
+                expected: "integral".into(),
+                got: typ.to_string(),
+            }),
+        },
         _ => Err(EngineError::NativeType {
             expected: "integral".into(),
             got: typ.to_string(),
@@ -1433,6 +1459,10 @@ where
     typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
     pub(crate) modules: ModuleSystem,
     injected_modules: HashSet<String>,
+    pub(crate) module_exports_cache: HashMap<ModuleId, ModuleExports>,
+    pub(crate) module_interface_cache: HashMap<ModuleId, Vec<Decl>>,
+    pub(crate) module_source_fingerprints: HashMap<ModuleId, String>,
+    pub(crate) published_cycle_interfaces: HashSet<ModuleId>,
     default_imports: Vec<String>,
     virtual_modules: HashMap<String, ModuleExports>,
     module_local_type_names: HashMap<String, HashSet<Symbol>>,
@@ -1513,6 +1543,10 @@ where
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
             modules: ModuleSystem::default(),
             injected_modules: HashSet::new(),
+            module_exports_cache: HashMap::new(),
+            module_interface_cache: HashMap::new(),
+            module_source_fingerprints: HashMap::new(),
+            published_cycle_interfaces: HashSet::new(),
             default_imports: Vec::new(),
             virtual_modules: HashMap::new(),
             module_local_type_names: HashMap::new(),
@@ -1540,6 +1574,10 @@ where
             typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
             modules: ModuleSystem::default(),
             injected_modules: HashSet::new(),
+            module_exports_cache: HashMap::new(),
+            module_interface_cache: HashMap::new(),
+            module_source_fingerprints: HashMap::new(),
+            published_cycle_interfaces: HashSet::new(),
             default_imports: options.default_imports,
             virtual_modules: HashMap::new(),
             module_local_type_names: HashMap::new(),
@@ -1563,7 +1601,7 @@ where
     /// Each function has the Rex type `a -> str where Show a` and logs
     /// `show x` at the corresponding level, returning the rendered string.
     pub fn inject_tracing_log_functions(&mut self) -> Result<(), EngineError> {
-        let string = Type::con("string", 0);
+        let string = Type::builtin(BuiltinTypeId::String);
 
         let make_scheme = |engine: &mut Engine<State>| {
             let a_tv = engine.type_system.supply.fresh(Some("a".into()));
@@ -1599,7 +1637,7 @@ where
         name: &str,
         log: fn(&str),
     ) -> Result<(), EngineError> {
-        let string = Type::con("string", 0);
+        let string = Type::builtin(BuiltinTypeId::String);
         let a_tv = self.type_system.supply.fresh(Some("a".into()));
         let a = Type::var(a_tv.clone());
         let scheme = Scheme::new(
@@ -1630,7 +1668,7 @@ where
 
                 let (arg_ty, _ret_ty) = split_fun(&call_type)
                     .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
-                let show_ty = Type::fun(arg_ty.clone(), Type::con("string", 0));
+                let show_ty = Type::fun(arg_ty.clone(), Type::builtin(BuiltinTypeId::String));
                 let mut gas = GasMeter::default();
                 let show_ptr = engine
                     .resolve_class_method(&sym("show"), &show_ty, &mut gas)
@@ -2132,9 +2170,13 @@ where
         let mut env_rec = self.env.clone();
         let mut slots = Vec::with_capacity(decls.len());
         for decl in decls {
-            let placeholder = self.heap.alloc_uninitialized(decl.name.name.clone())?;
-            env_rec = env_rec.extend(decl.name.name.clone(), placeholder);
-            slots.push(placeholder);
+            if let Some(existing) = env_rec.get(&decl.name.name) {
+                slots.push(existing);
+            } else {
+                let placeholder = self.heap.alloc_uninitialized(decl.name.name.clone())?;
+                env_rec = env_rec.extend(decl.name.name.clone(), placeholder);
+                slots.push(placeholder);
+            }
         }
 
         let saved_env = self.env.clone();
@@ -2221,6 +2263,20 @@ where
         Ok(())
     }
 
+    pub(crate) fn publish_runtime_decl_interfaces(
+        &mut self,
+        decls: &[DeclareFnDecl],
+    ) -> Result<(), EngineError> {
+        for df in decls {
+            if self.env.get(&df.name.name).is_some() {
+                continue;
+            }
+            let placeholder = self.heap.alloc_uninitialized(df.name.name.clone())?;
+            self.env = self.env.extend(df.name.name.clone(), placeholder);
+        }
+        Ok(())
+    }
+
     pub fn inject_class(&mut self, name: &str, supers: Vec<String>) {
         let supers = supers.into_iter().map(|s| sym(&s)).collect();
         self.type_system.inject_class(name, supers);
@@ -2261,24 +2317,49 @@ where
             return Ok(());
         }
 
-        let mut values: HashMap<Symbol, Symbol> = HashMap::new();
+        let module_key = module_key_for_module(&ModuleId::Virtual(PRELUDE_MODULE_NAME.to_string()));
+        let mut values: HashMap<Symbol, CanonicalSymbol> = HashMap::new();
         for (name, _) in self.type_system.env.values.iter() {
             if !name.as_ref().starts_with("@m") {
-                values.insert(name.clone(), name.clone());
+                values.insert(
+                    name.clone(),
+                    CanonicalSymbol::from_symbol(
+                        module_key,
+                        SymbolKind::Value,
+                        name.clone(),
+                        name.clone(),
+                    ),
+                );
             }
         }
 
-        let mut types: HashMap<Symbol, Symbol> = HashMap::new();
+        let mut types: HashMap<Symbol, CanonicalSymbol> = HashMap::new();
         for name in self.type_system.adts.keys() {
             if !name.as_ref().starts_with("@m") {
-                types.insert(name.clone(), name.clone());
+                types.insert(
+                    name.clone(),
+                    CanonicalSymbol::from_symbol(
+                        module_key,
+                        SymbolKind::Type,
+                        name.clone(),
+                        name.clone(),
+                    ),
+                );
             }
         }
 
-        let mut classes: HashMap<Symbol, Symbol> = HashMap::new();
+        let mut classes: HashMap<Symbol, CanonicalSymbol> = HashMap::new();
         for name in self.type_system.class_info.keys() {
             if !name.as_ref().starts_with("@m") {
-                classes.insert(name.clone(), name.clone());
+                classes.insert(
+                    name.clone(),
+                    CanonicalSymbol::from_symbol(
+                        module_key,
+                        SymbolKind::Class,
+                        name.clone(),
+                        name.clone(),
+                    ),
+                );
             }
         }
 
@@ -2909,9 +2990,9 @@ fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
     let mut candidates = Vec::new();
     collect_default_candidates(&typed, &mut candidates);
     for ty in [
-        Type::con("f32", 0),
-        Type::con("i32", 0),
-        Type::con("string", 0),
+        Type::builtin(BuiltinTypeId::F32),
+        Type::builtin(BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::String),
     ] {
         push_unique_type(&mut candidates, ty);
     }
@@ -3176,20 +3257,20 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
     };
 
     match value {
-        Value::Bool(..) => Ok(Type::con("bool", 0)),
-        Value::U8(..) => Ok(Type::con("u8", 0)),
-        Value::U16(..) => Ok(Type::con("u16", 0)),
-        Value::U32(..) => Ok(Type::con("u32", 0)),
-        Value::U64(..) => Ok(Type::con("u64", 0)),
-        Value::I8(..) => Ok(Type::con("i8", 0)),
-        Value::I16(..) => Ok(Type::con("i16", 0)),
-        Value::I32(..) => Ok(Type::con("i32", 0)),
-        Value::I64(..) => Ok(Type::con("i64", 0)),
-        Value::F32(..) => Ok(Type::con("f32", 0)),
-        Value::F64(..) => Ok(Type::con("f64", 0)),
-        Value::String(..) => Ok(Type::con("string", 0)),
-        Value::Uuid(..) => Ok(Type::con("uuid", 0)),
-        Value::DateTime(..) => Ok(Type::con("datetime", 0)),
+        Value::Bool(..) => Ok(Type::builtin(BuiltinTypeId::Bool)),
+        Value::U8(..) => Ok(Type::builtin(BuiltinTypeId::U8)),
+        Value::U16(..) => Ok(Type::builtin(BuiltinTypeId::U16)),
+        Value::U32(..) => Ok(Type::builtin(BuiltinTypeId::U32)),
+        Value::U64(..) => Ok(Type::builtin(BuiltinTypeId::U64)),
+        Value::I8(..) => Ok(Type::builtin(BuiltinTypeId::I8)),
+        Value::I16(..) => Ok(Type::builtin(BuiltinTypeId::I16)),
+        Value::I32(..) => Ok(Type::builtin(BuiltinTypeId::I32)),
+        Value::I64(..) => Ok(Type::builtin(BuiltinTypeId::I64)),
+        Value::F32(..) => Ok(Type::builtin(BuiltinTypeId::F32)),
+        Value::F64(..) => Ok(Type::builtin(BuiltinTypeId::F64)),
+        Value::String(..) => Ok(Type::builtin(BuiltinTypeId::String)),
+        Value::Uuid(..) => Ok(Type::builtin(BuiltinTypeId::Uuid)),
+        Value::DateTime(..) => Ok(Type::builtin(BuiltinTypeId::DateTime)),
         Value::Tuple(elems) => {
             let mut tys = Vec::with_capacity(elems.len());
             for elem in elems {
@@ -3211,7 +3292,7 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
                     });
                 }
             }
-            Ok(Type::app(Type::con("Array", 1), elem_ty))
+            Ok(Type::app(Type::builtin(BuiltinTypeId::Array), elem_ty))
         }
         Value::Dict(map) => {
             let first = map
@@ -3228,11 +3309,11 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
                     });
                 }
             }
-            Ok(Type::app(Type::con("Dict", 1), elem_ty))
+            Ok(Type::app(Type::builtin(BuiltinTypeId::Dict), elem_ty))
         }
         Value::Adt(tag, args) if sym_eq(tag, "Some") && args.len() == 1 => {
             let inner = pointer_type(&args[0])?;
-            Ok(Type::app(Type::con("Option", 1), inner))
+            Ok(Type::app(Type::builtin(BuiltinTypeId::Option), inner))
         }
         Value::Adt(tag, args) if sym_eq(tag, "None") && args.is_empty() => {
             Err(EngineError::UnknownType(sym("option")))
@@ -3257,7 +3338,7 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
                     });
                 }
             }
-            Ok(Type::app(Type::con("List", 1), elem_ty))
+            Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
         }
         Value::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
         Value::Uninitialized(..) => Err(EngineError::UnknownType(sym("uninitialized"))),
@@ -3622,7 +3703,9 @@ fn match_pattern_ptr(
         Pattern::Named(_, name, ps) => {
             let v = heap.get(value).ok()?;
             match v.as_ref() {
-                Value::Adt(vname, args) if vname == name && args.len() == ps.len() => {
+                Value::Adt(vname, args)
+                    if vname == &name.to_dotted_symbol() && args.len() == ps.len() =>
+                {
                     match_patterns(heap, ps, args)
                 }
                 _ => None,
@@ -3732,7 +3815,7 @@ mod tests {
             .eval_repl_program(&program1, &mut state, &mut gas)
             .await
             .unwrap();
-        assert_eq!(t1, Type::con("i32", 0));
+        assert_eq!(t1, Type::builtin(BuiltinTypeId::I32));
         let expected = engine.heap.alloc_i32(2).unwrap();
         assert!(crate::pointer_eq(&engine.heap, &v1, &expected).unwrap());
 
@@ -3741,7 +3824,7 @@ mod tests {
             .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
-        assert_eq!(t2, Type::con("i32", 0));
+        assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
         let expected = engine.heap.alloc_i32(3).unwrap();
         assert!(crate::pointer_eq(&engine.heap, &v2, &expected).unwrap());
     }
@@ -3770,7 +3853,7 @@ mod tests {
             .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
-        assert_eq!(t2, Type::con("i32", 0));
+        assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
         let expected = engine.heap.alloc_i32(30).unwrap();
         assert!(crate::pointer_eq(&engine.heap, &v2, &expected).unwrap());
     }
@@ -3799,7 +3882,7 @@ mod tests {
             .eval_repl_program(&program2, &mut state, &mut gas)
             .await
             .unwrap();
-        assert_eq!(t2, Type::con("i32", 0));
+        assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
         let expected = engine.heap.alloc_i32(30).unwrap();
         assert!(crate::pointer_eq(&engine.heap, &v2, &expected).unwrap());
     }
@@ -3843,7 +3926,7 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
 
         let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-        let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
+        let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
         engine
             .export_native_async_cancellable(
                 "stall",
@@ -3909,7 +3992,7 @@ mod tests {
     async fn native_per_impl_gas_cost_is_charged() {
         let expr = parse("foo");
         let mut engine = Engine::with_prelude(()).unwrap();
-        let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
+        let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
         engine
             .export_native_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
                 engine.heap.alloc_i32(1)
@@ -3937,12 +4020,12 @@ mod tests {
         let expr = parse("answer");
         let mut engine = Engine::with_prelude(()).unwrap();
         engine
-            .export_value_typed("answer", Type::con("i32", 0), Value::I32(42))
+            .export_value_typed("answer", Type::builtin(BuiltinTypeId::I32), Value::I32(42))
             .unwrap();
 
         let mut gas = unlimited_gas();
         let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         let expected = engine.heap.alloc_i32(42).unwrap();
         assert!(crate::pointer_eq(&engine.heap, &value, &expected).unwrap());
     }
@@ -3951,7 +4034,7 @@ mod tests {
     async fn async_native_per_impl_gas_cost_is_charged() {
         let expr = parse("foo");
         let mut engine = Engine::with_prelude(()).unwrap();
-        let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
+        let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
         engine
             .export_native_async_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
                 async move { engine.heap.alloc_i32(1) }.boxed()
@@ -3978,7 +4061,7 @@ mod tests {
     async fn cancellable_async_native_per_impl_gas_cost_is_charged() {
         let expr = parse("foo");
         let mut engine = Engine::with_prelude(()).unwrap();
-        let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
+        let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
         engine
             .export_native_async_cancellable_with_gas_cost(
                 "foo",

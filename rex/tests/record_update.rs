@@ -26,7 +26,10 @@ async fn record_update_end_to_end() {
     let (value_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(
         ty,
-        rex::Type::tuple(vec![rex::Type::con("i32", 0), rex::Type::con("i32", 0)])
+        rex::Type::tuple(vec![
+            rex::Type::builtin(rex::BuiltinTypeId::I32),
+            rex::Type::builtin(rex::BuiltinTypeId::I32)
+        ])
     );
     let value = engine
         .heap

@@ -78,6 +78,9 @@ pub enum ModuleError {
         module: ModuleId,
         errors: Vec<ParserErr>,
     },
+    TopLevelExprInModule {
+        module: ModuleId,
+    },
     InvalidGithubImport {
         url: String,
     },
@@ -170,6 +173,12 @@ impl std::fmt::Display for ModuleError {
                     write!(f, "\n  {err}")?;
                 }
                 Ok(())
+            }
+            ModuleError::TopLevelExprInModule { module } => {
+                write!(
+                    f,
+                    "module {module} cannot contain a top-level expression; module files must be declaration-only"
+                )
             }
             ModuleError::InvalidGithubImport { url } => write!(
                 f,

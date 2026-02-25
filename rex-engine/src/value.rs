@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use rex_ast::expr::{Symbol, sym, sym_eq};
-use rex_ts::{Type, TypedExpr};
+use rex_ts::{BuiltinTypeId, Type, TypedExpr};
 use uuid::Uuid;
 
 use crate::EngineError;
@@ -1353,103 +1353,103 @@ impl IntoPointer for DateTime<Utc> {
 
 impl RexType for bool {
     fn rex_type() -> Type {
-        Type::con("bool", 0)
+        Type::builtin(BuiltinTypeId::Bool)
     }
 }
 
 impl RexType for u8 {
     fn rex_type() -> Type {
-        Type::con("u8", 0)
+        Type::builtin(BuiltinTypeId::U8)
     }
 }
 
 impl RexType for u16 {
     fn rex_type() -> Type {
-        Type::con("u16", 0)
+        Type::builtin(BuiltinTypeId::U16)
     }
 }
 
 impl RexType for u32 {
     fn rex_type() -> Type {
-        Type::con("u32", 0)
+        Type::builtin(BuiltinTypeId::U32)
     }
 }
 
 impl RexType for u64 {
     fn rex_type() -> Type {
-        Type::con("u64", 0)
+        Type::builtin(BuiltinTypeId::U64)
     }
 }
 
 impl RexType for i8 {
     fn rex_type() -> Type {
-        Type::con("i8", 0)
+        Type::builtin(BuiltinTypeId::I8)
     }
 }
 
 impl RexType for i16 {
     fn rex_type() -> Type {
-        Type::con("i16", 0)
+        Type::builtin(BuiltinTypeId::I16)
     }
 }
 
 impl RexType for i32 {
     fn rex_type() -> Type {
-        Type::con("i32", 0)
+        Type::builtin(BuiltinTypeId::I32)
     }
 }
 
 impl RexType for i64 {
     fn rex_type() -> Type {
-        Type::con("i64", 0)
+        Type::builtin(BuiltinTypeId::I64)
     }
 }
 
 impl RexType for f32 {
     fn rex_type() -> Type {
-        Type::con("f32", 0)
+        Type::builtin(BuiltinTypeId::F32)
     }
 }
 
 impl RexType for f64 {
     fn rex_type() -> Type {
-        Type::con("f64", 0)
+        Type::builtin(BuiltinTypeId::F64)
     }
 }
 
 impl RexType for String {
     fn rex_type() -> Type {
-        Type::con("string", 0)
+        Type::builtin(BuiltinTypeId::String)
     }
 }
 
 impl RexType for &str {
     fn rex_type() -> Type {
-        Type::con("string", 0)
+        Type::builtin(BuiltinTypeId::String)
     }
 }
 
 impl RexType for Uuid {
     fn rex_type() -> Type {
-        Type::con("uuid", 0)
+        Type::builtin(BuiltinTypeId::Uuid)
     }
 }
 
 impl RexType for DateTime<Utc> {
     fn rex_type() -> Type {
-        Type::con("datetime", 0)
+        Type::builtin(BuiltinTypeId::DateTime)
     }
 }
 
 impl<T: RexType> RexType for Vec<T> {
     fn rex_type() -> Type {
-        Type::app(Type::con("Array", 1), T::rex_type())
+        Type::app(Type::builtin(BuiltinTypeId::Array), T::rex_type())
     }
 }
 
 impl<T: RexType> RexType for Option<T> {
     fn rex_type() -> Type {
-        Type::app(Type::con("Option", 1), T::rex_type())
+        Type::app(Type::builtin(BuiltinTypeId::Option), T::rex_type())
     }
 }
 
@@ -1555,7 +1555,7 @@ impl<T: IntoPointer, E: IntoPointer> IntoPointer for Result<T, E> {
 impl<T: RexType, E: RexType> RexType for Result<T, E> {
     fn rex_type() -> Type {
         Type::app(
-            Type::app(Type::con("Result", 2), E::rex_type()),
+            Type::app(Type::builtin(BuiltinTypeId::Result), E::rex_type()),
             T::rex_type(),
         )
     }

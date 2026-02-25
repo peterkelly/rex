@@ -75,6 +75,13 @@ impl ModuleSystem {
         state.loaded.insert(inst.id.clone(), inst);
         Ok(())
     }
+
+    pub(crate) fn invalidate(&self, id: &ModuleId) -> Result<(), EngineError> {
+        let mut state = self.state.lock().map_err(|_| ModuleError::StatePoisoned)?;
+        state.loading.remove(id);
+        state.loaded.remove(id);
+        Ok(())
+    }
 }
 
 pub(crate) fn wrap_resolver<F>(f: F) -> ResolverFn

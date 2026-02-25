@@ -521,7 +521,10 @@ fn engine_export_native_rejects_invalid_arity_scheme_pair() {
     let unary_scheme = Scheme::new(
         vec![],
         vec![],
-        Type::fun(Type::con("i32", 0), Type::con("i32", 0)),
+        Type::fun(
+            Type::builtin(rex_ts::BuiltinTypeId::I32),
+            Type::builtin(rex_ts::BuiltinTypeId::I32),
+        ),
     );
 
     let err = engine
@@ -547,7 +550,10 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
     let unary_scheme = Scheme::new(
         vec![],
         vec![],
-        Type::fun(Type::con("i32", 0), Type::con("i32", 0)),
+        Type::fun(
+            Type::builtin(rex_ts::BuiltinTypeId::I32),
+            Type::builtin(rex_ts::BuiltinTypeId::I32),
+        ),
     );
 
     let err = engine

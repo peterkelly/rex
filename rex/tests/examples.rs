@@ -48,7 +48,7 @@ async fn example_adt_record_constructor() {
               v.x + v.y
         "#,
         3,
-        Type::con("i32", 0),
+        Type::builtin(rex::BuiltinTypeId::I32),
     )
     .await;
 }
@@ -65,7 +65,7 @@ async fn example_nested_lets() {
             in c
         "#,
         3,
-        Type::con("i32", 0),
+        Type::builtin(rex::BuiltinTypeId::I32),
     )
     .await;
 }
@@ -79,7 +79,7 @@ async fn example_lambda_application() {
               inc 41
         "#,
         42,
-        Type::con("i32", 0),
+        Type::builtin(rex::BuiltinTypeId::I32),
     )
     .await;
 }
@@ -97,7 +97,7 @@ async fn example_match() {
                 when B {x} -> x + 100
         "#,
         7,
-        Type::con("i32", 0),
+        Type::builtin(rex::BuiltinTypeId::I32),
     )
     .await;
 }

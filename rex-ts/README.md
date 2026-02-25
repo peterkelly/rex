@@ -15,7 +15,7 @@ This crate implements a Hindley-Milner style type system with parametric polymor
 
 ```rust
 use rex_ast::expr::intern;
-use rex_ts::{Predicate, Type, TypeSystem};
+use rex_ts::{BuiltinTypeId, Predicate, Type, TypeSystem};
 
 fn main() -> Result<(), rex_ts::TypeError> {
     let mut ts = TypeSystem::with_prelude()?;
@@ -26,7 +26,7 @@ fn main() -> Result<(), rex_ts::TypeError> {
     ts.add_value("id", scheme);
 
     // Ask whether a class constraint is satisfiable in the prelude
-    let field_f32 = Predicate::new("Field", Type::con("f32", 0));
+    let field_f32 = Predicate::new("Field", Type::builtin(BuiltinTypeId::F32));
     assert!(rex_ts::entails(&ts.classes, &[], &field_f32)?);
     Ok(())
 }

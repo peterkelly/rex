@@ -146,12 +146,93 @@ impl Display for Var {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum NameRef {
+    Unqualified(Symbol),
+    Qualified(Symbol, Vec<Symbol>),
+}
+
+impl NameRef {
+    pub fn from_segments(segments: Vec<Symbol>) -> Self {
+        if segments.len() == 1 {
+            NameRef::Unqualified(segments[0].clone())
+        } else {
+            let dotted = intern(
+                &segments
+                    .iter()
+                    .map(|s| s.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            );
+            NameRef::Qualified(dotted, segments)
+        }
+    }
+
+    pub fn from_dotted(name: &str) -> Self {
+        let segments: Vec<Symbol> = name.split('.').map(intern).collect();
+        NameRef::from_segments(segments)
+    }
+
+    pub fn to_dotted_symbol(&self) -> Symbol {
+        match self {
+            NameRef::Unqualified(sym) => sym.clone(),
+            NameRef::Qualified(dotted, _) => dotted.clone(),
+        }
+    }
+
+    pub fn as_segments(&self) -> Vec<Symbol> {
+        match self {
+            NameRef::Unqualified(sym) => vec![sym.clone()],
+            NameRef::Qualified(_, segments) => segments.clone(),
+        }
+    }
+}
+
+impl From<&str> for NameRef {
+    fn from(value: &str) -> Self {
+        NameRef::from_dotted(value)
+    }
+}
+
+impl From<String> for NameRef {
+    fn from(value: String) -> Self {
+        NameRef::from_dotted(&value)
+    }
+}
+
+impl AsRef<str> for NameRef {
+    fn as_ref(&self) -> &str {
+        match self {
+            NameRef::Unqualified(sym) => sym.as_ref(),
+            NameRef::Qualified(dotted, _) => dotted.as_ref(),
+        }
+    }
+}
+
+impl Display for NameRef {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            NameRef::Unqualified(sym) => sym.fmt(f),
+            NameRef::Qualified(_, segments) => {
+                for (i, segment) in segments.iter().enumerate() {
+                    if i > 0 {
+                        '.'.fmt(f)?;
+                    }
+                    segment.fmt(f)?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Pattern {
     Wildcard(Span),                         // _
     Var(Var),                               // x
-    Named(Span, Symbol, Vec<Pattern>),      // Ok x y z
+    Named(Span, NameRef, Vec<Pattern>),     // Ok x y z
     Tuple(Span, Vec<Pattern>),              // (x, y, z)
     List(Span, Vec<Pattern>),               // [x, y, z]
     Cons(Span, Box<Pattern>, Box<Pattern>), // x::xs
@@ -279,7 +360,7 @@ impl Display for Pattern {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TypeExpr {
-    Name(Span, Symbol),
+    Name(Span, NameRef),
     App(Span, Box<TypeExpr>, Box<TypeExpr>),
     Fun(Span, Box<TypeExpr>, Box<TypeExpr>),
     Tuple(Span, Vec<TypeExpr>),
@@ -391,12 +472,12 @@ impl Display for TypeExpr {
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct TypeConstraint {
-    pub class: Symbol,
+    pub class: NameRef,
     pub typ: TypeExpr,
 }
 
 impl TypeConstraint {
-    pub fn new(class: Symbol, typ: TypeExpr) -> Self {
+    pub fn new(class: NameRef, typ: TypeExpr) -> Self {
         Self { class, typ }
     }
 }

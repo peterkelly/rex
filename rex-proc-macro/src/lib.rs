@@ -365,7 +365,12 @@ fn rex_type_expr(
                         return Err(Error::new(seg.span(), "expected `Vec<T>`"));
                     };
                     let inner = rex_type_expr(inner, adt_params)?;
-                    Ok(quote! { ::rex::Type::app(::rex::Type::con("List", 1), #inner) })
+                    Ok(quote! {
+                        ::rex::Type::app(
+                            ::rex::Type::builtin(::rex::BuiltinTypeId::List),
+                            #inner
+                        )
+                    })
                 }
                 "HashMap" | "BTreeMap" => {
                     let [k, v] = args.as_slice() else {
@@ -378,14 +383,24 @@ fn rex_type_expr(
                         ));
                     }
                     let v = rex_type_expr(v, adt_params)?;
-                    Ok(quote! { ::rex::Type::app(::rex::Type::con("Dict", 1), #v) })
+                    Ok(quote! {
+                        ::rex::Type::app(
+                            ::rex::Type::builtin(::rex::BuiltinTypeId::Dict),
+                            #v
+                        )
+                    })
                 }
                 "Option" => {
                     let [inner] = args.as_slice() else {
                         return Err(Error::new(seg.span(), "expected `Option<T>`"));
                     };
                     let inner = rex_type_expr(inner, adt_params)?;
-                    Ok(quote! { ::rex::Type::app(::rex::Type::con("Option", 1), #inner) })
+                    Ok(quote! {
+                        ::rex::Type::app(
+                            ::rex::Type::builtin(::rex::BuiltinTypeId::Option),
+                            #inner
+                        )
+                    })
                 }
                 "Result" => {
                     let [ok, err] = args.as_slice() else {
@@ -395,7 +410,10 @@ fn rex_type_expr(
                     let err = rex_type_expr(err, adt_params)?;
                     Ok(quote! {
                         ::rex::Type::app(
-                            ::rex::Type::app(::rex::Type::con("Result", 2), #err),
+                            ::rex::Type::app(
+                                ::rex::Type::builtin(::rex::BuiltinTypeId::Result),
+                                #err
+                            ),
                             #ok
                         )
                     })

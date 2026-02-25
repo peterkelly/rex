@@ -72,7 +72,7 @@ async fn demo_factorial() {
         )),
     )
     .await;
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
     assert_eq!(heap.pointer_as_i32(&value).unwrap(), 720);
 }
 
@@ -86,7 +86,7 @@ async fn demo_fibonacci() {
         )),
     )
     .await;
-    assert_eq!(ty, Type::list(Type::con("i32", 0)));
+    assert_eq!(ty, Type::list(Type::builtin(rex::BuiltinTypeId::I32)));
     assert_eq!(
         list_i32_values(&heap, &value),
         vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
@@ -103,7 +103,7 @@ async fn demo_merge_sort() {
         )),
     )
     .await;
-    assert_eq!(ty, Type::list(Type::con("i32", 0)));
+    assert_eq!(ty, Type::list(Type::builtin(rex::BuiltinTypeId::I32)));
     assert_eq!(
         list_i32_values(&heap, &value),
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -123,9 +123,9 @@ async fn demo_binary_search_tree() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("bool", 0),
-            Type::con("bool", 0),
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -148,9 +148,9 @@ async fn demo_expression_evaluator() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("i32", 0),
-            Type::con("i32", 0),
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::I32),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -172,7 +172,10 @@ async fn demo_dijkstra_lite() {
     .await;
     assert_eq!(
         ty,
-        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+        Type::tuple(vec![
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::I32)
+        ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 2);
@@ -192,7 +195,10 @@ async fn demo_knapsack_01() {
     .await;
     assert_eq!(
         ty,
-        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+        Type::tuple(vec![
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::I32)
+        ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 2);
@@ -213,10 +219,10 @@ async fn demo_union_find() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("bool", 0),
-            Type::con("bool", 0),
-            Type::con("i32", 0),
-            Type::con("i32", 0),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::I32),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -240,10 +246,10 @@ async fn demo_prefix_parser() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("bool", 0),
-            Type::con("i32", 0),
-            Type::con("bool", 0),
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::Bool),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -301,7 +307,10 @@ async fn demo_n_queens() {
     .await;
     assert_eq!(
         ty,
-        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+        Type::tuple(vec![
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::I32)
+        ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
     assert_eq!(items.len(), 2);

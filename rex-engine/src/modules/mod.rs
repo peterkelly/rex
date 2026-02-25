@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use async_recursion::async_recursion;
 use rex_ast::expr::{
-    Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl, ImportPath, InstanceDecl, Pattern,
-    Program, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
+    Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl, ImportPath, InstanceDecl, NameRef,
+    Pattern, Program, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
 };
 use rex_lexer::Token;
 use rex_parser::Parser as RexParser;
@@ -33,10 +33,12 @@ pub use resolvers::default_stdlib_resolver;
 pub use system::ResolverFn;
 pub use types::virtual_export_name;
 pub use types::{
-    ModuleExports, ModuleId, ModuleInstance, ReplState, ResolveRequest, ResolvedModule,
+    CanonicalSymbol, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ReplState, ResolveRequest,
+    ResolvedModule, SymbolKind,
 };
 
 pub(crate) use system::ModuleSystem;
+pub(crate) use types::module_key_for_module;
 
 use system::wrap_resolver;
 use types::{prefix_for_module, qualify};
@@ -92,7 +94,7 @@ fn default_import_decl(module_name: &str) -> ImportDecl {
 #[derive(Default)]
 struct ImportBindings {
     alias_exports: HashMap<Symbol, ModuleExports>,
-    imported_values: HashMap<Symbol, Symbol>,
+    imported_values: HashMap<Symbol, CanonicalSymbol>,
 }
 
 fn add_import_bindings(
@@ -103,7 +105,7 @@ fn add_import_bindings(
     existing_imported: Option<&HashSet<Symbol>>,
 ) -> Result<(), EngineError> {
     let module_name = import.alias.clone();
-    let mut bind_local = |local_name: Symbol, target: Symbol| -> Result<(), EngineError> {
+    let mut bind_local = |local_name: Symbol, target: CanonicalSymbol| -> Result<(), EngineError> {
         if forbidden_locals.contains(&local_name) {
             return Err(crate::ModuleError::ImportNameConflictsWithLocal {
                 module: module_name.clone(),
@@ -221,10 +223,11 @@ fn rename_type_expr(
 ) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => {
-            if let Some(new) = type_renames.get(name) {
-                TypeExpr::Name(*span, new.clone())
-            } else if let Some(new) = class_renames.get(name) {
-                TypeExpr::Name(*span, new.clone())
+            let name_sym = name.to_dotted_symbol();
+            if let Some(new) = type_renames.get(&name_sym) {
+                TypeExpr::Name(*span, NameRef::Unqualified(new.clone()))
+            } else if let Some(new) = class_renames.get(&name_sym) {
+                TypeExpr::Name(*span, NameRef::Unqualified(new.clone()))
             } else {
                 TypeExpr::Name(*span, name.clone())
             }
@@ -268,10 +271,14 @@ fn rename_constraints(
 ) -> Vec<TypeConstraint> {
     cs.iter()
         .map(|c| TypeConstraint {
-            class: class_renames
-                .get(&c.class)
-                .cloned()
-                .unwrap_or_else(|| c.class.clone()),
+            class: {
+                let class_sym = c.class.to_dotted_symbol();
+                class_renames
+                    .get(&class_sym)
+                    .cloned()
+                    .map(NameRef::Unqualified)
+                    .unwrap_or_else(|| c.class.clone())
+            },
             typ: rename_type_expr(&c.typ, type_renames, class_renames),
         })
         .collect()
@@ -283,10 +290,14 @@ fn rename_pattern(pat: &Pattern, value_renames: &HashMap<Symbol, Symbol>) -> Pat
         Pattern::Var(v) => Pattern::Var(v.clone()),
         Pattern::Named(span, name, args) => Pattern::Named(
             *span,
-            value_renames
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| name.clone()),
+            {
+                let name_sym = name.to_dotted_symbol();
+                value_renames
+                    .get(&name_sym)
+                    .cloned()
+                    .map(NameRef::Unqualified)
+                    .unwrap_or_else(|| name.clone())
+            },
             args.iter()
                 .map(|p| rename_pattern(p, value_renames))
                 .collect(),
@@ -784,7 +795,7 @@ fn rewrite_import_uses_expr(
     expr: &Expr,
     bound: &mut HashSet<Symbol>,
     aliases: &HashMap<Symbol, ModuleExports>,
-    imported_values: &HashMap<Symbol, Symbol>,
+    imported_values: &HashMap<Symbol, CanonicalSymbol>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Expr {
     match expr {
@@ -804,7 +815,7 @@ fn rewrite_import_uses_expr(
             {
                 return Expr::Var(Var {
                     span: *span,
-                    name: internal.clone(),
+                    name: internal.symbol().clone(),
                 });
             }
             Expr::Project(
@@ -825,32 +836,35 @@ fn rewrite_import_uses_expr(
             {
                 Expr::Var(Var {
                     span: v.span,
-                    name: internal.clone(),
+                    name: internal.symbol().clone(),
                 })
             } else {
                 Expr::Var(v.clone())
             }
         }
         Expr::Lam(span, scope, param, ann, constraints, body) => {
+            let ann = ann
+                .as_ref()
+                .map(|t| rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values));
+            let constraints = constraints
+                .iter()
+                .map(|c| TypeConstraint {
+                    class: rewrite_import_uses_class_name(
+                        &c.class,
+                        bound,
+                        aliases,
+                        shadowed_values,
+                    ),
+                    typ: rewrite_import_uses_type_expr(&c.typ, bound, aliases, shadowed_values),
+                })
+                .collect();
             bound.insert(param.name.clone());
             let out = Expr::Lam(
                 *span,
                 scope.clone(),
                 param.clone(),
-                ann.as_ref()
-                    .map(|t| rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values)),
-                constraints
-                    .iter()
-                    .map(|c| TypeConstraint {
-                        class: rewrite_import_uses_class_name(
-                            &c.class,
-                            bound,
-                            aliases,
-                            shadowed_values,
-                        ),
-                        typ: rewrite_import_uses_type_expr(&c.typ, bound, aliases, shadowed_values),
-                    })
-                    .collect(),
+                ann,
+                constraints,
                 Arc::new(rewrite_import_uses_expr(
                     body,
                     bound,
@@ -889,6 +903,13 @@ fn rewrite_import_uses_expr(
             )
         }
         Expr::LetRec(span, bindings, body) => {
+            let anns: Vec<Option<TypeExpr>> = bindings
+                .iter()
+                .map(|(_, ann, _)| {
+                    ann.as_ref()
+                        .map(|t| rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values))
+                })
+                .collect();
             let names: Vec<Symbol> = bindings
                 .iter()
                 .map(|(var, _, _)| var.name.clone())
@@ -898,12 +919,11 @@ fn rewrite_import_uses_expr(
             }
             let bindings = bindings
                 .iter()
-                .map(|(var, ann, def)| {
+                .zip(anns)
+                .map(|((var, _ann, def), ann)| {
                     (
                         var.clone(),
-                        ann.as_ref().map(|t| {
-                            rewrite_import_uses_type_expr(t, bound, aliases, shadowed_values)
-                        }),
+                        ann,
                         Arc::new(rewrite_import_uses_expr(
                             def,
                             bound,
@@ -1085,15 +1105,15 @@ fn rewrite_import_uses_expr(
 
 fn rewrite_import_uses_pattern(
     pat: &Pattern,
-    imported_values: &HashMap<Symbol, Symbol>,
+    imported_values: &HashMap<Symbol, CanonicalSymbol>,
 ) -> Pattern {
     match pat {
         Pattern::Wildcard(span) => Pattern::Wildcard(*span),
         Pattern::Var(v) => Pattern::Var(v.clone()),
         Pattern::Named(span, name, args) => {
             let name = imported_values
-                .get(name)
-                .cloned()
+                .get(&name.to_dotted_symbol())
+                .map(|c| NameRef::Unqualified(c.symbol().clone()))
                 .unwrap_or_else(|| name.clone());
             let args = args
                 .iter()
@@ -1136,27 +1156,35 @@ fn rewrite_import_uses_pattern(
 }
 
 fn rewrite_import_uses_class_name(
-    class: &Symbol,
+    class: &NameRef,
     bound: &HashSet<Symbol>,
     aliases: &HashMap<Symbol, ModuleExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
-) -> Symbol {
-    let Some((alias, member)) = class.as_ref().split_once('.') else {
+) -> NameRef {
+    let Some((alias_sym, member_sym)) = qualified_alias_member(class) else {
         return class.clone();
     };
-    let alias_sym = intern(alias);
-    if !alias_is_visible(&alias_sym, bound, shadowed_values) {
+    if !alias_is_visible(alias_sym, bound, shadowed_values) {
         return class.clone();
     }
-    let Some(exports) = aliases.get(&alias_sym) else {
+    let Some(exports) = aliases.get(alias_sym) else {
         return class.clone();
     };
-    let member_sym = intern(member);
     exports
         .classes
-        .get(&member_sym)
-        .cloned()
+        .get(member_sym)
+        .map(|s| s.symbol().clone())
+        .map(NameRef::Unqualified)
         .unwrap_or_else(|| class.clone())
+}
+
+fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol)> {
+    match name {
+        NameRef::Qualified(_, segments) if segments.len() == 2 => {
+            Some((&segments[0], &segments[1]))
+        }
+        _ => None,
+    }
 }
 
 fn rewrite_import_uses_type_expr(
@@ -1167,21 +1195,19 @@ fn rewrite_import_uses_type_expr(
 ) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => {
-            let Some((alias, member)) = name.as_ref().split_once('.') else {
+            let Some((alias_sym, member_sym)) = qualified_alias_member(name) else {
                 return TypeExpr::Name(*span, name.clone());
             };
-            let alias_sym = intern(alias);
-            if !alias_is_visible(&alias_sym, bound, shadowed_values) {
+            if !alias_is_visible(alias_sym, bound, shadowed_values) {
                 return TypeExpr::Name(*span, name.clone());
             }
-            let Some(exports) = aliases.get(&alias_sym) else {
+            let Some(exports) = aliases.get(alias_sym) else {
                 return TypeExpr::Name(*span, name.clone());
             };
-            let member_sym = intern(member);
-            if let Some(new) = exports.types.get(&member_sym) {
-                TypeExpr::Name(*span, new.clone())
-            } else if let Some(new) = exports.classes.get(&member_sym) {
-                TypeExpr::Name(*span, new.clone())
+            if let Some(new) = exports.types.get(member_sym) {
+                TypeExpr::Name(*span, NameRef::Unqualified(new.symbol().clone()))
+            } else if let Some(new) = exports.classes.get(member_sym) {
+                TypeExpr::Name(*span, NameRef::Unqualified(new.symbol().clone()))
             } else {
                 TypeExpr::Name(*span, name.clone())
             }
@@ -1241,9 +1267,10 @@ fn rewrite_import_uses_type_expr(
 fn rewrite_import_uses(
     program: &Program,
     aliases: &HashMap<Symbol, ModuleExports>,
-    imported_values: &HashMap<Symbol, Symbol>,
+    imported_values: &HashMap<Symbol, CanonicalSymbol>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Program {
+    let decl_bound = HashSet::new();
     let decls = program
         .decls
         .iter()
@@ -1262,12 +1289,144 @@ fn rewrite_import_uses(
                     span: fd.span,
                     is_pub: fd.is_pub,
                     name: fd.name.clone(),
-                    params: fd.params.clone(),
-                    ret: fd.ret.clone(),
-                    constraints: fd.constraints.clone(),
+                    params: fd
+                        .params
+                        .iter()
+                        .map(|(v, t)| {
+                            (
+                                v.clone(),
+                                rewrite_import_uses_type_expr(
+                                    t,
+                                    &decl_bound,
+                                    aliases,
+                                    shadowed_values,
+                                ),
+                            )
+                        })
+                        .collect(),
+                    ret: rewrite_import_uses_type_expr(
+                        &fd.ret,
+                        &decl_bound,
+                        aliases,
+                        shadowed_values,
+                    ),
+                    constraints: fd
+                        .constraints
+                        .iter()
+                        .map(|c| TypeConstraint {
+                            class: rewrite_import_uses_class_name(
+                                &c.class,
+                                &decl_bound,
+                                aliases,
+                                shadowed_values,
+                            ),
+                            typ: rewrite_import_uses_type_expr(
+                                &c.typ,
+                                &decl_bound,
+                                aliases,
+                                shadowed_values,
+                            ),
+                        })
+                        .collect(),
                     body,
                 })
             }
+            Decl::DeclareFn(df) => Decl::DeclareFn(DeclareFnDecl {
+                span: df.span,
+                is_pub: df.is_pub,
+                name: df.name.clone(),
+                params: df
+                    .params
+                    .iter()
+                    .map(|(v, t)| {
+                        (
+                            v.clone(),
+                            rewrite_import_uses_type_expr(t, &decl_bound, aliases, shadowed_values),
+                        )
+                    })
+                    .collect(),
+                ret: rewrite_import_uses_type_expr(&df.ret, &decl_bound, aliases, shadowed_values),
+                constraints: df
+                    .constraints
+                    .iter()
+                    .map(|c| TypeConstraint {
+                        class: rewrite_import_uses_class_name(
+                            &c.class,
+                            &decl_bound,
+                            aliases,
+                            shadowed_values,
+                        ),
+                        typ: rewrite_import_uses_type_expr(
+                            &c.typ,
+                            &decl_bound,
+                            aliases,
+                            shadowed_values,
+                        ),
+                    })
+                    .collect(),
+            }),
+            Decl::Type(td) => Decl::Type(TypeDecl {
+                span: td.span,
+                is_pub: td.is_pub,
+                name: td.name.clone(),
+                params: td.params.clone(),
+                variants: td
+                    .variants
+                    .iter()
+                    .map(|v| rex_ast::expr::TypeVariant {
+                        name: v.name.clone(),
+                        args: v
+                            .args
+                            .iter()
+                            .map(|t| {
+                                rewrite_import_uses_type_expr(
+                                    t,
+                                    &decl_bound,
+                                    aliases,
+                                    shadowed_values,
+                                )
+                            })
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+            Decl::Class(cd) => Decl::Class(rex_ast::expr::ClassDecl {
+                span: cd.span,
+                is_pub: cd.is_pub,
+                name: cd.name.clone(),
+                params: cd.params.clone(),
+                supers: cd
+                    .supers
+                    .iter()
+                    .map(|c| TypeConstraint {
+                        class: rewrite_import_uses_class_name(
+                            &c.class,
+                            &decl_bound,
+                            aliases,
+                            shadowed_values,
+                        ),
+                        typ: rewrite_import_uses_type_expr(
+                            &c.typ,
+                            &decl_bound,
+                            aliases,
+                            shadowed_values,
+                        ),
+                    })
+                    .collect(),
+                methods: cd
+                    .methods
+                    .iter()
+                    .map(|m| rex_ast::expr::ClassMethodSig {
+                        name: m.name.clone(),
+                        typ: rewrite_import_uses_type_expr(
+                            &m.typ,
+                            &decl_bound,
+                            aliases,
+                            shadowed_values,
+                        ),
+                    })
+                    .collect(),
+            }),
             Decl::Instance(inst) => {
                 let methods = inst
                     .methods
@@ -1290,9 +1449,37 @@ fn rewrite_import_uses(
                 Decl::Instance(InstanceDecl {
                     span: inst.span,
                     is_pub: inst.is_pub,
-                    class: inst.class.clone(),
-                    head: inst.head.clone(),
-                    context: inst.context.clone(),
+                    class: rewrite_import_uses_class_name(
+                        &NameRef::from_dotted(inst.class.as_ref()),
+                        &decl_bound,
+                        aliases,
+                        shadowed_values,
+                    )
+                    .to_dotted_symbol(),
+                    head: rewrite_import_uses_type_expr(
+                        &inst.head,
+                        &decl_bound,
+                        aliases,
+                        shadowed_values,
+                    ),
+                    context: inst
+                        .context
+                        .iter()
+                        .map(|c| TypeConstraint {
+                            class: rewrite_import_uses_class_name(
+                                &c.class,
+                                &decl_bound,
+                                aliases,
+                                shadowed_values,
+                            ),
+                            typ: rewrite_import_uses_type_expr(
+                                &c.typ,
+                                &decl_bound,
+                                aliases,
+                                shadowed_values,
+                            ),
+                        })
+                        .collect(),
                     methods,
                 })
             }
@@ -1332,13 +1519,23 @@ fn validate_import_uses_expr(
             }
             validate_import_uses_expr(base, bound, aliases, shadowed_values)
         }
-        Expr::Lam(_, _, param, _, _, body) => {
+        Expr::Lam(_, _, param, ann, constraints, body) => {
+            if let Some(ann) = ann {
+                validate_import_uses_type_expr(ann, bound, aliases, shadowed_values)?;
+            }
+            for c in constraints {
+                validate_import_uses_class_name(&c.class, bound, aliases, shadowed_values)?;
+                validate_import_uses_type_expr(&c.typ, bound, aliases, shadowed_values)?;
+            }
             bound.insert(param.name.clone());
             let res = validate_import_uses_expr(body, bound, aliases, shadowed_values);
             bound.remove(&param.name);
             res
         }
-        Expr::Let(_, var, _, val, body) => {
+        Expr::Let(_, var, ann, val, body) => {
+            if let Some(ann) = ann {
+                validate_import_uses_type_expr(ann, bound, aliases, shadowed_values)?;
+            }
             validate_import_uses_expr(val, bound, aliases, shadowed_values)?;
             bound.insert(var.name.clone());
             let res = validate_import_uses_expr(body, bound, aliases, shadowed_values);
@@ -1346,6 +1543,11 @@ fn validate_import_uses_expr(
             res
         }
         Expr::LetRec(_, bindings, body) => {
+            for (_, ann, _) in bindings {
+                if let Some(ann) = ann {
+                    validate_import_uses_type_expr(ann, bound, aliases, shadowed_values)?;
+                }
+            }
             let names: Vec<Symbol> = bindings
                 .iter()
                 .map(|(var, _, _)| var.name.clone())
@@ -1353,7 +1555,7 @@ fn validate_import_uses_expr(
             for name in &names {
                 bound.insert(name.clone());
             }
-            for (_, _, def) in bindings {
+            for (_, _ann, def) in bindings {
                 validate_import_uses_expr(def, bound, aliases, shadowed_values)?;
             }
             let res = validate_import_uses_expr(body, bound, aliases, shadowed_values);
@@ -1406,7 +1608,10 @@ fn validate_import_uses_expr(
             validate_import_uses_expr(t, bound, aliases, shadowed_values)?;
             validate_import_uses_expr(e, bound, aliases, shadowed_values)
         }
-        Expr::Ann(_, e, _) => validate_import_uses_expr(e, bound, aliases, shadowed_values),
+        Expr::Ann(_, e, t) => {
+            validate_import_uses_expr(e, bound, aliases, shadowed_values)?;
+            validate_import_uses_type_expr(t, bound, aliases, shadowed_values)
+        }
         Expr::Var(..)
         | Expr::Bool(..)
         | Expr::Uint(..)
@@ -1419,6 +1624,81 @@ fn validate_import_uses_expr(
     }
 }
 
+fn validate_import_uses_class_name(
+    class: &NameRef,
+    bound: &HashSet<Symbol>,
+    aliases: &HashMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&HashSet<Symbol>>,
+) -> Result<(), EngineError> {
+    let Some((alias_sym, member_sym)) = qualified_alias_member(class) else {
+        return Ok(());
+    };
+    if !alias_is_visible(alias_sym, bound, shadowed_values) {
+        return Ok(());
+    }
+    let Some(exports) = aliases.get(alias_sym) else {
+        return Ok(());
+    };
+    if exports.classes.contains_key(member_sym) {
+        return Ok(());
+    }
+    Err(crate::ModuleError::MissingExport {
+        module: alias_sym.clone(),
+        export: member_sym.clone(),
+    }
+    .into())
+}
+
+fn validate_import_uses_type_expr(
+    ty: &TypeExpr,
+    bound: &HashSet<Symbol>,
+    aliases: &HashMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&HashSet<Symbol>>,
+) -> Result<(), EngineError> {
+    match ty {
+        TypeExpr::Name(_, name) => {
+            let Some((alias_sym, member_sym)) = qualified_alias_member(name) else {
+                return Ok(());
+            };
+            if !alias_is_visible(alias_sym, bound, shadowed_values) {
+                return Ok(());
+            }
+            let Some(exports) = aliases.get(alias_sym) else {
+                return Ok(());
+            };
+            if exports.types.contains_key(member_sym) || exports.classes.contains_key(member_sym) {
+                Ok(())
+            } else {
+                Err(crate::ModuleError::MissingExport {
+                    module: alias_sym.clone(),
+                    export: member_sym.clone(),
+                }
+                .into())
+            }
+        }
+        TypeExpr::App(_, f, x) => {
+            validate_import_uses_type_expr(f, bound, aliases, shadowed_values)?;
+            validate_import_uses_type_expr(x, bound, aliases, shadowed_values)
+        }
+        TypeExpr::Fun(_, a, b) => {
+            validate_import_uses_type_expr(a, bound, aliases, shadowed_values)?;
+            validate_import_uses_type_expr(b, bound, aliases, shadowed_values)
+        }
+        TypeExpr::Tuple(_, elems) => {
+            for e in elems {
+                validate_import_uses_type_expr(e, bound, aliases, shadowed_values)?;
+            }
+            Ok(())
+        }
+        TypeExpr::Record(_, fields) => {
+            for (_, t) in fields {
+                validate_import_uses_type_expr(t, bound, aliases, shadowed_values)?;
+            }
+            Ok(())
+        }
+    }
+}
+
 fn validate_import_uses(
     program: &Program,
     aliases: &HashMap<Symbol, ModuleExports>,
@@ -1427,11 +1707,111 @@ fn validate_import_uses(
     for decl in &program.decls {
         match decl {
             Decl::Fn(fd) => {
+                for (_, t) in &fd.params {
+                    validate_import_uses_type_expr(t, &HashSet::new(), aliases, shadowed_values)?;
+                }
+                validate_import_uses_type_expr(&fd.ret, &HashSet::new(), aliases, shadowed_values)?;
+                for c in &fd.constraints {
+                    validate_import_uses_class_name(
+                        &c.class,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                    validate_import_uses_type_expr(
+                        &c.typ,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                }
                 let mut bound: HashSet<Symbol> =
                     fd.params.iter().map(|(v, _)| v.name.clone()).collect();
                 validate_import_uses_expr(fd.body.as_ref(), &mut bound, aliases, shadowed_values)?;
             }
+            Decl::DeclareFn(df) => {
+                for (_, t) in &df.params {
+                    validate_import_uses_type_expr(t, &HashSet::new(), aliases, shadowed_values)?;
+                }
+                validate_import_uses_type_expr(&df.ret, &HashSet::new(), aliases, shadowed_values)?;
+                for c in &df.constraints {
+                    validate_import_uses_class_name(
+                        &c.class,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                    validate_import_uses_type_expr(
+                        &c.typ,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                }
+            }
+            Decl::Type(td) => {
+                for v in &td.variants {
+                    for t in &v.args {
+                        validate_import_uses_type_expr(
+                            t,
+                            &HashSet::new(),
+                            aliases,
+                            shadowed_values,
+                        )?;
+                    }
+                }
+            }
+            Decl::Class(cd) => {
+                for c in &cd.supers {
+                    validate_import_uses_class_name(
+                        &c.class,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                    validate_import_uses_type_expr(
+                        &c.typ,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                }
+                for m in &cd.methods {
+                    validate_import_uses_type_expr(
+                        &m.typ,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                }
+            }
             Decl::Instance(inst) => {
+                validate_import_uses_class_name(
+                    &NameRef::from_dotted(inst.class.as_ref()),
+                    &HashSet::new(),
+                    aliases,
+                    shadowed_values,
+                )?;
+                validate_import_uses_type_expr(
+                    &inst.head,
+                    &HashSet::new(),
+                    aliases,
+                    shadowed_values,
+                )?;
+                for c in &inst.context {
+                    validate_import_uses_class_name(
+                        &c.class,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                    validate_import_uses_type_expr(
+                        &c.typ,
+                        &HashSet::new(),
+                        aliases,
+                        shadowed_values,
+                    )?;
+                }
                 for m in &inst.methods {
                     let mut bound = HashSet::new();
                     validate_import_uses_expr(
@@ -1442,7 +1822,7 @@ fn validate_import_uses(
                     )?;
                 }
             }
-            _ => {}
+            Decl::Import(..) => {}
         }
     }
     let mut bound = HashSet::new();
@@ -1470,8 +1850,129 @@ fn decl_value_names(decls: &[Decl]) -> HashSet<Symbol> {
     out
 }
 
-fn exports_from_program(program: &Program, prefix: &str) -> ModuleExports {
+fn interface_decls_from_program(program: &Program) -> Vec<Decl> {
+    let mut out = Vec::new();
+    for decl in &program.decls {
+        match decl {
+            Decl::Fn(fd) if fd.is_pub => out.push(Decl::DeclareFn(DeclareFnDecl {
+                span: fd.span,
+                is_pub: fd.is_pub,
+                name: fd.name.clone(),
+                params: fd.params.clone(),
+                ret: fd.ret.clone(),
+                constraints: fd.constraints.clone(),
+            })),
+            Decl::Instance(..)
+            | Decl::Import(..)
+            | Decl::Fn(..)
+            | Decl::DeclareFn(..)
+            | Decl::Type(..)
+            | Decl::Class(..) => {}
+        }
+    }
+    out
+}
+
+fn graph_imports_for_program(program: &Program, default_imports: &[String]) -> Vec<ImportDecl> {
+    let mut out = Vec::new();
+    for decl in &program.decls {
+        if let Decl::Import(import_decl) = decl {
+            out.push(import_decl.clone());
+        }
+    }
+    for module_name in default_imports {
+        let alias = intern(module_name);
+        if contains_import_alias(&program.decls, &alias) {
+            continue;
+        }
+        out.push(default_import_decl(module_name));
+    }
+    out
+}
+
+fn tarjan_scc_module_ids(
+    nodes: &[ModuleId],
+    edges: &HashMap<ModuleId, Vec<ModuleId>>,
+) -> Vec<Vec<ModuleId>> {
+    // Tarjan's SCC algorithm (linear in |V| + |E|).
+    //
+    // References:
+    // - Tarjan, R. E. (1972). "Depth-first search and linear graph algorithms."
+    //   SIAM Journal on Computing, 1(2), 146-160.
+    // - Cormen et al. (CLRS), 3rd ed., §22.5 "Strongly connected components".
+    //
+    // Why Tarjan here:
+    // - We need explicit SCC groups to process module cycles as units.
+    // - We want one DFS pass with low overhead because this runs in module loading paths.
+    #[derive(Default)]
+    struct TarjanState {
+        index: usize,
+        index_of: HashMap<ModuleId, usize>,
+        lowlink: HashMap<ModuleId, usize>,
+        stack: Vec<ModuleId>,
+        on_stack: HashSet<ModuleId>,
+        components: Vec<Vec<ModuleId>>,
+    }
+
+    fn strong_connect(
+        v: &ModuleId,
+        edges: &HashMap<ModuleId, Vec<ModuleId>>,
+        st: &mut TarjanState,
+    ) {
+        st.index_of.insert(v.clone(), st.index);
+        st.lowlink.insert(v.clone(), st.index);
+        st.index += 1;
+
+        st.stack.push(v.clone());
+        st.on_stack.insert(v.clone());
+
+        if let Some(neighbors) = edges.get(v) {
+            for w in neighbors {
+                if !st.index_of.contains_key(w) {
+                    strong_connect(w, edges, st);
+                    let lw = st.lowlink.get(w).copied();
+                    if let (Some(lw), Some(lv)) = (lw, st.lowlink.get_mut(v)) {
+                        *lv = (*lv).min(lw);
+                    }
+                } else if st.on_stack.contains(w) {
+                    let iw = st.index_of.get(w).copied();
+                    if let (Some(iw), Some(lv)) = (iw, st.lowlink.get_mut(v)) {
+                        *lv = (*lv).min(iw);
+                    }
+                }
+            }
+        }
+
+        // Root of an SCC when lowlink(v) == index(v): pop until we get v.
+        let is_root = st.lowlink.get(v) == st.index_of.get(v);
+        if is_root {
+            let mut component = Vec::new();
+            loop {
+                let Some(w) = st.stack.pop() else {
+                    break;
+                };
+                st.on_stack.remove(&w);
+                component.push(w.clone());
+                if &w == v {
+                    break;
+                }
+            }
+            st.components.push(component);
+        }
+    }
+
+    let mut st = TarjanState::default();
+    for node in nodes {
+        if !st.index_of.contains_key(node) {
+            strong_connect(node, edges, &mut st);
+        }
+    }
+    st.components
+}
+
+fn exports_from_program(program: &Program, prefix: &str, module_id: &ModuleId) -> ModuleExports {
     let (value_renames, type_renames, class_renames) = collect_local_renames(program, prefix);
+    let module_key = module_key_for_module(module_id);
 
     let mut values = HashMap::new();
     let mut types = HashMap::new();
@@ -1481,27 +1982,67 @@ fn exports_from_program(program: &Program, prefix: &str) -> ModuleExports {
         match decl {
             Decl::Fn(fd) if fd.is_pub => {
                 if let Some(internal) = value_renames.get(&fd.name.name) {
-                    values.insert(fd.name.name.clone(), internal.clone());
+                    values.insert(
+                        fd.name.name.clone(),
+                        CanonicalSymbol::from_symbol(
+                            module_key,
+                            SymbolKind::Value,
+                            fd.name.name.clone(),
+                            internal.clone(),
+                        ),
+                    );
                 }
             }
             Decl::DeclareFn(df) if df.is_pub => {
                 if let Some(internal) = value_renames.get(&df.name.name) {
-                    values.insert(df.name.name.clone(), internal.clone());
+                    values.insert(
+                        df.name.name.clone(),
+                        CanonicalSymbol::from_symbol(
+                            module_key,
+                            SymbolKind::Value,
+                            df.name.name.clone(),
+                            internal.clone(),
+                        ),
+                    );
                 }
             }
             Decl::Type(td) if td.is_pub => {
                 if let Some(internal) = type_renames.get(&td.name) {
-                    types.insert(td.name.clone(), internal.clone());
+                    types.insert(
+                        td.name.clone(),
+                        CanonicalSymbol::from_symbol(
+                            module_key,
+                            SymbolKind::Type,
+                            td.name.clone(),
+                            internal.clone(),
+                        ),
+                    );
                 }
                 for variant in &td.variants {
                     if let Some(internal) = value_renames.get(&variant.name) {
-                        values.insert(variant.name.clone(), internal.clone());
+                        values.insert(
+                            variant.name.clone(),
+                            CanonicalSymbol::from_symbol(
+                                module_key,
+                                SymbolKind::Value,
+                                variant.name.clone(),
+                                internal.clone(),
+                            ),
+                        );
                     }
                 }
             }
             Decl::Class(cd) if cd.is_pub => {
                 if let Some(internal) = class_renames.get(&cd.name) {
-                    classes.insert(cd.name.clone(), internal.clone());
+                    classes.insert(
+                        cd.name.clone(),
+                        CanonicalSymbol::from_symbol(
+                            module_key,
+                            SymbolKind::Class,
+                            cd.name.clone(),
+                            internal.clone(),
+                        ),
+                    );
                 }
             }
             Decl::Instance(..)
@@ -1544,6 +2085,14 @@ fn parse_program_from_source(
         }),
         None => EngineError::from(crate::ModuleError::Parse { errors: errs }),
     })?;
+    if let Some(module) = context
+        && !matches!(program.expr.as_ref(), Expr::Tuple(_, elems) if elems.is_empty())
+    {
+        return Err(crate::ModuleError::TopLevelExprInModule {
+            module: module.clone(),
+        }
+        .into());
+    }
     Ok(program)
 }
 
@@ -1551,6 +2100,202 @@ impl<State> Engine<State>
 where
     State: Clone + Send + Sync + 'static,
 {
+    fn source_fingerprint(source: &str) -> String {
+        sha256_hex(source.as_bytes())
+    }
+
+    fn refresh_if_stale(&mut self, resolved: &ResolvedModule) -> Result<String, EngineError> {
+        let next = Self::source_fingerprint(&resolved.source);
+        if let Some(prev) = self.module_source_fingerprints.get(&resolved.id)
+            && prev != &next
+        {
+            self.invalidate_module_caches(&resolved.id)?;
+        }
+        Ok(next)
+    }
+
+    fn remove_type_level_symbols_for_module_interface(&mut self, decls: &[Decl]) {
+        for decl in decls {
+            match decl {
+                Decl::Fn(fd) => {
+                    self.type_system.env.remove(&fd.name.name);
+                    self.type_system.declared_values.remove(&fd.name.name);
+                }
+                Decl::DeclareFn(df) => {
+                    self.type_system.env.remove(&df.name.name);
+                    self.type_system.declared_values.remove(&df.name.name);
+                }
+                Decl::Type(td) => {
+                    self.type_system.adts.remove(&td.name);
+                    for variant in &td.variants {
+                        self.type_system.env.remove(&variant.name);
+                        self.type_system.declared_values.remove(&variant.name);
+                    }
+                }
+                Decl::Class(cd) => {
+                    self.type_system.classes.classes.remove(&cd.name);
+                    self.type_system.classes.instances.remove(&cd.name);
+                    self.type_system.class_info.remove(&cd.name);
+                    for method in &cd.methods {
+                        self.type_system.env.remove(&method.name);
+                        self.type_system.class_methods.remove(&method.name);
+                    }
+                }
+                Decl::Import(..) | Decl::Instance(..) => {}
+            }
+        }
+    }
+
+    fn invalidate_module_caches(&mut self, id: &ModuleId) -> Result<(), EngineError> {
+        if let Some(prev_interface) = self.module_interface_cache.get(id).cloned() {
+            self.remove_type_level_symbols_for_module_interface(&prev_interface);
+        }
+        self.modules.invalidate(id)?;
+        self.module_exports_cache.remove(id);
+        self.module_interface_cache.remove(id);
+        self.module_source_fingerprints.remove(id);
+        self.published_cycle_interfaces.remove(id);
+        Ok(())
+    }
+
+    fn load_module_types_via_scc(
+        &mut self,
+        root: ResolvedModule,
+        gas: &mut GasMeter,
+        loaded: &mut HashMap<ModuleId, ModuleExports>,
+        loading: &mut HashSet<ModuleId>,
+    ) -> Result<ModuleExports, EngineError> {
+        #[derive(Clone)]
+        struct PendingModule {
+            resolved: ResolvedModule,
+            program: Program,
+            prefix: String,
+        }
+
+        if let Some(exports) = loaded.get(&root.id)
+            && !loading.contains(&root.id)
+        {
+            return Ok(exports.clone());
+        }
+
+        let mut pending: HashMap<ModuleId, PendingModule> = HashMap::new();
+        let mut edges: HashMap<ModuleId, Vec<ModuleId>> = HashMap::new();
+        let mut stack = vec![root.clone()];
+
+        while let Some(resolved) = stack.pop() {
+            let fingerprint = self.refresh_if_stale(&resolved)?;
+            if pending.contains_key(&resolved.id) {
+                continue;
+            }
+            if loaded.contains_key(&resolved.id) && !loading.contains(&resolved.id) {
+                continue;
+            }
+
+            let prefix = prefix_for_module(&resolved.id);
+            let program =
+                parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
+            let exports = exports_from_program(&program, &prefix, &resolved.id);
+            loaded.insert(resolved.id.clone(), exports);
+            loading.insert(resolved.id.clone());
+
+            let imports = graph_imports_for_program(&program, self.default_imports());
+            for import_decl in imports {
+                let spec = import_specifier(&import_decl.path);
+                if self.virtual_module_exports(spec_base_name(&spec)).is_some() {
+                    continue;
+                }
+                let imported = self.modules.resolve(ResolveRequest {
+                    module_name: spec,
+                    importer: Some(resolved.id.clone()),
+                })?;
+                edges
+                    .entry(resolved.id.clone())
+                    .or_default()
+                    .push(imported.id.clone());
+                if (loading.contains(&imported.id) || !loaded.contains_key(&imported.id))
+                    && !pending.contains_key(&imported.id)
+                {
+                    stack.push(imported);
+                }
+            }
+
+            let module_id = resolved.id.clone();
+            pending.insert(
+                module_id.clone(),
+                PendingModule {
+                    resolved,
+                    program,
+                    prefix,
+                },
+            );
+            self.module_source_fingerprints
+                .insert(module_id, fingerprint);
+        }
+
+        if pending.is_empty() {
+            return loaded.get(&root.id).cloned().ok_or_else(|| {
+                EngineError::Internal("missing module exports after SCC load".into())
+            });
+        }
+
+        let pending_ids: Vec<ModuleId> = pending.keys().cloned().collect();
+        let sccs = tarjan_scc_module_ids(&pending_ids, &edges);
+
+        // Tarjan yields SCCs in reverse topological order of the SCC DAG, so
+        // dependencies are processed before dependents.
+        for component in sccs {
+            for module_id in &component {
+                let node = pending
+                    .get(module_id)
+                    .ok_or_else(|| EngineError::Internal("missing pending module node".into()))?;
+                let rewritten = self.rewrite_program_with_imports(
+                    &node.program,
+                    Some(node.resolved.id.clone()),
+                    &node.prefix,
+                    gas,
+                    loaded,
+                    loading,
+                )?;
+                self.inject_decls(&rewritten.decls)?;
+            }
+            for module_id in component {
+                loading.remove(&module_id);
+            }
+        }
+
+        loaded
+            .get(&root.id)
+            .cloned()
+            .ok_or_else(|| EngineError::Internal("missing root exports after SCC load".into()))
+    }
+
+    fn ensure_cycle_interfaces_published(
+        &mut self,
+        module_id: &ModuleId,
+    ) -> Result<(), EngineError> {
+        if self.published_cycle_interfaces.contains(module_id) {
+            return Ok(());
+        }
+        let Some(decls) = self.module_interface_cache.get(module_id).cloned() else {
+            return Ok(());
+        };
+        self.inject_decls(&decls)?;
+        self.publish_runtime_interfaces(&decls)?;
+        self.published_cycle_interfaces.insert(module_id.clone());
+        Ok(())
+    }
+
+    fn publish_runtime_interfaces(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+        let mut signatures = Vec::new();
+        for decl in decls {
+            let Decl::DeclareFn(df) = decl else {
+                continue;
+            };
+            signatures.push(df.clone());
+        }
+        self.publish_runtime_decl_interfaces(&signatures)
+    }
+
     #[async_recursion]
     async fn resolve_module_exports_from_import_decl_async(
         &mut self,
@@ -1566,6 +2311,11 @@ where
             module_name: spec,
             importer,
         })?;
+        self.refresh_if_stale(&imported)?;
+        if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
+            self.ensure_cycle_interfaces_published(&imported.id)?;
+            return Ok(exports);
+        }
         let inst = self.load_module_from_resolved(imported, gas).await?;
         Ok(inst.exports)
     }
@@ -1690,6 +2440,7 @@ where
         resolved: ResolvedModule,
         gas: &mut GasMeter,
     ) -> Result<ModuleInstance, EngineError> {
+        let source_fingerprint = self.refresh_if_stale(&resolved)?;
         if let Some(inst) = self.modules.cached(&resolved.id)? {
             return Ok(inst);
         }
@@ -1698,6 +2449,13 @@ where
 
         let prefix = prefix_for_module(&resolved.id);
         let program = parse_program_from_source(&resolved.source, Some(&resolved.id), Some(gas))?;
+        let exports = exports_from_program(&program, &prefix, &resolved.id);
+        self.module_exports_cache
+            .insert(resolved.id.clone(), exports.clone());
+        let qualified = qualify_program(&program, &prefix);
+        let interfaces = interface_decls_from_program(&qualified);
+        self.module_interface_cache
+            .insert(resolved.id.clone(), interfaces);
 
         // Resolve imports first so qualified names exist in the environment.
         let local_values = decl_value_names(&program.decls);
@@ -1712,7 +2470,6 @@ where
             .await?;
 
         // Qualify local names, then rewrite `alias.foo` uses into internal symbols.
-        let qualified = qualify_program(&program, &prefix);
         validate_import_uses(&qualified, &import_bindings.alias_exports, None)?;
         let rewritten = rewrite_import_uses(
             &qualified,
@@ -1722,16 +2479,19 @@ where
         );
 
         self.inject_decls(&rewritten.decls)?;
-        let (init_value, init_type) = self.eval(rewritten.expr.as_ref(), gas).await?;
+        let init_value = self.heap.alloc_tuple(vec![])?;
+        let init_type = Type::tuple(vec![]);
 
-        let exports = exports_from_program(&program, &prefix);
         let inst = ModuleInstance {
             id: resolved.id.clone(),
             exports,
             init_value,
             init_type,
+            source_fingerprint: Some(source_fingerprint.clone()),
         };
         self.modules.store_loaded(inst.clone())?;
+        self.module_source_fingerprints
+            .insert(resolved.id.clone(), source_fingerprint);
         Ok(inst)
     }
 
@@ -1746,32 +2506,12 @@ where
             return Ok(exports.clone());
         }
 
-        if loading.contains(&resolved.id) {
-            return Err(crate::ModuleError::CyclicImport {
-                id: resolved.id.clone(),
-            }
-            .into());
+        if loading.contains(&resolved.id)
+            && let Some(exports) = loaded.get(&resolved.id)
+        {
+            return Ok(exports.clone());
         }
-        loading.insert(resolved.id.clone());
-
-        let prefix = prefix_for_module(&resolved.id);
-        let program =
-            parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
-
-        let rewritten = self.rewrite_program_with_imports(
-            &program,
-            Some(resolved.id.clone()),
-            &prefix,
-            gas,
-            loaded,
-            loading,
-        )?;
-        self.inject_decls(&rewritten.decls)?;
-
-        let exports = exports_from_program(&program, &prefix);
-        loaded.insert(resolved.id.clone(), exports.clone());
-        loading.remove(&resolved.id);
-        Ok(exports)
+        self.load_module_types_via_scc(resolved, gas, loaded, loading)
     }
 
     fn resolve_module_exports_for_rewrite(
@@ -1790,6 +2530,7 @@ where
             module_name: spec,
             importer,
         })?;
+        self.refresh_if_stale(&imported)?;
         self.load_module_types_from_resolved(imported, gas, loaded, loading)
     }
 
@@ -1861,8 +2602,7 @@ where
             path: canon.clone(),
             source: e,
         })?;
-        let hash = sha256_hex(&bytes);
-        Ok((ModuleId::Local { path: canon, hash }, bytes))
+        Ok((ModuleId::Local { path: canon }, bytes))
     }
 
     fn decode_local_module_source(
@@ -1924,7 +2664,7 @@ where
 
         let (preds, ty) = self.infer_type(rewritten.expr.as_ref(), gas)?;
 
-        let exports = exports_from_program(&program, &prefix);
+        let exports = exports_from_program(&program, &prefix, &resolved.id);
         loaded.insert(resolved.id.clone(), exports);
         loading.remove(&resolved.id);
 
@@ -1957,10 +2697,7 @@ where
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
-        let importer = importer_path.map(|p| ModuleId::Local {
-            path: p,
-            hash: "snippet".into(),
-        });
+        let importer = importer_path.map(|p| ModuleId::Local { path: p });
 
         let mut loaded: HashMap<ModuleId, ModuleExports> = HashMap::new();
         let mut loading: HashSet<ModuleId> = HashSet::new();
@@ -1984,8 +2721,14 @@ where
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), EngineError> {
         let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
+        let source_fingerprint = sha256_hex(&bytes);
         if let Some(inst) = self.modules.cached(&id)? {
-            return Ok((inst.init_value, inst.init_type));
+            if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
+                return Ok((inst.init_value, inst.init_type));
+            }
+            // Local module identity is path-based, so file edits must explicitly
+            // invalidate path-keyed caches before reload.
+            self.invalidate_module_caches(&id)?;
         }
         let source = self.decode_local_module_source(&id, bytes)?;
         let inst = self
@@ -2032,10 +2775,10 @@ where
         state: &mut ReplState,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), EngineError> {
-        let importer = state.importer_path.as_ref().map(|p| ModuleId::Local {
-            path: p.clone(),
-            hash: "repl".into(),
-        });
+        let importer = state
+            .importer_path
+            .as_ref()
+            .map(|p| ModuleId::Local { path: p.clone() });
 
         let mut local_values = state.defined_values.clone();
         local_values.extend(decl_value_names(&program.decls));
@@ -2092,10 +2835,7 @@ where
     ) -> Result<(Pointer, Type), EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
-        let importer = importer_path.map(|p| ModuleId::Local {
-            path: p,
-            hash: "snippet".into(),
-        });
+        let importer = importer_path.map(|p| ModuleId::Local { path: p });
 
         let local_values = decl_value_names(&program.decls);
         let import_bindings = self

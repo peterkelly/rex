@@ -45,7 +45,7 @@ fn resolve_rex_file(
         source: e,
     })?;
     Ok(Some(ResolvedModule {
-        id: ModuleId::Local { path: canon, hash },
+        id: ModuleId::Local { path: canon },
         source,
     }))
 }
@@ -59,7 +59,7 @@ pub fn default_local_resolver() -> ResolverFn {
         let (module_name, expected_sha) = split_module_name_and_sha(req.module_name);
 
         let base_dir = match req.importer {
-            Some(ModuleId::Local { path, .. }) => path.parent().map(|p| p.to_path_buf()),
+            Some(ModuleId::Local { path }) => path.parent().map(|p| p.to_path_buf()),
             _ => std::env::current_dir().ok(),
         }
         .ok_or(ModuleError::NoBaseDirectory)?;

@@ -14,7 +14,7 @@ use lsp_types::{
 };
 use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
-    Symbol, TypeDecl, TypeExpr, Var, intern,
+    Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
 };
 use rex_lexer::{
     LexicalError, Token, Tokens,
@@ -24,8 +24,8 @@ use rex_parser::Parser;
 use rex_parser::error::ParserErr;
 use rex_ts::Types;
 use rex_ts::{
-    Scheme, Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr, TypedExprKind,
-    instantiate, unify,
+    BuiltinTypeId, Scheme, Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr,
+    TypedExprKind, instantiate, unify,
 };
 use rex_util::{GasMeter, sha256_hex};
 use serde_json::{Value, json, to_value};
@@ -201,6 +201,8 @@ struct ImportModuleInfo {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     path: Option<PathBuf>,
     value_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>, // field -> internal name
+    type_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>,
+    class_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     export_defs: HashMap<String, Span>,
 }
@@ -299,8 +301,8 @@ fn rewrite_type_expr(
 ) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => {
-            if let Some(new) = type_map.get(name) {
-                TypeExpr::Name(*span, new.clone())
+            if let Some(new) = type_map.get(&name.to_dotted_symbol()) {
+                TypeExpr::Name(*span, rex_ast::expr::NameRef::Unqualified(new.clone()))
             } else {
                 TypeExpr::Name(*span, name.clone())
             }
@@ -484,13 +486,23 @@ fn rewrite_import_projections_expr(
             )),
         ),
         Expr::Lam(span, scope, param, ann, constraints, body) => {
+            let ann = ann
+                .as_ref()
+                .map(|t| rewrite_import_projections_type_expr(t, bound, imports));
+            let constraints = constraints
+                .iter()
+                .map(|c| TypeConstraint {
+                    class: rewrite_import_projections_class_name(&c.class, bound, imports),
+                    typ: rewrite_import_projections_type_expr(&c.typ, bound, imports),
+                })
+                .collect();
             bound.insert(param.name.clone());
             let out = Expr::Lam(
                 *span,
                 scope.clone(),
                 param.clone(),
-                ann.clone(),
-                constraints.clone(),
+                ann,
+                constraints,
                 std::sync::Arc::new(rewrite_import_projections_expr(
                     body,
                     bound,
@@ -516,9 +528,23 @@ fn rewrite_import_projections_expr(
                 diagnostics,
             ));
             bound.remove(&var.name);
-            Expr::Let(*span, var.clone(), ann.clone(), val, body)
+            Expr::Let(
+                *span,
+                var.clone(),
+                ann.as_ref()
+                    .map(|t| rewrite_import_projections_type_expr(t, bound, imports)),
+                val,
+                body,
+            )
         }
         Expr::LetRec(span, bindings, body) => {
+            let anns: Vec<Option<TypeExpr>> = bindings
+                .iter()
+                .map(|(_, ann, _)| {
+                    ann.as_ref()
+                        .map(|t| rewrite_import_projections_type_expr(t, bound, imports))
+                })
+                .collect();
             let names: Vec<Symbol> = bindings
                 .iter()
                 .map(|(var, _, _)| var.name.clone())
@@ -528,10 +554,11 @@ fn rewrite_import_projections_expr(
             }
             let bindings = bindings
                 .iter()
-                .map(|(var, ann, def)| {
+                .zip(anns)
+                .map(|((var, _ann, def), ann)| {
                     (
                         var.clone(),
-                        ann.clone(),
+                        ann,
                         std::sync::Arc::new(rewrite_import_projections_expr(
                             def,
                             bound,
@@ -608,7 +635,94 @@ fn rewrite_import_projections_expr(
                 imports,
                 diagnostics,
             )),
-            t.clone(),
+            rewrite_import_projections_type_expr(t, bound, imports),
+        ),
+    }
+}
+
+fn qualified_alias_member(
+    name: &rex_ast::expr::NameRef,
+) -> Option<(&rex_ast::expr::Symbol, &rex_ast::expr::Symbol)> {
+    match name {
+        rex_ast::expr::NameRef::Qualified(_, segments) if segments.len() == 2 => {
+            Some((&segments[0], &segments[1]))
+        }
+        _ => None,
+    }
+}
+
+fn rewrite_import_projections_class_name(
+    class: &rex_ast::expr::NameRef,
+    bound: &BTreeSet<rex_ast::expr::Symbol>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+) -> rex_ast::expr::NameRef {
+    let Some((alias, member)) = qualified_alias_member(class) else {
+        return class.clone();
+    };
+    if bound.contains(alias) {
+        return class.clone();
+    }
+    let Some(info) = imports.get(alias) else {
+        return class.clone();
+    };
+    info.class_map
+        .get(member)
+        .map(|s| rex_ast::expr::NameRef::Unqualified(s.clone()))
+        .unwrap_or_else(|| class.clone())
+}
+
+fn rewrite_import_projections_type_expr(
+    ty: &TypeExpr,
+    bound: &BTreeSet<rex_ast::expr::Symbol>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+) -> TypeExpr {
+    match ty {
+        TypeExpr::Name(span, name) => {
+            let Some((alias, member)) = qualified_alias_member(name) else {
+                return TypeExpr::Name(*span, name.clone());
+            };
+            if bound.contains(alias) {
+                return TypeExpr::Name(*span, name.clone());
+            }
+            let Some(info) = imports.get(alias) else {
+                return TypeExpr::Name(*span, name.clone());
+            };
+            if let Some(new) = info.type_map.get(member) {
+                TypeExpr::Name(*span, rex_ast::expr::NameRef::Unqualified(new.clone()))
+            } else if let Some(new) = info.class_map.get(member) {
+                TypeExpr::Name(*span, rex_ast::expr::NameRef::Unqualified(new.clone()))
+            } else {
+                TypeExpr::Name(*span, name.clone())
+            }
+        }
+        TypeExpr::App(span, f, x) => TypeExpr::App(
+            *span,
+            Box::new(rewrite_import_projections_type_expr(f, bound, imports)),
+            Box::new(rewrite_import_projections_type_expr(x, bound, imports)),
+        ),
+        TypeExpr::Fun(span, a, b) => TypeExpr::Fun(
+            *span,
+            Box::new(rewrite_import_projections_type_expr(a, bound, imports)),
+            Box::new(rewrite_import_projections_type_expr(b, bound, imports)),
+        ),
+        TypeExpr::Tuple(span, elems) => TypeExpr::Tuple(
+            *span,
+            elems
+                .iter()
+                .map(|e| rewrite_import_projections_type_expr(e, bound, imports))
+                .collect(),
+        ),
+        TypeExpr::Record(span, fields) => TypeExpr::Record(
+            *span,
+            fields
+                .iter()
+                .map(|(name, t)| {
+                    (
+                        name.clone(),
+                        rewrite_import_projections_type_expr(t, bound, imports),
+                    )
+                })
+                .collect(),
         ),
     }
 }
@@ -618,6 +732,7 @@ fn rewrite_program_import_projections(
     imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Program {
+    let decl_bound = BTreeSet::new();
     let decls = program
         .decls
         .iter()
@@ -635,12 +750,104 @@ fn rewrite_program_import_projections(
                     span: fd.span,
                     is_pub: fd.is_pub,
                     name: fd.name.clone(),
-                    params: fd.params.clone(),
-                    ret: fd.ret.clone(),
-                    constraints: fd.constraints.clone(),
+                    params: fd
+                        .params
+                        .iter()
+                        .map(|(v, t)| {
+                            (
+                                v.clone(),
+                                rewrite_import_projections_type_expr(t, &decl_bound, imports),
+                            )
+                        })
+                        .collect(),
+                    ret: rewrite_import_projections_type_expr(&fd.ret, &decl_bound, imports),
+                    constraints: fd
+                        .constraints
+                        .iter()
+                        .map(|c| TypeConstraint {
+                            class: rewrite_import_projections_class_name(
+                                &c.class,
+                                &decl_bound,
+                                imports,
+                            ),
+                            typ: rewrite_import_projections_type_expr(&c.typ, &decl_bound, imports),
+                        })
+                        .collect(),
                     body,
                 })
             }
+            Decl::DeclareFn(df) => Decl::DeclareFn(DeclareFnDecl {
+                span: df.span,
+                is_pub: df.is_pub,
+                name: df.name.clone(),
+                params: df
+                    .params
+                    .iter()
+                    .map(|(v, t)| {
+                        (
+                            v.clone(),
+                            rewrite_import_projections_type_expr(t, &decl_bound, imports),
+                        )
+                    })
+                    .collect(),
+                ret: rewrite_import_projections_type_expr(&df.ret, &decl_bound, imports),
+                constraints: df
+                    .constraints
+                    .iter()
+                    .map(|c| TypeConstraint {
+                        class: rewrite_import_projections_class_name(
+                            &c.class,
+                            &decl_bound,
+                            imports,
+                        ),
+                        typ: rewrite_import_projections_type_expr(&c.typ, &decl_bound, imports),
+                    })
+                    .collect(),
+            }),
+            Decl::Type(td) => Decl::Type(TypeDecl {
+                span: td.span,
+                is_pub: td.is_pub,
+                name: td.name.clone(),
+                params: td.params.clone(),
+                variants: td
+                    .variants
+                    .iter()
+                    .map(|v| rex_ast::expr::TypeVariant {
+                        name: v.name.clone(),
+                        args: v
+                            .args
+                            .iter()
+                            .map(|t| rewrite_import_projections_type_expr(t, &decl_bound, imports))
+                            .collect(),
+                    })
+                    .collect(),
+            }),
+            Decl::Class(cd) => Decl::Class(rex_ast::expr::ClassDecl {
+                span: cd.span,
+                is_pub: cd.is_pub,
+                name: cd.name.clone(),
+                params: cd.params.clone(),
+                supers: cd
+                    .supers
+                    .iter()
+                    .map(|c| TypeConstraint {
+                        class: rewrite_import_projections_class_name(
+                            &c.class,
+                            &decl_bound,
+                            imports,
+                        ),
+                        typ: rewrite_import_projections_type_expr(&c.typ, &decl_bound, imports),
+                    })
+                    .collect(),
+                methods: cd
+                    .methods
+                    .iter()
+                    .map(|m| rex_ast::expr::ClassMethodSig {
+                        name: m.name.clone(),
+                        typ: rewrite_import_projections_type_expr(&m.typ, &decl_bound, imports),
+                    })
+                    .collect(),
+            }),
             Decl::Instance(inst) => {
                 let methods = inst
                     .methods
@@ -662,9 +869,25 @@ fn rewrite_program_import_projections(
                 Decl::Instance(InstanceDecl {
                     span: inst.span,
                     is_pub: inst.is_pub,
-                    class: inst.class.clone(),
-                    head: inst.head.clone(),
-                    context: inst.context.clone(),
+                    class: rewrite_import_projections_class_name(
+                        &rex_ast::expr::NameRef::from_dotted(inst.class.as_ref()),
+                        &decl_bound,
+                        imports,
+                    )
+                    .to_dotted_symbol(),
+                    head: rewrite_import_projections_type_expr(&inst.head, &decl_bound, imports),
+                    context: inst
+                        .context
+                        .iter()
+                        .map(|c| TypeConstraint {
+                            class: rewrite_import_projections_class_name(
+                                &c.class,
+                                &decl_bound,
+                                imports,
+                            ),
+                            typ: rewrite_import_projections_type_expr(&c.typ, &decl_bound, imports),
+                        })
+                        .collect(),
                     methods,
                 })
             }
@@ -681,6 +904,291 @@ fn rewrite_program_import_projections(
     ));
 
     Program { decls, expr }
+}
+
+fn validate_import_projection_class_name(
+    class: &rex_ast::expr::NameRef,
+    span: Span,
+    bound: &BTreeSet<rex_ast::expr::Symbol>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some((alias, member)) = qualified_alias_member(class) else {
+        return;
+    };
+    if bound.contains(alias) {
+        return;
+    }
+    let Some(info) = imports.get(alias) else {
+        return;
+    };
+    if info.class_map.contains_key(member) {
+        return;
+    }
+    diagnostics.push(diagnostic_for_span(
+        span,
+        format!("module `{alias}` does not export `{member}`"),
+    ));
+}
+
+fn validate_import_projection_type_expr(
+    ty: &TypeExpr,
+    bound: &BTreeSet<rex_ast::expr::Symbol>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match ty {
+        TypeExpr::Name(span, name) => {
+            let Some((alias, member)) = qualified_alias_member(name) else {
+                return;
+            };
+            if bound.contains(alias) {
+                return;
+            }
+            let Some(info) = imports.get(alias) else {
+                return;
+            };
+            if info.type_map.contains_key(member) || info.class_map.contains_key(member) {
+                return;
+            }
+            diagnostics.push(diagnostic_for_span(
+                *span,
+                format!("module `{alias}` does not export `{member}`"),
+            ));
+        }
+        TypeExpr::App(_, f, x) => {
+            validate_import_projection_type_expr(f, bound, imports, diagnostics);
+            validate_import_projection_type_expr(x, bound, imports, diagnostics);
+        }
+        TypeExpr::Fun(_, a, b) => {
+            validate_import_projection_type_expr(a, bound, imports, diagnostics);
+            validate_import_projection_type_expr(b, bound, imports, diagnostics);
+        }
+        TypeExpr::Tuple(_, elems) => {
+            for e in elems {
+                validate_import_projection_type_expr(e, bound, imports, diagnostics);
+            }
+        }
+        TypeExpr::Record(_, fields) => {
+            for (_, t) in fields {
+                validate_import_projection_type_expr(t, bound, imports, diagnostics);
+            }
+        }
+    }
+}
+
+fn validate_import_projection_expr(
+    expr: &Expr,
+    bound: &mut BTreeSet<rex_ast::expr::Symbol>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match expr {
+        Expr::Lam(_, _, param, ann, constraints, body) => {
+            if let Some(ann) = ann {
+                validate_import_projection_type_expr(ann, bound, imports, diagnostics);
+            }
+            for c in constraints {
+                validate_import_projection_class_name(
+                    &c.class,
+                    *c.typ.span(),
+                    bound,
+                    imports,
+                    diagnostics,
+                );
+                validate_import_projection_type_expr(&c.typ, bound, imports, diagnostics);
+            }
+            bound.insert(param.name.clone());
+            validate_import_projection_expr(body, bound, imports, diagnostics);
+            bound.remove(&param.name);
+        }
+        Expr::Let(_, var, ann, val, body) => {
+            if let Some(ann) = ann {
+                validate_import_projection_type_expr(ann, bound, imports, diagnostics);
+            }
+            validate_import_projection_expr(val, bound, imports, diagnostics);
+            bound.insert(var.name.clone());
+            validate_import_projection_expr(body, bound, imports, diagnostics);
+            bound.remove(&var.name);
+        }
+        Expr::LetRec(_, bindings, body) => {
+            for (_, ann, _) in bindings {
+                if let Some(ann) = ann {
+                    validate_import_projection_type_expr(ann, bound, imports, diagnostics);
+                }
+            }
+            let names: Vec<_> = bindings
+                .iter()
+                .map(|(var, _, _)| var.name.clone())
+                .collect();
+            for name in &names {
+                bound.insert(name.clone());
+            }
+            for (_, _ann, def) in bindings {
+                validate_import_projection_expr(def, bound, imports, diagnostics);
+            }
+            validate_import_projection_expr(body, bound, imports, diagnostics);
+            for name in &names {
+                bound.remove(name);
+            }
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            validate_import_projection_expr(scrutinee, bound, imports, diagnostics);
+            for (pat, arm_expr) in arms {
+                let mut binds = Vec::new();
+                collect_pattern_bindings(pat, &mut binds);
+                for b in &binds {
+                    bound.insert(b.clone());
+                }
+                validate_import_projection_expr(arm_expr, bound, imports, diagnostics);
+                for b in &binds {
+                    bound.remove(b);
+                }
+            }
+        }
+        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+            for e in elems {
+                validate_import_projection_expr(e, bound, imports, diagnostics);
+            }
+        }
+        Expr::Dict(_, kvs) => {
+            for v in kvs.values() {
+                validate_import_projection_expr(v, bound, imports, diagnostics);
+            }
+        }
+        Expr::RecordUpdate(_, base, updates) => {
+            validate_import_projection_expr(base, bound, imports, diagnostics);
+            for v in updates.values() {
+                validate_import_projection_expr(v, bound, imports, diagnostics);
+            }
+        }
+        Expr::App(_, f, x) => {
+            validate_import_projection_expr(f, bound, imports, diagnostics);
+            validate_import_projection_expr(x, bound, imports, diagnostics);
+        }
+        Expr::Ite(_, c, t, e) => {
+            validate_import_projection_expr(c, bound, imports, diagnostics);
+            validate_import_projection_expr(t, bound, imports, diagnostics);
+            validate_import_projection_expr(e, bound, imports, diagnostics);
+        }
+        Expr::Ann(_, e, t) => {
+            validate_import_projection_expr(e, bound, imports, diagnostics);
+            validate_import_projection_type_expr(t, bound, imports, diagnostics);
+        }
+        Expr::Project(_, base, _) => {
+            validate_import_projection_expr(base, bound, imports, diagnostics);
+        }
+        Expr::Var(..)
+        | Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..)
+        | Expr::Hole(..) => {}
+    }
+}
+
+fn validate_import_projection_uses(
+    program: &Program,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let decl_bound = BTreeSet::new();
+    for decl in &program.decls {
+        match decl {
+            Decl::Fn(fd) => {
+                for (_, t) in &fd.params {
+                    validate_import_projection_type_expr(t, &decl_bound, imports, diagnostics);
+                }
+                validate_import_projection_type_expr(&fd.ret, &decl_bound, imports, diagnostics);
+                for c in &fd.constraints {
+                    validate_import_projection_class_name(
+                        &c.class,
+                        *c.typ.span(),
+                        &decl_bound,
+                        imports,
+                        diagnostics,
+                    );
+                    validate_import_projection_type_expr(&c.typ, &decl_bound, imports, diagnostics);
+                }
+                let mut bound: BTreeSet<rex_ast::expr::Symbol> =
+                    fd.params.iter().map(|(v, _)| v.name.clone()).collect();
+                validate_import_projection_expr(fd.body.as_ref(), &mut bound, imports, diagnostics);
+            }
+            Decl::DeclareFn(df) => {
+                for (_, t) in &df.params {
+                    validate_import_projection_type_expr(t, &decl_bound, imports, diagnostics);
+                }
+                validate_import_projection_type_expr(&df.ret, &decl_bound, imports, diagnostics);
+                for c in &df.constraints {
+                    validate_import_projection_class_name(
+                        &c.class,
+                        *c.typ.span(),
+                        &decl_bound,
+                        imports,
+                        diagnostics,
+                    );
+                    validate_import_projection_type_expr(&c.typ, &decl_bound, imports, diagnostics);
+                }
+            }
+            Decl::Type(td) => {
+                for v in &td.variants {
+                    for t in &v.args {
+                        validate_import_projection_type_expr(t, &decl_bound, imports, diagnostics);
+                    }
+                }
+            }
+            Decl::Class(cd) => {
+                for c in &cd.supers {
+                    validate_import_projection_class_name(
+                        &c.class,
+                        *c.typ.span(),
+                        &decl_bound,
+                        imports,
+                        diagnostics,
+                    );
+                    validate_import_projection_type_expr(&c.typ, &decl_bound, imports, diagnostics);
+                }
+                for m in &cd.methods {
+                    validate_import_projection_type_expr(&m.typ, &decl_bound, imports, diagnostics);
+                }
+            }
+            Decl::Instance(inst) => {
+                validate_import_projection_class_name(
+                    &rex_ast::expr::NameRef::from_dotted(inst.class.as_ref()),
+                    inst.span,
+                    &decl_bound,
+                    imports,
+                    diagnostics,
+                );
+                validate_import_projection_type_expr(&inst.head, &decl_bound, imports, diagnostics);
+                for c in &inst.context {
+                    validate_import_projection_class_name(
+                        &c.class,
+                        *c.typ.span(),
+                        &decl_bound,
+                        imports,
+                        diagnostics,
+                    );
+                    validate_import_projection_type_expr(&c.typ, &decl_bound, imports, diagnostics);
+                }
+                for m in &inst.methods {
+                    let mut bound = BTreeSet::new();
+                    validate_import_projection_expr(
+                        m.body.as_ref(),
+                        &mut bound,
+                        imports,
+                        diagnostics,
+                    );
+                }
+            }
+            Decl::Import(..) => {}
+        }
+    }
+    let mut bound = BTreeSet::new();
+    validate_import_projection_expr(program.expr.as_ref(), &mut bound, imports, diagnostics);
 }
 
 type PreparedProgram = (
@@ -862,12 +1370,22 @@ fn prepare_program_with_imports(
         let prefix = module_prefix(&hash);
 
         let mut type_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
+        let mut class_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
         for decl in &module_program.decls {
-            if let Decl::Type(td) = decl {
-                type_map.insert(
-                    td.name.clone(),
-                    intern(&format!("{prefix}.{}", td.name.as_ref())),
-                );
+            match decl {
+                Decl::Type(td) => {
+                    type_map.insert(
+                        td.name.clone(),
+                        intern(&format!("{prefix}.{}", td.name.as_ref())),
+                    );
+                }
+                Decl::Class(cd) => {
+                    class_map.insert(
+                        cd.name.clone(),
+                        intern(&format!("{prefix}.{}", cd.name.as_ref())),
+                    );
+                }
+                _ => {}
             }
         }
 
@@ -991,11 +1509,14 @@ fn prepare_program_with_imports(
             ImportModuleInfo {
                 path: module_path,
                 value_map,
+                type_map,
+                class_map,
                 export_defs,
             },
         );
     }
 
+    validate_import_projection_uses(program, &imports, &mut diagnostics);
     let rewritten = rewrite_program_import_projections(program, &imports, &mut diagnostics);
     Ok((rewritten, ts, imports, diagnostics))
 }
@@ -3176,7 +3697,7 @@ fn expected_type_in_expr(expr: &Expr, typed: &TypedExpr, pos: RexPosition) -> Op
                     else_expr: telse,
                 },
             ) => {
-                let bool_ty = Type::con("bool", 0);
+                let bool_ty = Type::builtin(BuiltinTypeId::Bool);
                 visit(cond.as_ref(), tcond.as_ref(), pos, Some(&bool_ty), best);
                 visit(
                     then_expr.as_ref(),
@@ -3201,7 +3722,9 @@ fn expected_type_in_expr(expr: &Expr, typed: &TypedExpr, pos: RexPosition) -> Op
             (Expr::List(_span, elems), TypedExprKind::List(typed_elems)) => {
                 let list_elem_expected = match typed.typ.as_ref() {
                     TypeKind::App(head, elem) => match head.as_ref() {
-                        TypeKind::Con(tc) if tc.name.as_ref() == "List" && tc.arity == 1 => {
+                        TypeKind::Con(tc)
+                            if tc.builtin_id == Some(BuiltinTypeId::List) && tc.arity == 1 =>
+                        {
                             Some(elem)
                         }
                         _ => None,
@@ -4405,7 +4928,8 @@ fn hover_type_in_expr(
                 out.insert(v.name.as_ref().to_string(), scrutinee_ty.clone());
             }
             Pattern::Named(_span, ctor, args) => {
-                let Some(schemes) = ts.env.lookup(ctor) else {
+                let ctor_name = ctor.to_dotted_symbol();
+                let Some(schemes) = ts.env.lookup(&ctor_name) else {
                     return;
                 };
                 let Some(scheme) = schemes.first() else {
@@ -4437,7 +4961,7 @@ fn hover_type_in_expr(
             Pattern::List(_span, elems) => {
                 let tv = ts.supply.fresh(None);
                 let elem = Type::var(tv.clone());
-                let list_ty = Type::app(Type::con("List", 1), elem.clone());
+                let list_ty = Type::app(Type::builtin(BuiltinTypeId::List), elem.clone());
                 let Ok(s) = unify(scrutinee_ty, &list_ty) else {
                     return;
                 };
@@ -4449,7 +4973,7 @@ fn hover_type_in_expr(
             Pattern::Cons(_span, head, tail) => {
                 let tv = ts.supply.fresh(None);
                 let elem = Type::var(tv.clone());
-                let list_ty = Type::app(Type::con("List", 1), elem.clone());
+                let list_ty = Type::app(Type::builtin(BuiltinTypeId::List), elem.clone());
                 let Ok(s) = unify(scrutinee_ty, &list_ty) else {
                     return;
                 };
@@ -4469,7 +4993,7 @@ fn hover_type_in_expr(
                 _ => {
                     let tv = ts.supply.fresh(None);
                     let elem = Type::var(tv.clone());
-                    let dict_ty = Type::app(Type::con("Dict", 1), elem.clone());
+                    let dict_ty = Type::app(Type::builtin(BuiltinTypeId::Dict), elem.clone());
                     let Ok(s) = unify(scrutinee_ty, &dict_ty) else {
                         return;
                     };
@@ -6934,6 +7458,8 @@ mod tests {
     use rex::{Engine, GasMeter, Parser, Token};
     use rex_engine::{ValueDisplayOptions, pointer_display_with};
     use serde_json::Map;
+    use std::fs;
+    use std::path::PathBuf;
 
     fn expect_object(value: &Value) -> &Map<String, Value> {
         value.as_object().expect("object")
@@ -6951,6 +7477,29 @@ mod tests {
             .unwrap_or_else(|| panic!("missing `{key}`"))
             .as_str()
             .unwrap_or_else(|| panic!("`{key}` should be string"))
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let mut dir = std::env::temp_dir();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock before epoch")
+            .as_nanos();
+        dir.push(format!("rex-lsp-test-{name}-{nonce}"));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn assert_internal_name_ref(name: &rex_ast::expr::NameRef) {
+        match name {
+            rex_ast::expr::NameRef::Unqualified(sym) => {
+                assert!(
+                    sym.as_ref().starts_with("@m"),
+                    "expected internal rewritten symbol, got `{sym}`"
+                );
+            }
+            other => panic!("expected unqualified rewritten name, got {other:?}"),
+        }
     }
 
     async fn eval_source_to_display(code: &str) -> (String, String) {
@@ -6991,6 +7540,462 @@ process.wait p
 
         let diags = diagnostics_from_text(&uri, text);
         assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    }
+
+    #[test]
+    fn prepare_program_rewrites_imported_type_refs_in_annotations() {
+        let dir = temp_dir("prepare_program_rewrites_imported_type_refs_in_annotations");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub type Boxed = Boxed i32
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+let x : D.Boxed = D.Boxed 1 in
+x is D.Boxed
+"#;
+        let tokens = Token::tokenize(source).expect("tokenize");
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program(&mut GasMeter::default())
+            .expect("parse");
+        let (rewritten, _ts, _imports, diags) =
+            prepare_program_with_imports(&uri, &program).expect("prepare");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+        let Expr::Let(_, _, Some(let_ann), _, body) = rewritten.expr.as_ref() else {
+            panic!("expected rewritten let expression");
+        };
+        if let TypeExpr::Name(_, name) = let_ann {
+            assert_internal_name_ref(name);
+        } else {
+            panic!("expected rewritten let annotation");
+        }
+
+        let Expr::Ann(_, _, ann_ty) = body.as_ref() else {
+            panic!("expected rewritten trailing annotation");
+        };
+        if let TypeExpr::Name(_, name) = ann_ty {
+            assert_internal_name_ref(name);
+        } else {
+            panic!("expected rewritten annotation type");
+        }
+
+        if let Expr::Let(_, _, _, def, _) = rewritten.expr.as_ref()
+            && let Expr::App(_, ctor, _) = def.as_ref()
+            && let Expr::Var(v) = ctor.as_ref()
+        {
+            assert!(
+                v.name.as_ref().starts_with("@m"),
+                "expected constructor projection rewrite to internal symbol"
+            );
+        } else {
+            panic!("expected rewritten constructor application");
+        }
+    }
+
+    #[test]
+    fn prepare_program_rewrites_imported_class_refs_in_instance_headers() {
+        let dir = temp_dir("prepare_program_rewrites_imported_class_refs_in_instance_headers");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub class Pick a where
+    pick : a
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+instance D.Pick i32 where
+    pick = 7
+
+pick is i32
+"#;
+        let tokens = Token::tokenize(source).expect("tokenize");
+        let mut parser = Parser::new(tokens);
+        let program = parser
+            .parse_program(&mut GasMeter::default())
+            .expect("parse");
+        let (rewritten, _ts, _imports, diags) =
+            prepare_program_with_imports(&uri, &program).expect("prepare");
+        assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+        let Some(inst) = rewritten.decls.iter().find_map(|decl| match decl {
+            Decl::Instance(inst) => Some(inst),
+            _ => None,
+        }) else {
+            panic!("expected instance declaration");
+        };
+        assert!(
+            inst.class.as_ref().starts_with("@m"),
+            "expected rewritten internal class symbol, got `{}`",
+            inst.class
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_missing_class_export_in_instance_header() {
+        let dir = temp_dir("diagnostics_report_missing_class_export_in_instance_header");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub class Present a where
+    present : a
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+instance D.Missing i32 where
+    missing = 1
+
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_missing_type_export_in_annotation() {
+        let dir = temp_dir("diagnostics_report_missing_type_export_in_annotation");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub type Present = Present i32
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+fn id x: D.Missing -> D.Missing = x
+
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_missing_type_export_in_instance_head() {
+        let dir = temp_dir("diagnostics_report_missing_type_export_in_instance_head");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub class Marker a where
+    marker : i32
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+instance D.Marker D.Missing where
+    marker = 1
+
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_missing_class_export_in_fn_where_constraint() {
+        let dir = temp_dir("diagnostics_report_missing_class_export_in_fn_where_constraint");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub class Present a where
+    present : a
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+fn id x: i32 -> i32 where D.Missing i32 = x
+
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_missing_class_export_in_declare_fn_where_constraint() {
+        let dir =
+            temp_dir("diagnostics_report_missing_class_export_in_declare_fn_where_constraint");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub class Present a where
+    present : a
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+declare fn id x: i32 -> i32 where D.Missing i32
+
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_report_missing_class_export_in_class_super_constraint() {
+        let dir = temp_dir("diagnostics_report_missing_class_export_in_class_super_constraint");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub class Present a where
+    present : a
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+class Local a <= D.Missing a where
+    local : a
+
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_allow_lambda_param_named_like_import_alias_in_annotation() {
+        let dir = temp_dir("diagnostics_allow_lambda_param_named_like_import_alias_in_annotation");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub type Boxed = Boxed i32
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+let f = \ (D : D.Boxed) -> 0 in
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+    }
+
+    #[test]
+    fn diagnostics_report_missing_type_export_in_letrec_annotation_with_alias_named_binding() {
+        let dir = temp_dir(
+            "diagnostics_report_missing_type_export_in_letrec_annotation_with_alias_named_binding",
+        );
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub type Present = Present i32
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+let rec D: D.Missing = 1 in
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
+    }
+
+    #[test]
+    fn diagnostics_allow_letrec_annotation_with_alias_named_binding_for_valid_type() {
+        let dir =
+            temp_dir("diagnostics_allow_letrec_annotation_with_alias_named_binding_for_valid_type");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub type Num = Num i32
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+import dep (Num)
+
+let rec D: D.Num -> i32 = \_ -> 0 in
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+    }
+
+    #[test]
+    fn diagnostics_allow_let_annotation_with_alias_named_binding_for_valid_type() {
+        let dir =
+            temp_dir("diagnostics_allow_let_annotation_with_alias_named_binding_for_valid_type");
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub type Num = Num i32
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+let D: D.Num -> i32 = \_ -> 0 in
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+    }
+
+    #[test]
+    fn diagnostics_report_missing_type_export_in_let_annotation_with_alias_named_binding() {
+        let dir = temp_dir(
+            "diagnostics_report_missing_type_export_in_let_annotation_with_alias_named_binding",
+        );
+        let main = dir.join("main.rex");
+        let dep = dir.join("dep.rex");
+        fs::write(
+            &dep,
+            r#"
+pub type Present = Present i32
+()
+"#,
+        )
+        .expect("write dep");
+        fs::write(&main, "()").expect("write main");
+
+        let uri = Url::from_file_path(&main).expect("main file uri");
+        let source = r#"
+import dep as D
+
+let D: D.Missing = 1 in
+0
+"#;
+        let diags = diagnostics_from_text(&uri, source);
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
+            "diagnostics: {diags:#?}"
+        );
     }
 
     #[test]

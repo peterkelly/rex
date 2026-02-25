@@ -47,6 +47,11 @@ let value = engine
 println!("{value}");
 ```
 
+Module sources loaded via resolvers (and module files on disk) must be declaration-only. To run an expression, use snippet/repl entry points.
+Qualified alias members used in type/class positions (annotations, `where` constraints, instance
+headers, superclass clauses) are validated against module exports during module processing; missing
+exports fail early with module errors.
+
 ## Engine Initialization and Default Imports
 
 `Engine::with_prelude(state)` is shorthand for `Engine::with_options(state, EngineOptions::default())`.
@@ -100,6 +105,8 @@ Notes:
 - local imports are resolved relative to the importing module path.
 - include roots are searched after local-relative imports.
 - type-only workflows can use `infer_module_file` with the same resolver setup.
+- import clauses (`(*)` / item lists) import exported values only.
+- module aliases (`import x as M`) provide qualified access to exported values, types, and classes.
 
 ### 2) Inject In-Memory Rex Modules
 
@@ -121,7 +128,7 @@ let modules = Arc::new(HashMap::from([
     ),
     (
         "acme.main".to_string(),
-        "import acme.math (inc)\ninc 41".to_string(),
+        "import acme.math (inc)\npub fn main : i32 = inc 41".to_string(),
     ),
 ]));
 
@@ -139,7 +146,9 @@ engine.add_resolver("host-map", {
 });
 
 let mut gas = GasMeter::default();
-let value = engine.eval_module_source(&modules["acme.main"], &mut gas).await?;
+let value = engine
+    .eval_snippet("import acme.main (main)\nmain", &mut gas)
+    .await?;
 println!("{value}");
 ```
 
@@ -290,19 +299,19 @@ These callbacks receive `&Engine<State>` (not just `&State`), so they can:
 ```rust
 use futures::FutureExt;
 use rex_engine::{Engine, Module, Pointer};
-use rex_ts::{Scheme, Type};
+use rex_ts::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
 let mut m = Module::new("acme.dynamic");
-let scheme = Scheme::new(vec![], vec![], Type::fun(Type::con("i32", 0), Type::con("i32", 0)));
+let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
 m.export_native("id_ptr", scheme.clone(), 1, |_engine: &Engine<()>, _typ: &Type, args: &[Pointer]| {
     Ok(args[0].clone())
 })?;
 
-m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::con("i32", 0)), 0, |engine: &Engine<()>, _typ: Type, _args: Vec<Pointer>| {
+m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: &Engine<()>, _typ: Type, _args: Vec<Pointer>| {
     async move { engine.heap.alloc_i32(42) }.boxed_local()
 })?;
 
@@ -607,7 +616,7 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 ```rust
 use futures::FutureExt;
 use rex_engine::{CancellationToken, Engine, EngineError};
-use rex_ts::{Scheme, Type};
+use rex_ts::{BuiltinTypeId, Scheme, Type};
 use rex_util::{GasCosts, GasMeter};
 
 let tokens = rex_lexer::Token::tokenize("stall")?;
@@ -618,7 +627,7 @@ let expr = parser
     .expr;
 
 let mut engine = Engine::with_prelude(())?;
-let scheme = Scheme::new(vec![], vec![], Type::con("i32", 0));
+let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
 engine.export_native_async_cancellable(
     "stall",
     scheme,

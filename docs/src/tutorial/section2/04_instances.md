@@ -18,6 +18,15 @@ instance Show i32
   show = \_ -> "<i32>"
 ```
 
+Class names in instance headers can be module-qualified when imported via alias:
+
+```rex
+import dep as D
+
+instance D.Show i32
+  show = \_ -> "<i32>"
+```
+
 ## A polymorphic instance with context
 
 Instance contexts use `<=`:
@@ -47,4 +56,3 @@ instance context.
 Rex rejects overlapping instance heads for the same class. This keeps method lookup deterministic.
 
 In practical terms: you can’t have two different `Show (List a)` instances in scope at once.
-

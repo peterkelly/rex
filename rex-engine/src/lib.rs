@@ -22,7 +22,8 @@ pub use env::Env;
 pub use error::{EngineError, ModuleError};
 pub use modules::virtual_export_name;
 pub use modules::{
-    ModuleExports, ModuleId, ModuleInstance, ReplState, ResolveRequest, ResolvedModule,
+    CanonicalSymbol, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ReplState, ResolveRequest,
+    ResolvedModule, SymbolKind,
 };
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
 pub use value::{

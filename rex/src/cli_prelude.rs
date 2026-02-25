@@ -9,7 +9,7 @@ use rex_ast::expr::{Symbol, sym};
 use rex_engine::{
     Engine, EngineError, FromPointer, Heap, Module, Pointer, Value, virtual_export_name,
 };
-use rex_ts::{Scheme, Type};
+use rex_ts::{BuiltinTypeId, Scheme, Type};
 use uuid::Uuid;
 
 fn lock_mutex<'a, T>(
@@ -42,7 +42,7 @@ fn unit_type() -> Type {
 }
 
 fn array_type(elem: Type) -> Type {
-    Type::app(Type::con("Array", 1), elem)
+    Type::app(Type::builtin(BuiltinTypeId::Array), elem)
 }
 
 fn list_to_vec(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
@@ -140,8 +140,8 @@ pub fn inject_cli_prelude_engine(engine: &mut Engine) -> Result<(), EngineError>
 }
 
 fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
-    let i32_ty = Type::con("i32", 0);
-    let u8_ty = Type::con("u8", 0);
+    let i32_ty = Type::builtin(BuiltinTypeId::I32);
+    let u8_ty = Type::builtin(BuiltinTypeId::U8);
     let array_u8 = array_type(u8_ty);
     let mut module = Module::new("std.io");
 
@@ -231,9 +231,9 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let subprocess_name = virtual_export_name("std.process", "Subprocess");
     let subprocess_ctor = sym(&subprocess_name);
     let subprocess = Type::con(&subprocess_name, 0);
-    let string = Type::con("string", 0);
-    let i32_ty = Type::con("i32", 0);
-    let list_string = Type::app(Type::con("List", 1), string.clone());
+    let string = Type::builtin(BuiltinTypeId::String);
+    let i32_ty = Type::builtin(BuiltinTypeId::I32);
+    let list_string = Type::app(Type::builtin(BuiltinTypeId::List), string.clone());
     let mut module = Module::new("std.process");
     let opts = Type::record(vec![
         (sym("cmd"), string.clone()),
@@ -429,7 +429,10 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         Scheme::new(
             vec![],
             vec![],
-            Type::fun(subprocess.clone(), array_type(Type::con("u8", 0))),
+            Type::fun(
+                subprocess.clone(),
+                array_type(Type::builtin(BuiltinTypeId::U8)),
+            ),
         ),
         1,
         move |engine, _, args| {
@@ -458,7 +461,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         Scheme::new(
             vec![],
             vec![],
-            Type::fun(subprocess, array_type(Type::con("u8", 0))),
+            Type::fun(subprocess, array_type(Type::builtin(BuiltinTypeId::U8))),
         ),
         1,
         move |engine, _, args| {
@@ -558,9 +561,9 @@ mod tests {
         assert_eq!(
             ty,
             Type::tuple(vec![
-                Type::con("i32", 0),
-                array_type(Type::con("u8", 0)),
-                array_type(Type::con("u8", 0)),
+                Type::builtin(BuiltinTypeId::I32),
+                array_type(Type::builtin(BuiltinTypeId::U8)),
+                array_type(Type::builtin(BuiltinTypeId::U8)),
             ])
         );
         let value = engine

@@ -5,7 +5,7 @@ use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_util::GasMeter;
 
-use crate::{AdtDecl, Predicate, Scheme, Type, TypeError, TypeSystem};
+use crate::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeError, TypeSystem};
 use rex_ast::expr::sym;
 
 fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeError> {
@@ -51,9 +51,9 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     //
     // These intentionally carry no typeclass predicates. An instance method
     // body should not need to assume the class it is defining.
-    let bool_ty = Type::con("bool", 0);
-    let i32_ty = Type::con("i32", 0);
-    let string_ty = Type::con("string", 0);
+    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
+    let i32_ty = Type::builtin(BuiltinTypeId::I32);
+    let string_ty = Type::builtin(BuiltinTypeId::String);
 
     // Equality intrinsics.
     //
@@ -63,11 +63,23 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // runtime (harder to reason about, harder to optimize).
     {
         let eq_types = [
-            "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
-            "uuid", "datetime",
+            BuiltinTypeId::Bool,
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
+            BuiltinTypeId::String,
+            BuiltinTypeId::Uuid,
+            BuiltinTypeId::DateTime,
         ];
-        for prim in eq_types {
-            let t = Type::con(prim, 0);
+        for builtin in eq_types {
+            let t = Type::builtin(builtin);
             ts.add_overload(
                 "prim_eq",
                 Scheme::new(
@@ -93,7 +105,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     {
         let a_tv = ts.supply.fresh(Some(sym("a")));
         let a = Type::var(a_tv.clone());
-        let array_a = Type::app(Type::con("Array", 1), a.clone());
+        let array_a = Type::app(Type::builtin(BuiltinTypeId::Array), a.clone());
         ts.add_value(
             "prim_array_eq",
             Scheme::new(
@@ -115,10 +127,20 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // Numeric intrinsics (monomorphic overloads).
     {
         let additive = [
-            "string", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+            BuiltinTypeId::String,
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
         ];
-        for prim in additive {
-            let t = Type::con(prim, 0);
+        for builtin in additive {
+            let t = Type::builtin(builtin);
             ts.add_overload("prim_zero", Scheme::new(vec![], vec![], t.clone()));
             ts.add_overload(
                 "prim_add",
@@ -131,10 +153,19 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         }
 
         let multiplicative = [
-            "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
         ];
-        for prim in multiplicative {
-            let t = Type::con(prim, 0);
+        for builtin in multiplicative {
+            let t = Type::builtin(builtin);
             ts.add_overload("prim_one", Scheme::new(vec![], vec![], t.clone()));
             ts.add_overload(
                 "prim_mul",
@@ -146,9 +177,16 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
-        let signed = ["i8", "i16", "i32", "i64", "f32", "f64"];
-        for prim in signed {
-            let t = Type::con(prim, 0);
+        let signed = [
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
+        ];
+        for builtin in signed {
+            let t = Type::builtin(builtin);
             ts.add_overload(
                 "prim_sub",
                 Scheme::new(
@@ -163,8 +201,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
-        for prim in ["f32", "f64"] {
-            let t = Type::con(prim, 0);
+        for builtin in [BuiltinTypeId::F32, BuiltinTypeId::F64] {
+            let t = Type::builtin(builtin);
             ts.add_overload(
                 "prim_div",
                 Scheme::new(
@@ -175,9 +213,18 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
-        let integral = ["u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64"];
-        for prim in integral {
-            let t = Type::con(prim, 0);
+        let integral = [
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+        ];
+        for builtin in integral {
+            let t = Type::builtin(builtin);
             ts.add_overload(
                 "prim_mod",
                 Scheme::new(
@@ -192,10 +239,20 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // Ordering intrinsics (monomorphic overloads).
     {
         let ord = [
-            "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
+            BuiltinTypeId::String,
         ];
-        for prim in ord {
-            let t = Type::con(prim, 0);
+        for builtin in ord {
+            let t = Type::builtin(builtin);
             ts.add_overload(
                 "prim_cmp",
                 Scheme::new(
@@ -220,11 +277,23 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // Show-printing intrinsics (monomorphic overloads).
     {
         let show_types = [
-            "bool", "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "string",
-            "uuid", "datetime",
+            BuiltinTypeId::Bool,
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
+            BuiltinTypeId::String,
+            BuiltinTypeId::Uuid,
+            BuiltinTypeId::DateTime,
         ];
-        for prim in show_types {
-            let t = Type::con(prim, 0);
+        for builtin in show_types {
+            let t = Type::builtin(builtin);
             ts.add_overload(
                 "prim_show",
                 Scheme::new(vec![], vec![], Type::fun(t, string_ty.clone())),
@@ -253,7 +322,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     {
         let a_tv = ts.supply.fresh(Some(sym("a")));
         let a = Type::var(a_tv.clone());
-        let result_con = Type::con("Result", 2);
+        let result_con = Type::builtin(BuiltinTypeId::Result);
         let result_as = Type::app(Type::app(result_con, string_ty.clone()), a);
         ts.add_value(
             "prim_json_parse",
@@ -266,10 +335,10 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // These are all `prim_` because they are the host-provided “bottom layer”.
     // The user-facing API is the class methods (`map`, `foldl`, `zip`, `get`, ...).
     {
-        let list_con = Type::con("List", 1);
-        let array_con = Type::con("Array", 1);
-        let option_con = Type::con("Option", 1);
-        let result_con = Type::con("Result", 2);
+        let list_con = Type::builtin(BuiltinTypeId::List);
+        let array_con = Type::builtin(BuiltinTypeId::Array);
+        let option_con = Type::builtin(BuiltinTypeId::Option);
+        let result_con = Type::builtin(BuiltinTypeId::Result);
 
         let list_of = |t: Type| Type::app(list_con.clone(), t);
         let array_of = |t: Type| Type::app(array_con.clone(), t);
@@ -620,8 +689,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             let b_tv = ts.supply.fresh(Some(sym("b")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
-            let dict_a = Type::app(Type::con("Dict", 1), a.clone());
-            let dict_b = Type::app(Type::con("Dict", 1), b.clone());
+            let dict_a = Type::app(Type::builtin(BuiltinTypeId::Dict), a.clone());
+            let dict_b = Type::app(Type::builtin(BuiltinTypeId::Dict), b.clone());
             ts.add_value(
                 "prim_dict_map",
                 Scheme::new(
@@ -640,8 +709,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             let e = Type::var(e_tv.clone());
-            let dict_a = Type::app(Type::con("Dict", 1), a.clone());
-            let dict_b = Type::app(Type::con("Dict", 1), b.clone());
+            let dict_a = Type::app(Type::builtin(BuiltinTypeId::Dict), a.clone());
+            let dict_b = Type::app(Type::builtin(BuiltinTypeId::Dict), b.clone());
             let result_eb = result_of(b.clone(), e.clone());
             let result_edictb = result_of(dict_b, e);
             ts.add_value(
@@ -659,33 +728,46 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         // We model these as primitive intrinsics to keep Rex code simple and to
         // make overflow/rounding rules explicit at the host boundary.
         for src in [
-            "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64",
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
         ] {
-            let t = Type::con(src, 0);
+            let t = Type::builtin(src);
             ts.add_overload(
                 "prim_to_f64",
-                Scheme::new(vec![], vec![], Type::fun(t, Type::con("f64", 0))),
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(t, Type::builtin(BuiltinTypeId::F64)),
+                ),
             );
         }
 
         for (name, dst) in [
-            ("prim_f64_to_u8", "u8"),
-            ("prim_f64_to_u16", "u16"),
-            ("prim_f64_to_u32", "u32"),
-            ("prim_f64_to_u64", "u64"),
-            ("prim_f64_to_i8", "i8"),
-            ("prim_f64_to_i16", "i16"),
-            ("prim_f64_to_i32", "i32"),
-            ("prim_f64_to_i64", "i64"),
-            ("prim_f64_to_f32", "f32"),
+            ("prim_f64_to_u8", BuiltinTypeId::U8),
+            ("prim_f64_to_u16", BuiltinTypeId::U16),
+            ("prim_f64_to_u32", BuiltinTypeId::U32),
+            ("prim_f64_to_u64", BuiltinTypeId::U64),
+            ("prim_f64_to_i8", BuiltinTypeId::I8),
+            ("prim_f64_to_i16", BuiltinTypeId::I16),
+            ("prim_f64_to_i32", BuiltinTypeId::I32),
+            ("prim_f64_to_i64", BuiltinTypeId::I64),
+            ("prim_f64_to_f32", BuiltinTypeId::F32),
         ] {
-            let dst_ty = Type::con(dst, 0);
+            let dst_ty = Type::builtin(dst);
             ts.add_value(
                 name,
                 Scheme::new(
                     vec![],
                     vec![],
-                    Type::fun(Type::con("f64", 0), option_of(dst_ty)),
+                    Type::fun(Type::builtin(BuiltinTypeId::F64), option_of(dst_ty)),
                 ),
             );
         }
@@ -695,7 +777,10 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             Scheme::new(
                 vec![],
                 vec![],
-                Type::fun(Type::con("string", 0), option_of(Type::con("uuid", 0))),
+                Type::fun(
+                    Type::builtin(BuiltinTypeId::String),
+                    option_of(Type::builtin(BuiltinTypeId::Uuid)),
+                ),
             ),
         );
         ts.add_value(
@@ -703,7 +788,10 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             Scheme::new(
                 vec![],
                 vec![],
-                Type::fun(Type::con("string", 0), option_of(Type::con("datetime", 0))),
+                Type::fun(
+                    Type::builtin(BuiltinTypeId::String),
+                    option_of(Type::builtin(BuiltinTypeId::DateTime)),
+                ),
             ),
         );
     }
@@ -712,17 +800,31 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
     // Primitive type constructors
     let prims = [
-        "u8", "u16", "u32", "u64", "i8", "i16", "i32", "i64", "f32", "f64", "bool", "string",
-        "uuid", "datetime",
+        BuiltinTypeId::U8,
+        BuiltinTypeId::U16,
+        BuiltinTypeId::U32,
+        BuiltinTypeId::U64,
+        BuiltinTypeId::I8,
+        BuiltinTypeId::I16,
+        BuiltinTypeId::I32,
+        BuiltinTypeId::I64,
+        BuiltinTypeId::F32,
+        BuiltinTypeId::F64,
+        BuiltinTypeId::Bool,
+        BuiltinTypeId::String,
+        BuiltinTypeId::Uuid,
+        BuiltinTypeId::DateTime,
     ];
     for prim in prims {
-        ts.env
-            .extend(sym(prim), Scheme::new(vec![], vec![], Type::con(prim, 0)));
+        ts.env.extend(
+            prim.as_symbol(),
+            Scheme::new(vec![], vec![], Type::builtin(prim)),
+        );
     }
 
     // Type constructors for ADTs used in prelude schemes.
-    let result_con = Type::con("Result", 2);
-    let option_con = Type::con("Option", 1);
+    let result_con = Type::builtin(BuiltinTypeId::Result);
+    let option_con = Type::builtin(BuiltinTypeId::Option);
 
     // Register ADT constructors as value-level functions.
     {
@@ -778,7 +880,7 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
     // Inject provided function declarations and schemes.
 
     // Boolean operators
-    let bool_ty = Type::con("bool", 0);
+    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
     ts.add_value(
         "&&",
         Scheme::new(
@@ -831,7 +933,7 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
             Scheme::new(
                 vec![f_tv.clone(), a_tv.clone()],
                 vec![Predicate::new("Foldable", f.clone())],
-                Type::fun(fa.clone(), Type::con("i32", 0)),
+                Type::fun(fa.clone(), Type::builtin(BuiltinTypeId::I32)),
             ),
         );
         ts.add_value(

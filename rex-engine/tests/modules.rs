@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
 use rex_engine::{Engine, EngineOptions, Module, Pointer, PreludeMode, Value, pointer_display};
-use rex_ts::{Scheme, Type, TypeKind};
+use rex_ts::{BuiltinTypeId, Scheme, Type, TypeKind};
 use rex_util::GasMeter;
 use uuid::Uuid;
 
@@ -32,7 +32,7 @@ fn unlimited_gas() -> GasMeter {
 }
 
 fn i32_type() -> Type {
-    Type::con("i32", 0)
+    Type::builtin(BuiltinTypeId::I32)
 }
 
 fn i32_binop_scheme() -> Scheme {
@@ -60,7 +60,13 @@ async fn prelude_module_can_be_imported_explicitly() {
     .await
     .unwrap();
 
-    assert_eq!(ty, Type::app(Type::con("List", 1), Type::con("i32", 0)));
+    assert_eq!(
+        ty,
+        Type::app(
+            Type::builtin(BuiltinTypeId::List),
+            Type::builtin(BuiltinTypeId::I32)
+        )
+    );
     let rendered = pointer_display(&engine.heap, &value_ptr).unwrap();
     assert_eq!(rendered, "[2, 3]");
 }
@@ -86,8 +92,8 @@ async fn eval_module_file<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     path: &Path,
 ) -> Result<(Pointer, Type), rex_engine::EngineError> {
-    let mut gas = unlimited_gas();
-    engine.eval_module_file(path, &mut gas).await
+    let source = fs::read_to_string(path).unwrap();
+    eval_snippet_at(engine, &source, path).await
 }
 
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
@@ -152,7 +158,7 @@ async fn module_import_local_pub() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -164,6 +170,244 @@ async fn module_import_local_pub() {
             "expected i32, got {}",
             engine.heap.type_name(&value_ptr).unwrap()
         ),
+    }
+}
+
+#[tokio::test]
+async fn eval_module_file_reloads_when_local_file_changes() {
+    let dir = temp_dir("eval_module_file_reloads_when_local_file_changes");
+    let module = dir.join("foo.rex");
+    let importer = dir.join("main.rex");
+    write_file(&importer, "()");
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
+    let mut gas = unlimited_gas();
+    let _ = engine.eval_module_file(&module, &mut gas).await.unwrap();
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+        .await
+        .unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 1),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+
+    // Edit the same local module path and ensure the engine invalidates path-keyed
+    // module cache entries before reloading.
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
+    let mut gas = unlimited_gas();
+    let _ = engine.eval_module_file(&module, &mut gas).await.unwrap();
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+        .await
+        .unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 2),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn snippet_import_reloads_when_local_module_changes() {
+    let dir = temp_dir("snippet_import_reloads_when_local_module_changes");
+    let module = dir.join("foo.rex");
+    let importer = dir.join("main.rex");
+    write_file(&importer, "()");
+
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+        .await
+        .unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 1),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+
+    // Same module path, changed contents: import resolution must observe updated
+    // source and invalidate stale per-module caches.
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+        .await
+        .unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 2),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn imported_type_names_in_fn_signatures_are_rewritten() {
+    let dir = temp_dir("imported_type_names_in_fn_signatures_are_rewritten");
+    let a = dir.join("a.rex");
+    let b = dir.join("b.rex");
+    let importer = dir.join("main.rex");
+    write_file(&importer, "()");
+
+    write_file(
+        &b,
+        r#"
+        pub type Boxed = Boxed i32
+        "#,
+    );
+    write_file(
+        &a,
+        r#"
+        import b as B
+        pub fn id x: B.Boxed -> B.Boxed = x
+        "#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, _ty) = eval_snippet_at(
+        &mut engine,
+        r#"
+        import a (id)
+        import b (Boxed)
+        id (Boxed 1)
+        "#,
+        &importer,
+    )
+    .await
+    .unwrap();
+
+    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
+    match value {
+        Value::Adt(_, fields) => {
+            assert_eq!(fields.len(), 1);
+            match engine.heap.get(&fields[0]).unwrap().as_ref() {
+                Value::I32(v) => assert_eq!(*v, 1),
+                other => panic!("expected i32 field, got {}", other.value_type_name()),
+            }
+        }
+        other => panic!("expected adt value, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn imported_class_names_in_instance_headers_are_rewritten() {
+    let dir = temp_dir("imported_class_names_in_instance_headers_are_rewritten");
+    let dep = dir.join("dep.rex");
+    let importer = dir.join("main.rex");
+    write_file(&importer, "()");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Pick a where
+            pick : a
+        ()
+        "#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_snippet_at(
+        &mut engine,
+        r#"
+        import dep as D
+
+        instance D.Pick i32 where
+            pick = 7
+
+        pick is i32
+        "#,
+        &importer,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 7),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name() {
+    let dir = temp_dir("imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name");
+    let dep = dir.join("dep.rex");
+    let importer = dir.join("main.rex");
+    write_file(&importer, "()");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Boxed = Boxed i32
+        ()
+        "#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_snippet_at(
+        &mut engine,
+        r#"
+        import dep as D
+
+        let f = \ (D : D.Boxed) -> 0 in
+        0
+        "#,
+        &importer,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 0),
+        other => panic!("expected i32 value, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn module_cycle_with_pub_function_signatures_resolves() {
+    let dir = temp_dir("module_cycle_with_pub_function_signatures_resolves");
+    let main = dir.join("main.rex");
+    let a = dir.join("a.rex");
+    let b = dir.join("b.rex");
+
+    write_file(
+        &a,
+        r#"
+        import b as B
+        pub fn fa x: i32 -> i32 = if x == 0 then 0 else B.fb (x - 1)
+        ()
+"#,
+    );
+    write_file(
+        &b,
+        r#"
+        import a as A
+        pub fn fb x: i32 -> i32 = if x == 0 then 0 else A.fa (x - 1)
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import a as A
+        A.fa 6
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    let value = engine.heap.get(&value_ptr).unwrap();
+    match value.as_ref() {
+        Value::I32(v) => assert_eq!(*v, 0),
+        _ => panic!("expected i32"),
     }
 }
 
@@ -193,7 +437,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -267,9 +511,9 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("i32", 0),
-            Type::con("i32", 0),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
         ])
     );
 
@@ -322,7 +566,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
         matches!(items[0].as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
             || matches!(items[0].as_ref(), TypeKind::Var(_))
     );
-    assert_eq!(items[1], Type::con("string", 0));
+    assert_eq!(items[1], Type::builtin(BuiltinTypeId::String));
 
     let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
     let Value::Tuple(xs) = value else {
@@ -418,9 +662,9 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("i32", 0),
-            Type::con("i32", 0),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
         ])
     );
 
@@ -513,7 +757,7 @@ async fn module_injected_from_rust_wildcard_import() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -602,7 +846,7 @@ async fn module_import_include_roots() {
     engine.add_default_resolvers();
     engine.add_include_resolver(&include_root).unwrap();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -641,7 +885,7 @@ async fn snippet_can_import_with_explicit_base() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -683,7 +927,7 @@ async fn module_import_wildcard_clause() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -723,7 +967,7 @@ async fn module_import_selected_clause_with_alias() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -767,6 +1011,363 @@ async fn module_import_selected_clause_missing_export() {
     };
     let msg = err.to_string();
     assert!(msg.contains("does not export"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_missing_class_export_in_instance_header() {
+    let dir = temp_dir("module_import_missing_class_export_in_instance_header");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Present a where
+            present : a
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        instance D.Missing i32 where
+            missing = 1
+
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_missing_type_export_in_fn_signature() {
+    let dir = temp_dir("module_import_missing_type_export_in_fn_signature");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Present = Present i32
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        fn id x: D.Missing -> D.Missing = x
+
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_missing_type_export_in_instance_head() {
+    let dir = temp_dir("module_import_missing_type_export_in_instance_head");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Marker a where
+            marker : i32
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        instance D.Marker D.Missing where
+            marker = 1
+
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_missing_class_export_in_fn_where_constraint() {
+    let dir = temp_dir("module_import_missing_class_export_in_fn_where_constraint");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Present a where
+            present : a
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        fn id x: i32 -> i32 where D.Missing i32 = x
+
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
+    let dir = temp_dir("module_import_missing_class_export_in_declare_fn_where_constraint");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Present a where
+            present : a
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        declare fn id x: i32 -> i32 where D.Missing i32
+
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_missing_class_export_in_class_super_constraint() {
+    let dir = temp_dir("module_import_missing_class_export_in_class_super_constraint");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Present a where
+            present : a
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        class Local a <= D.Missing a where
+            local : a
+
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named_binding() {
+    let dir =
+        temp_dir("module_import_missing_type_export_in_letrec_annotation_with_alias_named_binding");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Present = Present i32
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        let rec D: D.Missing = 1 in
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
+}
+
+#[tokio::test]
+async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_imported_type() {
+    let dir =
+        temp_dir("letrec_annotation_with_alias_named_binding_still_rewrites_valid_imported_type");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Num = Num i32
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+        import dep (Num)
+
+        let rec D: D.Num -> i32 = \_ -> 0 in
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 0),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_type() {
+    let dir =
+        temp_dir("let_annotation_with_alias_named_binding_still_rewrites_valid_imported_type");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Num = Num i32
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        let D: D.Num -> i32 = \_ -> 0 in
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 0),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn module_import_missing_type_export_in_let_annotation_with_alias_named_binding() {
+    let dir =
+        temp_dir("module_import_missing_type_export_in_let_annotation_with_alias_named_binding");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Present = Present i32
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+
+        let D: D.Missing = 1 in
+        0
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_module_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("does not export"), "{msg}");
+    assert!(msg.contains("Missing"), "{msg}");
 }
 
 #[tokio::test]
@@ -861,7 +1462,7 @@ async fn std_json_encode_decode_smoke() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine.heap.pointer_as_i32(&value_ptr).unwrap();
     assert_eq!(value, 1);
 }
@@ -903,7 +1504,10 @@ async fn std_json_roundtrip_nested() {
     .unwrap();
     assert_eq!(
         ty,
-        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32)
+        ])
     );
     let value = engine
         .heap
@@ -975,10 +1579,10 @@ async fn std_json_decode_errors_have_useful_messages() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("string", 0),
-            Type::con("string", 0),
-            Type::con("string", 0),
-            Type::con("string", 0),
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
         ])
     );
     let value = engine
@@ -1038,7 +1642,10 @@ async fn std_json_numeric_decode_errors() {
     .unwrap();
     assert_eq!(
         ty,
-        Type::tuple(vec![Type::con("string", 0), Type::con("string", 0)])
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String)
+        ])
     );
     let value = engine
         .heap
@@ -1095,7 +1702,7 @@ async fn std_json_show_renders_valid_json() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::con("string", 0));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     let value = engine
         .heap
         .get(&value_ptr)
@@ -1175,9 +1782,9 @@ async fn std_json_parse_and_from_string_roundtrip() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("i32", 0),
-            Type::con("i32", 0),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
         ])
     );
     let value = engine

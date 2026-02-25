@@ -25,7 +25,7 @@ async fn assert_i32_result(source: &str, expected: i32) {
 }
 
 async fn assert_even_odd_tuple(source: &str) {
-    let bool_ty = Type::con("bool", 0);
+    let bool_ty = Type::builtin(rex::BuiltinTypeId::Bool);
     let expected_ty = Type::tuple(vec![
         bool_ty.clone(),
         bool_ty.clone(),

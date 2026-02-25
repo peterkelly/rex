@@ -35,14 +35,14 @@ fn expected_values() -> Vec<&'static str> {
 
 fn expected_type() -> Type {
     Type::tuple(vec![
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
     ])
 }
 
@@ -52,10 +52,10 @@ fn expected_negative_signed_values() -> Vec<&'static str> {
 
 fn expected_negative_signed_type() -> Type {
     Type::tuple(vec![
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
-        Type::con("string", 0),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(rex::BuiltinTypeId::String),
     ])
 }
 

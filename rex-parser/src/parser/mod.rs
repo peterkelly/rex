@@ -8,8 +8,8 @@ use std::{
 
 use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl,
-    ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, Pattern, Program, Scope, Symbol,
-    TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var, intern,
+    ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Scope,
+    Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var, intern,
 };
 use rex_lexer::{
     Token, Tokens,
@@ -1338,19 +1338,7 @@ impl Parser {
     fn parse_type_constraints(&mut self) -> Result<Vec<TypeConstraint>, ParserErr> {
         let mut constraints = Vec::new();
         loop {
-            let class = match self.current_token() {
-                Token::Ident(name, _span, ..) => {
-                    let name = intern(&name);
-                    self.next_token();
-                    name
-                }
-                token => {
-                    return Err(ParserErr::new(
-                        *token.span(),
-                        format!("expected type class name got {}", token),
-                    ));
-                }
-            };
+            let (class, _) = self.parse_name_ref_with_span("expected type class name")?;
 
             let typ = self.parse_type_app()?;
             constraints.push(TypeConstraint::new(class, typ));
@@ -1916,18 +1904,8 @@ impl Parser {
             }
         };
 
-        let (class, class_span) = match self.current_token() {
-            Token::Ident(name, span, ..) => {
-                self.next_token_raw();
-                (intern(&name), span)
-            }
-            token => {
-                return Err(ParserErr::new(
-                    *token.span(),
-                    format!("expected class name got {}", token),
-                ));
-            }
-        };
+        let (class_ref, class_span) = self.parse_name_ref_with_span("expected class name")?;
+        let class = class_ref.to_dotted_symbol();
 
         let instance_indent = span_begin.column;
         let header_line = class_span.begin.line;
@@ -2733,6 +2711,51 @@ impl Parser {
                     },
                 )
             }
+            Token::Dot(..) | Token::DotDot(..) => {
+                let (mut segs, end) = self.parse_relative_import_segments()?;
+
+                let sha = if matches!(self.current_token(), Token::HashTag(..)) {
+                    self.next_token();
+                    match self.current_token() {
+                        Token::Ident(s, span, ..) => {
+                            self.next_token();
+                            Some((s.clone(), span.end))
+                        }
+                        Token::Int(n, span, ..) => {
+                            self.next_token();
+                            Some((n.to_string(), span.end))
+                        }
+                        token => {
+                            return Err(ParserErr::new(
+                                *token.span(),
+                                format!("expected sha token got {}", token),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                let mut end = end;
+                let sha = sha.map(|(sha, sha_end)| {
+                    end = end.max(sha_end);
+                    sha
+                });
+                let default_alias = segs.last().cloned();
+                if segs.is_empty() {
+                    return Err(ParserErr::new(
+                        *self.current_token().span(),
+                        "relative import must include a module path",
+                    ));
+                }
+                (
+                    ImportPath::Local {
+                        segments: std::mem::take(&mut segs),
+                        sha,
+                    },
+                    end,
+                    default_alias,
+                )
+            }
             Token::Ident(..) => {
                 let mut segs: Vec<Symbol> = Vec::new();
                 let (first, first_span) = match self.current_token() {
@@ -2924,6 +2947,75 @@ impl Parser {
         })
     }
 
+    fn parse_relative_import_segments(&mut self) -> Result<(Vec<Symbol>, Position), ParserErr> {
+        let mut segments: Vec<Symbol> = Vec::new();
+
+        loop {
+            if matches!(self.current_token(), Token::DotDot(..)) {
+                self.next_token();
+                segments.push(intern("super"));
+            } else {
+                match self.current_token() {
+                    Token::Dot(..) => self.next_token(),
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            "expected `.` or `..` in relative import path",
+                        ));
+                    }
+                }
+            }
+
+            match self.current_token() {
+                Token::Div(..) => self.next_token(),
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        "expected `/` in relative import path",
+                    ));
+                }
+            }
+
+            if !matches!(self.current_token(), Token::Dot(..) | Token::DotDot(..)) {
+                break;
+            }
+        }
+
+        let (first, first_span) = match self.current_token() {
+            Token::Ident(name, span, ..) => (intern(&name), span),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    format!("expected module path segment got {}", token),
+                ));
+            }
+        };
+        segments.push(first);
+        let mut end = first_span.end;
+        self.next_token();
+
+        loop {
+            if !matches!(self.current_token(), Token::Dot(..) | Token::Div(..)) {
+                break;
+            }
+            self.next_token();
+            let (seg, seg_span) = match self.current_token() {
+                Token::Ident(name, span, ..) => (intern(&name), span),
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        format!("expected module path segment got {}", token),
+                    ));
+                }
+            };
+            segments.push(seg);
+            end = seg_span.end;
+            self.next_token();
+        }
+
+        Ok((segments, end))
+    }
+
     fn parse_type_decl(&mut self, is_pub: bool) -> Result<TypeDecl, ParserErr> {
         let span_begin = match self.current_token() {
             Token::Type(span, ..) => {
@@ -3052,31 +3144,9 @@ impl Parser {
 
     fn parse_type_atom(&mut self) -> Result<TypeExpr, ParserErr> {
         match self.current_token() {
-            Token::Ident(name, span, ..) => {
-                let start = span.begin;
-                let mut end = span.end;
-                let mut parts = vec![name.to_string()];
-                self.next_token();
-
-                while let Token::Dot(..) = self.current_token() {
-                    self.next_token();
-                    match self.current_token() {
-                        Token::Ident(seg, seg_span, ..) => {
-                            parts.push(seg.to_string());
-                            end = seg_span.end;
-                            self.next_token();
-                        }
-                        token => {
-                            return Err(ParserErr::new(
-                                *token.span(),
-                                "expected identifier after `.` in type",
-                            ));
-                        }
-                    }
-                }
-
-                let name = intern(&parts.join("."));
-                Ok(TypeExpr::Name(Span::from_begin_end(start, end), name))
+            Token::Ident(..) => {
+                let (name, span) = self.parse_name_ref_with_span("expected type identifier")?;
+                Ok(TypeExpr::Name(span, name))
             }
             Token::ParenL(..) => self.parse_type_paren(),
             Token::BraceL(..) => self.parse_type_record(),
@@ -3251,7 +3321,35 @@ impl Parser {
     }
 
     fn parse_pattern_app(&mut self) -> Result<Pattern, ParserErr> {
-        let head = self.parse_pattern_atom()?;
+        let mut head = self.parse_pattern_atom()?;
+        if let Pattern::Var(var) = &head
+            && matches!(self.current_token(), Token::Dot(..))
+        {
+            let mut segments = vec![var.name.clone()];
+            let mut end = var.span.end;
+            while matches!(self.current_token(), Token::Dot(..)) {
+                self.next_token();
+                match self.current_token() {
+                    Token::Ident(name, seg_span, ..) => {
+                        segments.push(intern(&name));
+                        end = seg_span.end;
+                        self.next_token();
+                    }
+                    token => {
+                        return Err(ParserErr::new(
+                            *token.span(),
+                            "expected identifier after `.` in constructor pattern",
+                        ));
+                    }
+                }
+            }
+            head = Pattern::Named(
+                Span::from_begin_end(var.span.begin, end),
+                NameRef::from_segments(segments),
+                vec![],
+            );
+        }
+
         let mut args = Vec::new();
         while let Token::Ident(..) | Token::BracketL(..) | Token::BraceL(..) | Token::ParenL(..) =
             self.current_token()
@@ -3269,31 +3367,88 @@ impl Parser {
                     .map(|c| c.is_uppercase())
                     .unwrap_or(false);
                 if is_constructor {
-                    return Ok(Pattern::Named(var.span, var.name.clone(), vec![]));
+                    return Ok(Pattern::Named(
+                        var.span,
+                        NameRef::Unqualified(var.name.clone()),
+                        vec![],
+                    ));
                 }
             }
             return Ok(head);
         }
 
         // If there are args, the head must be a constructor (identifier) pattern
-        if let Pattern::Var(var) = head {
-            let begin = var.span.begin;
-            let end = args.last().map(|p| p.span().end).unwrap_or(begin);
-            Ok(Pattern::Named(
-                Span::from_begin_end(begin, end),
-                var.name,
-                args,
-            ))
-        } else {
-            let span = args
-                .first()
-                .map(|p| *p.span())
-                .unwrap_or_else(|| *self.current_token().span());
-            Err(ParserErr::new(
-                span,
-                "constructor patterns must start with an identifier",
-            ))
+        match head {
+            Pattern::Var(var) => {
+                let begin = var.span.begin;
+                let end = args.last().map(|p| p.span().end).unwrap_or(begin);
+                Ok(Pattern::Named(
+                    Span::from_begin_end(begin, end),
+                    NameRef::Unqualified(var.name),
+                    args,
+                ))
+            }
+            Pattern::Named(span, name, mut existing_args) => {
+                existing_args.extend(args);
+                let end = existing_args
+                    .last()
+                    .map(|p| p.span().end)
+                    .unwrap_or(span.end);
+                Ok(Pattern::Named(
+                    Span::from_begin_end(span.begin, end),
+                    name,
+                    existing_args,
+                ))
+            }
+            _ => {
+                let span = args
+                    .first()
+                    .map(|p| *p.span())
+                    .unwrap_or_else(|| *self.current_token().span());
+                Err(ParserErr::new(
+                    span,
+                    "constructor patterns must start with an identifier",
+                ))
+            }
         }
+    }
+
+    fn parse_name_ref_with_span(
+        &mut self,
+        expected_message: &str,
+    ) -> Result<(NameRef, Span), ParserErr> {
+        let mut segments: Vec<Symbol> = Vec::new();
+        let start = self.current_token().span().begin;
+        let mut end = match self.current_token() {
+            Token::Ident(name, span, ..) => {
+                segments.push(intern(&name));
+                self.next_token();
+                span.end
+            }
+            token => return Err(ParserErr::new(*token.span(), expected_message)),
+        };
+
+        while matches!(self.current_token(), Token::Dot(..)) {
+            self.next_token();
+            match self.current_token() {
+                Token::Ident(name, span, ..) => {
+                    segments.push(intern(&name));
+                    end = span.end;
+                    self.next_token();
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        "expected identifier after `.`",
+                    ));
+                }
+            }
+        }
+
+        Ok((
+            NameRef::from_segments(segments),
+            Span::from_begin_end(start, end),
+        ))
     }
 
     fn parse_pattern_atom(&mut self) -> Result<Pattern, ParserErr> {
@@ -4934,6 +5089,50 @@ mod tests {
     }
 
     #[test]
+    fn test_import_relative_current_dir_path() {
+        let code = "import ./foo/bar (x)\n()";
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+        let Decl::Import(import) = &program.decls[0] else {
+            panic!("expected import decl");
+        };
+        match &import.path {
+            ImportPath::Local { segments, sha } => {
+                assert_eq!(segments, &vec![intern("foo"), intern("bar")]);
+                assert_eq!(sha, &None);
+            }
+            other => panic!("expected local import path, got {other:?}"),
+        }
+        assert_eq!(import.alias, intern("bar"));
+    }
+
+    #[test]
+    fn test_import_relative_parent_dir_path() {
+        let code = "import ../../foo/bar as FB\n()";
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+        let Decl::Import(import) = &program.decls[0] else {
+            panic!("expected import decl");
+        };
+        match &import.path {
+            ImportPath::Local { segments, sha } => {
+                assert_eq!(
+                    segments,
+                    &vec![
+                        intern("super"),
+                        intern("super"),
+                        intern("foo"),
+                        intern("bar")
+                    ]
+                );
+                assert_eq!(sha, &None);
+            }
+            other => panic!("expected local import path, got {other:?}"),
+        }
+        assert_eq!(import.alias, intern("FB"));
+    }
+
+    #[test]
     fn test_errors() {
         let mut parser = Parser::new(Token::tokenize("1 + 2 + in + 3").unwrap());
         let res = parser.parse_program(&mut GasMeter::default());
@@ -5044,6 +5243,27 @@ instance Marker i32
         let program = parser.parse_program(&mut GasMeter::default()).unwrap();
         assert_eq!(program.decls.len(), 2);
         assert!(matches!(program.expr.as_ref(), Expr::Bool(..)));
+    }
+
+    #[test]
+    fn test_parse_instance_with_qualified_class_name() {
+        let code = r#"
+instance Sample.Default i32
+    default = 0
+
+default
+"#;
+
+        let mut parser = Parser::new(Token::tokenize(code).unwrap());
+        let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+        assert_eq!(program.decls.len(), 1);
+
+        let Decl::Instance(decl) = &program.decls[0] else {
+            panic!("expected instance decl");
+        };
+        assert_eq!(decl.class, intern("Sample.Default"));
+        assert_eq!(decl.methods.len(), 1);
+        assert_eq!(decl.methods[0].name, intern("default"));
     }
 
     #[test]

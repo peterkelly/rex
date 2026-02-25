@@ -80,10 +80,10 @@ async fn let_rec_mutual_even_odd() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::con("bool", 0),
-            Type::con("bool", 0),
-            Type::con("bool", 0),
-            Type::con("bool", 0),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(rex::BuiltinTypeId::Bool),
         ])
     );
 
@@ -141,7 +141,7 @@ async fn let_rec_function_is_still_polymorphic() {
     };
     assert_eq!(items.len(), 2);
     assert_i32_or_var(&items[0]);
-    assert_eq!(items[1], Type::con("bool", 0));
+    assert_eq!(items[1], Type::builtin(rex::BuiltinTypeId::Bool));
     let one = heap.alloc_i32(1).unwrap();
     let tru = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![one, tru]).unwrap();
@@ -160,7 +160,7 @@ async fn let_rec_allows_self_referential_data_cycles() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::list(Type::con("i32", 0)));
+    assert_eq!(ty, Type::list(Type::builtin(rex::BuiltinTypeId::I32)));
     let value = heap.get(&pointer).unwrap();
     let Value::Adt(tag, args) = value.as_ref() else {
         panic!(
@@ -189,8 +189,8 @@ async fn let_rec_allows_mutual_data_cycles() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::list(Type::con("i32", 0)),
-            Type::list(Type::con("i32", 0)),
+            Type::list(Type::builtin(rex::BuiltinTypeId::I32)),
+            Type::list(Type::builtin(rex::BuiltinTypeId::I32)),
         ])
     );
     let tuple = heap.get(&pointer).unwrap();

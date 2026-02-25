@@ -36,3 +36,25 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - ADT/typeclass *heads* injected by `TypeSystem::with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rex-ts/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
 - **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parser/typechecker limit APIs provide bounded recursion for production/untrusted workloads.
+- **Import-use rewrite/validation**: module processing resolves import aliases across expression
+  vars, constructor patterns, type references, and class references; unresolved qualified alias
+  members are rejected as module errors before runtime.
+
+## Intentional String Boundaries
+
+Rex now prefers structured internal representations (for example `NameRef`, `BuiltinTypeId`,
+`CanonicalSymbol`, and module/type/class maps) across parser, type system, evaluator, and LSP
+rewrite paths. Remaining string usage is intentional in these boundary layers:
+
+- **Source text and parsing**: lexer/parser operate on source strings by definition.
+- **Human-facing diagnostics and display**: error messages, hover text, CLI rendering, and debug
+  output stringify symbols/types for readability.
+- **Protocol/serialization boundaries**: JSON/LSP payloads are string-based and convert structured
+  internal symbols/types at the edge.
+- **Filesystem/module specifiers**: import specifiers and path labels are textual before being
+  resolved into structured module identities.
+
+Non-goal for this pass:
+
+- Eliminating all `.to_string()` calls globally. The design target is to avoid stringly-typed core
+  semantics, not to remove string conversion at UI/protocol boundaries.

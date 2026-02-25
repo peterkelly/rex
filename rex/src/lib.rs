@@ -14,7 +14,7 @@ pub use rex_engine::{
 pub use rex_lexer::Token;
 pub use rex_parser::{Parser, ParserLimits, error::ParserErr};
 pub use rex_proc_macro::Rex;
-pub use rex_ts::{AdtDecl, Scheme, Type, TypeError, TypeKind, TypeSystem};
+pub use rex_ts::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeError, TypeKind, TypeSystem};
 pub use rex_util::{GasCosts, GasMeter};
 
 pub use crate::json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json};

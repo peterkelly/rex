@@ -18,6 +18,96 @@ use crate::prelude;
 
 pub type TypeVarId = usize;
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum BuiltinTypeId {
+    U8,
+    U16,
+    U32,
+    U64,
+    I8,
+    I16,
+    I32,
+    I64,
+    F32,
+    F64,
+    Bool,
+    String,
+    Uuid,
+    DateTime,
+    List,
+    Array,
+    Dict,
+    Option,
+    Result,
+}
+
+impl BuiltinTypeId {
+    pub fn as_symbol(self) -> Symbol {
+        sym(self.as_str())
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::I8 => "i8",
+            Self::I16 => "i16",
+            Self::I32 => "i32",
+            Self::I64 => "i64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::Bool => "bool",
+            Self::String => "string",
+            Self::Uuid => "uuid",
+            Self::DateTime => "datetime",
+            Self::List => "List",
+            Self::Array => "Array",
+            Self::Dict => "Dict",
+            Self::Option => "Option",
+            Self::Result => "Result",
+        }
+    }
+
+    pub fn arity(self) -> usize {
+        match self {
+            Self::List | Self::Array | Self::Dict | Self::Option => 1,
+            Self::Result => 2,
+            _ => 0,
+        }
+    }
+
+    pub fn from_symbol(name: &Symbol) -> Option<Self> {
+        Self::from_name(name.as_ref())
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "u8" => Some(Self::U8),
+            "u16" => Some(Self::U16),
+            "u32" => Some(Self::U32),
+            "u64" => Some(Self::U64),
+            "i8" => Some(Self::I8),
+            "i16" => Some(Self::I16),
+            "i32" => Some(Self::I32),
+            "i64" => Some(Self::I64),
+            "f32" => Some(Self::F32),
+            "f64" => Some(Self::F64),
+            "bool" => Some(Self::Bool),
+            "string" => Some(Self::String),
+            "uuid" => Some(Self::Uuid),
+            "datetime" => Some(Self::DateTime),
+            "List" => Some(Self::List),
+            "Array" => Some(Self::Array),
+            "Dict" => Some(Self::Dict),
+            "Option" => Some(Self::Option),
+            "Result" => Some(Self::Result),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct TypeVar {
     pub id: TypeVarId,
@@ -37,6 +127,7 @@ impl TypeVar {
 pub struct TypeConst {
     pub name: Symbol,
     pub arity: usize,
+    pub builtin_id: Option<BuiltinTypeId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -62,9 +153,27 @@ impl Type {
     }
 
     pub fn con(name: impl AsRef<str>, arity: usize) -> Self {
+        if let Some(id) = BuiltinTypeId::from_name(name.as_ref())
+            && id.arity() == arity
+        {
+            return Self::builtin(id);
+        }
+        Self::user_con(name, arity)
+    }
+
+    pub fn user_con(name: impl AsRef<str>, arity: usize) -> Self {
         Type::new(TypeKind::Con(TypeConst {
             name: intern(name.as_ref()),
             arity,
+            builtin_id: None,
+        }))
+    }
+
+    pub fn builtin(id: BuiltinTypeId) -> Self {
+        Type::new(TypeKind::Con(TypeConst {
+            name: id.as_symbol(),
+            arity: id.arity(),
+            builtin_id: Some(id),
         }))
     }
 
@@ -92,23 +201,23 @@ impl Type {
     }
 
     pub fn list(elem: Type) -> Type {
-        Type::app(Type::con("List", 1), elem)
+        Type::app(Type::builtin(BuiltinTypeId::List), elem)
     }
 
     pub fn array(elem: Type) -> Type {
-        Type::app(Type::con("Array", 1), elem)
+        Type::app(Type::builtin(BuiltinTypeId::Array), elem)
     }
 
     pub fn dict(elem: Type) -> Type {
-        Type::app(Type::con("Dict", 1), elem)
+        Type::app(Type::builtin(BuiltinTypeId::Dict), elem)
     }
 
     pub fn option(elem: Type) -> Type {
-        Type::app(Type::con("Option", 1), elem)
+        Type::app(Type::builtin(BuiltinTypeId::Option), elem)
     }
 
     pub fn result(ok: Type, err: Type) -> Type {
-        Type::app(Type::app(Type::con("Result", 2), err), ok)
+        Type::app(Type::app(Type::builtin(BuiltinTypeId::Result), err), ok)
     }
 
     fn apply_with_change(&self, s: &Subst) -> (Type, bool) {
@@ -213,7 +322,8 @@ impl Display for Type {
                 if let TypeKind::App(head, err) = l.as_ref()
                     && matches!(
                         head.as_ref(),
-                        TypeKind::Con(c) if c.name.as_ref() == "Result" && c.arity == 2
+                        TypeKind::Con(c)
+                            if c.builtin_id == Some(BuiltinTypeId::Result) && c.arity == 2
                     )
                 {
                     return write!(f, "(Result {} {})", r, err);
@@ -586,11 +696,19 @@ fn dedup_preds(preds: Vec<Predicate>) -> Vec<Predicate> {
 fn is_integral_primitive(typ: &Type) -> bool {
     matches!(
         typ.as_ref(),
-        TypeKind::Con(tc)
-            if matches!(
-                tc.name.as_ref(),
-                "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64"
-            )
+        TypeKind::Con(TypeConst {
+            builtin_id: Some(
+                BuiltinTypeId::U8
+                    | BuiltinTypeId::U16
+                    | BuiltinTypeId::U32
+                    | BuiltinTypeId::U64
+                    | BuiltinTypeId::I8
+                    | BuiltinTypeId::I16
+                    | BuiltinTypeId::I32
+                    | BuiltinTypeId::I64
+            ),
+            ..
+        })
     )
 }
 
@@ -603,7 +721,7 @@ fn finalize_infer_for_public_api(
         if pred.class.as_ref() == "Integral"
             && let TypeKind::Var(tv) = pred.typ.as_ref()
         {
-            subst = subst.insert(tv.id, Type::con("i32", 0));
+            subst = subst.insert(tv.id, Type::builtin(BuiltinTypeId::I32));
         }
     }
 
@@ -637,6 +755,8 @@ pub enum TypeError {
     NoInstance(Symbol, String),
     #[error("unknown type {0}")]
     UnknownTypeName(Symbol),
+    #[error("cannot redefine reserved builtin type `{0}`")]
+    ReservedTypeName(Symbol),
     #[error("duplicate value definition `{0}`")]
     DuplicateValue(Symbol),
     #[error("duplicate class definition `{0}`")]
@@ -1079,12 +1199,15 @@ impl<'g> Unifier<'g> {
             }
             (TypeKind::Record(fields), TypeKind::App(head, arg))
             | (TypeKind::App(head, arg), TypeKind::Record(fields)) => match head.as_ref() {
-                TypeKind::Con(c) if c.name.as_ref() == "Dict" => {
+                TypeKind::Con(c) if c.builtin_id == Some(BuiltinTypeId::Dict) => {
                     let elem_ty = record_elem_type_unifier(fields, self)?;
                     self.unify(arg, &elem_ty)
                 }
                 TypeKind::Var(tv) => {
-                    self.unify(&Type::new(TypeKind::Var(tv.clone())), &Type::con("Dict", 1))?;
+                    self.unify(
+                        &Type::new(TypeKind::Var(tv.clone())),
+                        &Type::builtin(BuiltinTypeId::Dict),
+                    )?;
                     let elem_ty = record_elem_type_unifier(fields, self)?;
                     self.unify(arg, &elem_ty)
                 }
@@ -1179,13 +1302,13 @@ pub fn unify(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
         }
         (TypeKind::Record(fields), TypeKind::App(head, arg))
         | (TypeKind::App(head, arg), TypeKind::Record(fields)) => match head.as_ref() {
-            TypeKind::Con(c) if c.name.as_ref() == "Dict" => {
+            TypeKind::Con(c) if c.builtin_id == Some(BuiltinTypeId::Dict) => {
                 let (s_fields, elem_ty) = record_elem_type(fields)?;
                 let s_arg = unify(&arg.apply(&s_fields), &elem_ty)?;
                 Ok(compose_subst(s_arg, s_fields))
             }
             TypeKind::Var(tv) => {
-                let s_head = bind(tv, &Type::con("Dict", 1))?;
+                let s_head = bind(tv, &Type::builtin(BuiltinTypeId::Dict))?;
                 let arg = arg.apply(&s_head);
                 let (s_fields, elem_ty) = record_elem_type(fields)?;
                 let s_arg = unify(&arg.apply(&s_fields), &elem_ty)?;
@@ -1753,7 +1876,7 @@ impl TypeSystem {
                         "superclass constraints must be of the form `<= C a`",
                     ));
                 }
-                supers.push(sup.class.clone());
+                supers.push(sup.class.to_dotted_symbol());
             }
 
             self.classes.add_class(decl.name.clone(), supers.clone());
@@ -2318,6 +2441,9 @@ impl TypeSystem {
     }
 
     pub fn inject_type_decl(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
+        if BuiltinTypeId::from_symbol(&decl.name).is_some() {
+            return Err(TypeError::ReservedTypeName(decl.name.clone()));
+        }
         let adt = self.adt_from_decl(decl)?;
         self.inject_adt(&adt);
         Ok(())
@@ -2332,10 +2458,11 @@ impl TypeSystem {
         let span = *expr.span();
         let res = (|| match expr {
             TypeExpr::Name(_, name) => {
-                if let Some(tv) = params.get(name) {
+                let name_sym = name.to_dotted_symbol();
+                if let Some(tv) = params.get(&name_sym) {
                     Ok(Type::var(tv.clone()))
                 } else {
-                    let name = normalize_type_name(name);
+                    let name = normalize_type_name(&name_sym);
                     if let Some(arity) = self.type_arity(decl, &name) {
                         Ok(Type::con(name, arity))
                     } else {
@@ -2378,12 +2505,7 @@ impl TypeSystem {
         if let Some(adt) = self.adts.get(name) {
             return Some(adt.params.len());
         }
-        match name.as_ref() {
-            "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64"
-            | "bool" | "string" | "uuid" | "datetime" => Some(0),
-            "Dict" | "Array" => Some(1),
-            _ => None,
-        }
+        BuiltinTypeId::from_symbol(name).map(BuiltinTypeId::arity)
     }
 
     fn register_value_scheme(&mut self, name: &Symbol, scheme: Scheme) {
@@ -2606,7 +2728,12 @@ fn improve_indexable(preds: &[Predicate]) -> Result<Subst, TypeError> {
 fn indexable_elem_subst(container: &Type, elem: &Type) -> Result<Subst, TypeError> {
     match container.as_ref() {
         TypeKind::App(head, arg) => match head.as_ref() {
-            TypeKind::Con(tc) if tc.name.as_ref() == "List" || tc.name.as_ref() == "Array" => {
+            TypeKind::Con(tc)
+                if matches!(
+                    tc.builtin_id,
+                    Some(BuiltinTypeId::List | BuiltinTypeId::Array)
+                ) =>
+            {
                 unify(elem, arg)
             }
             _ => Ok(Subst::new_sync()),
@@ -2637,7 +2764,7 @@ fn type_from_annotation_expr(
     let span = *expr.span();
     let res = (|| match expr {
         TypeExpr::Name(_, name) => {
-            let name = normalize_type_name(name);
+            let name = normalize_type_name(&name.to_dotted_symbol());
             match annotation_type_arity(adts, &name) {
                 Some(arity) => Ok(Type::con(name, arity)),
                 None => Err(TypeError::UnknownTypeName(name)),
@@ -2680,7 +2807,7 @@ fn type_from_annotation_expr_vars(
     let span = *expr.span();
     let res = (|| match expr {
         TypeExpr::Name(_, name) => {
-            let name = normalize_type_name(name);
+            let name = normalize_type_name(&name.to_dotted_symbol());
             if let Some(arity) = annotation_type_arity(adts, &name) {
                 Ok(Type::con(name, arity))
             } else if let Some(tv) = vars.get(&name) {
@@ -2734,17 +2861,12 @@ fn annotation_type_arity(adts: &HashMap<Symbol, AdtDecl>, name: &Symbol) -> Opti
     if let Some(adt) = adts.get(name) {
         return Some(adt.params.len());
     }
-    match name.as_ref() {
-        "u8" | "u16" | "u32" | "u64" | "i8" | "i16" | "i32" | "i64" | "f32" | "f64" | "bool"
-        | "string" | "uuid" | "datetime" => Some(0),
-        "Dict" | "Array" => Some(1),
-        _ => None,
-    }
+    BuiltinTypeId::from_symbol(name).map(BuiltinTypeId::arity)
 }
 
 fn normalize_type_name(name: &Symbol) -> Symbol {
     if name.as_ref() == "str" {
-        sym("string")
+        BuiltinTypeId::String.as_symbol()
     } else {
         name.clone()
     }
@@ -2757,7 +2879,8 @@ fn type_app_with_result_syntax(fun: Type, arg: Type) -> Type {
     if let TypeKind::App(head, ok) = fun.as_ref()
         && matches!(
             head.as_ref(),
-            TypeKind::Con(c) if c.name.as_ref() == "Result" && c.arity == 2
+            TypeKind::Con(c)
+                if c.builtin_id == Some(BuiltinTypeId::Result) && c.arity == 2
         )
     {
         return Type::app(Type::app(head.clone(), arg), ok.clone());
@@ -2799,7 +2922,7 @@ fn predicates_from_constraints(
     let mut out = Vec::with_capacity(constraints.len());
     for constraint in constraints {
         let ty = type_from_annotation_expr_vars(adts, &constraint.typ, vars, supply)?;
-        out.push(Predicate::new(constraint.class.clone(), ty));
+        out.push(Predicate::new(constraint.class.as_ref(), ty));
     }
     Ok(out)
 }
@@ -3083,7 +3206,7 @@ fn infer_expr_type_inner(
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
     unifier.charge_infer_node()?;
     match expr {
-        Expr::Bool(_, _) => Ok((vec![], Type::con("bool", 0))),
+        Expr::Bool(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::Bool))),
         Expr::Uint(_, _) => {
             let lit_ty = Type::var(supply.fresh(Some(sym("n"))));
             Ok((vec![Predicate::new("Integral", lit_ty.clone())], lit_ty))
@@ -3098,10 +3221,10 @@ fn infer_expr_type_inner(
                 lit_ty,
             ))
         }
-        Expr::Float(_, _) => Ok((vec![], Type::con("f32", 0))),
-        Expr::String(_, _) => Ok((vec![], Type::con("string", 0))),
-        Expr::Uuid(_, _) => Ok((vec![], Type::con("uuid", 0))),
-        Expr::DateTime(_, _) => Ok((vec![], Type::con("datetime", 0))),
+        Expr::Float(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::F32))),
+        Expr::String(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::String))),
+        Expr::Uuid(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::Uuid))),
+        Expr::DateTime(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::DateTime))),
         Expr::Hole(_) => {
             let t = Type::var(supply.fresh(Some(sym("hole"))));
             Ok((vec![], t))
@@ -3375,7 +3498,7 @@ fn infer_expr_type_inner(
         }
         Expr::Ite(_, cond, then_expr, else_expr) => {
             let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, cond)?;
-            unifier.unify(&t1, &Type::con("bool", 0))?;
+            unifier.unify(&t1, &Type::builtin(BuiltinTypeId::Bool))?;
             let (p2, t2) = infer_expr_type(unifier, supply, env, adts, known, then_expr)?;
             let (p3, t3) = infer_expr_type(unifier, supply, env, adts, known, else_expr)?;
             unifier.unify(&t2, &t3)?;
@@ -3404,7 +3527,10 @@ fn infer_expr_type_inner(
                 unifier.unify(&t1, &elem_tv)?;
                 preds.extend(p1);
             }
-            let list_ty = Type::app(Type::con("List", 1), unifier.apply_type(&elem_tv));
+            let list_ty = Type::app(
+                Type::builtin(BuiltinTypeId::List),
+                unifier.apply_type(&elem_tv),
+            );
             Ok((preds, list_ty))
         }
         Expr::Dict(_, kvs) => {
@@ -3415,7 +3541,10 @@ fn infer_expr_type_inner(
                 unifier.unify(&t1, &elem_tv)?;
                 preds.extend(p1);
             }
-            let dict_ty = Type::app(Type::con("Dict", 1), unifier.apply_type(&elem_tv));
+            let dict_ty = Type::app(
+                Type::builtin(BuiltinTypeId::Dict),
+                unifier.apply_type(&elem_tv),
+            );
             Ok((preds, dict_ty))
         }
         Expr::Match(_, scrutinee, arms) => {
@@ -3437,12 +3566,13 @@ fn infer_expr_type_inner(
                 if let Expr::Var(var) = scrutinee.as_ref() {
                     match pat {
                         Pattern::Named(_, name, _) => {
-                            if let Some((adt, _variant)) = ctor_lookup(adts, name) {
+                            let name_sym = name.to_dotted_symbol();
+                            if let Some((adt, _variant)) = ctor_lookup(adts, &name_sym) {
                                 known_arm.insert(
                                     var.name.clone(),
                                     KnownVariant {
                                         adt: adt.name.clone(),
-                                        variant: name.clone(),
+                                        variant: name_sym,
                                     },
                                 );
                             } else {
@@ -3507,7 +3637,7 @@ fn infer_expr(
             unifier.charge_infer_node()?;
             match expr {
                 Expr::Bool(_, v) => {
-                    let t = Type::con("bool", 0);
+                    let t = Type::builtin(BuiltinTypeId::Bool);
                     Ok((
                         vec![],
                         t.clone(),
@@ -3534,7 +3664,7 @@ fn infer_expr(
                     ))
                 }
                 Expr::Float(_, v) => {
-                    let t = Type::con("f32", 0);
+                    let t = Type::builtin(BuiltinTypeId::F32);
                     Ok((
                         vec![],
                         t.clone(),
@@ -3542,7 +3672,7 @@ fn infer_expr(
                     ))
                 }
                 Expr::String(_, v) => {
-                    let t = Type::con("string", 0);
+                    let t = Type::builtin(BuiltinTypeId::String);
                     Ok((
                         vec![],
                         t.clone(),
@@ -3550,7 +3680,7 @@ fn infer_expr(
                     ))
                 }
                 Expr::Uuid(_, v) => {
-                    let t = Type::con("uuid", 0);
+                    let t = Type::builtin(BuiltinTypeId::Uuid);
                     Ok((
                         vec![],
                         t.clone(),
@@ -3558,7 +3688,7 @@ fn infer_expr(
                     ))
                 }
                 Expr::DateTime(_, v) => {
-                    let t = Type::con("datetime", 0);
+                    let t = Type::builtin(BuiltinTypeId::DateTime);
                     Ok((
                         vec![],
                         t.clone(),
@@ -3951,7 +4081,7 @@ fn infer_expr(
                 }
                 Expr::Ite(_, cond, then_expr, else_expr) => {
                     let (p1, t1, typed_cond) = infer_expr(unifier, supply, env, adts, known, cond)?;
-                    unifier.unify(&t1, &Type::con("bool", 0))?;
+                    unifier.unify(&t1, &Type::builtin(BuiltinTypeId::Bool))?;
                     let (p2, t2, typed_then) =
                         infer_expr(unifier, supply, env, adts, known, then_expr)?;
                     let (p3, t3, typed_else) =
@@ -3997,7 +4127,10 @@ fn infer_expr(
                         preds.extend(p1);
                         typed_elems.push(typed_elem);
                     }
-                    let list_ty = Type::app(Type::con("List", 1), unifier.apply_type(&elem_tv));
+                    let list_ty = Type::app(
+                        Type::builtin(BuiltinTypeId::List),
+                        unifier.apply_type(&elem_tv),
+                    );
                     let typed = TypedExpr::new(list_ty.clone(), TypedExprKind::List(typed_elems));
                     Ok((preds, list_ty, typed))
                 }
@@ -4011,7 +4144,10 @@ fn infer_expr(
                         preds.extend(p1);
                         typed_kvs.insert(k.clone(), typed_v);
                     }
-                    let dict_ty = Type::app(Type::con("Dict", 1), unifier.apply_type(&elem_tv));
+                    let dict_ty = Type::app(
+                        Type::builtin(BuiltinTypeId::Dict),
+                        unifier.apply_type(&elem_tv),
+                    );
                     let typed = TypedExpr::new(dict_ty.clone(), TypedExprKind::Dict(typed_kvs));
                     Ok((preds, dict_ty, typed))
                 }
@@ -4038,12 +4174,13 @@ fn infer_expr(
                         if let Expr::Var(var) = scrutinee.as_ref() {
                             match pat {
                                 Pattern::Named(_, name, _) => {
-                                    if let Some((adt, _variant)) = ctor_lookup(adts, name) {
+                                    let name_sym = name.to_dotted_symbol();
+                                    if let Some((adt, _variant)) = ctor_lookup(adts, &name_sym) {
                                         known_arm.insert(
                                             var.name.clone(),
                                             KnownVariant {
                                                 adt: adt.name.clone(),
-                                                variant: name.clone(),
+                                                variant: name_sym,
                                             },
                                         );
                                     } else {
@@ -4411,11 +4548,12 @@ fn infer_pattern(
                 vec![(var.name.clone(), unifier.apply_type(scrutinee_ty))],
             )),
             Pattern::Named(_, name, ps) => {
+                let ctor_name = name.to_dotted_symbol();
                 let schemes = env
-                    .lookup(name)
-                    .ok_or_else(|| TypeError::UnknownVar(name.clone()))?;
+                    .lookup(&ctor_name)
+                    .ok_or_else(|| TypeError::UnknownVar(ctor_name.clone()))?;
                 if schemes.len() != 1 {
-                    return Err(TypeError::AmbiguousOverload(name.clone()));
+                    return Err(TypeError::AmbiguousOverload(ctor_name));
                 }
                 let scheme = apply_scheme_with_unifier(&schemes[0], unifier);
                 let (preds, ctor_ty) = instantiate(&scheme, supply);
@@ -4438,7 +4576,7 @@ fn infer_pattern(
             }
             Pattern::List(_, ps) => {
                 let elem_tv = Type::var(supply.fresh(Some("a".into())));
-                let list_ty = Type::app(Type::con("List", 1), elem_tv.clone());
+                let list_ty = Type::app(Type::builtin(BuiltinTypeId::List), elem_tv.clone());
                 unifier.unify(scrutinee_ty, &list_ty)?;
                 let mut preds = Vec::new();
                 let mut bindings = Vec::new();
@@ -4456,7 +4594,7 @@ fn infer_pattern(
             }
             Pattern::Cons(_, head, tail) => {
                 let elem_tv = Type::var(supply.fresh(Some("a".into())));
-                let list_ty = Type::app(Type::con("List", 1), elem_tv.clone());
+                let list_ty = Type::app(Type::builtin(BuiltinTypeId::List), elem_tv.clone());
                 unifier.unify(scrutinee_ty, &list_ty)?;
                 let mut preds = Vec::new();
                 let mut bindings = Vec::new();
@@ -4466,7 +4604,10 @@ fn infer_pattern(
                 preds.extend(p1);
                 bindings.extend(binds1);
 
-                let tail_ty = Type::app(Type::con("List", 1), unifier.apply_type(&elem_tv));
+                let tail_ty = Type::app(
+                    Type::builtin(BuiltinTypeId::List),
+                    unifier.apply_type(&elem_tv),
+                );
                 let (p2, binds2) = infer_pattern(unifier, supply, env, tail, &tail_ty)?;
                 preds.extend(p2);
                 bindings.extend(binds2);
@@ -4526,7 +4667,7 @@ fn infer_pattern(
                     Ok((preds, bindings))
                 } else {
                     let elem_tv = Type::var(supply.fresh(Some("v".into())));
-                    let dict_ty = Type::app(Type::con("Dict", 1), elem_tv.clone());
+                    let dict_ty = Type::app(Type::builtin(BuiltinTypeId::Dict), elem_tv.clone());
                     unifier.unify(scrutinee_ty, &dict_ty)?;
                     let elem_ty = unifier.apply_type(&elem_tv);
 
@@ -4565,7 +4706,10 @@ fn adt_name_from_patterns(adts: &HashMap<Symbol, AdtDecl>, patterns: &[Pattern])
     let mut candidate: Option<Symbol> = None;
     for pat in patterns {
         let next = match pat {
-            Pattern::Named(_, name, _) => ctor_lookup(adts, name).map(|(adt, _)| adt.name.clone()),
+            Pattern::Named(_, name, _) => {
+                let name_sym = name.to_dotted_symbol();
+                ctor_lookup(adts, &name_sym).map(|(adt, _)| adt.name.clone())
+            }
             Pattern::List(..) | Pattern::Cons(..) => Some(sym("List")),
             _ => None,
         };
@@ -4609,8 +4753,11 @@ fn check_match_exhaustive(
     let mut covered = HashSet::new();
     for pat in patterns {
         match pat {
-            Pattern::Named(_, name, _) if ctor_names.contains(name) => {
-                covered.insert(name.clone());
+            Pattern::Named(_, name, _) => {
+                let name_sym = name.to_dotted_symbol();
+                if ctor_names.contains(&name_sym) {
+                    covered.insert(name_sym);
+                }
             }
             Pattern::List(_, elems) if adt_name.as_ref() == "List" && elems.is_empty() => {
                 covered.insert(sym("Empty"));
@@ -4642,22 +4789,22 @@ mod tests {
     }
 
     fn dict_of(elem: Type) -> Type {
-        Type::app(Type::con("Dict", 1), elem)
+        Type::app(Type::builtin(BuiltinTypeId::Dict), elem)
     }
 
     #[test]
     fn unify_simple() {
-        let t1 = Type::fun(tvar(0, "a"), Type::con("u32", 0));
-        let t2 = Type::fun(Type::con("u16", 0), tvar(1, "b"));
+        let t1 = Type::fun(tvar(0, "a"), Type::builtin(BuiltinTypeId::U32));
+        let t2 = Type::fun(Type::builtin(BuiltinTypeId::U16), tvar(1, "b"));
         let subst = unify(&t1, &t2).unwrap();
-        assert_eq!(subst.get(&0), Some(&Type::con("u16", 0)));
-        assert_eq!(subst.get(&1), Some(&Type::con("u32", 0)));
+        assert_eq!(subst.get(&0), Some(&Type::builtin(BuiltinTypeId::U16)));
+        assert_eq!(subst.get(&1), Some(&Type::builtin(BuiltinTypeId::U32)));
     }
 
     #[test]
     fn occurs_check_blocks_infinite_type() {
         let tv = TypeVar::new(0, Some(sym("a")));
-        let t = Type::fun(Type::var(tv.clone()), Type::con("u8", 0));
+        let t = Type::fun(Type::var(tv.clone()), Type::builtin(BuiltinTypeId::U8));
         let err = bind(&tv, &t).unwrap_err();
         assert!(matches!(err, TypeError::Occurs(_, _)));
     }
@@ -4682,18 +4829,21 @@ mod tests {
     #[test]
     fn entail_superclasses() {
         let ts = TypeSystem::with_prelude().unwrap();
-        let pred = Predicate::new("Semiring", Type::con("i32", 0));
-        let given = [Predicate::new("AdditiveGroup", Type::con("i32", 0))];
+        let pred = Predicate::new("Semiring", Type::builtin(BuiltinTypeId::I32));
+        let given = [Predicate::new(
+            "AdditiveGroup",
+            Type::builtin(BuiltinTypeId::I32),
+        )];
         assert!(entails(&ts.classes, &given, &pred).unwrap());
     }
 
     #[test]
     fn entail_instances() {
         let ts = TypeSystem::with_prelude().unwrap();
-        let pred = Predicate::new("Field", Type::con("f32", 0));
+        let pred = Predicate::new("Field", Type::builtin(BuiltinTypeId::F32));
         assert!(entails(&ts.classes, &[], &pred).unwrap());
 
-        let pred_fail = Predicate::new("Field", Type::con("u32", 0));
+        let pred_fail = Predicate::new("Field", Type::builtin(BuiltinTypeId::U32));
         assert!(!entails(&ts.classes, &[], &pred_fail).unwrap());
     }
 
@@ -4761,7 +4911,13 @@ mod tests {
         let expr = program.expr;
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::app(Type::con("List", 1), Type::con("i32", 0)));
+        assert_eq!(
+            ty,
+            Type::app(
+                Type::builtin(BuiltinTypeId::List),
+                Type::builtin(BuiltinTypeId::I32)
+            )
+        );
     }
 
     #[test]
@@ -4804,11 +4960,10 @@ mod tests {
         let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert!(
             preds.is_empty()
-                || preds
-                    .iter()
-                    .all(|p| p.class.as_ref() == "Integral" && p.typ == Type::con("i32", 0))
+                || preds.iter().all(|p| p.class.as_ref() == "Integral"
+                    && p.typ == Type::builtin(BuiltinTypeId::I32))
         );
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -4819,7 +4974,10 @@ mod tests {
             Scheme::new(
                 vec![],
                 vec![],
-                Type::fun(Type::con("i32", 0), Type::con("i32", 0)),
+                Type::fun(
+                    Type::builtin(BuiltinTypeId::I32),
+                    Type::builtin(BuiltinTypeId::I32),
+                ),
             ),
         );
 
@@ -4891,6 +5049,34 @@ mod tests {
     }
 
     #[test]
+    fn reject_user_redefinition_of_primitive_type_name() {
+        let program = parse_program("type i32 = I32Wrap i32");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let rex_ast::expr::Decl::Type(decl) = &program.decls[0] else {
+            panic!("expected type decl");
+        };
+        let err = ts.inject_type_decl(decl).unwrap_err();
+        assert!(matches!(
+            err,
+            TypeError::ReservedTypeName(name) if name.as_ref() == "i32"
+        ));
+    }
+
+    #[test]
+    fn reject_user_redefinition_of_prelude_adt_name() {
+        let program = parse_program("type Result e a = Nope e a");
+        let mut ts = TypeSystem::with_prelude().unwrap();
+        let rex_ast::expr::Decl::Type(decl) = &program.decls[0] else {
+            panic!("expected type decl");
+        };
+        let err = ts.inject_type_decl(decl).unwrap_err();
+        assert!(matches!(
+            err,
+            TypeError::ReservedTypeName(name) if name.as_ref() == "Result"
+        ));
+    }
+
+    #[test]
     fn infer_polymorphic_id_tuple() {
         let expr = parse_expr(
             r#"
@@ -4903,9 +5089,9 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("f32", 0),
-            Type::con("string", 0),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::F32),
+            Type::builtin(BuiltinTypeId::String),
         ]);
         assert_eq!(ty, expected);
     }
@@ -4915,7 +5101,7 @@ mod tests {
         let expr = parse_expr("let x: i32 = 42 in x");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -4923,7 +5109,13 @@ mod tests {
         let expr = parse_expr("\\ (a : f32) -> a");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::fun(Type::con("f32", 0), Type::con("f32", 0)));
+        assert_eq!(
+            ty,
+            Type::fun(
+                Type::builtin(BuiltinTypeId::F32),
+                Type::builtin(BuiltinTypeId::F32)
+            )
+        );
     }
 
     #[test]
@@ -4931,7 +5123,7 @@ mod tests {
         let expr = parse_expr("\"hi\" is str");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("string", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     }
 
     #[test]
@@ -4960,7 +5152,10 @@ mod tests {
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
-        let expected = Type::tuple(vec![Type::con("i32", 0), Type::con("f32", 0)]);
+        let expected = Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::F32),
+        ]);
         assert_eq!(ty, expected);
     }
 
@@ -4982,7 +5177,7 @@ mod tests {
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5024,7 +5219,7 @@ mod tests {
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5047,7 +5242,7 @@ mod tests {
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5070,7 +5265,7 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5088,9 +5283,12 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
-            Type::con("i32", 0),
-            Type::con("string", 0),
-            Type::tuple(vec![Type::con("bool", 0), Type::con("bool", 0)]),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::String),
+            Type::tuple(vec![
+                Type::builtin(BuiltinTypeId::Bool),
+                Type::builtin(BuiltinTypeId::Bool),
+            ]),
         ]);
         assert_eq!(ty, expected);
     }
@@ -5111,7 +5309,7 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5129,7 +5327,10 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        let expected = Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)]);
+        let expected = Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+        ]);
         assert_eq!(ty, expected);
     }
 
@@ -5148,7 +5349,10 @@ mod tests {
         );
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        let expected = Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)]);
+        let expected = Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+        ]);
         assert_eq!(ty, expected);
     }
 
@@ -5172,7 +5376,7 @@ mod tests {
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5186,7 +5390,7 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5200,7 +5404,7 @@ mod tests {
         let mut ts = TypeSystem::with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5216,7 +5420,10 @@ mod tests {
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(
             ty,
-            Type::tuple(vec![Type::con("i32", 0), Type::con("f32", 0)])
+            Type::tuple(vec![
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::F32)
+            ])
         );
     }
 
@@ -5301,11 +5508,15 @@ mod tests {
         let expr = parse_expr("1 + 2");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert_eq!(preds.len(), 2);
         assert!(preds.iter().any(|p| p.class.as_ref() == "AdditiveMonoid"));
         assert!(preds.iter().any(|p| p.class.as_ref() == "Integral"));
-        assert!(preds.iter().all(|p| p.typ == Type::con("i32", 0)));
+        assert!(
+            preds
+                .iter()
+                .all(|p| p.typ == Type::builtin(BuiltinTypeId::I32))
+        );
     }
 
     #[test]
@@ -5313,10 +5524,10 @@ mod tests {
         let expr = parse_expr("1 % 2");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "Integral");
-        assert_eq!(preds[0].typ, Type::con("i32", 0));
+        assert_eq!(preds[0].typ, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5324,11 +5535,11 @@ mod tests {
         let expr = parse_expr("get 1 [1, 2, 3]");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert!(preds.iter().any(|p| p.class.as_ref() == "Indexable"));
         assert!(preds.iter().all(|p| {
             p.class.as_ref() == "Indexable"
-                || (p.class.as_ref() == "Integral" && p.typ == Type::con("i32", 0))
+                || (p.class.as_ref() == "Integral" && p.typ == Type::builtin(BuiltinTypeId::I32))
         }));
         for pred in preds.iter().filter(|p| p.class.as_ref() == "Indexable") {
             assert!(entails(&ts.classes, &[], pred).unwrap());
@@ -5340,19 +5551,19 @@ mod tests {
         let expr = parse_expr("(1, 'Hello', true).0");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
         let expr = parse_expr("(1, 'Hello', true).1");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("string", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
         assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
         let expr = parse_expr("(1, 'Hello', true).2");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("bool", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
         assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
     }
 
@@ -5361,10 +5572,10 @@ mod tests {
         let expr = parse_expr("1.0 / 2.0");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("f32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "Field");
-        assert_eq!(preds[0].typ, Type::con("f32", 0));
+        assert_eq!(preds[0].typ, Type::builtin(BuiltinTypeId::F32));
         assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
     }
 
@@ -5658,10 +5869,14 @@ mod tests {
             ("map_dict", r#"map (\x -> x) {a = 1}"#),
         ] {
             let (class, pred_type, expected_ty) = match name {
-                "division" => ("Field", Type::con("i32", 0), Some(Type::con("i32", 0))),
-                "eq_dict" => ("Eq", dict_of(Type::con("i32", 0)), None),
-                "min_bool" => ("Ord", Type::con("bool", 0), None),
-                "map_dict" => ("Functor", Type::con("Dict", 1), None),
+                "division" => (
+                    "Field",
+                    Type::builtin(BuiltinTypeId::I32),
+                    Some(Type::builtin(BuiltinTypeId::I32)),
+                ),
+                "eq_dict" => ("Eq", dict_of(Type::builtin(BuiltinTypeId::I32)), None),
+                "min_bool" => ("Ord", Type::builtin(BuiltinTypeId::Bool), None),
+                "map_dict" => ("Functor", Type::builtin(BuiltinTypeId::Dict), None),
                 _ => unreachable!("unknown test case {name}"),
             };
 
@@ -5786,7 +6001,7 @@ mod tests {
         let expr = parse_expr("let x : i32 = ? in x");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5794,7 +6009,7 @@ mod tests {
         let expr = parse_expr("if ? then 1 else 2");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]
@@ -5802,7 +6017,7 @@ mod tests {
         let expr = parse_expr("? + 1");
         let mut ts = TypeSystem::with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
-        assert_eq!(ty, Type::con("i32", 0));
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
 
     #[test]

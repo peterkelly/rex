@@ -308,7 +308,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
     let heap = &engine.heap;
     assert_pointer_eq!(heap, v, heap.alloc_i32(100).unwrap());
 }
@@ -335,7 +335,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
 
     let mut gas = GasMeter::default();
     let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
     let heap = &engine.heap;
     assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
 }
@@ -358,7 +358,7 @@ async fn derive_types_implement_rex_adt_trait() {
 
     let mut gas = GasMeter::default();
     let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::con("i32", 0));
+    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, v, engine.heap.alloc_i32(10).unwrap());
 }
 
@@ -383,7 +383,10 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let (v_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(
         ty,
-        Type::tuple(vec![Type::con("i32", 0), Type::con("i32", 0)])
+        Type::tuple(vec![
+            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(rex::BuiltinTypeId::I32)
+        ])
     );
     let v = engine
         .heap
