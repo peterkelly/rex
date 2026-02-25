@@ -2153,6 +2153,7 @@ where
         self.modules.invalidate(id)?;
         self.module_exports_cache.remove(id);
         self.module_interface_cache.remove(id);
+        self.module_sources.remove(id);
         self.module_source_fingerprints.remove(id);
         self.published_cycle_interfaces.remove(id);
         Ok(())
@@ -2197,6 +2198,8 @@ where
             let exports = exports_from_program(&program, &prefix, &resolved.id);
             loaded.insert(resolved.id.clone(), exports);
             loading.insert(resolved.id.clone());
+            self.module_sources
+                .insert(resolved.id.clone(), resolved.source.clone());
 
             let imports = graph_imports_for_program(&program, self.default_imports());
             for import_decl in imports {
@@ -2449,6 +2452,8 @@ where
 
         let prefix = prefix_for_module(&resolved.id);
         let program = parse_program_from_source(&resolved.source, Some(&resolved.id), Some(gas))?;
+        self.module_sources
+            .insert(resolved.id.clone(), resolved.source.clone());
         let exports = exports_from_program(&program, &prefix, &resolved.id);
         self.module_exports_cache
             .insert(resolved.id.clone(), exports.clone());

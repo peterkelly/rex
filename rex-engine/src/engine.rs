@@ -1,6 +1,7 @@
 //! Core engine implementation for Rex.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt::Write as _;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
@@ -1533,6 +1534,7 @@ where
     injected_modules: HashSet<String>,
     pub(crate) module_exports_cache: HashMap<ModuleId, ModuleExports>,
     pub(crate) module_interface_cache: HashMap<ModuleId, Vec<Decl>>,
+    pub(crate) module_sources: HashMap<ModuleId, String>,
     pub(crate) module_source_fingerprints: HashMap<ModuleId, String>,
     pub(crate) published_cycle_interfaces: HashSet<ModuleId>,
     default_imports: Vec<String>,
@@ -1617,6 +1619,7 @@ where
             injected_modules: HashSet::new(),
             module_exports_cache: HashMap::new(),
             module_interface_cache: HashMap::new(),
+            module_sources: HashMap::new(),
             module_source_fingerprints: HashMap::new(),
             published_cycle_interfaces: HashSet::new(),
             default_imports: Vec::new(),
@@ -1648,6 +1651,7 @@ where
             injected_modules: HashSet::new(),
             module_exports_cache: HashMap::new(),
             module_interface_cache: HashMap::new(),
+            module_sources: HashMap::new(),
             module_source_fingerprints: HashMap::new(),
             published_cycle_interfaces: HashSet::new(),
             default_imports: options.default_imports,
@@ -1775,6 +1779,333 @@ where
         &self.default_imports
     }
 
+    /// Return a markdown document that inventories the currently-registered
+    /// engine state.
+    ///
+    /// The report includes:
+    /// - summary counts
+    /// - modules and exports
+    /// - ADTs
+    /// - functions/values in the type environment
+    /// - type classes, methods, and instances
+    /// - native implementations
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use rex_engine::Engine;
+    ///
+    /// let engine = Engine::with_prelude(()).unwrap();
+    /// let md = engine.registry_markdown();
+    ///
+    /// assert!(md.contains("# Engine Registry"));
+    /// assert!(md.contains("## ADTs"));
+    /// ```
+    pub fn registry_markdown(&self) -> String {
+        fn module_anchor(id: &ModuleId) -> String {
+            let raw = format!("module-{id}").to_ascii_lowercase();
+            let mut out = String::with_capacity(raw.len());
+            let mut prev_dash = false;
+            for ch in raw.chars() {
+                let keep = ch.is_ascii_alphanumeric();
+                let mapped = if keep { ch } else { '-' };
+                if mapped == '-' {
+                    if prev_dash {
+                        continue;
+                    }
+                    prev_dash = true;
+                } else {
+                    prev_dash = false;
+                }
+                out.push(mapped);
+            }
+            out.trim_matches('-').to_string()
+        }
+
+        fn symbol_list(symbols: &[Symbol]) -> String {
+            if symbols.is_empty() {
+                "(none)".to_string()
+            } else {
+                symbols
+                    .iter()
+                    .map(|s| format!("`{s}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+        }
+
+        let mut out = String::new();
+        let _ = writeln!(&mut out, "# Engine Registry");
+        let _ = writeln!(&mut out);
+        let mut module_ids: BTreeMap<String, ModuleId> = BTreeMap::new();
+        for id in self.module_exports_cache.keys() {
+            module_ids.insert(id.to_string(), id.clone());
+        }
+        for id in self.module_sources.keys() {
+            module_ids.insert(id.to_string(), id.clone());
+        }
+        for module_name in self.virtual_modules.keys() {
+            let id = ModuleId::Virtual(module_name.clone());
+            module_ids.insert(id.to_string(), id);
+        }
+        for module_name in &self.injected_modules {
+            let id = ModuleId::Virtual(module_name.clone());
+            module_ids.insert(id.to_string(), id);
+        }
+
+        let _ = writeln!(&mut out, "## Summary");
+        let env_value_count = self.type_system.env.values.size();
+        let native_impl_count: usize = self.natives.entries.values().map(Vec::len).sum();
+        let class_count = self.type_system.classes.classes.len();
+        let class_instance_count: usize = self
+            .type_system
+            .classes
+            .instances
+            .values()
+            .map(Vec::len)
+            .sum();
+        let _ = writeln!(&mut out, "- Modules (all kinds): {}", module_ids.len());
+        let _ = writeln!(
+            &mut out,
+            "- Injected modules: {}",
+            self.injected_modules.len()
+        );
+        let _ = writeln!(
+            &mut out,
+            "- Virtual modules: {}",
+            self.virtual_modules.len()
+        );
+        let _ = writeln!(&mut out, "- ADTs: {}", self.type_system.adts.len());
+        let _ = writeln!(
+            &mut out,
+            "- Values/functions in type env: {env_value_count}"
+        );
+        let _ = writeln!(&mut out, "- Type classes: {class_count}");
+        let _ = writeln!(&mut out, "- Type class instances: {class_instance_count}");
+        let _ = writeln!(&mut out, "- Native implementations: {native_impl_count}");
+        let _ = writeln!(&mut out);
+
+        let _ = writeln!(&mut out, "## Module Index");
+        if module_ids.is_empty() {
+            let _ = writeln!(&mut out, "_No modules registered._");
+        } else {
+            for (display, id) in &module_ids {
+                let anchor = module_anchor(id);
+                let _ = writeln!(&mut out, "- [`{display}`](#{anchor})");
+            }
+        }
+        let _ = writeln!(&mut out);
+
+        let _ = writeln!(&mut out, "## Modules");
+        if module_ids.is_empty() {
+            let _ = writeln!(&mut out, "_No modules registered._");
+            let _ = writeln!(&mut out);
+        } else {
+            for (display, id) in module_ids {
+                let anchor = module_anchor(&id);
+                let _ = writeln!(&mut out, "<a id=\"{anchor}\"></a>");
+                let _ = writeln!(&mut out, "### `{display}`");
+                if let Some(source) = self.module_sources.get(&id) {
+                    if source.trim().is_empty() {
+                        let _ = writeln!(&mut out, "_Module source is empty._");
+                    } else {
+                        let _ = writeln!(&mut out, "```rex");
+                        let _ = writeln!(&mut out, "{}", source.trim_end());
+                        let _ = writeln!(&mut out, "```");
+                    }
+                } else {
+                    let _ = writeln!(&mut out, "_No captured source for this module._");
+                }
+
+                let exports = self.module_exports_cache.get(&id).or_else(|| match &id {
+                    ModuleId::Virtual(name) => self.virtual_modules.get(name),
+                    _ => None,
+                });
+                if let Some(exports) = exports {
+                    let mut values: Vec<Symbol> = exports.values.keys().cloned().collect();
+                    let mut types: Vec<Symbol> = exports.types.keys().cloned().collect();
+                    let mut classes: Vec<Symbol> = exports.classes.keys().cloned().collect();
+                    values.sort();
+                    types.sort();
+                    classes.sort();
+                    let _ = writeln!(&mut out, "- Values: {}", symbol_list(&values));
+                    let _ = writeln!(&mut out, "- Types: {}", symbol_list(&types));
+                    let _ = writeln!(&mut out, "- Classes: {}", symbol_list(&classes));
+                } else {
+                    let _ = writeln!(&mut out, "- Exports: (none cached)");
+                }
+                let _ = writeln!(&mut out);
+            }
+        }
+
+        let _ = writeln!(&mut out, "## ADTs");
+        if self.type_system.adts.is_empty() {
+            let _ = writeln!(&mut out, "_No ADTs registered._");
+            let _ = writeln!(&mut out);
+        } else {
+            let mut adts: Vec<&AdtDecl> = self.type_system.adts.values().collect();
+            adts.sort_by(|a, b| a.name.cmp(&b.name));
+            for adt in adts {
+                let params = if adt.params.is_empty() {
+                    "(none)".to_string()
+                } else {
+                    adt.params
+                        .iter()
+                        .map(|p| format!("`{}`", p.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let _ = writeln!(&mut out, "### `{}`", adt.name);
+                let _ = writeln!(&mut out, "- Parameters: {params}");
+                if adt.variants.is_empty() {
+                    let _ = writeln!(&mut out, "- Variants: (none)");
+                } else {
+                    let mut variants = adt.variants.clone();
+                    variants.sort_by(|a, b| a.name.cmp(&b.name));
+                    let _ = writeln!(&mut out, "- Variants:");
+                    for variant in variants {
+                        if variant.args.is_empty() {
+                            let _ = writeln!(&mut out, "  - `{}`", variant.name);
+                        } else {
+                            let args = variant
+                                .args
+                                .iter()
+                                .map(ToString::to_string)
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let _ = writeln!(&mut out, "  - `{}`({args})", variant.name);
+                        }
+                    }
+                }
+                let _ = writeln!(&mut out);
+            }
+        }
+
+        let _ = writeln!(&mut out, "## Functions and Values");
+        if self.type_system.env.values.is_empty() {
+            let _ = writeln!(&mut out, "_No values registered._");
+            let _ = writeln!(&mut out);
+        } else {
+            let mut names: Vec<Symbol> = self
+                .type_system
+                .env
+                .values
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect();
+            names.sort();
+            for name in names {
+                if let Some(schemes) = self.type_system.env.lookup(&name) {
+                    let mut scheme_strs: Vec<String> =
+                        schemes.iter().map(|s| s.typ.to_string()).collect();
+                    scheme_strs.sort();
+                    scheme_strs.dedup();
+                    let joined = scheme_strs
+                        .into_iter()
+                        .map(|s| format!("`{s}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let _ = writeln!(&mut out, "- `{name}`: {joined}");
+                }
+            }
+            let _ = writeln!(&mut out);
+        }
+
+        let _ = writeln!(&mut out, "## Type Classes");
+        if self.type_system.classes.classes.is_empty() {
+            let _ = writeln!(&mut out, "_No type classes registered._");
+            let _ = writeln!(&mut out);
+        } else {
+            let mut class_names: Vec<Symbol> =
+                self.type_system.classes.classes.keys().cloned().collect();
+            class_names.sort();
+            for class_name in class_names {
+                let supers = self.type_system.classes.supers_of(&class_name);
+                let mut supers_sorted = supers;
+                supers_sorted.sort();
+                let _ = writeln!(&mut out, "### `{class_name}`");
+                let _ = writeln!(&mut out, "- Superclasses: {}", symbol_list(&supers_sorted));
+
+                let mut methods: Vec<(Symbol, String)> = self
+                    .type_system
+                    .class_methods
+                    .iter()
+                    .filter(|(_, info)| info.class == class_name)
+                    .map(|(name, info)| (name.clone(), info.scheme.typ.to_string()))
+                    .collect();
+                methods.sort_by(|a, b| a.0.cmp(&b.0));
+                if methods.is_empty() {
+                    let _ = writeln!(&mut out, "- Methods: (none)");
+                } else {
+                    let _ = writeln!(&mut out, "- Methods:");
+                    for (method, scheme) in methods {
+                        let _ = writeln!(&mut out, "  - `{method}`: `{scheme}`");
+                    }
+                }
+
+                let mut instances = self
+                    .type_system
+                    .classes
+                    .instances
+                    .get(&class_name)
+                    .cloned()
+                    .unwrap_or_default();
+                instances.sort_by(|a, b| a.head.typ.to_string().cmp(&b.head.typ.to_string()));
+                if instances.is_empty() {
+                    let _ = writeln!(&mut out, "- Instances: (none)");
+                } else {
+                    let _ = writeln!(&mut out, "- Instances:");
+                    for instance in instances {
+                        let ctx = if instance.context.is_empty() {
+                            String::new()
+                        } else {
+                            let mut parts: Vec<String> = instance
+                                .context
+                                .iter()
+                                .map(|pred| format!("{} {}", pred.class, pred.typ))
+                                .collect();
+                            parts.sort();
+                            format!("({}) => ", parts.join(", "))
+                        };
+                        let _ = writeln!(
+                            &mut out,
+                            "  - `{}{} {}`",
+                            ctx, instance.head.class, instance.head.typ
+                        );
+                    }
+                }
+                let _ = writeln!(&mut out);
+            }
+        }
+
+        let _ = writeln!(&mut out, "## Native Implementations");
+        if self.natives.entries.is_empty() {
+            let _ = writeln!(&mut out, "_No native implementations registered._");
+        } else {
+            let mut native_names: Vec<Symbol> = self.natives.entries.keys().cloned().collect();
+            native_names.sort();
+            for name in native_names {
+                if let Some(impls) = self.natives.get(&name) {
+                    let mut rows: Vec<(usize, String, u64)> = impls
+                        .iter()
+                        .map(|imp| (imp.arity, imp.scheme.typ.to_string(), imp.gas_cost))
+                        .collect();
+                    rows.sort_by(|a, b| a.1.cmp(&b.1));
+                    let _ = writeln!(&mut out, "### `{name}`");
+                    for (arity, typ, gas_cost) in rows {
+                        let _ = writeln!(
+                            &mut out,
+                            "- arity `{arity}`, gas `{gas_cost}`, type `{typ}`"
+                        );
+                    }
+                    let _ = writeln!(&mut out);
+                }
+            }
+        }
+
+        out
+    }
+
     pub fn cancel(&self) {
         self.cancel.cancel();
     }
@@ -1799,6 +2130,8 @@ where
             source.push_str(&export.declaration);
             source.push('\n');
         }
+        self.module_sources
+            .insert(ModuleId::Virtual(module_name.clone()), source.clone());
 
         let local_type_names = module_local_type_names_from_declarations(&module.declarations);
         self.module_local_type_names
@@ -3873,6 +4206,25 @@ mod tests {
 
     fn unlimited_gas() -> GasMeter {
         GasMeter::default()
+    }
+
+    #[test]
+    fn registry_markdown_lists_core_sections() {
+        let engine = Engine::with_prelude(()).unwrap();
+        let doc = engine.registry_markdown();
+
+        assert!(doc.contains("# Engine Registry"));
+        assert!(doc.contains("## Module Index"));
+        assert!(doc.contains("## Modules"));
+        assert!(doc.contains("## ADTs"));
+        assert!(doc.contains("## Functions and Values"));
+        assert!(doc.contains("## Type Classes"));
+        assert!(doc.contains("## Native Implementations"));
+        assert!(doc.contains("[`virtual:Prelude`](#module-virtual-prelude)"));
+        assert!(doc.contains("<a id=\"module-virtual-prelude\"></a>"));
+        assert!(doc.contains("### `virtual:Prelude`"));
+        assert!(doc.contains("`List`"));
+        assert!(doc.contains("`Option`"));
     }
 
     #[test]
