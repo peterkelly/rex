@@ -12,9 +12,9 @@ use rex_ast::expr::{
 };
 use rex_lexer::span::Span;
 use rex_ts::{
-    AdtDecl, BuiltinTypeId, Instance, Predicate, PreparedInstanceDecl, Scheme, Subst, Type,
-    TypeError, TypeKind, TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types, compose_subst,
-    entails, instantiate, unify,
+    AdtDecl, BuiltinTypeId, CollectAdtsError, Instance, Predicate, PreparedInstanceDecl, Scheme,
+    Subst, Type, TypeError, TypeKind, TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types,
+    collect_adts_in_types, compose_subst, entails, instantiate, unify,
 };
 use rex_util::GasMeter;
 
@@ -495,6 +495,41 @@ where
         self.add_declaration(adt_declaration_line(&adt))
     }
 
+    /// Collect user ADTs referenced by `types`, convert each to an `AdtDecl`,
+    /// and add the declarations to this module.
+    ///
+    /// This deduplicates discovered ADTs across all inputs. If conflicting ADT
+    /// definitions are found (same name, different constructor definition), this
+    /// returns an `EngineError` describing every conflict.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use rex_engine::{Engine, Module};
+    /// use rex_ts::{BuiltinTypeId, Type};
+    ///
+    /// let mut engine = Engine::with_prelude(()).unwrap();
+    /// let mut module = Module::new("acme.types");
+    /// let types = vec![
+    ///     Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
+    ///     Type::user_con("Bar", 0),
+    /// ];
+    ///
+    /// module.add_adt_decls_from_types(&mut engine, types).unwrap();
+    /// ```
+    pub fn add_adt_decls_from_types(
+        &mut self,
+        engine: &mut Engine<State>,
+        types: Vec<Type>,
+    ) -> Result<(), EngineError> {
+        let adts = collect_adts_in_types(types).map_err(collect_adts_error_to_engine)?;
+        for typ in adts {
+            let adt = engine.adt_decl_from_type(&typ)?;
+            self.add_adt_decl(adt)?;
+        }
+        Ok(())
+    }
+
     /// Build and add a Rust-backed ADT declaration into this module.
     pub fn inject_rex_adt<T>(&mut self, engine: &mut Engine<State>) -> Result<(), EngineError>
     where
@@ -719,6 +754,43 @@ fn adt_declaration_line(adt: &AdtDecl) -> String {
         .collect::<Vec<_>>()
         .join(" | ");
     format!("pub type {head} = {variants}")
+}
+
+/// Convert ADT collection conflicts into an embedder-facing `EngineError`.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use rex_engine::collect_adts_error_to_engine;
+/// use rex_ts::{collect_adts_in_types, Type};
+///
+/// let err = collect_adts_in_types(vec![
+///     Type::user_con("Thing", 1),
+///     Type::user_con("Thing", 2),
+/// ])
+/// .unwrap_err();
+///
+/// let engine_err = collect_adts_error_to_engine(err);
+/// assert!(engine_err.to_string().contains("conflicting ADT definitions"));
+/// ```
+pub fn collect_adts_error_to_engine(err: CollectAdtsError) -> EngineError {
+    let details = err
+        .conflicts
+        .into_iter()
+        .map(|conflict| {
+            let defs = conflict
+                .definitions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}: [{defs}]", conflict.name)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    EngineError::Custom(format!(
+        "conflicting ADT definitions discovered in input types: {details}"
+    ))
 }
 
 fn native_export_arg_types(
@@ -3801,6 +3873,53 @@ mod tests {
 
     fn unlimited_gas() -> GasMeter {
         GasMeter::default()
+    }
+
+    #[test]
+    fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
+        let mut engine = Engine::with_prelude(()).unwrap();
+        let mut module = Module::new("acme.types");
+        let a = Type::var(rex_ts::TypeVar::new(0, Some(sym("a"))));
+        let types = vec![
+            Type::fun(
+                Type::app(Type::user_con("Foo", 1), a.clone()),
+                Type::user_con("Bar", 0),
+            ),
+            Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
+        ];
+
+        module.add_adt_decls_from_types(&mut engine, types).unwrap();
+
+        assert_eq!(module.declarations.len(), 2);
+        assert!(
+            module
+                .declarations
+                .iter()
+                .any(|d| d.starts_with("pub type Foo t0 ="))
+        );
+        assert!(
+            module
+                .declarations
+                .iter()
+                .any(|d| d.starts_with("pub type Bar ="))
+        );
+    }
+
+    #[test]
+    fn module_add_adt_decls_from_types_rejects_conflicting_adts() {
+        let mut engine = Engine::with_prelude(()).unwrap();
+        let mut module = Module::new("acme.types");
+        let types = vec![Type::user_con("Thing", 1), Type::user_con("Thing", 2)];
+
+        let err = module
+            .add_adt_decls_from_types(&mut engine, types)
+            .unwrap_err();
+
+        assert!(matches!(err, EngineError::Custom(_)));
+        assert!(
+            err.to_string()
+                .contains("conflicting ADT definitions discovered in input types")
+        );
     }
 
     #[tokio::test]

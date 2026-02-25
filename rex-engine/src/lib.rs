@@ -17,6 +17,7 @@ pub use engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineOptions,
     Export, Handler, Module, NativeFn, NativeFuture, OverloadedFn, PRELUDE_MODULE_NAME,
     PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault, SyncNativeCallable,
+    collect_adts_error_to_engine,
 };
 pub use env::Env;
 pub use error::{EngineError, ModuleError};

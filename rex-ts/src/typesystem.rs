@@ -4702,6 +4702,117 @@ fn type_head_name(typ: &Type) -> Option<&Symbol> {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdtConflict {
+    pub name: Symbol,
+    pub definitions: Vec<Type>,
+}
+
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
+#[error("conflicting ADT definitions: {conflicts:?}")]
+pub struct CollectAdtsError {
+    pub conflicts: Vec<AdtConflict>,
+}
+
+/// Collect all user-defined ADT constructors referenced by the provided types.
+///
+/// This walks each type recursively (including nested occurrences), returns a
+/// deduplicated list of constructor heads, and rejects ambiguous constructor
+/// names that appear with incompatible definitions.
+///
+/// The returned `Type`s are constructor heads (for example `Foo`), suitable
+/// for passing to embedder utilities that derive `AdtDecl`s from type
+/// constructors.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use rex_ts::{collect_adts_in_types, BuiltinTypeId, Type};
+///
+/// let types = vec![
+///     Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
+///     Type::fun(Type::user_con("Bar", 0), Type::user_con("Foo", 1)),
+/// ];
+///
+/// let adts = collect_adts_in_types(types).unwrap();
+/// assert_eq!(adts, vec![Type::user_con("Foo", 1), Type::user_con("Bar", 0)]);
+/// ```
+///
+/// ```rust,ignore
+/// use rex_ts::{collect_adts_in_types, Type};
+///
+/// let err = collect_adts_in_types(vec![
+///     Type::user_con("Thing", 1),
+///     Type::user_con("Thing", 2),
+/// ])
+/// .unwrap_err();
+///
+/// assert_eq!(err.conflicts.len(), 1);
+/// assert_eq!(err.conflicts[0].name.as_ref(), "Thing");
+/// ```
+pub fn collect_adts_in_types(types: Vec<Type>) -> Result<Vec<Type>, CollectAdtsError> {
+    fn visit(
+        typ: &Type,
+        out: &mut Vec<Type>,
+        seen: &mut HashSet<Type>,
+        defs_by_name: &mut BTreeMap<Symbol, Vec<Type>>,
+    ) {
+        match typ.as_ref() {
+            TypeKind::Var(_) => {}
+            TypeKind::Con(tc) => {
+                // Builtins are not embeddable ADT declarations.
+                if tc.builtin_id.is_none() {
+                    let adt = Type::new(TypeKind::Con(tc.clone()));
+                    if seen.insert(adt.clone()) {
+                        out.push(adt.clone());
+                    }
+                    let defs = defs_by_name.entry(tc.name.clone()).or_default();
+                    if !defs.contains(&adt) {
+                        defs.push(adt);
+                    }
+                }
+            }
+            TypeKind::App(fun, arg) => {
+                visit(fun, out, seen, defs_by_name);
+                visit(arg, out, seen, defs_by_name);
+            }
+            TypeKind::Fun(arg, ret) => {
+                visit(arg, out, seen, defs_by_name);
+                visit(ret, out, seen, defs_by_name);
+            }
+            TypeKind::Tuple(elems) => {
+                for elem in elems {
+                    visit(elem, out, seen, defs_by_name);
+                }
+            }
+            TypeKind::Record(fields) => {
+                for (_name, field_ty) in fields {
+                    visit(field_ty, out, seen, defs_by_name);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut defs_by_name: BTreeMap<Symbol, Vec<Type>> = BTreeMap::new();
+    for typ in &types {
+        visit(typ, &mut out, &mut seen, &mut defs_by_name);
+    }
+
+    let conflicts: Vec<AdtConflict> = defs_by_name
+        .into_iter()
+        .filter_map(|(name, definitions)| {
+            (definitions.len() > 1).then_some(AdtConflict { name, definitions })
+        })
+        .collect();
+    if !conflicts.is_empty() {
+        return Err(CollectAdtsError { conflicts });
+    }
+
+    Ok(out)
+}
+
 fn adt_name_from_patterns(adts: &HashMap<Symbol, AdtDecl>, patterns: &[Pattern]) -> Option<Symbol> {
     let mut candidate: Option<Symbol> = None;
     for pat in patterns {
@@ -4918,6 +5029,37 @@ mod tests {
                 Type::builtin(BuiltinTypeId::I32)
             )
         );
+    }
+
+    #[test]
+    fn collect_adts_in_types_finds_nested_unique_adts() {
+        let foo = Type::user_con("Foo", 1);
+        let bar = Type::user_con("Bar", 0);
+        let ty = Type::fun(
+            Type::app(
+                Type::builtin(BuiltinTypeId::List),
+                Type::app(foo.clone(), tvar(0, "a")),
+            ),
+            Type::tuple(vec![
+                Type::app(foo.clone(), Type::builtin(BuiltinTypeId::I32)),
+                bar.clone(),
+            ]),
+        );
+
+        let adts = collect_adts_in_types(vec![ty]).unwrap();
+        assert_eq!(adts, vec![foo, bar]);
+    }
+
+    #[test]
+    fn collect_adts_in_types_rejects_conflicting_names() {
+        let arity1 = Type::user_con("Thing", 1);
+        let arity2 = Type::user_con("Thing", 2);
+
+        let err = collect_adts_in_types(vec![arity1.clone(), arity2.clone()]).unwrap_err();
+        assert_eq!(err.conflicts.len(), 1);
+        let conflict = &err.conflicts[0];
+        assert_eq!(conflict.name, sym("Thing"));
+        assert_eq!(conflict.definitions, vec![arity1, arity2]);
     }
 
     #[test]
