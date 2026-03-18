@@ -2,15 +2,15 @@
 
 Rex is designed as a small pipeline you can embed at whatever stage you need:
 
-1. `rex-lexer`: source → `Tokens`
-2. `rex-parser`: tokens → `Program { decls, expr }`
-3. `rex-ts`: HM inference + type classes → `TypedExpr` (plus predicates/type)
-4. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Value`
+1. `rexlang-lexer`: source → `Tokens`
+2. `rexlang-parser`: tokens → `Program { decls, expr }`
+3. `rexlang-ts`: HM inference + type classes → `TypedExpr` (plus predicates/type)
+4. `rexlang-engine`: evaluate a `TypedExpr` → `rexlang_engine::Value`
 
 This document focuses on common embedding patterns.
 
 For most applications, use `rexlang` as your dependency and import types from there.
-This guide also shows lower-level crate APIs (`rex-engine`, `rex-parser`, etc.) when that detail
+This guide also shows lower-level crate APIs (`rexlang-engine`, `rexlang-parser`, etc.) when that detail
 is useful.
 
 ## Running Untrusted Rex Code (Production Checklist)
@@ -33,10 +33,10 @@ Evaluation API:
 ## Evaluate Rex Code
 
 ```rust
-use rex_engine::Engine;
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_util::{GasCosts, GasMeter};
+use rexlang_engine::Engine;
+use rexlang_lexer::Token;
+use rexlang_parser::Parser;
+use rexlang_util::{GasCosts, GasMeter};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
@@ -68,7 +68,7 @@ exports fail early with module errors.
 If you want full control:
 
 ```rust
-use rex_engine::{Engine, EngineOptions, PreludeMode};
+use rexlang_engine::{Engine, EngineOptions, PreludeMode};
 
 let mut engine = Engine::with_options(
     (),
@@ -81,7 +81,7 @@ let mut engine = Engine::with_options(
 
 ## Inject Modules (Embedder Patterns)
 
-This is fully supported in `rex-engine`. You can compose module loading from:
+This is fully supported in `rexlang-engine`. You can compose module loading from:
 
 - default resolvers (`std.*`, local filesystem, optional remote feature)
 - include roots
@@ -90,8 +90,8 @@ This is fully supported in `rex-engine`. You can compose module loading from:
 ### 1) Use Built-In Resolvers
 
 ```rust
-use rex_engine::Engine;
-use rex_util::GasMeter;
+use rexlang_engine::Engine;
+use rexlang_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -117,8 +117,8 @@ Notes:
 For host-managed modules, add a resolver that maps `module_name` to source text.
 
 ```rust
-use rex_engine::{Engine, ModuleId, ResolveRequest, ResolvedModule};
-use rex_util::GasMeter;
+use rexlang_engine::{Engine, ModuleId, ResolveRequest, ResolvedModule};
+use rexlang_util::GasMeter;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -175,8 +175,8 @@ Use `Module` + `Engine::inject_module(...)`:
 `Future<Output = Result<T, EngineError>>`.
 
 ```rust
-use rex_engine::{Engine, Module};
-use rex_util::GasMeter;
+use rexlang_engine::{Engine, Module};
+use rexlang_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -199,7 +199,7 @@ println!("{value}");
 You can declare ADTs directly inside an injected host module:
 
 ```rust
-use rex_engine::{Engine, Module};
+use rexlang_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -237,8 +237,8 @@ Example:
 
 ```rust
 use rexlang::{Engine, EngineError, Module};
-use rex_proc_macro::Rex;
-use rex_util::GasMeter;
+use rexlang_proc_macro::Rex;
+use rexlang_util::GasMeter;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
 enum Side {
@@ -302,8 +302,8 @@ These callbacks receive `&Engine<State>` (not just `&State`), so they can:
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{Engine, Module, Pointer};
-use rex_ts::{BuiltinTypeId, Scheme, Type};
+use rexlang_engine::{Engine, Module, Pointer};
+use rexlang_ts::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -341,7 +341,7 @@ If you evaluate ad-hoc Rex snippets that contain imports, use `eval_snippet_at` 
 `infer_snippet_at`) to provide an importer path anchor:
 
 ```rust
-let mut gas = rex_util::GasMeter::default();
+let mut gas = rexlang_util::GasMeter::default();
 let value = engine
     .eval_snippet_at("import foo.bar as Bar\nBar.add 1 2", "/tmp/workflow/_snippet.rex", &mut gas)
     .await?;
@@ -360,7 +360,7 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
   they can use heap/runtime internals and read `engine.state`.
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 
 #[derive(Clone)]
 struct HostState {
@@ -427,9 +427,9 @@ match (to_list bytes) with
 ## Typecheck Without Evaluating
 
 ```rust
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_ts::TypeSystem;
+use rexlang_lexer::Token;
+use rexlang_parser::Parser;
+use rexlang_ts::TypeSystem;
 
 let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
@@ -438,12 +438,12 @@ let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| form
 let mut ts = TypeSystem::with_prelude()?;
 for decl in &program.decls {
     match decl {
-        rex_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
-        rex_ast::expr::Decl::Class(d) => ts.inject_class_decl(d)?,
-        rex_ast::expr::Decl::Instance(d) => {
+        rexlang_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
+        rexlang_ast::expr::Decl::Class(d) => ts.inject_class_decl(d)?,
+        rexlang_ast::expr::Decl::Instance(d) => {
             ts.inject_instance_decl(d)?;
         }
-        rex_ast::expr::Decl::Fn(d) => ts.inject_fn_decl(d)?,
+        rexlang_ast::expr::Decl::Fn(d) => ts.inject_fn_decl(d)?,
     }
 }
 
@@ -471,9 +471,9 @@ Users can declare new type classes and instances directly in Rex source. As the 
 ### Typecheck: Inject Class/Instance Decls into `TypeSystem`
 
 ```rust
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_ts::TypeSystem;
+use rexlang_lexer::Token;
+use rexlang_parser::Parser;
+use rexlang_ts::TypeSystem;
 
 let code = r#"
 class Size a
@@ -495,12 +495,12 @@ let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| form
 let mut ts = TypeSystem::with_prelude()?;
 for decl in &program.decls {
     match decl {
-        rex_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
-        rex_ast::expr::Decl::Class(d) => ts.inject_class_decl(d)?,
-        rex_ast::expr::Decl::Instance(d) => {
+        rexlang_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
+        rexlang_ast::expr::Decl::Class(d) => ts.inject_class_decl(d)?,
+        rexlang_ast::expr::Decl::Instance(d) => {
             ts.inject_instance_decl(d)?;
         }
-        rex_ast::expr::Decl::Fn(d) => ts.inject_fn_decl(d)?,
+        rexlang_ast::expr::Decl::Fn(d) => ts.inject_fn_decl(d)?,
     }
 }
 
@@ -511,10 +511,10 @@ assert_eq!(ty.to_string(), "i32");
 ### Evaluate: Inject Decls into `Engine`
 
 ```rust
-use rex_engine::{Engine, EngineError};
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_util::{GasCosts, GasMeter};
+use rexlang_engine::{Engine, EngineError};
+use rexlang_lexer::Token;
+use rexlang_parser::Parser;
+use rexlang_util::{GasCosts, GasMeter};
 
 let code = r#"
 class Size a
@@ -544,14 +544,14 @@ println!("{value}");
 
 ## Inject Native Values and Functions
 
-`rex-engine` is the boundary where Rust provides implementations for Rex values.
+`rexlang-engine` is the boundary where Rust provides implementations for Rex values.
 
 For host-provided *modules*, prefer `Module` + `inject_module` (above). The direct injection APIs
 below register exports into the root scope (the engine's root module), which is useful for values
 or functions you want available without importing a host module.
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 
 let mut engine = Engine::with_prelude(())?;
 engine.export_value("answer", 42i32)?;
@@ -564,8 +564,8 @@ Integer literals are overloaded (`Integral a`) and can specialize at call sites.
 direct calls, `let` bindings, and lambda wrappers:
 
 ```rust
-use rex_engine::Engine;
-use rex_util::GasMeter;
+use rexlang_engine::Engine;
+use rexlang_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
 engine.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
@@ -576,8 +576,8 @@ for code in [
     "let x = 4 in num_u8 x",
     "let f = \\x -> num_i64 x in f 4",
 ] {
-    let tokens = rex_lexer::Token::tokenize(code)?;
-    let mut parser = rex_parser::Parser::new(tokens);
+    let tokens = rexlang_lexer::Token::tokenize(code)?;
+    let mut parser = rexlang_parser::Parser::new(tokens);
     let program = parser
         .parse_program(&mut GasMeter::default())
         .map_err(|errs| format!("parse error: {errs:?}"))?;
@@ -596,14 +596,14 @@ If your host functions are async, inject them with `export_async` and evaluate w
 `Engine::eval_with_gas`.
 
 ```rust
-use rex_engine::Engine;
-use rex_util::{GasCosts, GasMeter};
+use rexlang_engine::Engine;
+use rexlang_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
 engine.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
 
-let tokens = rex_lexer::Token::tokenize("inc 1")?;
-let mut parser = rex_parser::Parser::new(tokens);
+let tokens = rexlang_lexer::Token::tokenize("inc 1")?;
+let mut parser = rexlang_parser::Parser::new(tokens);
 let program = parser
     .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?;
@@ -619,12 +619,12 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{CancellationToken, Engine, EngineError};
-use rex_ts::{BuiltinTypeId, Scheme, Type};
-use rex_util::{GasCosts, GasMeter};
+use rexlang_engine::{CancellationToken, Engine, EngineError};
+use rexlang_ts::{BuiltinTypeId, Scheme, Type};
+use rexlang_util::{GasCosts, GasMeter};
 
-let tokens = rex_lexer::Token::tokenize("stall")?;
-let mut parser = rex_parser::Parser::new(tokens);
+let tokens = rexlang_lexer::Token::tokenize("stall")?;
+let mut parser = rexlang_parser::Parser::new(tokens);
 let expr = parser
     .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?
@@ -668,9 +668,9 @@ To defend against untrusted/large programs, you can run the pipeline with a gas 
 For untrusted input, you can cap syntactic nesting depth during parsing:
 
 ```rust
-use rex_parser::{Parser, ParserLimits};
+use rexlang_parser::{Parser, ParserLimits};
 
-let mut parser = Parser::new(rex_lexer::Token::tokenize("(((1)))")?);
+let mut parser = Parser::new(rexlang_lexer::Token::tokenize("(((1)))")?);
 parser.set_limits(ParserLimits::safe_defaults());
 let program = parser.parse_program(&mut GasMeter::default())?;
 ```
@@ -684,7 +684,7 @@ The derive:
 
 ```rust
 use rexlang::{Engine, FromPointer, GasMeter, Parser, Token};
-use rex_proc_macro::Rex;
+use rexlang_proc_macro::Rex;
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -759,5 +759,5 @@ PrimitiveEither::inject_rex(&mut engine)?;
 Some workloads (very deep nesting) can exhaust parser/typechecker recursion depth. Prefer bounded
 limits for untrusted code:
 
-- `rex_parser::ParserLimits::safe_defaults`
-- `rex_ts::TypeSystemLimits::safe_defaults`
+- `rexlang_parser::ParserLimits::safe_defaults`
+- `rexlang_ts::TypeSystemLimits::safe_defaults`

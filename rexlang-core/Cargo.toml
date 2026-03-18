@@ -4,13 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-rex-ast = { workspace = true }
-rex-lexer = { workspace = true }
-rex-parser = { workspace = true }
-rex-proc-macro = { workspace = true }
-rex-engine = { workspace = true }
-rex-ts = { workspace = true }
-rex-util = { workspace = true }
+rexlang-ast = { workspace = true }
+rexlang-lexer = { workspace = true }
+rexlang-parser = { workspace = true }
+rexlang-proc-macro = { workspace = true }
+rexlang-engine = { workspace = true }
+rexlang-ts = { workspace = true }
+rexlang-util = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 

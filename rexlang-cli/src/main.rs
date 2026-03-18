@@ -6,10 +6,10 @@ use std::io::IsTerminal;
 use std::io::{self, BufRead, Read, Write};
 
 use clap::{Args, Parser, Subcommand};
-use rex_engine::{Engine, ReplState, ValueDisplayOptions, pointer_display_with};
-use rex_lexer::Token;
-use rex_parser::{Parser as RexParser, ParserLimits};
-use rex_util::{GasCosts, GasMeter};
+use rexlang_engine::{Engine, ReplState, ValueDisplayOptions, pointer_display_with};
+use rexlang_lexer::Token;
+use rexlang_parser::{Parser as RexParser, ParserLimits};
+use rexlang_util::{GasCosts, GasMeter};
 use serde_json::json;
 
 mod cli_prelude;
@@ -438,7 +438,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 }
 
 fn emit_json(
-    program: &rex_ast::expr::Program,
+    program: &rexlang_ast::expr::Program,
     emit_ast: bool,
     type_json: Option<serde_json::Value>,
 ) -> Result<String, String> {
@@ -490,7 +490,7 @@ fn infer_type_json(
     }))
 }
 
-fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
+fn format_parse_errors(errs: &[rexlang_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");
     for err in errs {
         out.push_str(&format!("\n  {err}"));

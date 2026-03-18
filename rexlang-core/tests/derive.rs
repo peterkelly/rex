@@ -1,8 +1,8 @@
-use rex_engine::assert_pointer_eq;
 use rexlang_core::{
     Engine, EngineError, FromPointer, GasMeter, Heap, JsonOptions, Parser, Pointer, Rex, RexAdt,
     RexType, Token, Type, Value, rex_to_json,
 };
+use rexlang_engine::assert_pointer_eq;
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -173,7 +173,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     assert_eq!(adt.params.len(), 1);
 
     let t = adt
-        .param_type(&rex_ast::expr::intern("T"))
+        .param_type(&rexlang_ast::expr::intern("T"))
         .expect("expected `T` param type");
 
     let just = adt
@@ -197,11 +197,17 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     // On the Rust side, `RexType` is the nominal head applied to the Rust generic arguments.
     assert_eq!(
         Maybe::<i32>::rex_type(),
-        rex_ts::Type::app(rex_ts::Type::con("Maybe", 1), <i32 as RexType>::rex_type())
+        rexlang_ts::Type::app(
+            rexlang_ts::Type::con("Maybe", 1),
+            <i32 as RexType>::rex_type()
+        )
     );
     assert_eq!(
         Maybe::<bool>::rex_type(),
-        rex_ts::Type::app(rex_ts::Type::con("Maybe", 1), <bool as RexType>::rex_type())
+        rexlang_ts::Type::app(
+            rexlang_ts::Type::con("Maybe", 1),
+            <bool as RexType>::rex_type()
+        )
     );
 
     // On the Rex side, `Just` stays polymorphic because the injected `AdtDecl` used a type var `T`

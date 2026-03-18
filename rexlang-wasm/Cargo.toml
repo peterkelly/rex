@@ -1,0 +1,22 @@
+[package]
+name = "rexlang-wasm"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+futures = { workspace = true }
+rexlang-ast = { workspace = true }
+rexlang-engine = { workspace = true }
+rexlang-lexer = { workspace = true }
+rexlang-lsp = { path = "../rexlang-lsp" }
+rexlang-parser = { workspace = true }
+rexlang-ts = { workspace = true }
+rexlang-util = { workspace = true }
+serde_json = { workspace = true }
+wasm-bindgen = "0.2"
+
+[lints]
+workspace = true

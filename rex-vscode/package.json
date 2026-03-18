@@ -59,7 +59,7 @@
         "rex.serverPath": {
           "type": "string",
           "default": "",
-          "description": "Path to the rex-lsp executable. Leave empty to use ../target/debug/rex-lsp or rex-lsp from PATH."
+          "description": "Path to the rexlang-lsp executable. Leave empty to use ../target/debug/rexlang-lsp or rexlang-lsp from PATH."
         },
         "rex.insertCandidateTypeComment": {
           "type": "boolean",

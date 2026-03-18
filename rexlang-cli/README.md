@@ -4,7 +4,7 @@ This crate provides the `rex` command-line interface.
 
 It is a thin wrapper around the core pipeline:
 
-`rex-lexer` -> `rex-parser` -> `rex-ts` -> `rex-engine`
+`rexlang-lexer` -> `rexlang-parser` -> `rexlang-ts` -> `rexlang-engine`
 
 ## Usage
 

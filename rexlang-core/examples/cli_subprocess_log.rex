@@ -2,7 +2,7 @@
 
 Run:
   cargo run -p rexlang-cli -- run rexlang-core/examples/cli_subprocess_log.rex
-  REX_LOG=rex_engine=debug cargo run -p rexlang-cli -- run rexlang-core/examples/cli_subprocess_log.rex
+  REX_LOG=rexlang_engine=debug cargo run -p rexlang-cli -- run rexlang-core/examples/cli_subprocess_log.rex
 
 Notes:
   - info/debug/warn/error return a rendered string (via Show a)

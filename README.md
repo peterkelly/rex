@@ -82,17 +82,20 @@ capabilities.
 
 This repo is a Cargo workspace. The key crates are:
 
-- `rex-lexer`: tokenization (+ spans)
-- `rex-parser`: parser producing a `Program { decls, expr }`
-- `rex-ts`: Hindley–Milner type inference + type classes + ADTs
-- `rex-engine`: runtime evaluator + native-function injection, backed by `rex-ts`
-- `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
+- `rexlang-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `Program`, symbols)
+- `rexlang-lexer`: tokenization (+ spans)
+- `rexlang-parser`: parser producing a `Program { decls, expr }`
+- `rexlang-ts`: Hindley–Milner type inference + type classes + ADTs
+- `rexlang-engine`: runtime evaluator + native-function injection, backed by `rexlang-ts`
+- `rexlang-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
 - `rexlang`: stable embedding facade crate (re-exporting `rexlang-core`)
 - `rexlang-core`: core embedding API and integration tests
 - `rexlang-cli`: CLI binary (`cargo run -p rexlang-cli -- ...`)
-- `rex-fuzz`: stdin-driven fuzz harness binaries
-- `rex-util`: small shared helpers (e.g. module hashing, bundled stdlib sources)
-- `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
+- `rexlang-fuzz`: stdin-driven fuzz harness binaries
+- `rexlang-util`: small shared helpers (e.g. module hashing, bundled stdlib sources)
+- `rexlang-wasm`: WebAssembly bridge used by the docs playground/runtime
+- `rexlang-mdbook`: mdBook preprocessor that builds the docs REPL assets
+- `rexlang-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
 
 ## CLI
 
@@ -133,9 +136,9 @@ operations, equality/ordering, and container abstractions).
 
 The prelude surface definitions and type-class wiring live primarily in:
 
-- `rex-ts/src/prelude_typeclasses.rex`
-- `rex-ts/src/prelude.rs`
-- `rex-engine/src/prelude.rs`
+- `rexlang-ts/src/prelude_typeclasses.rex`
+- `rexlang-ts/src/prelude.rs`
+- `rexlang-engine/src/prelude.rs`
 
 For full details and usage patterns, see the [docs](https://talo.github.io/rex/):
 

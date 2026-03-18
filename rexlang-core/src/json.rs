@@ -1,6 +1,6 @@
-use rex_ast::expr::{Symbol, sym};
-use rex_engine::{EngineError, Heap, Pointer};
-use rex_ts::{AdtDecl, BuiltinTypeId, Type, TypeKind, TypeSystem};
+use rexlang_ast::expr::{Symbol, sym};
+use rexlang_engine::{EngineError, Heap, Pointer};
+use rexlang_ts::{AdtDecl, BuiltinTypeId, Type, TypeKind, TypeSystem};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 

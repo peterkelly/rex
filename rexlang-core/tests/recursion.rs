@@ -1,5 +1,5 @@
-use rex_engine::assert_pointer_eq;
 use rexlang_core::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeKind};
+use rexlang_engine::assert_pointer_eq;
 
 async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let tokens = Token::tokenize(source).unwrap();

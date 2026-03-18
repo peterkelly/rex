@@ -19,10 +19,10 @@ function activate(context) {
 
   const resolved = resolveServerCommand(context);
   if (!resolved) {
-    outputChannel.appendLine('[rex] rex-lsp not found; syntax highlighting enabled, LSP disabled');
+    outputChannel.appendLine('[rex] rexlang-lsp not found; syntax highlighting enabled, LSP disabled');
     vscode.window.showWarningMessage(
-      'Rex: language server (rex-lsp) not found. Syntax highlighting works, but LSP features are disabled. ' +
-        'Install rex-lsp (e.g. `cargo install --path rex-lsp`) or set `rex.serverPath`.'
+      'Rex: language server (rexlang-lsp) not found. Syntax highlighting works, but LSP features are disabled. ' +
+        'Install rexlang-lsp (e.g. `cargo install --path rexlang-lsp`) or set `rex.serverPath`.'
     );
     return;
   }
@@ -735,7 +735,7 @@ function resolveServerCommand(context) {
     return { command: configured, args: [] };
   }
 
-  const binName = process.platform === 'win32' ? 'rex-lsp.exe' : 'rex-lsp';
+  const binName = process.platform === 'win32' ? 'rexlang-lsp.exe' : 'rexlang-lsp';
 
   // If you choose to ship a prebuilt server binary with the extension, put it here.
   const bundled = path.join(context.extensionPath, 'server', binName);

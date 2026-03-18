@@ -1,9 +1,9 @@
-use rex_engine::ReplState;
-use rex_ts::TypeVarSupply;
 use rexlang_core::{
     AdtDecl, Engine, EngineError, EnumPatch, GasMeter, Heap, JsonOptions, Parser, Rex, Token, Type,
     TypeSystem, intern, json_to_rex, rex_to_json, sym,
 };
+use rexlang_engine::ReplState;
+use rexlang_ts::TypeVarSupply;
 use serde::Serialize;
 use serde_json::json;
 use std::fs;

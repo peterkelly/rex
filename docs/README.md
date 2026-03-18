@@ -4,6 +4,10 @@ This directory contains the documentation for Rex, built with [mdBook](https://r
 
 ## Building the Documentation
 
+The docs use a custom mdBook preprocessor from the workspace: `rexlang-mdbook`.
+That preprocessor builds the interactive REPL/runtime assets under `src/assets/rexlang-wasm/`
+when you run a docs build.
+
 ### Prerequisites
 
 Install mdBook:
@@ -21,7 +25,7 @@ cd docs
 mdbook build
 ```
 
-The generated HTML will be in `docs/book/`.
+The generated HTML will be in `book/` relative to this directory (that is, `docs/book/` from the repo root).
 
 ### Serve Locally
 
@@ -50,6 +54,7 @@ mdbook watch
   - `README.md` — Introduction/homepage
   - `tutorial/` — Tutorial chapters organized into 3 sections
   - Reference documents: `LANGUAGE.md`, `SPEC.md`, `ARCHITECTURE.md`, `MEMORY_MANAGEMENT.md`, `EMBEDDING.md`, `CONTRIBUTING.md`
+- `src/assets/rexlang-wasm/` — generated browser runtime assets for interactive examples
 - `book/` — Generated HTML output (gitignored)
 - `.gitignore` — Git ignore rules
 

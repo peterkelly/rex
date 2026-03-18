@@ -7,7 +7,9 @@ fn strip_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn parse_program(code: &str) -> Result<rex_ast::expr::Program, Vec<rex_parser::error::ParserErr>> {
+fn parse_program(
+    code: &str,
+) -> Result<rexlang_ast::expr::Program, Vec<rexlang_parser::error::ParserErr>> {
     let tokens = Token::tokenize(code).expect("lexer should not panic");
     let mut parser = Parser::new(tokens);
     parser.set_limits(ParserLimits::safe_defaults());

@@ -5,12 +5,15 @@ This folder contains a standalone VS Code extension for the Rex language. It pro
 - Syntax highlighting for `.rex` files.
 - A Rust language server (LSP) with hover, completion, go-to-definition, and block-comment diagnostics.
 
+Naming note: the VS Code extension package is still published as `rex-lang`, while the Rust language
+server binary it launches is `rexlang-lsp`.
+
 ## Development
 
 From the repository root, build the language server:
 
 ```bash
-cargo build -p rex-lsp
+cargo build -p rexlang-lsp
 ```
 
 Then, from this folder:
@@ -62,7 +65,7 @@ Bulk semantic quick-fix runs also include stop details and progress-guard metric
 
 ### Settings
 
-- `rex.serverPath`: path to `rex-lsp` (existing setting).
+- `rex.serverPath`: path to `rexlang-lsp` (existing setting).
 - `rex.insertCandidateTypeComment` (default `false`): when enabled, candidate insertion appends a Rex block comment with the selected function signature.
 - `rex.semanticLoopBulkMaxSteps` (default `3`, range `1..20`): max steps for `Rex: Apply Best Semantic Loop Quick-Fixes At Cursor`.
 - `rex.semanticLoopBulkStrategy` (default `conservative`, options `conservative|aggressive`): ranking strategy used by bulk semantic quick-fix application.
@@ -86,15 +89,15 @@ This keeps generation constrained by Rex type information instead of free-form t
 ### Troubleshooting (when nothing shows up)
 
 1. Make sure VS Code thinks the file is **Rex** (bottom-right language mode should say `Rex`).
-2. Build the server: `cargo build -p rex-lsp` (from the repo root).
+2. Build the server: `cargo build -p rexlang-lsp` (from the repo root).
 3. Reload VS Code (Command Palette → “Developer: Reload Window”).
 4. Check logs: View → Output → select **Rex Language Server**.
-5. If the server binary isn’t found, set `rex.serverPath` to the full path of `target/debug/rex-lsp`.
+5. If the server binary isn’t found, set `rex.serverPath` to the full path of `target/debug/rexlang-lsp`.
 
-If the server binary is not in `../target/debug/`, set `rex.serverPath` to the full path of the `rex-lsp` executable or install it into your PATH with:
+If the server binary is not in `../target/debug/`, set `rex.serverPath` to the full path of the `rexlang-lsp` executable or install it into your PATH with:
 
 ```bash
-cargo install --path rex-lsp
+cargo install --path rexlang-lsp
 ```
 
 ## Packaging and Installing (VSIX)
@@ -119,10 +122,10 @@ code --install-extension rex-lang-0.0.1.vsix
 
 Important:
 
-- The VSIX does **not** automatically include `rex-lsp` unless you ship a prebuilt binary inside
+- The VSIX does **not** automatically include `rexlang-lsp` unless you ship a prebuilt binary inside
   `rex-vscode/server/`. In the default setup, users must either:
-  - install `rex-lsp` into their PATH (e.g. `cargo install --path rex-lsp`), or
-  - set `rex.serverPath` to point at the `rex-lsp` executable.
+  - install `rexlang-lsp` into their PATH (e.g. `cargo install --path rexlang-lsp`), or
+  - set `rex.serverPath` to point at the `rexlang-lsp` executable.
 
 If `vsce` warns about a missing `repository` field, it’s safe to ignore or you can pass
 `--allow-missing-repository`.

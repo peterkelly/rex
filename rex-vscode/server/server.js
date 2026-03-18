@@ -69,7 +69,7 @@ connection.onInitialize(() => {
       hoverProvider: true
     },
     serverInfo: {
-      name: 'rex-lsp',
+      name: 'rexlang-lsp',
       version: '0.0.1'
     }
   };
@@ -145,7 +145,7 @@ function validateTextDocument(textDocument) {
           severity: DiagnosticSeverity.Error,
           range: rangeFor(textDocument, i, i + 2),
           message: 'Unmatched block comment closer (-}).',
-          source: 'rex-lsp'
+          source: 'rexlang-lsp'
         });
         if (diagnostics.length >= maxDiagnostics) {
           break;
@@ -162,7 +162,7 @@ function validateTextDocument(textDocument) {
       severity: DiagnosticSeverity.Error,
       range: rangeFor(textDocument, start, start + 2),
       message: 'Unclosed block comment opener ({-).',
-      source: 'rex-lsp'
+      source: 'rexlang-lsp'
     });
     if (diagnostics.length >= maxDiagnostics) {
       break;

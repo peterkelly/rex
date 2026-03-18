@@ -3,7 +3,7 @@ set -euo pipefail
 
 cleanup_artifacts() {
   cargo clean
-  rm -rf docs/book docs/src/assets/rex-wasm docs/_build docs/_static docs/_templates
+  rm -rf docs/book docs/src/assets/rexlang-wasm docs/_build docs/_static docs/_templates
 }
 
 cleanup_artifacts

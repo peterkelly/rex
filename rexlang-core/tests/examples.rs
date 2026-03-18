@@ -1,6 +1,6 @@
 use rexlang_core::{Engine, GasMeter, Parser, Token, Type, Value};
 
-fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
+fn format_parse_errors(errs: &[rexlang_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");
     for err in errs {
         out.push_str(&format!("\n  {err}"));

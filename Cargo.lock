@@ -744,147 +744,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
-name = "rex-ast"
-version = "4.0.0"
-dependencies = [
- "async-recursion",
- "async-trait",
- "chrono",
- "regex",
- "rex-lexer",
- "rpds",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "rex-engine"
-version = "4.0.0"
-dependencies = [
- "async-recursion",
- "chrono",
- "futures",
- "rex-ast",
- "rex-lexer",
- "rex-parser",
- "rex-ts",
- "rex-util",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "rex-fuzz"
-version = "4.0.0"
-dependencies = [
- "rex-ast",
- "rex-engine",
- "rex-lexer",
- "rex-parser",
- "rex-ts",
- "rex-util",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "rex-lexer"
-version = "4.0.0"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "rex-lsp"
-version = "4.0.0"
-dependencies = [
- "lsp-types",
- "rex-ast",
- "rex-engine",
- "rex-lexer",
- "rex-parser",
- "rex-ts",
- "rex-util",
- "rexlang-core",
- "serde_json",
- "tokio",
- "tower-lsp",
-]
-
-[[package]]
-name = "rex-mdbook"
-version = "4.0.0"
-dependencies = [
- "serde_json",
-]
-
-[[package]]
-name = "rex-parser"
-version = "4.0.0"
-dependencies = [
- "regex",
- "rex-ast",
- "rex-lexer",
- "rex-util",
- "thiserror",
-]
-
-[[package]]
-name = "rex-proc-macro"
-version = "4.0.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
-name = "rex-ts"
-version = "4.0.0"
-dependencies = [
- "chrono",
- "rex-ast",
- "rex-lexer",
- "rex-parser",
- "rex-util",
- "rpds",
- "thiserror",
- "uuid",
-]
-
-[[package]]
-name = "rex-util"
-version = "4.0.0"
-dependencies = [
- "thiserror",
-]
-
-[[package]]
-name = "rex-wasm"
-version = "4.0.0"
-dependencies = [
- "futures",
- "rex-ast",
- "rex-engine",
- "rex-lexer",
- "rex-lsp",
- "rex-parser",
- "rex-ts",
- "rex-util",
- "serde_json",
- "wasm-bindgen",
-]
-
-[[package]]
 name = "rexlang"
 version = "4.0.0"
 dependencies = [
@@ -892,16 +751,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rexlang-ast"
+version = "4.0.0"
+dependencies = [
+ "async-recursion",
+ "async-trait",
+ "chrono",
+ "regex",
+ "rexlang-lexer",
+ "rpds",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "rexlang-cli"
 version = "4.0.0"
 dependencies = [
  "clap",
- "rex-ast",
- "rex-engine",
- "rex-lexer",
- "rex-parser",
- "rex-ts",
- "rex-util",
+ "rexlang-ast",
+ "rexlang-engine",
+ "rexlang-lexer",
+ "rexlang-parser",
+ "rexlang-ts",
+ "rexlang-util",
  "serde_json",
  "tokio",
  "tracing",
@@ -913,17 +789,141 @@ dependencies = [
 name = "rexlang-core"
 version = "4.0.0"
 dependencies = [
- "rex-ast",
- "rex-engine",
- "rex-lexer",
- "rex-parser",
- "rex-proc-macro",
- "rex-ts",
- "rex-util",
+ "rexlang-ast",
+ "rexlang-engine",
+ "rexlang-lexer",
+ "rexlang-parser",
+ "rexlang-proc-macro",
+ "rexlang-ts",
+ "rexlang-util",
  "serde",
  "serde_json",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "rexlang-engine"
+version = "4.0.0"
+dependencies = [
+ "async-recursion",
+ "chrono",
+ "futures",
+ "rexlang-ast",
+ "rexlang-lexer",
+ "rexlang-parser",
+ "rexlang-ts",
+ "rexlang-util",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rexlang-fuzz"
+version = "4.0.0"
+dependencies = [
+ "rexlang-ast",
+ "rexlang-engine",
+ "rexlang-lexer",
+ "rexlang-parser",
+ "rexlang-ts",
+ "rexlang-util",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "rexlang-lexer"
+version = "4.0.0"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "rexlang-lsp"
+version = "4.0.0"
+dependencies = [
+ "lsp-types",
+ "rexlang-ast",
+ "rexlang-core",
+ "rexlang-engine",
+ "rexlang-lexer",
+ "rexlang-parser",
+ "rexlang-ts",
+ "rexlang-util",
+ "serde_json",
+ "tokio",
+ "tower-lsp",
+]
+
+[[package]]
+name = "rexlang-mdbook"
+version = "4.0.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "rexlang-parser"
+version = "4.0.0"
+dependencies = [
+ "regex",
+ "rexlang-ast",
+ "rexlang-lexer",
+ "rexlang-util",
+ "thiserror",
+]
+
+[[package]]
+name = "rexlang-proc-macro"
+version = "4.0.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "rexlang-ts"
+version = "4.0.0"
+dependencies = [
+ "chrono",
+ "rexlang-ast",
+ "rexlang-lexer",
+ "rexlang-parser",
+ "rexlang-util",
+ "rpds",
+ "thiserror",
+ "uuid",
+]
+
+[[package]]
+name = "rexlang-util"
+version = "4.0.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
+name = "rexlang-wasm"
+version = "4.0.0"
+dependencies = [
+ "futures",
+ "rexlang-ast",
+ "rexlang-engine",
+ "rexlang-lexer",
+ "rexlang-lsp",
+ "rexlang-parser",
+ "rexlang-ts",
+ "rexlang-util",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

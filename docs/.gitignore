@@ -1,7 +1,7 @@
 # mdBook output
 book/
 book
-src/assets/rex-wasm/
+src/assets/rexlang-wasm/
 
 # Legacy Sphinx output
 _build/

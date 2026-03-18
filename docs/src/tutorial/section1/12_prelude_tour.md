@@ -4,8 +4,8 @@ Rex ships with a small “prelude” of standard types, type classes, and instan
 
 The source of truth in this repository is:
 
-- type classes + instances: `rex-ts/src/prelude_typeclasses.rex`
-- built-in types + helper functions: `rex-ts/src/prelude.rs`
+- type classes + instances: `rexlang-ts/src/prelude_typeclasses.rex`
+- built-in types + helper functions: `rexlang-ts/src/prelude.rs`
 
 This page is a guided map so you know what to reach for while writing Rex.
 
@@ -61,7 +61,7 @@ The prelude also exposes some generic helpers (type-class-based):
 When you see an unfamiliar function:
 
 1. Ask the CLI for its type: `cargo run -p rexlang-cli -- run --emit-type -c 'the_name'`
-2. If it’s a type-class method, find the class in `rex-ts/src/prelude_typeclasses.rex`
-3. If it’s a helper function, find it in `rex-ts/src/prelude.rs`
+2. If it’s a type-class method, find the class in `rexlang-ts/src/prelude_typeclasses.rex`
+3. If it’s a helper function, find it in `rexlang-ts/src/prelude.rs`
 
 This workflow is especially helpful when you’re building your own abstractions.

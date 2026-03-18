@@ -6,7 +6,7 @@ The standalone CLI now lives in `rexlang-cli`.
 
 `rexlang-core` re-exports the main embedding surface over the core pipeline:
 
-`rex-lexer` → `rex-parser` → `rex-ts` → `rex-engine`
+`rexlang-lexer` → `rexlang-parser` → `rexlang-ts` → `rexlang-engine`
 
 ## Usage
 

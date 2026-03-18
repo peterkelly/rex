@@ -5,11 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use rex_ast::expr::{Symbol, sym};
-use rex_engine::{
+use rexlang_ast::expr::{Symbol, sym};
+use rexlang_engine::{
     Engine, EngineError, FromPointer, Heap, Module, Pointer, Value, virtual_export_name,
 };
-use rex_ts::{BuiltinTypeId, Scheme, Type};
+use rexlang_ts::{BuiltinTypeId, Scheme, Type};
 use uuid::Uuid;
 
 fn lock_mutex<'a, T>(
@@ -518,8 +518,8 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 
 #[cfg(test)]
 mod tests {
-    use rex_engine::{Engine, assert_pointer_eq};
-    use rex_util::GasMeter;
+    use rexlang_engine::{Engine, assert_pointer_eq};
+    use rexlang_util::GasMeter;
 
     use super::*;
 

@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
 
-use rex_engine::assert_pointer_eq;
 use rexlang_core::{
     Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, Parser, Pointer, Rex, RexAdt,
     RexType, Token, Type, sym,
 };
+use rexlang_engine::assert_pointer_eq;
 
 #[derive(Debug, Clone, PartialEq)]
 struct ManualRecord {

@@ -1,9 +1,9 @@
-use rex_engine::assert_pointer_eq;
-use rex_proc_macro::Rex;
 use rexlang_core::{
     Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Parser, Pointer, RexType, Token,
     Type, sym,
 };
+use rexlang_engine::assert_pointer_eq;
+use rexlang_proc_macro::Rex;
 use serde_json::json;
 
 /// Helper to evaluate a Rex expression and return the result pointer

@@ -1,0 +1,29 @@
+[package]
+name = "rexlang-engine"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# Enables importing `.rex` modules from GitHub via `curl`.
+# This is intentionally off by default for production builds.
+github-imports = []
+
+[dependencies]
+rexlang-ast = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rexlang-ts = { workspace = true }
+async-recursion = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+rexlang-lexer = { workspace = true }
+rexlang-parser = { workspace = true }
+serde_json = { workspace = true }
+rexlang-util = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
