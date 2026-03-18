@@ -9,13 +9,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
       - name: Verify generated prelude docs are up to date

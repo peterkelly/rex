@@ -7,13 +7,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   CARGO_NET_GIT_FETCH_WITH_CLI: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-sh:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain and wasm target
         run: |
@@ -26,9 +27,7 @@ jobs:
         run: cargo install wasm-bindgen-cli --version 0.2.106
 
       - name: Install mdBook
-        uses: peaceiris/actions-mdbook@v2
-        with:
-          mdbook-version: "latest"
+        run: cargo install mdbook --locked
 
       - name: Run build.sh
         run: ./build.sh
