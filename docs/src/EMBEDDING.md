@@ -9,6 +9,10 @@ Rex is designed as a small pipeline you can embed at whatever stage you need:
 
 This document focuses on common embedding patterns.
 
+For most applications, use `rexlang` as your dependency and import types from there.
+This guide also shows lower-level crate APIs (`rex-engine`, `rex-parser`, etc.) when that detail
+is useful.
+
 ## Running Untrusted Rex Code (Production Checklist)
 
 This repo provides the *mechanisms* to safely run user-submitted Rex (gas metering, parsing limits,
@@ -232,7 +236,7 @@ Rex code calls it through `sample.render_label`.
 Example:
 
 ```rust
-use rex::{Engine, EngineError, Module};
+use rexlang::{Engine, EngineError, Module};
 use rex_proc_macro::Rex;
 use rex_util::GasMeter;
 
@@ -679,7 +683,7 @@ The derive:
 - implements `FromPointer`/`IntoPointer` for converting Rust ↔ Rex
 
 ```rust
-use rex::{Engine, FromPointer, GasMeter, Parser, Token};
+use rexlang::{Engine, FromPointer, GasMeter, Parser, Token};
 use rex_proc_macro::Rex;
 
 #[derive(Rex, Debug, PartialEq)]
@@ -710,7 +714,7 @@ without `#[derive(Rex)]`.
 - Register with `Engine::inject_adt(...)`.
 
 ```rust
-use rex::{Engine, RexType, Type, sym};
+use rexlang::{Engine, RexType, Type, sym};
 
 let mut engine = Engine::with_prelude(())?;
 
@@ -725,7 +729,7 @@ If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls,
 registration workflow as derived types.
 
 ```rust
-use rex::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, sym};
+use rexlang::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, sym};
 
 struct PrimitiveEither;
 

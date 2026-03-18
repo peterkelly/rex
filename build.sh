@@ -15,7 +15,7 @@ cargo check --tests
 cargo clippy --tests -- -D warnings
 cargo test
 
-cargo run -p rex --bin gen_prelude_docs
+cargo run -p rexlang-core --bin gen_prelude_docs
 git diff --exit-code docs/src/PRELUDE.md
 
 mdbook build docs

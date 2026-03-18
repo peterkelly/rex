@@ -9,7 +9,9 @@ Rex is a Cargo workspace. The most important crates are:
 - `rex-ts`: Hindley–Milner inference + type classes + ADTs
 - `rex-engine`: typed evaluation + native injection
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex types/values
-- `rex`: CLI binary
+- `rexlang`: stable embedding facade crate (re-exporting `rexlang-core`)
+- `rexlang-core`: core embedding API and integration tests
+- `rexlang-cli`: CLI binary
 
 Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -25,7 +27,7 @@ There is also a lightweight “fuzz smoke” test that runs a deterministic lex�
 You can scale iterations with `REX_FUZZ_ITERS`:
 
 ```sh
-REX_FUZZ_ITERS=2000 cargo test -p rex --test fuzz_smoke
+REX_FUZZ_ITERS=2000 cargo test -p rexlang-core --test fuzz_smoke
 ```
 
 ## Fuzz Harnesses

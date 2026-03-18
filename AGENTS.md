@@ -21,7 +21,9 @@ computations and data manipulation.
 
 ## Crates in this workspace
 
-- `rex`: Library acting as entry point for embedding in other Rust programs, CLI tool for testing. Also contains examples and integration tests.
+- `rexlang`: Stable embedding facade crate, re-exporting the full `rexlang-core` API.
+- `rexlang-core`: Core embedding API and integration tests.
+- `rexlang-cli`: CLI tool for testing and running Rex programs.
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `Program`, symbols).
 - `rex-lexer`: tokenizer + spans.
 - `rex-parser`: recursive-descent parser producing `Program { decls, expr }`.
@@ -45,7 +47,7 @@ computations and data manipulation.
 
 ```sh
 cargo test
-REX_FUZZ_ITERS=2000 cargo test -p rex --test fuzz_smoke
+REX_FUZZ_ITERS=2000 cargo test -p rexlang-core --test fuzz_smoke
 cargo fmt
 cargo clippy --tests
 ```
@@ -53,8 +55,8 @@ cargo clippy --tests
 ## CLI Usage
 
 ```sh
-cargo run -p rex -- run rex/examples/record_update.rex
-cargo run -p rex -- run -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rexlang-cli -- run rexlang-core/examples/record_update.rex
+cargo run -p rexlang-cli -- run -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 ## LSP + VS Code Extension
@@ -101,10 +103,10 @@ Install mdBook: `cargo install mdbook`
 
 - Update `docs/src/SPEC.md` when behavior changes.
 - Adjust regression tests:
-  - `rex/tests/spec_semantics.rs`
-  - `rex/tests/record_update.rs`
-  - `rex/tests/typeclasses_system.rs`
-  - `rex/tests/negative.rs`.
+  - `rexlang-core/tests/spec_semantics.rs`
+  - `rexlang-core/tests/record_update.rs`
+  - `rexlang-core/tests/typeclasses_system.rs`
+  - `rexlang-core/tests/negative.rs`.
 
 ## Guidelines for embedders running untrusted code
 

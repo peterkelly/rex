@@ -1,0 +1,25 @@
+[package]
+name = "rexlang-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rex"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+rex-engine = { workspace = true }
+rex-lexer = { workspace = true }
+rex-parser = { workspace = true }
+rex-util = { workspace = true }
+rex-ast = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+uuid = { workspace = true }
+rex-ts = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,6 +1,6 @@
 # Example: Custom `Show` type class
 
-This mirrors `rex/examples/typeclasses_custom_show.rex`.
+This mirrors `rexlang-core/examples/typeclasses_custom_show.rex`.
 
 ## Goal
 
@@ -31,7 +31,7 @@ demo_show (Point { x = 1, y = 2 })
 
 ## Extending it
 
-Add an instance `DemoShow (List a) <= DemoShow a` (see `rex/examples/typeclasses_custom_show.rex`)
+Add an instance `DemoShow (List a) <= DemoShow a` (see `rexlang-core/examples/typeclasses_custom_show.rex`)
 and call `demo_show [Point { x = 1, y = 2 }]`.
 
 ## A worked `DemoShow (List a)` instance

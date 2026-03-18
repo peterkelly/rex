@@ -1,0 +1,22 @@
+[package]
+name = "rexlang-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rex-ast = { workspace = true }
+rex-lexer = { workspace = true }
+rex-parser = { workspace = true }
+rex-proc-macro = { workspace = true }
+rex-engine = { workspace = true }
+rex-ts = { workspace = true }
+rex-util = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

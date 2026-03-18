@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "rex",
+    "rexlang-core",
+    "rexlang",
+    "rexlang-cli",
     "rex-ast",
     "rex-engine",
     "rex-fuzz",
@@ -50,6 +52,8 @@ rex-parser = { path = "rex-parser" }
 rex-proc-macro = { path = "rex-proc-macro" }
 rex-ts = { path = "rex-ts" }
 rex-util = { path = "rex-util" }
+rexlang-core = { path = "rexlang-core" }
+rexlang = { path = "rexlang" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"

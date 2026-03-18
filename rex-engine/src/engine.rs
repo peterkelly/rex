@@ -4306,7 +4306,8 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
 
-        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex/examples/modules_basic");
+        let examples =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../rexlang-core/examples/modules_basic");
         engine.add_include_resolver(&examples).unwrap();
 
         let mut state = ReplState::new();
@@ -4335,7 +4336,8 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
 
-        let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex/examples/modules_basic");
+        let examples =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../rexlang-core/examples/modules_basic");
         engine.add_include_resolver(&examples).unwrap();
 
         let mut state = ReplState::new();

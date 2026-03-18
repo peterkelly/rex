@@ -744,26 +744,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
-name = "rex"
-version = "4.0.0"
-dependencies = [
- "clap",
- "rex-ast",
- "rex-engine",
- "rex-lexer",
- "rex-parser",
- "rex-proc-macro",
- "rex-ts",
- "rex-util",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "rex-ast"
 version = "4.0.0"
 dependencies = [
@@ -828,13 +808,13 @@ name = "rex-lsp"
 version = "4.0.0"
 dependencies = [
  "lsp-types",
- "rex",
  "rex-ast",
  "rex-engine",
  "rex-lexer",
  "rex-parser",
  "rex-ts",
  "rex-util",
+ "rexlang-core",
  "serde_json",
  "tokio",
  "tower-lsp",
@@ -902,6 +882,48 @@ dependencies = [
  "rex-util",
  "serde_json",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "rexlang"
+version = "4.0.0"
+dependencies = [
+ "rexlang-core",
+]
+
+[[package]]
+name = "rexlang-cli"
+version = "4.0.0"
+dependencies = [
+ "clap",
+ "rex-ast",
+ "rex-engine",
+ "rex-lexer",
+ "rex-parser",
+ "rex-ts",
+ "rex-util",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "rexlang-core"
+version = "4.0.0"
+dependencies = [
+ "rex-ast",
+ "rex-engine",
+ "rex-lexer",
+ "rex-parser",
+ "rex-proc-macro",
+ "rex-ts",
+ "rex-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

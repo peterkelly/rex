@@ -5,7 +5,7 @@ those constraints in type signatures (for `fn`) and in `where` clauses (commonly
 
 ## Constrained lambdas
 
-This example is from `rex/examples/type_classes.rex`:
+This example is from `rexlang-core/examples/type_classes.rex`:
 
 ```rex,interactive
 let

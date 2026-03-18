@@ -5,10 +5,10 @@ When behavior changes, this file and the corresponding regression tests should b
 
 Regression tests live in:
 
-- `rex/tests/spec_semantics.rs`
-- `rex/tests/record_update.rs`
-- `rex/tests/typeclasses_system.rs`
-- `rex/tests/negative.rs`
+- `rexlang-core/tests/spec_semantics.rs`
+- `rexlang-core/tests/record_update.rs`
+- `rexlang-core/tests/typeclasses_system.rs`
+- `rexlang-core/tests/negative.rs`
 
 ## Notation
 
@@ -218,7 +218,7 @@ For each class `C`, instance heads are **non-overlapping**:
 
 This forbids overlap and preserves deterministic method resolution.
 
-Regression: `spec_typeclass_instance_overlap_is_rejected` (`rex/tests/spec_semantics.rs`).
+Regression: `spec_typeclass_instance_overlap_is_rejected` (`rexlang-core/tests/spec_semantics.rs`).
 
 ### Qualified Class Names in `instance` Headers
 
@@ -256,7 +256,7 @@ Resolution:
 5. If more than one match (should not occur given non-overlap), the engine errors
    (`EngineError::AmbiguousTypeclassImpl`).
 
-Regression: `spec_typeclass_method_value_without_type_is_ambiguous` (`rex/tests/spec_semantics.rs`).
+Regression: `spec_typeclass_method_value_without_type_is_ambiguous` (`rexlang-core/tests/spec_semantics.rs`).
 
 ### Overloaded Method Values (Deferred Resolution)
 
@@ -358,4 +358,4 @@ present:
 zero
 ```
 
-Regression: `spec_defaulting_picks_a_concrete_type_for_numeric_classes` (`rex/tests/spec_semantics.rs`).
+Regression: `spec_defaulting_picks_a_concrete_type_for_numeric_classes` (`rexlang-core/tests/spec_semantics.rs`).

@@ -1,6 +1,6 @@
 # Built-in types & functions
 
-> This page is auto-generated from the prelude source. Run `cargo run -p rex --bin gen_prelude_docs` to refresh it.
+> This page is auto-generated from the prelude source. Run `cargo run -p rexlang-core --bin gen_prelude_docs` to refresh it.
 
 ## Built-in Types
 

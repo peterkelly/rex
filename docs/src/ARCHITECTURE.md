@@ -26,7 +26,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while pointer-level APIs (`export_native*`) receive `&Engine<State>`.
   - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
-- `rex`: CLI front-end around the pipeline.
+- `rexlang`: stable embedding facade crate (re-exporting `rexlang-core`).
+- `rexlang-core`: core embedding API and integration tests.
+- `rexlang-cli`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
 
 ## Design Notes
