@@ -1,4 +1,4 @@
-use rex::{Engine, GasMeter, Parser, Token, Type, Value};
+use rex_core::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, Value};
 
 fn format_parse_errors(errs: &[rex_parser::error::ParserErr]) -> String {
     let mut out = String::from("parse error:");
@@ -48,7 +48,7 @@ async fn example_adt_record_constructor() {
               v.x + v.y
         "#,
         3,
-        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::I32),
     )
     .await;
 }
@@ -65,7 +65,7 @@ async fn example_nested_lets() {
             in c
         "#,
         3,
-        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::I32),
     )
     .await;
 }
@@ -79,7 +79,7 @@ async fn example_lambda_application() {
               inc 41
         "#,
         42,
-        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::I32),
     )
     .await;
 }
@@ -97,7 +97,7 @@ async fn example_match() {
                 when B {x} -> x + 100
         "#,
         7,
-        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::I32),
     )
     .await;
 }

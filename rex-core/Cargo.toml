@@ -1,12 +1,11 @@
 [package]
-name = "rex"
+name = "rex-core"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 clap = { workspace = true }
 rex-ast = { workspace = true }
-rex-core = { workspace = true }
 rex-lexer = { workspace = true }
 rex-parser = { workspace = true }
 rex-proc-macro = { workspace = true }

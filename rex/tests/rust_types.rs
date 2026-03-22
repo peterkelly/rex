@@ -1,6 +1,6 @@
-use rex::{
-    Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Parser, Pointer, RexType, Token,
-    Type, sym,
+use rex_core::{
+    BuiltinTypeId, Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Parser, Pointer,
+    RexType, Token, Type, sym,
 };
 use rex_engine::assert_pointer_eq;
 use rex_proc_macro::Rex;
@@ -35,7 +35,7 @@ async fn vec_from_value() {
 
     let (result, heap, ty) =
         eval_expr(engine, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::String));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     assert_pointer_eq!(
         &heap,
         result,
@@ -54,7 +54,7 @@ async fn vec_from_value_accepts_list_literal_without_conversion() {
     engine.export("accept_vec", accept_vec).unwrap();
 
     let (result, heap, ty) = eval_expr(engine, r#"accept_vec [1, 2, 3]"#).await;
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::String));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     assert_pointer_eq!(
         &heap,
         result,
@@ -73,7 +73,7 @@ async fn vec_to_value() {
     engine.export("return_vec", return_vec).unwrap();
 
     let (result, heap, ty) = eval_expr(engine, r#"return_vec "hello""#).await;
-    assert_eq!(ty, Type::array(Type::builtin(rex::BuiltinTypeId::I32)));
+    assert_eq!(ty, Type::array(Type::builtin(BuiltinTypeId::I32)));
     assert_pointer_eq!(
         &heap,
         result,
@@ -101,8 +101,8 @@ async fn vec_rex_type() {
     assert_eq!(
         ty,
         Type::app(
-            Type::builtin(rex::BuiltinTypeId::Array),
-            Type::builtin(rex::BuiltinTypeId::I32)
+            Type::builtin(BuiltinTypeId::Array),
+            Type::builtin(BuiltinTypeId::I32)
         )
     );
 }
@@ -123,7 +123,7 @@ async fn to_list_allows_pattern_matching_host_arrays() {
             when Empty -> -1"#,
     )
     .await;
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&heap, result, heap.alloc_i32(0).unwrap());
 }
 
@@ -138,8 +138,8 @@ async fn option_prelude() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::option(Type::builtin(rex::BuiltinTypeId::I32)),
-            Type::option(Type::builtin(rex::BuiltinTypeId::I32)),
+            Type::option(Type::builtin(BuiltinTypeId::I32)),
+            Type::option(Type::builtin(BuiltinTypeId::I32)),
         ])
     );
     assert_pointer_eq!(
@@ -166,8 +166,8 @@ async fn option_from_value() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::String),
-            Type::builtin(rex::BuiltinTypeId::String)
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String)
         ])
     );
     assert_pointer_eq!(
@@ -198,8 +198,8 @@ async fn option_into_value() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::option(Type::builtin(rex::BuiltinTypeId::I32)),
-            Type::option(Type::builtin(rex::BuiltinTypeId::I32)),
+            Type::option(Type::builtin(BuiltinTypeId::I32)),
+            Type::option(Type::builtin(BuiltinTypeId::I32)),
         ])
     );
     assert_pointer_eq!(
@@ -231,8 +231,8 @@ async fn option_rex_type() {
     assert_eq!(
         ty,
         Type::app(
-            Type::builtin(rex::BuiltinTypeId::Option),
-            Type::builtin(rex::BuiltinTypeId::I32)
+            Type::builtin(BuiltinTypeId::Option),
+            Type::builtin(BuiltinTypeId::I32)
         )
     );
 }
@@ -249,12 +249,12 @@ async fn result_prelude() {
         ty,
         Type::tuple(vec![
             Type::result(
-                Type::builtin(rex::BuiltinTypeId::I32),
-                Type::builtin(rex::BuiltinTypeId::String)
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::String)
             ),
             Type::result(
-                Type::builtin(rex::BuiltinTypeId::I32),
-                Type::builtin(rex::BuiltinTypeId::String)
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::String)
             ),
         ])
     );
@@ -290,8 +290,8 @@ async fn result_from_value_primitives() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::String),
-            Type::builtin(rex::BuiltinTypeId::String)
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String)
         ])
     );
     assert_pointer_eq!(
@@ -323,8 +323,8 @@ async fn result_from_value_different_primitives() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::String),
-            Type::builtin(rex::BuiltinTypeId::String)
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String)
         ])
     );
     assert_pointer_eq!(
@@ -358,12 +358,12 @@ async fn result_into_value_primitives() {
         ty,
         Type::tuple(vec![
             Type::result(
-                Type::builtin(rex::BuiltinTypeId::I32),
-                Type::builtin(rex::BuiltinTypeId::String)
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::String)
             ),
             Type::result(
-                Type::builtin(rex::BuiltinTypeId::I32),
-                Type::builtin(rex::BuiltinTypeId::String)
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::String)
             ),
         ])
     );
@@ -401,10 +401,10 @@ async fn result_rex_type() {
         ty,
         Type::app(
             Type::app(
-                Type::builtin(rex::BuiltinTypeId::Result),
-                Type::builtin(rex::BuiltinTypeId::String)
+                Type::builtin(BuiltinTypeId::Result),
+                Type::builtin(BuiltinTypeId::String)
             ),
-            Type::builtin(rex::BuiltinTypeId::I32)
+            Type::builtin(BuiltinTypeId::I32)
         )
     );
 }
@@ -446,8 +446,8 @@ async fn result_from_value_custom_types() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::String),
-            Type::builtin(rex::BuiltinTypeId::String)
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String)
         ])
     );
 
@@ -553,7 +553,7 @@ async fn serde_json_value_from_pointer() {
         .unwrap();
 
     let (result, heap, ty) = eval_expr(engine, r#"accept_json test_json"#).await;
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::String));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
 
     assert_pointer_eq!(
         &heap,
@@ -636,7 +636,7 @@ async fn serde_json_value_primitives() {
         r#"accept_primitives null_val bool_val num_val str_val"#,
     )
     .await;
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::String));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
 
     assert_pointer_eq!(
         &heap,

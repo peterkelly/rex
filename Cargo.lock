@@ -749,6 +749,7 @@ version = "4.0.0"
 dependencies = [
  "clap",
  "rex-ast",
+ "rex-core",
  "rex-engine",
  "rex-lexer",
  "rex-parser",
@@ -777,6 +778,26 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "rex-core"
+version = "4.0.0"
+dependencies = [
+ "clap",
+ "rex-ast",
+ "rex-engine",
+ "rex-lexer",
+ "rex-parser",
+ "rex-proc-macro",
+ "rex-ts",
+ "rex-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -828,8 +849,8 @@ name = "rex-lsp"
 version = "4.0.0"
 dependencies = [
  "lsp-types",
- "rex",
  "rex-ast",
+ "rex-core",
  "rex-engine",
  "rex-lexer",
  "rex-parser",

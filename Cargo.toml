@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "rex",
+    "rex-core",
     "rex-ast",
     "rex-engine",
     "rex-fuzz",
@@ -43,6 +44,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4", "js"] }
 
 # Internal dependencies
+rex-core = { path = "rex-core" }
 rex-ast = { path = "rex-ast" }
 rex-engine = { path = "rex-engine" }
 rex-lexer = { path = "rex-lexer" }

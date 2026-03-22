@@ -1,4 +1,4 @@
-use rex::{Engine, GasMeter, Parser, Token, Type, TypeKind};
+use rex_core::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, TypeKind};
 use rex_engine::{ValueDisplayOptions, pointer_display_with};
 
 fn type_compatible(actual: &Type, expected: &Type) -> bool {
@@ -56,7 +56,7 @@ async fn assert_eval(code: &str, expected: &str, expected_ty: Type) {
 }
 
 async fn assert_err_contains(code: &str, needle: &str) {
-    let err = eval_to_string(code, Type::builtin(rex::BuiltinTypeId::I32))
+    let err = eval_to_string(code, Type::builtin(BuiltinTypeId::I32))
         .await
         .unwrap_err();
     assert!(
@@ -89,7 +89,7 @@ async fn default_nested_context_list() {
         let xs: List i32 = default in xs
         "#,
         "[]",
-        Type::list(Type::builtin(rex::BuiltinTypeId::I32)),
+        Type::list(Type::builtin(BuiltinTypeId::I32)),
     )
     .await;
 }
@@ -121,7 +121,7 @@ async fn default_nested_context_option() {
         let x: Option i32 = default in x
         "#,
         "None",
-        Type::option(Type::builtin(rex::BuiltinTypeId::I32)),
+        Type::option(Type::builtin(BuiltinTypeId::I32)),
     )
     .await;
 }
@@ -206,7 +206,7 @@ async fn default_custom_adt_generic_instance_uses_constraint() {
         let x: Box i32 = default in x
         "#,
         "Box 0i32",
-        Type::app(Type::con("Box", 1), Type::builtin(rex::BuiltinTypeId::I32)),
+        Type::app(Type::con("Box", 1), Type::builtin(BuiltinTypeId::I32)),
     )
     .await;
 }
@@ -338,7 +338,7 @@ async fn methods_can_call_other_methods() {
         sum_pair (Pair { a = 19, b = 23 })
         "#,
         "42i32",
-        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::I32),
     )
     .await;
 }
@@ -356,7 +356,7 @@ async fn method_can_return_function() {
         let f = make_adder (5 is i32) in f (37 is i32)
         "#,
         "42i32",
-        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::I32),
     )
     .await;
 }
@@ -376,7 +376,7 @@ async fn instance_method_can_reference_global_fn() {
         bump 41
         "#,
         "42i32",
-        Type::builtin(rex::BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::I32),
     )
     .await;
 }
@@ -411,15 +411,15 @@ async fn hkt_functor_option_and_result() {
         "#,
         r#"(Some 2i32, None, Ok 2i32, Err "bad")"#,
         Type::tuple(vec![
-            Type::option(Type::builtin(rex::BuiltinTypeId::I32)),
-            Type::option(Type::builtin(rex::BuiltinTypeId::I32)),
+            Type::option(Type::builtin(BuiltinTypeId::I32)),
+            Type::option(Type::builtin(BuiltinTypeId::I32)),
             Type::result(
-                Type::builtin(rex::BuiltinTypeId::I32),
-                Type::builtin(rex::BuiltinTypeId::String),
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::String),
             ),
             Type::result(
-                Type::builtin(rex::BuiltinTypeId::I32),
-                Type::builtin(rex::BuiltinTypeId::String),
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::String),
             ),
         ]),
     )
@@ -443,8 +443,8 @@ async fn pattern_match_inside_method_body() {
         "#,
         "(1i32, 7i32)",
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
         ]),
     )
     .await;
@@ -484,10 +484,10 @@ async fn superclass_and_instance_context() {
         "#,
         "(false, true, -1i32, 1i32)",
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
         ]),
     )
     .await;

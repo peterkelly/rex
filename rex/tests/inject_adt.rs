@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use rex::{
-    Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, Parser, Pointer, Rex, RexAdt,
-    RexType, Token, Type, sym,
+use rex_core::{
+    AdtDecl, BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, Parser,
+    Pointer, Rex, RexAdt, RexType, Token, Type, sym,
 };
 use rex_engine::assert_pointer_eq;
 
@@ -122,7 +122,7 @@ impl FromPointer for ManualEnum {
 impl RexAdt for ManualRecord {
     fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
         engine: &mut Engine<State>,
-    ) -> Result<rex::AdtDecl, EngineError> {
+    ) -> Result<AdtDecl, EngineError> {
         let mut adt = engine.adt_decl_from_type(&Self::rex_type())?;
         let record = Type::record(vec![
             (sym("enabled"), bool::rex_type()),
@@ -136,7 +136,7 @@ impl RexAdt for ManualRecord {
 impl RexAdt for ManualEnum {
     fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
         engine: &mut Engine<State>,
-    ) -> Result<rex::AdtDecl, EngineError> {
+    ) -> Result<AdtDecl, EngineError> {
         let mut adt = engine.adt_decl_from_type(&Self::rex_type())?;
         adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
         adt.add_variant(sym("Count"), vec![i32::rex_type()]);
@@ -206,7 +206,7 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
 
     let mut gas = GasMeter::default();
     let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }
 
@@ -228,7 +228,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
 
     let mut gas = GasMeter::default();
     let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }
 
@@ -236,7 +236,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
 fn adt_decl_from_type_rejects_non_constructor_heads() {
     let mut engine = Engine::new(());
     let err = engine
-        .adt_decl_from_type(&Type::tuple(vec![Type::builtin(rex::BuiltinTypeId::I32)]))
+        .adt_decl_from_type(&Type::tuple(vec![Type::builtin(BuiltinTypeId::I32)]))
         .unwrap_err();
     let EngineError::Custom(message) = err else {
         panic!("expected EngineError::Custom");
@@ -259,10 +259,7 @@ fn adt_decl_from_type_rejects_non_constructor_heads_for_derived_types() {
 #[test]
 fn adt_decl_from_type_rejects_applied_non_variable_args() {
     let mut engine = Engine::new(());
-    let typ = Type::app(
-        Type::con("Boxed", 1),
-        Type::builtin(rex::BuiltinTypeId::I32),
-    );
+    let typ = Type::app(Type::con("Boxed", 1), Type::builtin(BuiltinTypeId::I32));
     let err = engine.adt_decl_from_type(&typ).unwrap_err();
     let EngineError::Custom(message) = err else {
         panic!("expected EngineError::Custom");
@@ -286,7 +283,7 @@ fn adt_decl_from_type_rejects_applied_non_variable_args_for_derived_types() {
 fn adt_decl_from_type_with_params_validates_arity() {
     let mut engine = Engine::new(());
     let err = engine
-        .adt_decl_from_type_with_params(&Type::builtin(rex::BuiltinTypeId::Result), &["T"])
+        .adt_decl_from_type_with_params(&Type::builtin(BuiltinTypeId::Result), &["T"])
         .unwrap_err();
     let EngineError::Custom(message) = err else {
         panic!("expected EngineError::Custom");
@@ -328,7 +325,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
 
     let mut gas = GasMeter::default();
     let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }
 
@@ -354,6 +351,6 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
 
     let mut gas = GasMeter::default();
     let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }

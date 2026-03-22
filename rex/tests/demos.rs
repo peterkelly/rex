@@ -1,4 +1,4 @@
-use rex::{Engine, GasMeter, Heap, Pointer, Type, Value};
+use rex_core::{BuiltinTypeId, Engine, GasMeter, Heap, Pointer, Type, Value};
 
 fn extract_first_interactive_rex(markdown: &str) -> String {
     let mut lines = markdown.lines();
@@ -37,7 +37,7 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
     (engine.into_heap(), value, ty)
 }
 
-fn list_elements(heap: &rex::Heap, list: &Pointer) -> Vec<Pointer> {
+fn list_elements(heap: &Heap, list: &Pointer) -> Vec<Pointer> {
     let mut out = Vec::new();
     let mut cur = *list;
     loop {
@@ -54,7 +54,7 @@ fn list_elements(heap: &rex::Heap, list: &Pointer) -> Vec<Pointer> {
     }
 }
 
-fn list_i32_values(heap: &rex::Heap, ptr: &Pointer) -> Vec<i32> {
+fn list_i32_values(heap: &Heap, ptr: &Pointer) -> Vec<i32> {
     let elems = list_elements(heap, ptr);
     elems
         .iter()
@@ -72,7 +72,7 @@ async fn demo_factorial() {
         )),
     )
     .await;
-    assert_eq!(ty, Type::builtin(rex::BuiltinTypeId::I32));
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(heap.pointer_as_i32(&value).unwrap(), 720);
 }
 
@@ -86,7 +86,7 @@ async fn demo_fibonacci() {
         )),
     )
     .await;
-    assert_eq!(ty, Type::list(Type::builtin(rex::BuiltinTypeId::I32)));
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
     assert_eq!(
         list_i32_values(&heap, &value),
         vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
@@ -103,7 +103,7 @@ async fn demo_merge_sort() {
         )),
     )
     .await;
-    assert_eq!(ty, Type::list(Type::builtin(rex::BuiltinTypeId::I32)));
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
     assert_eq!(
         list_i32_values(&heap, &value),
         vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -123,9 +123,9 @@ async fn demo_binary_search_tree() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -148,9 +148,9 @@ async fn demo_expression_evaluator() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -173,8 +173,8 @@ async fn demo_dijkstra_lite() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32)
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32)
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -196,8 +196,8 @@ async fn demo_knapsack_01() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32)
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32)
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -219,10 +219,10 @@ async fn demo_union_find() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -246,10 +246,10 @@ async fn demo_prefix_parser() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::Bool),
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();
@@ -308,8 +308,8 @@ async fn demo_n_queens() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::I32),
-            Type::builtin(rex::BuiltinTypeId::I32)
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32)
         ])
     );
     let items = heap.pointer_as_tuple(&value).unwrap();

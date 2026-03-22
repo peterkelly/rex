@@ -1,4 +1,4 @@
-use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type};
+use rex_core::{BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type};
 
 fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), EngineError> {
     engine.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
@@ -35,14 +35,14 @@ fn expected_values() -> Vec<&'static str> {
 
 fn expected_type() -> Type {
     Type::tuple(vec![
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
     ])
 }
 
@@ -52,10 +52,10 @@ fn expected_negative_signed_values() -> Vec<&'static str> {
 
 fn expected_negative_signed_type() -> Type {
     Type::tuple(vec![
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
-        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::String),
     ])
 }
 

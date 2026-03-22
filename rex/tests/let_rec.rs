@@ -1,4 +1,7 @@
-use rex::{Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeKind, Value};
+use rex_core::{
+    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeKind,
+    Value,
+};
 use rex_engine::assert_pointer_eq;
 
 async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
@@ -80,10 +83,10 @@ async fn let_rec_mutual_even_odd() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::Bool),
-            Type::builtin(rex::BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
+            Type::builtin(BuiltinTypeId::Bool),
         ])
     );
 
@@ -141,7 +144,7 @@ async fn let_rec_function_is_still_polymorphic() {
     };
     assert_eq!(items.len(), 2);
     assert_i32_or_var(&items[0]);
-    assert_eq!(items[1], Type::builtin(rex::BuiltinTypeId::Bool));
+    assert_eq!(items[1], Type::builtin(BuiltinTypeId::Bool));
     let one = heap.alloc_i32(1).unwrap();
     let tru = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![one, tru]).unwrap();
@@ -160,7 +163,7 @@ async fn let_rec_allows_self_referential_data_cycles() {
     )
     .await
     .unwrap();
-    assert_eq!(ty, Type::list(Type::builtin(rex::BuiltinTypeId::I32)));
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
     let value = heap.get(&pointer).unwrap();
     let Value::Adt(tag, args) = value.as_ref() else {
         panic!(
@@ -189,8 +192,8 @@ async fn let_rec_allows_mutual_data_cycles() {
     assert_eq!(
         ty,
         Type::tuple(vec![
-            Type::list(Type::builtin(rex::BuiltinTypeId::I32)),
-            Type::list(Type::builtin(rex::BuiltinTypeId::I32)),
+            Type::list(Type::builtin(BuiltinTypeId::I32)),
+            Type::list(Type::builtin(BuiltinTypeId::I32)),
         ])
     );
     let tuple = heap.get(&pointer).unwrap();

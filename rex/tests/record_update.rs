@@ -1,4 +1,4 @@
-use rex::{Engine, GasMeter, Parser, Token};
+use rex_core::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type};
 
 #[tokio::test]
 async fn record_update_end_to_end() {
@@ -26,9 +26,9 @@ async fn record_update_end_to_end() {
     let (value_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
     assert_eq!(
         ty,
-        rex::Type::tuple(vec![
-            rex::Type::builtin(rex::BuiltinTypeId::I32),
-            rex::Type::builtin(rex::BuiltinTypeId::I32)
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32)
         ])
     );
     let value = engine

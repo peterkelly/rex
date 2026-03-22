@@ -17,7 +17,7 @@ tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
 tower-lsp = { workspace = true }
 
 [dev-dependencies]
-rex = { path = "../rex" }
+rex-core = { workspace = true }
 rex-engine = { workspace = true }
 
 [lints]

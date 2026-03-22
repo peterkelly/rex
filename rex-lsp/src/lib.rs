@@ -7455,7 +7455,7 @@ pub async fn run_stdio() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rex::{Engine, GasMeter, Parser, Token};
+    use rex_core::{Engine, GasMeter, Parser, Token};
     use rex_engine::{ValueDisplayOptions, pointer_display_with};
     use serde_json::Map;
     use std::fs;

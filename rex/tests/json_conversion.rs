@@ -1,6 +1,6 @@
-use rex::{
-    AdtDecl, Engine, EngineError, EnumPatch, GasMeter, Heap, JsonOptions, Parser, Rex, Token, Type,
-    TypeSystem, intern, json_to_rex, rex_to_json, sym,
+use rex_core::{
+    AdtDecl, BuiltinTypeId, Engine, EngineError, EnumPatch, GasMeter, Heap, JsonOptions, Parser,
+    Pointer, Program, Rex, Token, Type, TypeSystem, intern, json_to_rex, rex_to_json, sym,
 };
 use rex_engine::ReplState;
 use rex_ts::TypeVarSupply;
@@ -34,7 +34,7 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn parse_program(source: &str) -> rex::Program {
+fn parse_program(source: &str) -> Program {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
     parser.parse_program(&mut GasMeter::default()).unwrap()
@@ -48,7 +48,7 @@ struct EvalJsonRecord {
 
 fn assert_eval_json(
     engine: &Engine<()>,
-    pointer: &rex::Pointer,
+    pointer: &Pointer,
     typ: &Type,
     expected: serde_json::Value,
 ) {
@@ -70,9 +70,9 @@ fn primitive_roundtrip() {
     let opts = JsonOptions::default();
 
     let cases = vec![
-        (Type::builtin(rex::BuiltinTypeId::Bool), json!(true)),
-        (Type::builtin(rex::BuiltinTypeId::I32), json!(-7)),
-        (Type::builtin(rex::BuiltinTypeId::String), json!("hello")),
+        (Type::builtin(BuiltinTypeId::Bool), json!(true)),
+        (Type::builtin(BuiltinTypeId::I32), json!(-7)),
+        (Type::builtin(BuiltinTypeId::String), json!("hello")),
     ];
 
     for (ty, expected_json) in cases {
@@ -88,7 +88,7 @@ fn option_and_result_roundtrip() {
     let heap = Heap::new();
     let opts = JsonOptions::default();
 
-    let opt_ty = Type::option(Type::builtin(rex::BuiltinTypeId::I32));
+    let opt_ty = Type::option(Type::builtin(BuiltinTypeId::I32));
     let some = json!(9);
     let none = serde_json::Value::Null;
 
@@ -104,8 +104,8 @@ fn option_and_result_roundtrip() {
     );
 
     let res_ty = Type::result(
-        Type::builtin(rex::BuiltinTypeId::I32),
-        Type::builtin(rex::BuiltinTypeId::String),
+        Type::builtin(BuiltinTypeId::I32),
+        Type::builtin(BuiltinTypeId::String),
     );
     let ok_json = json!({ "Ok": 1 });
     let err_json = json!({ "Err": "bad" });
@@ -128,7 +128,7 @@ fn json_array_maps_to_array_not_list() {
     let opts = JsonOptions::default();
     let array_json = json!([1, 2, 3]);
 
-    let array_ty = Type::array(Type::builtin(rex::BuiltinTypeId::I32));
+    let array_ty = Type::array(Type::builtin(BuiltinTypeId::I32));
     let array_ptr = json_to_rex(&heap, &array_json, &array_ty, &ts, &opts).unwrap();
     let items = heap.pointer_as_array(&array_ptr).unwrap();
     assert_eq!(items.len(), 3);
@@ -137,7 +137,7 @@ fn json_array_maps_to_array_not_list() {
         array_json
     );
 
-    let list_ty = Type::list(Type::builtin(rex::BuiltinTypeId::I32));
+    let list_ty = Type::list(Type::builtin(BuiltinTypeId::I32));
     let list_ptr = json_to_rex(&heap, &array_json, &list_ty, &ts, &opts).unwrap();
     let (tag, _args) = heap.pointer_as_adt(&list_ptr).unwrap();
     assert_eq!(tag.as_ref(), "Cons");
@@ -154,8 +154,8 @@ fn struct_like_single_variant_adt_roundtrip() {
     foo.add_variant(
         sym("Foo"),
         vec![Type::record(vec![
-            (sym("a"), Type::builtin(rex::BuiltinTypeId::U64)),
-            (sym("b"), Type::builtin(rex::BuiltinTypeId::String)),
+            (sym("a"), Type::builtin(BuiltinTypeId::U64)),
+            (sym("b"), Type::builtin(BuiltinTypeId::String)),
         ])],
     );
     ts.inject_adt(&foo);
