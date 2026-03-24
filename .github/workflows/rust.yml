@@ -15,12 +15,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: rustup toolchain install stable --profile minimal
       - uses: Swatinem/rust-cache@v2
       - name: Verify generated prelude docs are up to date
         run: |
-          cargo run -p rex --bin gen_prelude_docs
+          cargo run -p rexlang-cli --bin gen_prelude_docs
           git diff --exit-code docs/src/PRELUDE.md
       - name: Build
         run: cargo clippy --verbose
