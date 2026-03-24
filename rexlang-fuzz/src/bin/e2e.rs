@@ -1,0 +1,48 @@
+#![forbid(unsafe_code)]
+#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
+
+use rexlang_engine::Engine;
+use rexlang_fuzz::{
+    FuzzError, gas_meter_from_env, parser_limits_from_env, read_stdin_bytes, tokenize_fuzz_input,
+};
+use rexlang_parser::Parser;
+use rexlang_typesystem::TypeSystem;
+
+async fn run_one(input: &[u8]) {
+    let mut gas = gas_meter_from_env(300_000);
+    let Some(tokens) = tokenize_fuzz_input(input) else {
+        return;
+    };
+    let mut parser = Parser::new(tokens);
+    parser.set_limits(parser_limits_from_env());
+
+    let program = match parser.parse_program(&mut gas) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+
+    let Ok(mut ts) = TypeSystem::with_prelude() else {
+        return;
+    };
+    if ts.inject_decls(&program.decls).is_err() {
+        return;
+    }
+    if ts.infer_with_gas(program.expr.as_ref(), &mut gas).is_err() {
+        return;
+    }
+
+    let Ok(mut engine) = Engine::with_prelude(()) else {
+        return;
+    };
+    if engine.inject_decls(&program.decls).is_err() {
+        return;
+    }
+    let _ = engine.eval(program.expr.as_ref(), &mut gas).await;
+}
+
+#[tokio::main]
+async fn main() -> Result<(), FuzzError> {
+    let input = read_stdin_bytes()?;
+    run_one(&input).await;
+    Ok(())
+}

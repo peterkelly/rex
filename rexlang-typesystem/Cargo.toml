@@ -1,0 +1,21 @@
+[package]
+name = "rexlang-typesystem"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+rexlang-ast = { workspace = true }
+rexlang-lexer = { workspace = true }
+rexlang-parser = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rpds = { workspace = true }
+rexlang-util = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rexlang-lexer = { workspace = true }
+rexlang-parser = { workspace = true }

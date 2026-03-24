@@ -82,15 +82,15 @@ capabilities.
 
 This repo is a Cargo workspace. The key crates are:
 
-- `rex-lexer`: tokenization (+ spans)
-- `rex-parser`: parser producing a `Program { decls, expr }`
-- `rex-ts`: Hindley–Milner type inference + type classes + ADTs
-- `rex-engine`: runtime evaluator + native-function injection, backed by `rex-ts`
-- `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
+- `rexlang-lexer`: tokenization (+ spans)
+- `rexlang-parser`: parser producing a `Program { decls, expr }`
+- `rexlang-typesystem`: Hindley–Milner type inference + type classes + ADTs
+- `rexlang-engine`: runtime evaluator + native-function injection, backed by `rexlang-typesystem`
+- `rexlang-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
 - `rex`: CLI binary (`cargo run -p rex -- ...`)
-- `rex-fuzz`: stdin-driven fuzz harness binaries
-- `rex-util`: small shared helpers (e.g. module hashing, bundled stdlib sources)
-- `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
+- `rexlang-fuzz`: stdin-driven fuzz harness binaries
+- `rexlang-util`: small shared helpers (e.g. module hashing, bundled stdlib sources)
+- `rexlang-lsp` / `rexlang-vscode`: language tooling (LSP + VS Code extension)
 
 ## CLI
 
@@ -131,9 +131,9 @@ operations, equality/ordering, and container abstractions).
 
 The prelude surface definitions and type-class wiring live primarily in:
 
-- `rex-ts/src/prelude_typeclasses.rex`
-- `rex-ts/src/prelude.rs`
-- `rex-engine/src/prelude.rs`
+- `rexlang-typesystem/src/prelude_typeclasses.rex`
+- `rexlang-typesystem/src/prelude.rs`
+- `rexlang-engine/src/prelude.rs`
 
 For full details and usage patterns, see the [docs](https://talo.github.io/rex/):
 

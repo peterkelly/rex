@@ -1,0 +1,11 @@
+[package]
+name = "rexlang"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+rexlang-core = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

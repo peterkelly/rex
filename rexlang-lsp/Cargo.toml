@@ -1,0 +1,24 @@
+[package]
+name = "rexlang-lsp"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lsp-types = "0.94"
+serde_json = "1"
+rexlang-lexer = { workspace = true }
+rexlang-ast = { workspace = true }
+rexlang-parser = { workspace = true }
+rexlang-typesystem = { workspace = true }
+rexlang-util = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
+tower-lsp = { workspace = true }
+
+[dev-dependencies]
+rexlang-core = { workspace = true }
+rexlang-engine = { workspace = true }
+
+[lints]
+workspace = true

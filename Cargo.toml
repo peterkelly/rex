@@ -1,19 +1,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "rex-cli",
-    "rex-core",
-    "rex-ast",
-    "rex-engine",
-    "rex-fuzz",
-    "rex-lexer",
-    "rex-lsp",
-    "rex-mdbook",
-    "rex-parser",
-    "rex-proc-macro",
-    "rex-ts",
-    "rex-util",
-    "rex-wasm",
+    "rexlang",
+    "rexlang-ast",
+    "rexlang-cli",
+    "rexlang-core",
+    "rexlang-engine",
+    "rexlang-fuzz",
+    "rexlang-lexer",
+    "rexlang-lsp",
+    "rexlang-mdbook",
+    "rexlang-parser",
+    "rexlang-proc-macro",
+    "rexlang-typesystem",
+    "rexlang-util",
+    "rexlang-wasm",
 ]
 
 [workspace.package]
@@ -44,14 +45,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["v4", "js"] }
 
 # Internal dependencies
-rex-core = { path = "rex-core" }
-rex-ast = { path = "rex-ast" }
-rex-engine = { path = "rex-engine" }
-rex-lexer = { path = "rex-lexer" }
-rex-parser = { path = "rex-parser" }
-rex-proc-macro = { path = "rex-proc-macro" }
-rex-ts = { path = "rex-ts" }
-rex-util = { path = "rex-util" }
+rexlang-ast = { path = "rexlang-ast" }
+rexlang-core = { path = "rexlang-core" }
+rexlang-engine = { path = "rexlang-engine" }
+rexlang-lexer = { path = "rexlang-lexer" }
+rexlang-parser = { path = "rexlang-parser" }
+rexlang-proc-macro = { path = "rexlang-proc-macro" }
+rexlang-typesystem = { path = "rexlang-typesystem" }
+rexlang-util = { path = "rexlang-util" }
 
 [workspace.lints.clippy]
 uninlined_format_args = "allow"

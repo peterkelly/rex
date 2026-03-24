@@ -36,4 +36,4 @@ When generating Rex code, prefer consulting the LLM guidance and tutorial first,
 ## Optional
 
 - [Demo Index](https://talo.github.io/rex/demos/): Interactive algorithm demos.
-- [VS Code Extension](https://github.com/talo/rex/tree/main/rex-vscode): Editor integration for Rex via LSP.
+- [VS Code Extension](https://github.com/talo/rex/tree/main/rexlang-vscode): Editor integration for Rex via LSP.

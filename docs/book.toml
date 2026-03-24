@@ -8,8 +8,8 @@ description = "Rex (short for Rush Expressions) is a strongly-typed functional D
 [build]
 build-dir = "book"
 
-[preprocessor.rex-wasm]
-command = "cargo run --manifest-path ../Cargo.toml -p rex-mdbook --"
+[preprocessor.rexlang-wasm]
+command = "cargo run --manifest-path ../Cargo.toml -p rexlang-mdbook --"
 
 [output.html]
 default-theme = "light"

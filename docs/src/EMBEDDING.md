@@ -2,10 +2,10 @@
 
 Rex is designed as a small pipeline you can embed at whatever stage you need:
 
-1. `rex-lexer`: source → `Tokens`
-2. `rex-parser`: tokens → `Program { decls, expr }`
-3. `rex-ts`: HM inference + type classes → `TypedExpr` (plus predicates/type)
-4. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Value`
+1. `rexlang-lexer`: source → `Tokens`
+2. `rexlang-parser`: tokens → `Program { decls, expr }`
+3. `rexlang-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
+4. `rexlang-engine`: evaluate a `TypedExpr` → `rexlang_engine::Value`
 
 This document focuses on common embedding patterns.
 
@@ -29,7 +29,7 @@ Evaluation API:
 ## Evaluate Rex Code
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_util::{GasCosts, GasMeter};
@@ -64,7 +64,7 @@ exports fail early with module errors.
 If you want full control:
 
 ```rust
-use rex_engine::{Engine, EngineOptions, PreludeMode};
+use rexlang_engine::{Engine, EngineOptions, PreludeMode};
 
 let mut engine = Engine::with_options(
     (),
@@ -77,7 +77,7 @@ let mut engine = Engine::with_options(
 
 ## Inject Modules (Embedder Patterns)
 
-This is fully supported in `rex-engine`. You can compose module loading from:
+This is fully supported in `rexlang-engine`. You can compose module loading from:
 
 - default resolvers (`std.*`, local filesystem, optional remote feature)
 - include roots
@@ -86,7 +86,7 @@ This is fully supported in `rex-engine`. You can compose module loading from:
 ### 1) Use Built-In Resolvers
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
@@ -113,7 +113,7 @@ Notes:
 For host-managed modules, add a resolver that maps `module_name` to source text.
 
 ```rust
-use rex_engine::{Engine, ModuleId, ResolveRequest, ResolvedModule};
+use rexlang_engine::{Engine, ModuleId, ResolveRequest, ResolvedModule};
 use rex_util::GasMeter;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -171,7 +171,7 @@ Use `Module` + `Engine::inject_module(...)`:
 `Future<Output = Result<T, EngineError>>`.
 
 ```rust
-use rex_engine::{Engine, Module};
+use rexlang_engine::{Engine, Module};
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
@@ -195,7 +195,7 @@ println!("{value}");
 You can declare ADTs directly inside an injected host module:
 
 ```rust
-use rex_engine::{Engine, Module};
+use rexlang_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -232,8 +232,7 @@ Rex code calls it through `sample.render_label`.
 Example:
 
 ```rust
-use rex::{Engine, EngineError, Module};
-use rex_proc_macro::Rex;
+use rex::{Engine, EngineError, Module, Rex};
 use rex_util::GasMeter;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -298,7 +297,7 @@ These callbacks receive `&Engine<State>` (not just `&State`), so they can:
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{Engine, Module, Pointer};
+use rexlang_engine::{Engine, Module, Pointer};
 use rex_ts::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
@@ -356,7 +355,7 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
   they can use heap/runtime internals and read `engine.state`.
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 
 #[derive(Clone)]
 struct HostState {
@@ -507,7 +506,7 @@ assert_eq!(ty.to_string(), "i32");
 ### Evaluate: Inject Decls into `Engine`
 
 ```rust
-use rex_engine::{Engine, EngineError};
+use rexlang_engine::{Engine, EngineError};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_util::{GasCosts, GasMeter};
@@ -540,14 +539,14 @@ println!("{value}");
 
 ## Inject Native Values and Functions
 
-`rex-engine` is the boundary where Rust provides implementations for Rex values.
+`rexlang-engine` is the boundary where Rust provides implementations for Rex values.
 
 For host-provided *modules*, prefer `Module` + `inject_module` (above). The direct injection APIs
 below register exports into the root scope (the engine's root module), which is useful for values
 or functions you want available without importing a host module.
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 
 let mut engine = Engine::with_prelude(())?;
 engine.export_value("answer", 42i32)?;
@@ -560,7 +559,7 @@ Integer literals are overloaded (`Integral a`) and can specialize at call sites.
 direct calls, `let` bindings, and lambda wrappers:
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
@@ -592,7 +591,7 @@ If your host functions are async, inject them with `export_async` and evaluate w
 `Engine::eval_with_gas`.
 
 ```rust
-use rex_engine::Engine;
+use rexlang_engine::Engine;
 use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
@@ -615,7 +614,7 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{CancellationToken, Engine, EngineError};
+use rexlang_engine::{CancellationToken, Engine, EngineError};
 use rex_ts::{BuiltinTypeId, Scheme, Type};
 use rex_util::{GasCosts, GasMeter};
 
@@ -679,8 +678,7 @@ The derive:
 - implements `FromPointer`/`IntoPointer` for converting Rust ↔ Rex
 
 ```rust
-use rex::{Engine, FromPointer, GasMeter, Parser, Token};
-use rex_proc_macro::Rex;
+use rex::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {

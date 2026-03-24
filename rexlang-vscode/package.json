@@ -1,0 +1,245 @@
+{
+  "name": "rex-lang",
+  "displayName": "Rex Language Support",
+  "description": "Syntax highlighting and language server for Rex.",
+  "version": "0.0.1",
+  "publisher": "rex-lang",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:rex",
+    "onCommand:rex.showExpectedTypeAtCursor",
+    "onCommand:rex.showFunctionsProducingExpectedTypeAtCursor",
+    "onCommand:rex.showFunctionsAcceptingInferredTypeAtCursor",
+    "onCommand:rex.showAdaptersFromInferredToExpectedAtCursor",
+    "onCommand:rex.showFunctionsCompatibleWithInScopeValuesAtCursor",
+    "onCommand:rex.showHolesExpectedTypes",
+    "onCommand:rex.showSemanticLoopStepAtCursor",
+    "onCommand:rex.applySemanticLoopQuickFixAtCursor",
+    "onCommand:rex.applyBestSemanticLoopQuickFixesAtCursor",
+    "onCommand:rex.previewBestSemanticLoopQuickFixesAtCursor",
+    "onCommand:rex.insertFunctionFromCandidatesAtCursor",
+    "onCommand:rex.insertFunctionFromCandidatesWithTypeCommentAtCursor"
+  ],
+  "main": "./src/extension.js",
+  "scripts": {
+    "test:arity": "node test/arity.test.js",
+    "test:snippet": "node test/snippet_builder.test.js",
+    "test:js": "npm run test:arity && npm run test:snippet"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "rex",
+        "aliases": [
+          "Rex",
+          "rex"
+        ],
+        "extensions": [
+          ".rex"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "rex",
+        "scopeName": "source.rex",
+        "path": "./syntaxes/rex.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Rex",
+      "properties": {
+        "rex.serverPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the rexlang-lsp executable. Leave empty to use ../target/debug/rexlang-lsp or rexlang-lsp from PATH."
+        },
+        "rex.insertCandidateTypeComment": {
+          "type": "boolean",
+          "default": false,
+          "description": "When inserting a function from candidates, append a Rex block comment with the selected function type."
+        },
+        "rex.semanticLoopBulkMaxSteps": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 20,
+          "description": "Maximum number of quick-fix steps applied by \"Apply Best Semantic Loop Quick-Fixes At Cursor\"."
+        },
+        "rex.semanticLoopBulkStrategy": {
+          "type": "string",
+          "default": "conservative",
+          "enum": [
+            "conservative",
+            "aggressive"
+          ],
+          "description": "Ranking strategy for selecting quick-fixes in bulk semantic loop application."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "rex.showExpectedTypeAtCursor",
+        "title": "Rex: Show Expected Type At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.showFunctionsProducingExpectedTypeAtCursor",
+        "title": "Rex: Show Functions Producing Expected Type At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.showFunctionsAcceptingInferredTypeAtCursor",
+        "title": "Rex: Show Functions Accepting Inferred Type At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.showAdaptersFromInferredToExpectedAtCursor",
+        "title": "Rex: Show Adapters From Inferred To Expected Type At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.showFunctionsCompatibleWithInScopeValuesAtCursor",
+        "title": "Rex: Show Functions Compatible With In-Scope Values At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.showHolesExpectedTypes",
+        "title": "Rex: Show Holes And Expected Types",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.showSemanticLoopStepAtCursor",
+        "title": "Rex: Show Semantic Loop Step At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.applySemanticLoopQuickFixAtCursor",
+        "title": "Rex: Apply Semantic Loop Quick-Fix At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.applyBestSemanticLoopQuickFixesAtCursor",
+        "title": "Rex: Apply Best Semantic Loop Quick-Fixes At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.previewBestSemanticLoopQuickFixesAtCursor",
+        "title": "Rex: Preview Best Semantic Loop Quick-Fixes At Cursor (Dry Run)",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.insertFunctionFromCandidatesAtCursor",
+        "title": "Rex: Insert Function From Candidates At Cursor",
+        "category": "Rex"
+      },
+      {
+        "command": "rex.insertFunctionFromCandidatesWithTypeCommentAtCursor",
+        "title": "Rex: Insert Function From Candidates At Cursor (With Type Comment)",
+        "category": "Rex"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "rex.showExpectedTypeAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@50"
+        },
+        {
+          "command": "rex.showFunctionsProducingExpectedTypeAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@51"
+        },
+        {
+          "command": "rex.showFunctionsAcceptingInferredTypeAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@52"
+        },
+        {
+          "command": "rex.showAdaptersFromInferredToExpectedAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@53"
+        },
+        {
+          "command": "rex.showFunctionsCompatibleWithInScopeValuesAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@54"
+        },
+        {
+          "command": "rex.showHolesExpectedTypes",
+          "when": "editorLangId == rex",
+          "group": "navigation@55"
+        },
+        {
+          "command": "rex.showSemanticLoopStepAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@56"
+        },
+        {
+          "command": "rex.applySemanticLoopQuickFixAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@57"
+        },
+        {
+          "command": "rex.applyBestSemanticLoopQuickFixesAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@58"
+        },
+        {
+          "command": "rex.previewBestSemanticLoopQuickFixesAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@59"
+        },
+        {
+          "command": "rex.insertFunctionFromCandidatesAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@60"
+        },
+        {
+          "command": "rex.insertFunctionFromCandidatesWithTypeCommentAtCursor",
+          "when": "editorLangId == rex",
+          "group": "navigation@61"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "rex.insertFunctionFromCandidatesAtCursor",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
+        "when": "editorTextFocus && editorLangId == rex"
+      },
+      {
+        "command": "rex.insertFunctionFromCandidatesWithTypeCommentAtCursor",
+        "key": "ctrl+alt+shift+i",
+        "mac": "cmd+alt+shift+i",
+        "when": "editorTextFocus && editorLangId == rex"
+      }
+    ]
+  },
+  "files": [
+    "src",
+    "server",
+    "node_modules",
+    "syntaxes",
+    "language-configuration.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.7.1"
+  }
+}
