@@ -8,17 +8,17 @@ version.workspace = true
 
 [dependencies]
 thiserror = { workspace = true }
-rexlang-ast = { workspace = true }
-rexlang-lexer = { workspace = true }
-rexlang-parser = { workspace = true }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.1" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.1" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.1" }
 chrono = { workspace = true }
 uuid = { workspace = true }
 rpds = { workspace = true }
-rexlang-util = { workspace = true }
+rexlang-util = { path = "../rexlang-util", version = "3.9.1" }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
-rexlang-lexer = { workspace = true }
-rexlang-parser = { workspace = true }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.1" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.1" }
