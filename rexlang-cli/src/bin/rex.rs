@@ -13,7 +13,7 @@ use rexlang_parser::{Parser as RexParser, ParserLimits, error::ParserErr};
 use rexlang_util::{GasCosts, GasMeter};
 use serde_json::json;
 
-use rex::cli_prelude;
+use rexlang_cli::cli_prelude;
 
 #[derive(Parser)]
 #[command(name = "rex")]
