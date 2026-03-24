@@ -18,8 +18,11 @@ members = [
 ]
 
 [workspace.package]
-version = "3.9.0"
+description = "Rex: A strongly-typed, pure, implicitly parallel functional programming language"
 edition = "2024"
+license-file = "LICENSE"
+repository = "https://github.com/talo/rex"
+version = "3.9.0"
 
 [workspace.dependencies]
 # External dependencies
