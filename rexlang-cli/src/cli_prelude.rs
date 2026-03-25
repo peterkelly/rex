@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use rexlang_ast::expr::{Symbol, sym};
-use rexlang_core::{Engine, EngineError, FromPointer, Heap, Module, Pointer, Value};
+use rexlang_core::{Engine, EngineError, FromPointer, Heap, Library, Pointer, Value};
 use rexlang_engine::virtual_export_name;
 use rexlang_typesystem::{BuiltinTypeId, Scheme, Type};
 use uuid::Uuid;
@@ -142,10 +142,10 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
     let u8_ty = Type::builtin(BuiltinTypeId::U8);
     let array_u8 = array_type(u8_ty);
-    let mut module = Module::new("std.io");
+    let mut library = Library::new("std.io");
 
     let read_all_sym = sym("read_all");
-    module.export_native_async(
+    library.export_native_async(
         "read_all",
         Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), array_u8.clone())),
         1,
@@ -177,7 +177,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
     )?;
 
     let write_all_sym = sym("write_all");
-    module.export_native_async(
+    library.export_native_async(
         "write_all",
         Scheme::new(
             vec![],
@@ -223,7 +223,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    engine.inject_module(module)
+    engine.inject_library(library)
 }
 
 fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
@@ -233,7 +233,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let string = Type::builtin(BuiltinTypeId::String);
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
     let list_string = Type::app(Type::builtin(BuiltinTypeId::List), string.clone());
-    let mut module = Module::new("std.process");
+    let mut library = Library::new("std.process");
     let opts = Type::record(vec![
         (sym("cmd"), string.clone()),
         (sym("args"), list_string),
@@ -241,7 +241,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
 
     let spawn_sym = sym("spawn");
     let subprocess_ctor_for_spawn = subprocess_ctor.clone();
-    module.export_native_async(
+    library.export_native_async(
         "spawn",
         Scheme::new(vec![], vec![], Type::fun(opts, subprocess.clone())),
         1,
@@ -355,7 +355,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
 
     let wait_sym = sym("wait");
     let subprocess_ctor_for_wait = subprocess_ctor.clone();
-    module.export_native_async(
+    library.export_native_async(
         "wait",
         Scheme::new(vec![], vec![], Type::fun(subprocess.clone(), i32_ty)),
         1,
@@ -423,7 +423,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
 
     let stdout_sym = sym("stdout");
     let subprocess_ctor_for_stdout = subprocess_ctor.clone();
-    module.export_native_async(
+    library.export_native_async(
         "stdout",
         Scheme::new(
             vec![],
@@ -455,7 +455,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
 
     let stderr_sym = sym("stderr");
     let subprocess_ctor_for_stderr = subprocess_ctor.clone();
-    module.export_native_async(
+    library.export_native_async(
         "stderr",
         Scheme::new(
             vec![],
@@ -482,7 +482,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    engine.inject_module(module)
+    engine.inject_library(library)
 }
 
 fn subprocess_id(heap: &Heap, pointer: &Pointer, tag: &Symbol) -> Result<Uuid, EngineError> {

@@ -1,4 +1,4 @@
-//! Module system: resolvers, loading, and import rewriting.
+//! Library system: resolvers, loading, and import rewriting.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -33,15 +33,15 @@ pub use resolvers::default_stdlib_resolver;
 pub use system::ResolverFn;
 pub use types::virtual_export_name;
 pub use types::{
-    CanonicalSymbol, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ReplState, ResolveRequest,
-    ResolvedModule, SymbolKind,
+    CanonicalSymbol, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
+    ResolveRequest, ResolvedLibrary, SymbolKind,
 };
 
-pub(crate) use system::ModuleSystem;
-pub(crate) use types::module_key_for_module;
+pub(crate) use system::LibrarySystem;
+pub(crate) use types::library_key_for_library;
 
 use system::wrap_resolver;
-use types::{prefix_for_module, qualify};
+use types::{prefix_for_library, qualify};
 
 fn import_specifier(path: &ImportPath) -> String {
     match path {
@@ -78,37 +78,37 @@ fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
     })
 }
 
-fn default_import_decl(module_name: &str) -> ImportDecl {
+fn default_import_decl(library_name: &str) -> ImportDecl {
     ImportDecl {
         span: rexlang_lexer::span::Span::default(),
         is_pub: false,
         path: ImportPath::Local {
-            segments: vec![intern(module_name)],
+            segments: vec![intern(library_name)],
             sha: None,
         },
-        alias: intern(module_name),
+        alias: intern(library_name),
         clause: Some(ImportClause::All),
     }
 }
 
 #[derive(Default)]
 struct ImportBindings {
-    alias_exports: HashMap<Symbol, ModuleExports>,
+    alias_exports: HashMap<Symbol, LibraryExports>,
     imported_values: HashMap<Symbol, CanonicalSymbol>,
 }
 
 fn add_import_bindings(
     out: &mut ImportBindings,
     import: &ImportDecl,
-    exports: &ModuleExports,
+    exports: &LibraryExports,
     forbidden_locals: &HashSet<Symbol>,
     existing_imported: Option<&HashSet<Symbol>>,
 ) -> Result<(), EngineError> {
-    let module_name = import.alias.clone();
+    let library_name = import.alias.clone();
     let mut bind_local = |local_name: Symbol, target: CanonicalSymbol| -> Result<(), EngineError> {
         if forbidden_locals.contains(&local_name) {
-            return Err(crate::ModuleError::ImportNameConflictsWithLocal {
-                module: module_name.clone(),
+            return Err(crate::LibraryError::ImportNameConflictsWithLocal {
+                library: library_name.clone(),
                 name: local_name,
             }
             .into());
@@ -116,10 +116,10 @@ fn add_import_bindings(
         if let Some(existing) = existing_imported
             && existing.contains(&local_name)
         {
-            return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
+            return Err(crate::LibraryError::DuplicateImportedName { name: local_name }.into());
         }
         if out.imported_values.contains_key(&local_name) {
-            return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
+            return Err(crate::LibraryError::DuplicateImportedName { name: local_name }.into());
         }
         out.imported_values.insert(local_name, target);
         Ok(())
@@ -140,8 +140,8 @@ fn add_import_bindings(
         Some(ImportClause::Items(items)) => {
             for item in items {
                 let Some(target) = exports.values.get(&item.name) else {
-                    return Err(crate::ModuleError::MissingExport {
-                        module: import.alias.clone(),
+                    return Err(crate::LibraryError::MissingExport {
+                        library: import.alias.clone(),
                         export: item.name.clone(),
                     }
                     .into());
@@ -794,7 +794,7 @@ fn alias_is_visible(
 fn rewrite_import_uses_expr(
     expr: &Expr,
     bound: &mut HashSet<Symbol>,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     imported_values: &HashMap<Symbol, CanonicalSymbol>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Expr {
@@ -1158,7 +1158,7 @@ fn rewrite_import_uses_pattern(
 fn rewrite_import_uses_class_name(
     class: &NameRef,
     bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> NameRef {
     let Some((alias_sym, member_sym)) = qualified_alias_member(class) else {
@@ -1190,7 +1190,7 @@ fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol)> {
 fn rewrite_import_uses_type_expr(
     ty: &TypeExpr,
     bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> TypeExpr {
     match ty {
@@ -1266,7 +1266,7 @@ fn rewrite_import_uses_type_expr(
 
 fn rewrite_import_uses(
     program: &Program,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     imported_values: &HashMap<Symbol, CanonicalSymbol>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Program {
@@ -1501,7 +1501,7 @@ fn rewrite_import_uses(
 fn validate_import_uses_expr(
     expr: &Expr,
     bound: &mut HashSet<Symbol>,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Result<(), EngineError> {
     match expr {
@@ -1511,8 +1511,8 @@ fn validate_import_uses_expr(
                 && let Some(exports) = aliases.get(&v.name)
                 && !exports.values.contains_key(field)
             {
-                return Err(crate::ModuleError::MissingExport {
-                    module: v.name.clone(),
+                return Err(crate::LibraryError::MissingExport {
+                    library: v.name.clone(),
                     export: field.clone(),
                 }
                 .into());
@@ -1627,7 +1627,7 @@ fn validate_import_uses_expr(
 fn validate_import_uses_class_name(
     class: &NameRef,
     bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Result<(), EngineError> {
     let Some((alias_sym, member_sym)) = qualified_alias_member(class) else {
@@ -1642,8 +1642,8 @@ fn validate_import_uses_class_name(
     if exports.classes.contains_key(member_sym) {
         return Ok(());
     }
-    Err(crate::ModuleError::MissingExport {
-        module: alias_sym.clone(),
+    Err(crate::LibraryError::MissingExport {
+        library: alias_sym.clone(),
         export: member_sym.clone(),
     }
     .into())
@@ -1652,7 +1652,7 @@ fn validate_import_uses_class_name(
 fn validate_import_uses_type_expr(
     ty: &TypeExpr,
     bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Result<(), EngineError> {
     match ty {
@@ -1669,8 +1669,8 @@ fn validate_import_uses_type_expr(
             if exports.types.contains_key(member_sym) || exports.classes.contains_key(member_sym) {
                 Ok(())
             } else {
-                Err(crate::ModuleError::MissingExport {
-                    module: alias_sym.clone(),
+                Err(crate::LibraryError::MissingExport {
+                    library: alias_sym.clone(),
                     export: member_sym.clone(),
                 }
                 .into())
@@ -1701,7 +1701,7 @@ fn validate_import_uses_type_expr(
 
 fn validate_import_uses(
     program: &Program,
-    aliases: &HashMap<Symbol, ModuleExports>,
+    aliases: &HashMap<Symbol, LibraryExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
 ) -> Result<(), EngineError> {
     for decl in &program.decls {
@@ -1880,20 +1880,20 @@ fn graph_imports_for_program(program: &Program, default_imports: &[String]) -> V
             out.push(import_decl.clone());
         }
     }
-    for module_name in default_imports {
-        let alias = intern(module_name);
+    for library_name in default_imports {
+        let alias = intern(library_name);
         if contains_import_alias(&program.decls, &alias) {
             continue;
         }
-        out.push(default_import_decl(module_name));
+        out.push(default_import_decl(library_name));
     }
     out
 }
 
-fn tarjan_scc_module_ids(
-    nodes: &[ModuleId],
-    edges: &HashMap<ModuleId, Vec<ModuleId>>,
-) -> Vec<Vec<ModuleId>> {
+fn tarjan_scc_library_ids(
+    nodes: &[LibraryId],
+    edges: &HashMap<LibraryId, Vec<LibraryId>>,
+) -> Vec<Vec<LibraryId>> {
     // Tarjan's SCC algorithm (linear in |V| + |E|).
     //
     // References:
@@ -1902,21 +1902,21 @@ fn tarjan_scc_module_ids(
     // - Cormen et al. (CLRS), 3rd ed., §22.5 "Strongly connected components".
     //
     // Why Tarjan here:
-    // - We need explicit SCC groups to process module cycles as units.
-    // - We want one DFS pass with low overhead because this runs in module loading paths.
+    // - We need explicit SCC groups to process library cycles as units.
+    // - We want one DFS pass with low overhead because this runs in library loading paths.
     #[derive(Default)]
     struct TarjanState {
         index: usize,
-        index_of: HashMap<ModuleId, usize>,
-        lowlink: HashMap<ModuleId, usize>,
-        stack: Vec<ModuleId>,
-        on_stack: HashSet<ModuleId>,
-        components: Vec<Vec<ModuleId>>,
+        index_of: HashMap<LibraryId, usize>,
+        lowlink: HashMap<LibraryId, usize>,
+        stack: Vec<LibraryId>,
+        on_stack: HashSet<LibraryId>,
+        components: Vec<Vec<LibraryId>>,
     }
 
     fn strong_connect(
-        v: &ModuleId,
-        edges: &HashMap<ModuleId, Vec<ModuleId>>,
+        v: &LibraryId,
+        edges: &HashMap<LibraryId, Vec<LibraryId>>,
         st: &mut TarjanState,
     ) {
         st.index_of.insert(v.clone(), st.index);
@@ -1970,9 +1970,9 @@ fn tarjan_scc_module_ids(
     st.components
 }
 
-fn exports_from_program(program: &Program, prefix: &str, module_id: &ModuleId) -> ModuleExports {
+fn exports_from_program(program: &Program, prefix: &str, library_id: &LibraryId) -> LibraryExports {
     let (value_renames, type_renames, class_renames) = collect_local_renames(program, prefix);
-    let module_key = module_key_for_module(module_id);
+    let module_key = library_key_for_library(library_id);
 
     let mut values = HashMap::new();
     let mut types = HashMap::new();
@@ -2054,7 +2054,7 @@ fn exports_from_program(program: &Program, prefix: &str, module_id: &ModuleId) -
         }
     }
 
-    ModuleExports {
+    LibraryExports {
         values,
         types,
         classes,
@@ -2063,15 +2063,15 @@ fn exports_from_program(program: &Program, prefix: &str, module_id: &ModuleId) -
 
 fn parse_program_from_source(
     source: &str,
-    context: Option<&ModuleId>,
+    context: Option<&LibraryId>,
     gas: Option<&mut GasMeter>,
 ) -> Result<Program, EngineError> {
     let tokens = Token::tokenize(source).map_err(|e| match context {
-        Some(id) => EngineError::from(crate::ModuleError::LexInModule {
-            module: id.clone(),
+        Some(id) => EngineError::from(crate::LibraryError::LexInLibrary {
+            library: id.clone(),
             source: e,
         }),
-        None => EngineError::from(crate::ModuleError::Lex { source: e }),
+        None => EngineError::from(crate::LibraryError::Lex { source: e }),
     })?;
     let mut parser = RexParser::new(tokens);
     let program = match gas {
@@ -2079,17 +2079,17 @@ fn parse_program_from_source(
         None => parser.parse_program(&mut GasMeter::default()),
     }
     .map_err(|errs| match context {
-        Some(id) => EngineError::from(crate::ModuleError::ParseInModule {
-            module: id.clone(),
+        Some(id) => EngineError::from(crate::LibraryError::ParseInLibrary {
+            library: id.clone(),
             errors: errs,
         }),
-        None => EngineError::from(crate::ModuleError::Parse { errors: errs }),
+        None => EngineError::from(crate::LibraryError::Parse { errors: errs }),
     })?;
-    if let Some(module) = context
+    if let Some(library) = context
         && !matches!(program.expr.as_ref(), Expr::Tuple(_, elems) if elems.is_empty())
     {
-        return Err(crate::ModuleError::TopLevelExprInModule {
-            module: module.clone(),
+        return Err(crate::LibraryError::TopLevelExprInLibrary {
+            library: library.clone(),
         }
         .into());
     }
@@ -2104,17 +2104,17 @@ where
         sha256_hex(source.as_bytes())
     }
 
-    fn refresh_if_stale(&mut self, resolved: &ResolvedModule) -> Result<String, EngineError> {
+    fn refresh_if_stale(&mut self, resolved: &ResolvedLibrary) -> Result<String, EngineError> {
         let next = Self::source_fingerprint(&resolved.source);
-        if let Some(prev) = self.module_source_fingerprints.get(&resolved.id)
+        if let Some(prev) = self.library_source_fingerprints.get(&resolved.id)
             && prev != &next
         {
-            self.invalidate_module_caches(&resolved.id)?;
+            self.invalidate_library_caches(&resolved.id)?;
         }
         Ok(next)
     }
 
-    fn remove_type_level_symbols_for_module_interface(&mut self, decls: &[Decl]) {
+    fn remove_type_level_symbols_for_library_interface(&mut self, decls: &[Decl]) {
         for decl in decls {
             match decl {
                 Decl::Fn(fd) => {
@@ -2146,29 +2146,29 @@ where
         }
     }
 
-    fn invalidate_module_caches(&mut self, id: &ModuleId) -> Result<(), EngineError> {
-        if let Some(prev_interface) = self.module_interface_cache.get(id).cloned() {
-            self.remove_type_level_symbols_for_module_interface(&prev_interface);
+    fn invalidate_library_caches(&mut self, id: &LibraryId) -> Result<(), EngineError> {
+        if let Some(prev_interface) = self.library_interface_cache.get(id).cloned() {
+            self.remove_type_level_symbols_for_library_interface(&prev_interface);
         }
         self.modules.invalidate(id)?;
-        self.module_exports_cache.remove(id);
-        self.module_interface_cache.remove(id);
-        self.module_sources.remove(id);
-        self.module_source_fingerprints.remove(id);
+        self.library_exports_cache.remove(id);
+        self.library_interface_cache.remove(id);
+        self.library_sources.remove(id);
+        self.library_source_fingerprints.remove(id);
         self.published_cycle_interfaces.remove(id);
         Ok(())
     }
 
-    fn load_module_types_via_scc(
+    fn load_library_types_via_scc(
         &mut self,
-        root: ResolvedModule,
+        root: ResolvedLibrary,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<ModuleId, ModuleExports>,
-        loading: &mut HashSet<ModuleId>,
-    ) -> Result<ModuleExports, EngineError> {
+        loaded: &mut HashMap<LibraryId, LibraryExports>,
+        loading: &mut HashSet<LibraryId>,
+    ) -> Result<LibraryExports, EngineError> {
         #[derive(Clone)]
         struct PendingModule {
-            resolved: ResolvedModule,
+            resolved: ResolvedLibrary,
             program: Program,
             prefix: String,
         }
@@ -2179,8 +2179,8 @@ where
             return Ok(exports.clone());
         }
 
-        let mut pending: HashMap<ModuleId, PendingModule> = HashMap::new();
-        let mut edges: HashMap<ModuleId, Vec<ModuleId>> = HashMap::new();
+        let mut pending: HashMap<LibraryId, PendingModule> = HashMap::new();
+        let mut edges: HashMap<LibraryId, Vec<LibraryId>> = HashMap::new();
         let mut stack = vec![root.clone()];
 
         while let Some(resolved) = stack.pop() {
@@ -2192,23 +2192,26 @@ where
                 continue;
             }
 
-            let prefix = prefix_for_module(&resolved.id);
+            let prefix = prefix_for_library(&resolved.id);
             let program =
                 parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
             let exports = exports_from_program(&program, &prefix, &resolved.id);
             loaded.insert(resolved.id.clone(), exports);
             loading.insert(resolved.id.clone());
-            self.module_sources
+            self.library_sources
                 .insert(resolved.id.clone(), resolved.source.clone());
 
             let imports = graph_imports_for_program(&program, self.default_imports());
             for import_decl in imports {
                 let spec = import_specifier(&import_decl.path);
-                if self.virtual_module_exports(spec_base_name(&spec)).is_some() {
+                if self
+                    .virtual_library_exports(spec_base_name(&spec))
+                    .is_some()
+                {
                     continue;
                 }
                 let imported = self.modules.resolve(ResolveRequest {
-                    module_name: spec,
+                    library_name: spec,
                     importer: Some(resolved.id.clone()),
                 })?;
                 edges
@@ -2222,35 +2225,35 @@ where
                 }
             }
 
-            let module_id = resolved.id.clone();
+            let library_id = resolved.id.clone();
             pending.insert(
-                module_id.clone(),
+                library_id.clone(),
                 PendingModule {
                     resolved,
                     program,
                     prefix,
                 },
             );
-            self.module_source_fingerprints
-                .insert(module_id, fingerprint);
+            self.library_source_fingerprints
+                .insert(library_id, fingerprint);
         }
 
         if pending.is_empty() {
             return loaded.get(&root.id).cloned().ok_or_else(|| {
-                EngineError::Internal("missing module exports after SCC load".into())
+                EngineError::Internal("missing library exports after SCC load".into())
             });
         }
 
-        let pending_ids: Vec<ModuleId> = pending.keys().cloned().collect();
-        let sccs = tarjan_scc_module_ids(&pending_ids, &edges);
+        let pending_ids: Vec<LibraryId> = pending.keys().cloned().collect();
+        let sccs = tarjan_scc_library_ids(&pending_ids, &edges);
 
         // Tarjan yields SCCs in reverse topological order of the SCC DAG, so
         // dependencies are processed before dependents.
         for component in sccs {
-            for module_id in &component {
+            for library_id in &component {
                 let node = pending
-                    .get(module_id)
-                    .ok_or_else(|| EngineError::Internal("missing pending module node".into()))?;
+                    .get(library_id)
+                    .ok_or_else(|| EngineError::Internal("missing pending library node".into()))?;
                 let rewritten = self.rewrite_program_with_imports(
                     &node.program,
                     Some(node.resolved.id.clone()),
@@ -2261,8 +2264,8 @@ where
                 )?;
                 self.inject_decls(&rewritten.decls)?;
             }
-            for module_id in component {
-                loading.remove(&module_id);
+            for library_id in component {
+                loading.remove(&library_id);
             }
         }
 
@@ -2274,17 +2277,17 @@ where
 
     fn ensure_cycle_interfaces_published(
         &mut self,
-        module_id: &ModuleId,
+        library_id: &LibraryId,
     ) -> Result<(), EngineError> {
-        if self.published_cycle_interfaces.contains(module_id) {
+        if self.published_cycle_interfaces.contains(library_id) {
             return Ok(());
         }
-        let Some(decls) = self.module_interface_cache.get(module_id).cloned() else {
+        let Some(decls) = self.library_interface_cache.get(library_id).cloned() else {
             return Ok(());
         };
         self.inject_decls(&decls)?;
         self.publish_runtime_interfaces(&decls)?;
-        self.published_cycle_interfaces.insert(module_id.clone());
+        self.published_cycle_interfaces.insert(library_id.clone());
         Ok(())
     }
 
@@ -2300,26 +2303,26 @@ where
     }
 
     #[async_recursion]
-    async fn resolve_module_exports_from_import_decl_async(
+    async fn resolve_library_exports_from_import_decl_async(
         &mut self,
         import_decl: &ImportDecl,
-        importer: Option<ModuleId>,
+        importer: Option<LibraryId>,
         gas: &mut GasMeter,
-    ) -> Result<ModuleExports, EngineError> {
+    ) -> Result<LibraryExports, EngineError> {
         let spec = import_specifier(&import_decl.path);
-        if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
+        if let Some(exports) = self.virtual_library_exports(spec_base_name(&spec)) {
             return Ok(exports);
         }
         let imported = self.modules.resolve(ResolveRequest {
-            module_name: spec,
+            library_name: spec,
             importer,
         })?;
         self.refresh_if_stale(&imported)?;
-        if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
+        if let Some(exports) = self.library_exports_cache.get(&imported.id).cloned() {
             self.ensure_cycle_interfaces_published(&imported.id)?;
             return Ok(exports);
         }
-        let inst = self.load_module_from_resolved(imported, gas).await?;
+        let inst = self.load_library_from_resolved(imported, gas).await?;
         Ok(inst.exports)
     }
 
@@ -2327,21 +2330,21 @@ where
         &mut self,
         bindings: &mut ImportBindings,
         decls: &[Decl],
-        importer: Option<ModuleId>,
+        importer: Option<LibraryId>,
         forbidden_locals: &HashSet<Symbol>,
         existing_imported: Option<&HashSet<Symbol>>,
         gas: &mut GasMeter,
     ) -> Result<(), EngineError> {
         let existing_names: HashSet<Symbol> = existing_imported.cloned().unwrap_or_default();
         let default_imports = self.default_imports().to_vec();
-        for module_name in default_imports {
-            let alias = intern(&module_name);
+        for library_name in default_imports {
+            let alias = intern(&library_name);
             if contains_import_alias(decls, &alias) {
                 continue;
             }
-            let import_decl = default_import_decl(&module_name);
+            let import_decl = default_import_decl(&library_name);
             let exports = self
-                .resolve_module_exports_from_import_decl_async(&import_decl, importer.clone(), gas)
+                .resolve_library_exports_from_import_decl_async(&import_decl, importer.clone(), gas)
                 .await?;
             for (local, target) in exports.values {
                 if !forbidden_locals.contains(&local)
@@ -2357,7 +2360,7 @@ where
 
     pub fn add_resolver<F>(&mut self, name: impl Into<String>, f: F)
     where
-        F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError>
+        F: Fn(ResolveRequest) -> Result<Option<ResolvedLibrary>, EngineError>
             + Send
             + Sync
             + 'static,
@@ -2384,7 +2387,7 @@ where
         let canon =
             root.as_ref()
                 .canonicalize()
-                .map_err(|e| crate::ModuleError::InvalidIncludeRoot {
+                .map_err(|e| crate::LibraryError::InvalidIncludeRoot {
                     path: root.as_ref().to_path_buf(),
                     source: e,
                 })?;
@@ -2404,7 +2407,7 @@ where
     async fn import_bindings_for_decls(
         &mut self,
         decls: &[Decl],
-        importer: Option<ModuleId>,
+        importer: Option<LibraryId>,
         forbidden_locals: &HashSet<Symbol>,
         existing_imported: Option<&HashSet<Symbol>>,
         gas: &mut GasMeter,
@@ -2415,7 +2418,7 @@ where
                 continue;
             };
             let exports = self
-                .resolve_module_exports_from_import_decl_async(import_decl, importer.clone(), gas)
+                .resolve_library_exports_from_import_decl_async(import_decl, importer.clone(), gas)
                 .await?;
             add_import_bindings(
                 &mut bindings,
@@ -2438,11 +2441,11 @@ where
     }
 
     #[async_recursion]
-    async fn load_module_from_resolved(
+    async fn load_library_from_resolved(
         &mut self,
-        resolved: ResolvedModule,
+        resolved: ResolvedLibrary,
         gas: &mut GasMeter,
-    ) -> Result<ModuleInstance, EngineError> {
+    ) -> Result<LibraryInstance, EngineError> {
         let source_fingerprint = self.refresh_if_stale(&resolved)?;
         if let Some(inst) = self.modules.cached(&resolved.id)? {
             return Ok(inst);
@@ -2450,16 +2453,16 @@ where
 
         self.modules.mark_loading(&resolved.id)?;
 
-        let prefix = prefix_for_module(&resolved.id);
+        let prefix = prefix_for_library(&resolved.id);
         let program = parse_program_from_source(&resolved.source, Some(&resolved.id), Some(gas))?;
-        self.module_sources
+        self.library_sources
             .insert(resolved.id.clone(), resolved.source.clone());
         let exports = exports_from_program(&program, &prefix, &resolved.id);
-        self.module_exports_cache
+        self.library_exports_cache
             .insert(resolved.id.clone(), exports.clone());
         let qualified = qualify_program(&program, &prefix);
         let interfaces = interface_decls_from_program(&qualified);
-        self.module_interface_cache
+        self.library_interface_cache
             .insert(resolved.id.clone(), interfaces);
 
         // Resolve imports first so qualified names exist in the environment.
@@ -2487,7 +2490,7 @@ where
         let init_value = self.heap.alloc_tuple(vec![])?;
         let init_type = Type::tuple(vec![]);
 
-        let inst = ModuleInstance {
+        let inst = LibraryInstance {
             id: resolved.id.clone(),
             exports,
             init_value,
@@ -2495,18 +2498,18 @@ where
             source_fingerprint: Some(source_fingerprint.clone()),
         };
         self.modules.store_loaded(inst.clone())?;
-        self.module_source_fingerprints
+        self.library_source_fingerprints
             .insert(resolved.id.clone(), source_fingerprint);
         Ok(inst)
     }
 
-    fn load_module_types_from_resolved(
+    fn load_library_types_from_resolved(
         &mut self,
-        resolved: ResolvedModule,
+        resolved: ResolvedLibrary,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<ModuleId, ModuleExports>,
-        loading: &mut HashSet<ModuleId>,
-    ) -> Result<ModuleExports, EngineError> {
+        loaded: &mut HashMap<LibraryId, LibraryExports>,
+        loading: &mut HashSet<LibraryId>,
+    ) -> Result<LibraryExports, EngineError> {
         if let Some(exports) = loaded.get(&resolved.id) {
             return Ok(exports.clone());
         }
@@ -2516,37 +2519,37 @@ where
         {
             return Ok(exports.clone());
         }
-        self.load_module_types_via_scc(resolved, gas, loaded, loading)
+        self.load_library_types_via_scc(resolved, gas, loaded, loading)
     }
 
-    fn resolve_module_exports_for_rewrite(
+    fn resolve_library_exports_for_rewrite(
         &mut self,
         import_decl: &ImportDecl,
-        importer: Option<ModuleId>,
+        importer: Option<LibraryId>,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<ModuleId, ModuleExports>,
-        loading: &mut HashSet<ModuleId>,
-    ) -> Result<ModuleExports, EngineError> {
+        loaded: &mut HashMap<LibraryId, LibraryExports>,
+        loading: &mut HashSet<LibraryId>,
+    ) -> Result<LibraryExports, EngineError> {
         let spec = import_specifier(&import_decl.path);
-        if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
+        if let Some(exports) = self.virtual_library_exports(spec_base_name(&spec)) {
             return Ok(exports);
         }
         let imported = self.modules.resolve(ResolveRequest {
-            module_name: spec,
+            library_name: spec,
             importer,
         })?;
         self.refresh_if_stale(&imported)?;
-        self.load_module_types_from_resolved(imported, gas, loaded, loading)
+        self.load_library_types_from_resolved(imported, gas, loaded, loading)
     }
 
     fn rewrite_program_with_imports(
         &mut self,
         program: &Program,
-        importer: Option<ModuleId>,
+        importer: Option<LibraryId>,
         prefix: &str,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<ModuleId, ModuleExports>,
-        loading: &mut HashSet<ModuleId>,
+        loaded: &mut HashMap<LibraryId, LibraryExports>,
+        loading: &mut HashSet<LibraryId>,
     ) -> Result<Program, EngineError> {
         let mut bindings = ImportBindings::default();
         let local_values = decl_value_names(&program.decls);
@@ -2554,7 +2557,7 @@ where
             let Decl::Import(import_decl) = decl else {
                 continue;
             };
-            let exports = self.resolve_module_exports_for_rewrite(
+            let exports = self.resolve_library_exports_for_rewrite(
                 import_decl,
                 importer.clone(),
                 gas,
@@ -2565,13 +2568,13 @@ where
         }
 
         let default_imports = self.default_imports().to_vec();
-        for module_name in default_imports {
-            let alias = intern(&module_name);
+        for library_name in default_imports {
+            let alias = intern(&library_name);
             if contains_import_alias(&program.decls, &alias) {
                 continue;
             }
-            let import_decl = default_import_decl(&module_name);
-            let exports = self.resolve_module_exports_for_rewrite(
+            let import_decl = default_import_decl(&library_name);
+            let exports = self.resolve_library_exports_for_rewrite(
                 &import_decl,
                 importer.clone(),
                 gas,
@@ -2596,35 +2599,35 @@ where
         ))
     }
 
-    fn read_local_module_bytes(&self, path: &Path) -> Result<(ModuleId, Vec<u8>), EngineError> {
+    fn read_local_library_bytes(&self, path: &Path) -> Result<(LibraryId, Vec<u8>), EngineError> {
         let canon = path
             .canonicalize()
-            .map_err(|e| crate::ModuleError::InvalidModulePath {
+            .map_err(|e| crate::LibraryError::InvalidLibraryPath {
                 path: path.to_path_buf(),
                 source: e,
             })?;
-        let bytes = std::fs::read(&canon).map_err(|e| crate::ModuleError::ReadFailed {
+        let bytes = std::fs::read(&canon).map_err(|e| crate::LibraryError::ReadFailed {
             path: canon.clone(),
             source: e,
         })?;
-        Ok((ModuleId::Local { path: canon }, bytes))
+        Ok((LibraryId::Local { path: canon }, bytes))
     }
 
-    fn decode_local_module_source(
+    fn decode_local_library_source(
         &self,
-        id: &ModuleId,
+        id: &LibraryId,
         bytes: Vec<u8>,
     ) -> Result<String, EngineError> {
         let path = match id {
-            ModuleId::Local { path, .. } => path.clone(),
+            LibraryId::Local { path, .. } => path.clone(),
             other => {
                 return Err(EngineError::Internal(format!(
-                    "decode_local_module_source called with non-local module id {other}"
+                    "decode_local_library_source called with non-local library id {other}"
                 )));
             }
         };
         String::from_utf8(bytes).map_err(|e| {
-            crate::ModuleError::NotUtf8 {
+            crate::LibraryError::NotUtf8 {
                 kind: "local",
                 path,
                 source: e,
@@ -2633,27 +2636,27 @@ where
         })
     }
 
-    pub fn infer_module_file(
+    pub fn infer_library_file(
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
-        let source = self.decode_local_module_source(&id, bytes)?;
-        self.infer_module_source(ResolvedModule { id, source }, gas)
+        let (id, bytes) = self.read_local_library_bytes(path.as_ref())?;
+        let source = self.decode_local_library_source(&id, bytes)?;
+        self.infer_library_source(ResolvedLibrary { id, source }, gas)
     }
 
-    fn infer_module_source(
+    fn infer_library_source(
         &mut self,
-        resolved: ResolvedModule,
+        resolved: ResolvedLibrary,
         gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        let mut loaded: HashMap<ModuleId, ModuleExports> = HashMap::new();
-        let mut loading: HashSet<ModuleId> = HashSet::new();
+        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
+        let mut loading: HashSet<LibraryId> = HashSet::new();
 
         loading.insert(resolved.id.clone());
 
-        let prefix = prefix_for_module(&resolved.id);
+        let prefix = prefix_for_library(&resolved.id);
         let program =
             parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
 
@@ -2702,10 +2705,10 @@ where
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
-        let importer = importer_path.map(|p| ModuleId::Local { path: p });
+        let importer = importer_path.map(|p| LibraryId::Local { path: p });
 
-        let mut loaded: HashMap<ModuleId, ModuleExports> = HashMap::new();
-        let mut loading: HashSet<ModuleId> = HashSet::new();
+        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
+        let mut loading: HashSet<LibraryId> = HashSet::new();
 
         let prefix = format!("@snippet{}", Uuid::new_v4());
         let rewritten = self.rewrite_program_with_imports(
@@ -2720,42 +2723,42 @@ where
         self.infer_type(rewritten.expr.as_ref(), gas)
     }
 
-    pub async fn eval_module_file(
+    pub async fn eval_library_file(
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), EngineError> {
-        let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
+        let (id, bytes) = self.read_local_library_bytes(path.as_ref())?;
         let source_fingerprint = sha256_hex(&bytes);
         if let Some(inst) = self.modules.cached(&id)? {
             if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
                 return Ok((inst.init_value, inst.init_type));
             }
-            // Local module identity is path-based, so file edits must explicitly
+            // Local library identity is path-based, so file edits must explicitly
             // invalidate path-keyed caches before reload.
-            self.invalidate_module_caches(&id)?;
+            self.invalidate_library_caches(&id)?;
         }
-        let source = self.decode_local_module_source(&id, bytes)?;
+        let source = self.decode_local_library_source(&id, bytes)?;
         let inst = self
-            .load_module_from_resolved(ResolvedModule { id, source }, gas)
+            .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
             .await?;
         Ok((inst.init_value, inst.init_type))
     }
 
-    pub async fn eval_module_source(
+    pub async fn eval_library_source(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), EngineError> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
-        let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
+        let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
         if let Some(inst) = self.modules.cached(&id)? {
             return Ok((inst.init_value, inst.init_type));
         }
         let inst = self
-            .load_module_from_resolved(
-                ResolvedModule {
+            .load_library_from_resolved(
+                ResolvedLibrary {
                     id,
                     source: source.to_string(),
                 },
@@ -2783,7 +2786,7 @@ where
         let importer = state
             .importer_path
             .as_ref()
-            .map(|p| ModuleId::Local { path: p.clone() });
+            .map(|p| LibraryId::Local { path: p.clone() });
 
         let mut local_values = state.defined_values.clone();
         local_values.extend(decl_value_names(&program.decls));
@@ -2820,7 +2823,7 @@ where
         self.eval(rewritten.expr.as_ref(), gas).await
     }
 
-    /// Evaluate a non-module snippet (with gas), but use `importer_path` for resolving local-relative imports.
+    /// Evaluate a non-library snippet (with gas), but use `importer_path` for resolving local-relative imports.
     pub async fn eval_snippet_at(
         &mut self,
         source: &str,
@@ -2840,7 +2843,7 @@ where
     ) -> Result<(Pointer, Type), EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
-        let importer = importer_path.map(|p| ModuleId::Local { path: p });
+        let importer = importer_path.map(|p| LibraryId::Local { path: p });
 
         let local_values = decl_value_names(&program.decls);
         let import_bindings = self

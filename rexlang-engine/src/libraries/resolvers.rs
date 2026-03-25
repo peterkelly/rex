@@ -5,14 +5,14 @@ use std::process::Command;
 
 use rexlang_util::sha256_hex;
 
-use crate::ModuleError;
+use crate::LibraryError;
 
-use super::{ModuleId, ResolveRequest, ResolvedModule, ResolverFn};
+use super::{LibraryId, ResolveRequest, ResolvedLibrary, ResolverFn};
 
 #[cfg(feature = "github-imports")]
 pub fn default_github_resolver() -> ResolverFn {
     Arc::new(|req: ResolveRequest| {
-        let url = req.module_name;
+        let url = req.library_name;
         let Some(rest) = url.strip_prefix("https://github.com/") else {
             return Ok(None);
         };
@@ -27,31 +27,31 @@ pub fn default_github_resolver() -> ResolverFn {
         let repo = parts.next().unwrap_or("");
         let file_path = parts.next().unwrap_or("");
         if owner.is_empty() || repo.is_empty() || file_path.is_empty() {
-            return Err(ModuleError::InvalidGithubImport { url }.into());
+            return Err(LibraryError::InvalidGithubImport { url }.into());
         }
 
-        let sha = sha_opt.ok_or_else(|| ModuleError::UnpinnedGithubImport { url: url.clone() })?;
+        let sha = sha_opt.ok_or_else(|| LibraryError::UnpinnedGithubImport { url: url.clone() })?;
         let raw_url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{sha}/{file_path}");
 
         let output = Command::new("curl")
             .arg("-fsSL")
             .arg(&raw_url)
             .output()
-            .map_err(|e| ModuleError::CurlFailed { source: e })?;
+            .map_err(|e| LibraryError::CurlFailed { source: e })?;
         if !output.status.success() {
-            return Err(ModuleError::CurlNonZeroExit {
+            return Err(LibraryError::CurlNonZeroExit {
                 url: raw_url,
                 status: output.status,
             }
             .into());
         }
-        let source = String::from_utf8(output.stdout).map_err(|e| ModuleError::NotUtf8Remote {
+        let source = String::from_utf8(output.stdout).map_err(|e| LibraryError::NotUtf8Remote {
             url: raw_url.clone(),
             source: e,
         })?;
 
-        Ok(Some(ResolvedModule {
-            id: ModuleId::Remote(url),
+        Ok(Some(ResolvedLibrary {
+            id: LibraryId::Remote(url),
             source,
         }))
     })
@@ -59,10 +59,10 @@ pub fn default_github_resolver() -> ResolverFn {
 
 pub fn default_stdlib_resolver() -> ResolverFn {
     Arc::new(|req: ResolveRequest| {
-        let (base, expected_sha) = if let Some((a, b)) = req.module_name.split_once('#') {
+        let (base, expected_sha) = if let Some((a, b)) = req.library_name.split_once('#') {
             (a, Some(b))
         } else {
-            (req.module_name.as_str(), None)
+            (req.library_name.as_str(), None)
         };
 
         let Some(source) = rexlang_util::stdlib_source(base) else {
@@ -73,8 +73,8 @@ pub fn default_stdlib_resolver() -> ResolverFn {
             let hash = sha256_hex(source.as_bytes());
             let expected = expected.to_ascii_lowercase();
             if !hash.starts_with(&expected) {
-                return Err(ModuleError::ShaMismatchStdlib {
-                    module: base.to_string(),
+                return Err(LibraryError::ShaMismatchStdlib {
+                    library: base.to_string(),
                     expected,
                     actual: hash,
                 }
@@ -82,8 +82,8 @@ pub fn default_stdlib_resolver() -> ResolverFn {
             }
         }
 
-        Ok(Some(ResolvedModule {
-            id: ModuleId::Virtual(base.to_string()),
+        Ok(Some(ResolvedLibrary {
+            id: LibraryId::Virtual(base.to_string()),
             source: source.to_string(),
         }))
     })

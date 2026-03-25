@@ -12,18 +12,18 @@ version.workspace = true
 github-imports = []
 
 [dependencies]
-rexlang-ast = { path = "../rexlang-ast", version = "3.9.1" }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.2" }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.1" }
+rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.2" }
 async-recursion = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
-rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.1" }
-rexlang-parser = { path = "../rexlang-parser", version = "3.9.1" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.2" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.2" }
 serde_json = { workspace = true }
-rexlang-util = { path = "../rexlang-util", version = "3.9.1" }
+rexlang-util = { path = "../rexlang-util", version = "3.9.2" }
 
 [lints]
 workspace = true

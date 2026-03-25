@@ -20,14 +20,14 @@ Regression tests live in:
   - binary `C t a` is `Predicate { class: C, typ: (t, a) }`
   - etc.
 
-## Module Imports
+## Library Imports
 
 Rex distinguishes between:
 
 - program/snippet execution (declarations + one expression), and
-- module files used by the import system (declaration-only).
+- library files used by the import system (declaration-only).
 
-When a `.rex` file is loaded as a module via the module system, it must not contain a top-level
+When a `.rex` file is loaded as a library via the library system, it must not contain a top-level
 expression result.
 
 ### Syntax
@@ -42,45 +42,45 @@ import foo.bar (x, y, z as q)
 
 Rules:
 
-- `import <module> as <Alias>` imports the module namespace and requires qualified access
+- `import <library> as <Alias>` imports the library namespace and requires qualified access
   (`Alias.member`).
-- `import <module> (*)` imports all exported **values** into unqualified scope.
-- `import <module> (x, y as z)` imports selected exported **values** into unqualified scope.
-- `as <Alias>` on the module and `(...)` import clauses are mutually exclusive.
+- `import <library> (*)` imports all exported **values** into unqualified scope.
+- `import <library> (x, y as z)` imports selected exported **values** into unqualified scope.
+- `as <Alias>` on the library and `(...)` import clauses are mutually exclusive.
 
 ### Visibility and Exports
 
 Only exported (`pub`) values are importable through `(*)` and item clauses.
 
-Module aliases expose all export namespaces for qualified lookup:
+Library aliases expose all export namespaces for qualified lookup:
 
 - `Alias.value` resolves against exported values (including constructors).
 - `Alias.Type` resolves against exported type names in type positions.
 - `Alias.Class` resolves against exported class names in class-constraint positions.
 
-- Missing requested exports are module errors.
+- Missing requested exports are library errors.
 - Private (non-`pub`) values are not importable.
 
 ### Name Binding and Conflicts
 
 - Imported unqualified names participate in lexical shadowing.
 - Lexically bound names (lambda params, `let` vars, pattern bindings) shadow imported names.
-- Importing a name that conflicts with a local top-level declaration is a module error.
-- Importing the same unqualified name more than once (including via aliasing) is a module error.
+- Importing a name that conflicts with a local top-level declaration is a library error.
+- Importing the same unqualified name more than once (including via aliasing) is a library error.
 
 Type/class rewrites run with declaration ordering semantics:
 
 - In binder forms that carry type syntax (`\ (x : T) -> ...`, `let rec f : T = ...`), the
   binder being introduced does not suppress alias resolution inside its own annotation.
 - Missing alias members used in type/class positions (function signatures, annotations, `where`
-  constraints, instance headers, and superclass clauses) are reported as module errors.
+  constraints, instance headers, and superclass clauses) are reported as library errors.
 
-### Module Initialization
+### Library Initialization
 
-- Importing a module does not execute arbitrary top-level expressions.
-- Module initialization is declaration-driven: exported values/types/classes are registered from
+- Importing a library does not execute arbitrary top-level expressions.
+- Library initialization is declaration-driven: exported values/types/classes are registered from
   declarations, and import resolution rewrites references to canonical internal symbols.
-- Cyclic imports are supported via strongly connected component (SCC) loading of module interfaces.
+- Cyclic imports are supported via strongly connected component (SCC) loading of library interfaces.
 
 ## Let Rec Bindings
 
@@ -103,12 +103,12 @@ Rules:
 
 ## Top-Level `fn` Recursion
 
-Top-level `fn` declarations are mutually recursive within a module.
+Top-level `fn` declarations are mutually recursive within a library.
 
 This means:
 
 - A top-level `fn` may reference itself.
-- A top-level `fn` may reference other top-level `fn` declarations in the same module, regardless of
+- A top-level `fn` may reference other top-level `fn` declarations in the same library, regardless of
   declaration order.
 
 Operationally, top-level `fn` recursion follows the same fixed-point semantics as recursive
@@ -222,7 +222,7 @@ Regression: `spec_typeclass_instance_overlap_is_rejected` (`rex/tests/spec_seman
 
 ### Qualified Class Names in `instance` Headers
 
-The class name in an instance header may be qualified through a module alias:
+The class name in an instance header may be qualified through a library alias:
 
 ```rex
 import dep as D
@@ -231,7 +231,7 @@ instance D.Pick i32 where
   pick = 7
 ```
 
-The alias member must be an exported class from the referenced module; otherwise import-use
+The alias member must be an exported class from the referenced library; otherwise import-use
 validation fails before typechecking/evaluation.
 
 ### Method Resolution (Runtime)

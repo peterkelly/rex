@@ -8,7 +8,7 @@ pub enum ImportPathError {
     EscapesRoot,
 }
 
-/// Resolves a local Rex module import to a `.rex` path relative to `base_dir`.
+/// Resolves a local Rex library import to a `.rex` path relative to `base_dir`.
 /// Leading `super` segments walk up the directory tree.
 pub fn resolve_local_import_path<S: AsRef<str>>(
     base_dir: &Path,

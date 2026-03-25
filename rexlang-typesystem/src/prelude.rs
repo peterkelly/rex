@@ -304,7 +304,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // JSON stringification (used by `std.json`'s `Show` instance).
     //
     // This is intentionally a `prim_` helper with a polymorphic type so the
-    // `std.json` module can stay purely-Rex at the surface level.
+    // `std.json` library can stay purely-Rex at the surface level.
     {
         let a_tv = ts.supply.fresh(Some(sym("a")));
         let a = Type::var(a_tv.clone());

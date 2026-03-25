@@ -8,14 +8,14 @@ version.workspace = true
 
 [dependencies]
 clap = { workspace = true }
-rexlang-ast = { path = "../rexlang-ast", version = "3.9.1" }
-rexlang-core = { path = "../rexlang-core", version = "3.9.1" }
-rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.1" }
-rexlang-parser = { path = "../rexlang-parser", version = "3.9.1" }
-rexlang-proc-macro = { path = "../rexlang-proc-macro", version = "3.9.1" }
-rexlang-engine = { path = "../rexlang-engine", version = "3.9.1" }
-rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.1" }
-rexlang-util = { path = "../rexlang-util", version = "3.9.1" }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.2" }
+rexlang-core = { path = "../rexlang-core", version = "3.9.2" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.2" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.2" }
+rexlang-proc-macro = { path = "../rexlang-proc-macro", version = "3.9.2" }
+rexlang-engine = { path = "../rexlang-engine", version = "3.9.2" }
+rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.2" }
+rexlang-util = { path = "../rexlang-util", version = "3.9.2" }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }

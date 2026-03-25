@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use rexlang_core::{
-    BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, IntoPointer, Module, Parser,
+    BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, IntoPointer, Library, Parser,
     Pointer, Rex, RexDefault, Token, Type, TypeError, TypeKind, Value,
 };
 use rexlang_engine::virtual_export_name;
@@ -33,20 +33,20 @@ fn render_label(label: Label) -> String {
 }
 
 #[tokio::test]
-async fn module_render_label_with_module_scoped_adts_left_and_right() {
+async fn library_render_label_with_library_scoped_adts_left_and_right() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let mut module = Module::new("sample");
-    module.inject_rex_adt::<Side>(&mut engine).unwrap();
-    module.inject_rex_adt::<Correctness>(&mut engine).unwrap();
-    module.inject_rex_adt::<Label>(&mut engine).unwrap();
-    module
+    let mut library = Library::new("sample");
+    library.inject_rex_adt::<Side>(&mut engine).unwrap();
+    library.inject_rex_adt::<Correctness>(&mut engine).unwrap();
+    library.inject_rex_adt::<Label>(&mut engine).unwrap();
+    library
         .export("render_label", |_: &(), label: Label| {
             Ok::<String, EngineError>(render_label(label))
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    engine.inject_library(library).unwrap();
 
     let mut gas = unlimited_gas();
     let (value, ty) = engine
@@ -66,7 +66,7 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
         .await
         .unwrap();
 
-    // `Side` and `Correctness` both provide a `Right` constructor in the same module.
+    // `Side` and `Correctness` both provide a `Right` constructor in the same library.
     // This ensures Rex keeps them distinct via explicit type ascription (`is Side` vs `is Sample.Correctness`).
     let correctness_ty = Type::con(virtual_export_name("sample", "Correctness"), 0);
     assert_eq!(
@@ -107,18 +107,18 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
 }
 
 #[tokio::test]
-async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_regression() {
-    // Regression guard: when two module ADTs expose overlapping constructor names
+async fn match_ascribed_library_type_with_overlapping_constructor_is_ambiguous_regression() {
+    // Regression guard: when two library ADTs expose overlapping constructor names
     // (e.g. both have `Right`), `match` arms that use the bare constructor after an
     // `is Sample.Correctness` ascription currently remain ambiguous. This test ensures
     // we keep surfacing that ambiguity instead of silently picking one constructor.
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let mut module = Module::new("sample");
-    module.inject_rex_adt::<Side>(&mut engine).unwrap();
-    module.inject_rex_adt::<Correctness>(&mut engine).unwrap();
-    engine.inject_module(module).unwrap();
+    let mut library = Library::new("sample");
+    library.inject_rex_adt::<Side>(&mut engine).unwrap();
+    library.inject_rex_adt::<Correctness>(&mut engine).unwrap();
+    engine.inject_library(library).unwrap();
 
     let mut gas = unlimited_gas();
     let err = engine

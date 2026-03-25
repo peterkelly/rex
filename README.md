@@ -89,7 +89,7 @@ This repo is a Cargo workspace. The key crates are:
 - `rexlang-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
 - `rex`: CLI binary (`cargo run -p rex -- ...`)
 - `rexlang-fuzz`: stdin-driven fuzz harness binaries
-- `rexlang-util`: small shared helpers (e.g. module hashing, bundled stdlib sources)
+- `rexlang-util`: small shared helpers (e.g. library hashing, bundled stdlib sources)
 - `rexlang-lsp` / `rexlang-vscode`: language tooling (LSP + VS Code extension)
 
 ## CLI
@@ -100,10 +100,10 @@ Run a file:
 cargo run -p rex -- run rex/examples/record_update.rex
 ```
 
-Run the advanced module import example:
+Run the advanced library import example:
 
 ```sh
-cargo run -p rex -- run rex/examples/modules_advanced/main.rex
+cargo run -p rex -- run rex/examples/libraries_advanced/main.rex
 ```
 
 Run inline code:

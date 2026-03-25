@@ -40,7 +40,9 @@ The seven rules:
 
 1. Separate subject from body with a blank line.
 2. Limit the subject line to ~50 characters.
-3. Capitalize the subject line.
+3. When using a `<keyword>: <subject>` format, capitalize the first
+   word after the colon rather than the keyword itself (for example
+   `chore: Make change`).
 4. Do not end the subject line with a period.
 5. Use the imperative mood (“Add feature”, not “Added feature”).
 6. Wrap the body at ~72 characters.

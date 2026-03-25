@@ -3,7 +3,7 @@
 
    Note: Rex class method names are global, so we intentionally use
    encode_json/decode_json as the method names and expose
-   module-scoped to_json/from_json wrappers.
+   library-scoped to_json/from_json wrappers.
 -}
 
 pub type Value

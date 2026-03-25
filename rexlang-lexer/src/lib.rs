@@ -423,7 +423,7 @@ impl Token {
                 r"(?P<Null>\bnull\b)|",
                 r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
                 r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
-                // URL-ish bare tokens (used by module imports)
+                // URL-ish bare tokens (used by library imports)
                 r"(?P<HttpsUrl>https://[^\s]+)|",
                 // Idents
                 r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",

@@ -18,7 +18,7 @@ instance Show i32
   show = \_ -> "<i32>"
 ```
 
-Class names in instance headers can be module-qualified when imported via alias:
+Class names in instance headers can be library-qualified when imported via alias:
 
 ```rex
 import dep as D

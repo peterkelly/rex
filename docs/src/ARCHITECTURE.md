@@ -24,7 +24,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Engine::inject_decls(&program.decls)` to make user declarations available at runtime.
   - `Engine::eval_with_gas(&program.expr, &mut gas).await` to evaluate.
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while pointer-level APIs (`export_native*`) receive `&Engine<State>`.
-  - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
+  - Host library injection API: `Library` + `Export` + `Engine::inject_library`.
 - `rexlang-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
 - `rexlang-lsp` / `rexlang-vscode`: editor tooling.
@@ -36,14 +36,14 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - ADT/typeclass *heads* injected by `TypeSystem::with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rexlang-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
 - **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parser/typechecker limit APIs provide bounded recursion for production/untrusted workloads.
-- **Import-use rewrite/validation**: module processing resolves import aliases across expression
+- **Import-use rewrite/validation**: library processing resolves import aliases across expression
   vars, constructor patterns, type references, and class references; unresolved qualified alias
-  members are rejected as module errors before runtime.
+  members are rejected as library errors before runtime.
 
 ## Intentional String Boundaries
 
 Rex now prefers structured internal representations (for example `NameRef`, `BuiltinTypeId`,
-`CanonicalSymbol`, and module/type/class maps) across parser, type system, evaluator, and LSP
+`CanonicalSymbol`, and library/type/class maps) across parser, type system, evaluator, and LSP
 rewrite paths. Remaining string usage is intentional in these boundary layers:
 
 - **Source text and parsing**: lexer/parser operate on source strings by definition.
@@ -51,8 +51,8 @@ rewrite paths. Remaining string usage is intentional in these boundary layers:
   output stringify symbols/types for readability.
 - **Protocol/serialization boundaries**: JSON/LSP payloads are string-based and convert structured
   internal symbols/types at the edge.
-- **Filesystem/module specifiers**: import specifiers and path labels are textual before being
-  resolved into structured module identities.
+- **Filesystem/library specifiers**: import specifiers and path labels are textual before being
+  resolved into structured library identities.
 
 Non-goal for this pass:
 

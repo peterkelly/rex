@@ -22,7 +22,7 @@ description = "Rex: A strongly-typed, pure, implicitly parallel functional progr
 edition = "2024"
 license-file = "LICENSE"
 repository = "https://github.com/talo/rex"
-version = "3.9.1"
+version = "3.9.2"
 
 [workspace.dependencies]
 # External dependencies

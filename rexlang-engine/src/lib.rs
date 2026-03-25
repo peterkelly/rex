@@ -7,7 +7,7 @@ mod cancel;
 mod engine;
 mod env;
 mod error;
-mod modules;
+mod libraries;
 mod prelude;
 mod stack;
 mod value;
@@ -15,16 +15,16 @@ mod value;
 pub use cancel::CancellationToken;
 pub use engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineOptions,
-    Export, Handler, Module, NativeFn, NativeFuture, OverloadedFn, PRELUDE_MODULE_NAME,
-    PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault, SyncNativeCallable,
+    Export, Handler, Library, NativeFn, NativeFuture, OverloadedFn, PRELUDE_LIBRARY_NAME,
+    PreludeMode, ROOT_LIBRARY_NAME, RexAdt, RexDefault, SyncNativeCallable,
     collect_adts_error_to_engine,
 };
 pub use env::Env;
-pub use error::{EngineError, ModuleError};
-pub use modules::virtual_export_name;
-pub use modules::{
-    CanonicalSymbol, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ReplState, ResolveRequest,
-    ResolvedModule, SymbolKind,
+pub use error::{EngineError, LibraryError};
+pub use libraries::virtual_export_name;
+pub use libraries::{
+    CanonicalSymbol, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
+    ResolveRequest, ResolvedLibrary, SymbolKind,
 };
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
 pub use value::{

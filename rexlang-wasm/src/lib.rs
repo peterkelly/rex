@@ -150,7 +150,7 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
     engine
         .type_system
         .set_limits(rexlang_typesystem::TypeSystemLimits::unlimited());
-    // Match CLI semantics by evaluating snippets through module/snippet rewriting.
+    // Match CLI semantics by evaluating snippets through library/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
     let (value_ptr, _value_ty) = engine
         .eval_snippet(source, &mut gas)

@@ -15,8 +15,8 @@ const maxDiagnostics = 50;
 
 const keywordDocs = new Map([
   ['declare', 'Declares a forward signature for an externally-provided function.'],
-  ['import', 'Imports a module into scope (e.g. `import foo.bar as Foo`).'],
-  ['pub', 'Marks a top-level item as exported from its module.'],
+  ['import', 'Imports a library into scope (e.g. `import foo.bar as Foo`).'],
+  ['pub', 'Marks a top-level item as exported from its library.'],
   ['let', 'Introduces local bindings.'],
   ['in', 'Begins the expression body for a let binding.'],
   ['type', 'Declares a type or ADT.'],

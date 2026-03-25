@@ -63,7 +63,7 @@ struct RunArgs {
     #[arg(long = "emit-type", alias = "type")]
     emit_type: bool,
 
-    /// Additional module include roots (searched after local-relative imports).
+    /// Additional library include roots (searched after local-relative imports).
     #[arg(long = "include", value_name = "DIR")]
     include: Vec<String>,
 
@@ -94,7 +94,7 @@ struct RunArgs {
 
 #[derive(Args)]
 struct ReplArgs {
-    /// Additional module include roots (searched after local-relative imports).
+    /// Additional library include roots (searched after local-relative imports).
     #[arg(long = "include", value_name = "DIR")]
     include: Vec<String>,
 
@@ -423,7 +423,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let (pointer, _) = if let Some(path) = file {
         engine
-            .eval_module_file(&path, &mut gas)
+            .eval_library_file(&path, &mut gas)
             .await
             .map_err(|e| format!("{e}"))?
     } else {
@@ -467,7 +467,7 @@ fn infer_type_json(
 
     let (preds, ty) = if let Some(path) = file {
         engine
-            .infer_module_file(path, gas)
+            .infer_library_file(path, gas)
             .map_err(|e| format!("{e}"))?
     } else {
         engine
@@ -539,7 +539,7 @@ mod tests {
             .expect("clock is before unix epoch")
             .as_nanos();
         let root = std::env::temp_dir().join(format!("rex-import-test-{nonce}"));
-        std::fs::create_dir_all(root.join("foo")).expect("create temp module dir");
+        std::fs::create_dir_all(root.join("foo")).expect("create temp library dir");
 
         std::fs::write(
             root.join("foo/bar.rex"),
