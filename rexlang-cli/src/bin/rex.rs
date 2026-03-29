@@ -6,11 +6,10 @@ use std::io::IsTerminal;
 use std::io::{self, BufRead, Read, Write};
 
 use clap::{Args, Parser, Subcommand};
-use rexlang_core::{Engine, ValueDisplayOptions, pointer_display_with};
-use rexlang_engine::ReplState; // FIXME: Move this to cli
-use rexlang_lexer::Token;
-use rexlang_parser::{Parser as RexParser, ParserLimits, error::ParserErr};
-use rexlang_util::{GasCosts, GasMeter};
+use rexlang::{
+    Engine, GasCosts, GasMeter, Parser as RexParser, ParserErr, ParserLimits, Program, ReplState,
+    Token, ValueDisplayOptions, pointer_display_with,
+};
 use serde_json::json;
 
 use rexlang_cli::cli_prelude;
@@ -439,7 +438,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 }
 
 fn emit_json(
-    program: &rexlang_ast::expr::Program,
+    program: &Program,
     emit_ast: bool,
     type_json: Option<serde_json::Value>,
 ) -> Result<String, String> {

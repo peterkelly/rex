@@ -19,7 +19,7 @@ This is polymorphic: it can be used at any type (`a -> a`).
 Ask the CLI for the type:
 
 ```sh
-cargo run -p rex -- run --emit-type -c '\\x -> x'
+cargo run -p rexlang-cli -- run --emit-type -c '\\x -> x'
 ```
 
 ## Inference plus operators

@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
-use rexlang_ast::expr::{Symbol, sym};
-use rexlang_core::{Engine, EngineError, FromPointer, Heap, Library, Pointer, Value};
-use rexlang_engine::virtual_export_name;
-use rexlang_typesystem::{BuiltinTypeId, Scheme, Type};
+use rexlang::{
+    BuiltinTypeId, Engine, EngineError, FromPointer, Heap, Library, Pointer, Scheme, Symbol, Type,
+    Value, sym, virtual_export_name,
+};
 use uuid::Uuid;
 
 fn lock_mutex<'a, T>(
@@ -517,8 +517,7 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 
 #[cfg(test)]
 mod tests {
-    use rexlang_engine::{Engine, assert_pointer_eq};
-    use rexlang_util::GasMeter;
+    use rexlang::{Engine, GasMeter, assert_pointer_eq};
 
     use super::*;
 

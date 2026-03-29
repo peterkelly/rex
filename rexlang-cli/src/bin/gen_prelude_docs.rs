@@ -6,9 +6,9 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
-use rexlang_ast::expr::{Decl, Symbol};
-use rexlang_typesystem::{
-    Instance, Predicate, Scheme, Type, TypeKind, TypeSystem, prelude_typeclasses_program,
+use rexlang::{
+    Decl, Instance, Predicate, Program, Scheme, Symbol, Type, TypeKind, TypeSystem,
+    prelude_typeclasses_program,
 };
 
 const OUTPUT_PATH: &str = "docs/src/PRELUDE.md";
@@ -139,9 +139,7 @@ fn collect_primitive_type_names(ts: &TypeSystem) -> BTreeSet<String> {
     out
 }
 
-fn collect_methods_by_class(
-    program: &rexlang_ast::expr::Program,
-) -> Result<BTreeMap<String, Vec<String>>, String> {
+fn collect_methods_by_class(program: &Program) -> Result<BTreeMap<String, Vec<String>>, String> {
     let mut out = BTreeMap::<String, Vec<String>>::new();
     for decl in &program.decls {
         if let Decl::Class(class_decl) = decl {

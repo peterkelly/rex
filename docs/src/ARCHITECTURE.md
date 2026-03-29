@@ -4,8 +4,8 @@ Rex is implemented as a small set of focused crates that form a pipeline:
 
 1. **Lexing** (`rexlang-lexer`): converts source text into a `Vec<Token>` with spans.
 2. **Parsing** (`rexlang-parser`): converts tokens into a `rex_ast::expr::Program { decls, expr }`.
-3. **Typing** (`rexlang-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_ts::TypedExpr`.
-4. **Evaluation** (`rexlang-engine`): evaluates `TypedExpr` to a runtime `rex_engine::Value`.
+3. **Typing** (`rexlang-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rexlang_typesystem::TypedExpr`.
+4. **Evaluation** (`rexlang-engine`): evaluates `TypedExpr` to a runtime `rexlang_engine::Value`.
 
 The crates are designed so you can use them independently (e.g. parser-only tooling, typechecking-only checks, or embedding the full evaluator).
 
@@ -13,7 +13,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `TypeExpr`, `Program`, symbols).
 - `rexlang-lexer`: tokenizer + spans (`Span`, `Position`).
-- `rexlang-parser`: recursive-descent parser. Entry point: `rex_parser::Parser::parse_program`.
+- `rexlang-parser`: recursive-descent parser. Entry point: `rexlang_parser::Parser::parse_program`.
   - For untrusted code, set `ParserLimits::safe_defaults` before parsing.
 - `rexlang-typesystem`: type system. Entry points:
   - `TypeSystem::with_prelude()?` to create a typing environment with standard types/classes.

@@ -29,10 +29,7 @@ Evaluation API:
 ## Evaluate Rex Code
 
 ```rust
-use rexlang_engine::Engine;
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_util::{GasCosts, GasMeter};
+use rexlang::{Engine, GasMeter, Parser, Token};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
@@ -64,7 +61,7 @@ exports fail early with library errors.
 If you want full control:
 
 ```rust
-use rexlang_engine::{Engine, EngineOptions, PreludeMode};
+use rexlang::{Engine, EngineOptions, PreludeMode};
 
 let mut engine = Engine::with_options(
     (),
@@ -86,8 +83,7 @@ This is fully supported in `rexlang-engine`. You can compose library loading fro
 ### 1) Use Built-In Resolvers
 
 ```rust
-use rexlang_engine::Engine;
-use rex_util::GasMeter;
+use rexlang::{Engine, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -113,8 +109,8 @@ Notes:
 For host-managed modules, add a resolver that maps `library_name` to source text.
 
 ```rust
-use rexlang_engine::{Engine, LibraryId, ResolveRequest, ResolvedLibrary};
-use rex_util::GasMeter;
+use rexlang_engine::{LibraryId, ResolveRequest, ResolvedLibrary};
+use rexlang::{Engine, GasMeter};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -232,7 +228,7 @@ Rex code calls it through `sample.render_label`.
 Example:
 
 ```rust
-use rex::{Engine, EngineError, Library, Rex};
+use rexlang::{Engine, EngineError, Library, Rex};
 use rex_util::GasMeter;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -298,7 +294,7 @@ These callbacks receive `&Engine<State>` (not just `&State`), so they can:
 ```rust
 use futures::FutureExt;
 use rexlang_engine::{Engine, Library, Pointer};
-use rex_ts::{BuiltinTypeId, Scheme, Type};
+use rexlang::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -422,9 +418,7 @@ match (to_list bytes) with
 ## Typecheck Without Evaluating
 
 ```rust
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_ts::TypeSystem;
+use rexlang::{Parser, Token, TypeSystem};
 
 let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
@@ -466,9 +460,7 @@ Users can declare new type classes and instances directly in Rex source. As the 
 ### Typecheck: Inject Class/Instance Decls into `TypeSystem`
 
 ```rust
-use rex_lexer::Token;
-use rex_parser::Parser;
-use rex_ts::TypeSystem;
+use rexlang::{Parser, Token, TypeSystem};
 
 let code = r#"
 class Size a
@@ -507,8 +499,7 @@ assert_eq!(ty.to_string(), "i32");
 
 ```rust
 use rexlang_engine::{Engine, EngineError};
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rexlang::{Parser, Token};
 use rex_util::{GasCosts, GasMeter};
 
 let code = r#"
@@ -571,8 +562,8 @@ for code in [
     "let x = 4 in num_u8 x",
     "let f = \\x -> num_i64 x in f 4",
 ] {
-    let tokens = rex_lexer::Token::tokenize(code)?;
-    let mut parser = rex_parser::Parser::new(tokens);
+    let tokens = Token::tokenize(code)?;
+    let mut parser = Parser::new(tokens);
     let program = parser
         .parse_program(&mut GasMeter::default())
         .map_err(|errs| format!("parse error: {errs:?}"))?;
@@ -597,8 +588,8 @@ use rex_util::{GasCosts, GasMeter};
 let mut engine = Engine::with_prelude(())?;
 engine.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
 
-let tokens = rex_lexer::Token::tokenize("inc 1")?;
-let mut parser = rex_parser::Parser::new(tokens);
+let tokens = Token::tokenize("inc 1")?;
+let mut parser = Parser::new(tokens);
 let program = parser
     .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?;
@@ -615,11 +606,11 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 ```rust
 use futures::FutureExt;
 use rexlang_engine::{CancellationToken, Engine, EngineError};
-use rex_ts::{BuiltinTypeId, Scheme, Type};
+use rexlang::{BuiltinTypeId, Scheme, Type};
 use rex_util::{GasCosts, GasMeter};
 
-let tokens = rex_lexer::Token::tokenize("stall")?;
-let mut parser = rex_parser::Parser::new(tokens);
+let tokens = Token::tokenize("stall")?;
+let mut parser = Parser::new(tokens);
 let expr = parser
     .parse_program(&mut GasMeter::default())
     .map_err(|errs| format!("parse error: {errs:?}"))?
@@ -663,9 +654,9 @@ To defend against untrusted/large programs, you can run the pipeline with a gas 
 For untrusted input, you can cap syntactic nesting depth during parsing:
 
 ```rust
-use rex_parser::{Parser, ParserLimits};
+use rexlang::{Parser, ParserLimits, Token};
 
-let mut parser = Parser::new(rex_lexer::Token::tokenize("(((1)))")?);
+let mut parser = Parser::new(Token::tokenize("(((1)))")?);
 parser.set_limits(ParserLimits::safe_defaults());
 let program = parser.parse_program(&mut GasMeter::default())?;
 ```
@@ -678,7 +669,7 @@ The derive:
 - implements `FromPointer`/`IntoPointer` for converting Rust ↔ Rex
 
 ```rust
-use rex::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
+use rexlang::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -708,7 +699,7 @@ without `#[derive(Rex)]`.
 - Register with `Engine::inject_adt(...)`.
 
 ```rust
-use rex::{Engine, RexType, Type, sym};
+use rexlang::{Engine, RexType, Type, sym};
 
 let mut engine = Engine::with_prelude(())?;
 
@@ -723,7 +714,7 @@ If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls,
 registration workflow as derived types.
 
 ```rust
-use rex::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, sym};
+use rexlang::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, sym};
 
 struct PrimitiveEither;
 
@@ -753,5 +744,5 @@ PrimitiveEither::inject_rex(&mut engine)?;
 Some workloads (very deep nesting) can exhaust parser/typechecker recursion depth. Prefer bounded
 limits for untrusted code:
 
-- `rex_parser::ParserLimits::safe_defaults`
-- `rex_ts::TypeSystemLimits::safe_defaults`
+- `rexlang::ParserLimits::safe_defaults`
+- `rexlang_typesystem::TypeSystemLimits::safe_defaults`

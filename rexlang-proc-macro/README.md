@@ -7,7 +7,7 @@ This crate provides procedural macros for bridging Rust types and Rex values.
 The derive generates:
 
 - an ADT declaration suitable for injection into an `Engine`
-- `IntoValue` / `FromValue` implementations to convert between Rust values and `rex_engine::Value`
+- `IntoPointer` / `FromPointer` implementations to convert between Rust values and Rex runtime values
 
-It’s intended for host applications embedding Rex and exposing domain-specific data types.
-
+The generated code now targets the public `rexlang` crate path, so embedders only need `rexlang`
+instead of `rexlang-core`.

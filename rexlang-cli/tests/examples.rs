@@ -1,5 +1,4 @@
-use rexlang_core::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, Value};
-use rexlang_parser::error::ParserErr;
+use rexlang::{BuiltinTypeId, Engine, GasMeter, Parser, ParserErr, Token, Type, Value};
 
 fn format_parse_errors(errs: &[ParserErr]) -> String {
     let mut out = String::from("parse error:");

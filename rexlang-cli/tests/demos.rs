@@ -1,4 +1,4 @@
-use rexlang_core::{BuiltinTypeId, Engine, GasMeter, Heap, Pointer, Type, Value};
+use rexlang::{BuiltinTypeId, Engine, GasMeter, Heap, Pointer, Type, Value};
 
 fn extract_first_interactive_rex(markdown: &str) -> String {
     let mut lines = markdown.lines();

@@ -1,4 +1,4 @@
-use rexlang_core::{Engine, GasCosts, GasMeter, Parser, ParserLimits, Token, TypeSystem};
+use rexlang::{Engine, GasCosts, GasMeter, Parser, ParserLimits, Token, TypeSystem};
 
 #[derive(Clone)]
 struct XorShift64 {

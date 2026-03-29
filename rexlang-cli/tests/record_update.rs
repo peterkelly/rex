@@ -1,4 +1,4 @@
-use rexlang_core::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type};
+use rexlang::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, Value};
 
 #[tokio::test]
 async fn record_update_end_to_end() {
@@ -37,7 +37,7 @@ async fn record_update_end_to_end() {
         .map(|value| value.as_ref().clone())
         .unwrap();
 
-    let rexlang_engine::Value::Tuple(items) = value else {
+    let Value::Tuple(items) = value else {
         panic!(
             "expected tuple, got {}",
             engine.heap.type_name(&value_ptr).unwrap()
@@ -47,7 +47,7 @@ async fn record_update_end_to_end() {
 
     let a_ptr = &items[0];
     let a_value = engine.heap.get(a_ptr).unwrap();
-    let rexlang_engine::Value::I32(a) = a_value.as_ref() else {
+    let Value::I32(a) = a_value.as_ref() else {
         panic!(
             "expected i32, got {}",
             engine.heap.type_name(a_ptr).unwrap()
@@ -55,7 +55,7 @@ async fn record_update_end_to_end() {
     };
     let b_ptr = &items[1];
     let b_value = engine.heap.get(b_ptr).unwrap();
-    let rexlang_engine::Value::I32(b) = b_value.as_ref() else {
+    let Value::I32(b) = b_value.as_ref() else {
         panic!(
             "expected i32, got {}",
             engine.heap.type_name(b_ptr).unwrap()

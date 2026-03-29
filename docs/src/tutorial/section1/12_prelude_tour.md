@@ -60,7 +60,7 @@ The prelude also exposes some generic helpers (type-class-based):
 
 When you see an unfamiliar function:
 
-1. Ask the CLI for its type: `cargo run -p rex -- run --emit-type -c 'the_name'`
+1. Ask the CLI for its type: `cargo run -p rexlang-cli -- run --emit-type -c 'the_name'`
 2. If it’s a type-class method, find the class in `rexlang-typesystem/src/prelude_typeclasses.rex`
 3. If it’s a helper function, find it in `rexlang-typesystem/src/prelude.rs`
 

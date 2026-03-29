@@ -1,6 +1,4 @@
-use rexlang_core::{
-    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type,
-};
+use rexlang::{BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type};
 
 fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), EngineError> {
     engine.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;

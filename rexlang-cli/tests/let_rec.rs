@@ -1,4 +1,4 @@
-use rexlang_core::{
+use rexlang::{
     BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeKind,
     Value, assert_pointer_eq,
 };

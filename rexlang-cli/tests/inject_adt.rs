@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use rexlang_core::{
+use rexlang::{
     AdtDecl, BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, Parser,
     Pointer, Rex, RexAdt, RexType, Token, Type, assert_pointer_eq, sym,
 };

@@ -9,7 +9,7 @@ repository.workspace = true
 version.workspace = true
 
 [dependencies]
-rexlang-core = { path = "../rexlang-core", version = "3.9.3" }
+rexlang-core = { path = "../rexlang-core", version = "3.9.4" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]

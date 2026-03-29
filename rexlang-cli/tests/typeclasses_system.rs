@@ -1,5 +1,7 @@
-use rexlang_core::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, TypeKind};
-use rexlang_engine::{ValueDisplayOptions, pointer_display_with};
+use rexlang::{
+    BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, TypeKind, ValueDisplayOptions,
+    pointer_display_with,
+};
 
 fn type_compatible(actual: &Type, expected: &Type) -> bool {
     match (actual.as_ref(), expected.as_ref()) {

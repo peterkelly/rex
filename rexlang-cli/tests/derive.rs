@@ -1,4 +1,4 @@
-use rexlang_core::{
+use rexlang::{
     BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, JsonOptions, Parser, Pointer,
     Rex, RexAdt, RexType, Token, Type, Value, assert_pointer_eq, rex_to_json,
 };
@@ -172,7 +172,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     assert_eq!(adt.params.len(), 1);
 
     let t = adt
-        .param_type(&rexlang_ast::expr::intern("T"))
+        .param_type(&rexlang::intern("T"))
         .expect("expected `T` param type");
 
     let just = adt

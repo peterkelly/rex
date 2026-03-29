@@ -332,7 +332,7 @@ Before returning generated Rex code:
 2. Use `let rec` only for local recursive helpers inside expressions.
 3. Add annotations where constructor or numeric ambiguity is likely (`Empty`, `zero`, overloaded methods).
 4. Ensure the final expression returns a visible result (often a tuple for demos).
-5. Run `cargo run -p rex -- run /tmp/snippet.rex` and fix all parse and type errors.
+5. Run `cargo run -p rexlang-cli -- run /tmp/snippet.rex` and fix all parse and type errors.
 
 ### Syntax Pitfalls
 
@@ -432,7 +432,7 @@ example `(x::_, 0)`); match structurally first, then use an `if` guard in expres
 Before emitting generated Rex snippets in docs:
 
 1. Save the snippet to a temporary `.rex` file.
-2. Run `cargo run -p rex -- run /tmp/snippet.rex`.
+2. Run `cargo run -p rexlang-cli -- run /tmp/snippet.rex`.
 3. If parse or type errors appear, fix and re-run until clean.
 
 For mdBook interactive demos, also run:

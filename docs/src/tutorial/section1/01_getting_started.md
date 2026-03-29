@@ -13,13 +13,13 @@ Rex programs are *one expression*, optionally preceded by top-level declarations
 From this repository, you can run a file:
 
 ```sh
-cargo run -p rex -- run rex/examples/record_update.rex
+cargo run -p rexlang-cli -- run rexlang-cli/examples/record_update.rex
 ```
 
 Or evaluate a small snippet inline:
 
 ```sh
-cargo run -p rex -- run -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rexlang-cli -- run -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 ### What you should see
@@ -98,7 +98,7 @@ in
 Run it:
 
 ```sh
-cargo run -p rex -- run hello.rex
+cargo run -p rexlang-cli -- run hello.rex
 ```
 
 ## Unicode (λ, →) versus ASCII

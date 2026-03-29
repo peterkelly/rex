@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use rexlang_core::{
-    BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, IntoPointer, Library, Parser,
+use rexlang::virtual_export_name;
+use rexlang::{
+    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, GasMeter, IntoPointer, Library, Parser,
     Pointer, Rex, RexDefault, Token, Type, TypeError, TypeKind, Value,
 };
-use rexlang_engine::virtual_export_name;
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -227,7 +227,7 @@ async fn have_role_async(state: HostState, role: String) -> Result<bool, EngineE
     Ok(state.roles.iter().any(|r| r == &role))
 }
 
-fn parse(code: &str) -> Arc<rexlang_ast::expr::Expr> {
+fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program(&mut GasMeter::default()).unwrap().expr
 }

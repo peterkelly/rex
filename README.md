@@ -87,7 +87,7 @@ This repo is a Cargo workspace. The key crates are:
 - `rexlang-typesystem`: Hindley–Milner type inference + type classes + ADTs
 - `rexlang-engine`: runtime evaluator + native-function injection, backed by `rexlang-typesystem`
 - `rexlang-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
-- `rex`: CLI binary (`cargo run -p rex -- ...`)
+- `rexlang-cli`: CLI crate providing the `rex` binary (`cargo run -p rexlang-cli -- ...`)
 - `rexlang-fuzz`: stdin-driven fuzz harness binaries
 - `rexlang-util`: small shared helpers (e.g. library hashing, bundled stdlib sources)
 - `rexlang-lsp` / `rexlang-vscode`: language tooling (LSP + VS Code extension)
@@ -97,19 +97,19 @@ This repo is a Cargo workspace. The key crates are:
 Run a file:
 
 ```sh
-cargo run -p rex -- run rex/examples/record_update.rex
+cargo run -p rexlang-cli -- run rexlang-cli/examples/record_update.rex
 ```
 
 Run the advanced library import example:
 
 ```sh
-cargo run -p rex -- run rex/examples/libraries_advanced/main.rex
+cargo run -p rexlang-cli -- run rexlang-cli/examples/libraries_advanced/main.rex
 ```
 
 Run inline code:
 
 ```sh
-cargo run -p rex -- run -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rexlang-cli -- run -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 Other useful flags:

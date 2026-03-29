@@ -1,5 +1,6 @@
-use rexlang_core::{Engine, EngineError, GasMeter, Parser, ParserLimits, Token, TypeError};
-use rexlang_parser::error::ParserErr;
+use rexlang::{
+    Engine, EngineError, GasMeter, Parser, ParserErr, ParserLimits, Program, Token, TypeError,
+};
 
 fn strip_span(mut err: TypeError) -> TypeError {
     while let TypeError::Spanned { error, .. } = err {
@@ -8,7 +9,7 @@ fn strip_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn parse_program(code: &str) -> Result<rexlang_ast::expr::Program, Vec<ParserErr>> {
+fn parse_program(code: &str) -> Result<Program, Vec<ParserErr>> {
     let tokens = Token::tokenize(code).expect("lexer should not panic");
     let mut parser = Parser::new(tokens);
     parser.set_limits(ParserLimits::safe_defaults());

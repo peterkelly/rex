@@ -11,13 +11,13 @@ It is a thin wrapper around the core pipeline:
 Run a `.rex` file:
 
 ```sh
-cargo run -p rex -- run rex/examples/record_update.rex
+cargo run -p rexlang-cli -- run rexlang-cli/examples/record_update.rex
 ```
 
 Run inline code:
 
 ```sh
-cargo run -p rex -- run -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rexlang-cli -- run -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 Inspect compiler output:
@@ -28,6 +28,5 @@ Inspect compiler output:
 ## REPL
 
 ```sh
-cargo run -p rex -- repl
+cargo run -p rexlang-cli -- repl
 ```
-
