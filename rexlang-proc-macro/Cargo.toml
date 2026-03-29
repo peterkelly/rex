@@ -2,7 +2,8 @@
 name = "rexlang-proc-macro"
 description.workspace = true
 edition.workspace = true
-license-file.workspace = true
+homepage.workspace = true
+license.workspace = true
 repository.workspace = true
 version.workspace = true
 

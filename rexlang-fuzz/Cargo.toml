@@ -2,18 +2,19 @@
 name = "rexlang-fuzz"
 description.workspace = true
 edition.workspace = true
-license-file.workspace = true
+homepage.workspace = true
+license.workspace = true
 repository.workspace = true
 version.workspace = true
 publish = false
 
 [dependencies]
-rexlang-ast = { path = "../rexlang-ast", version = "3.9.2" }
-rexlang-engine = { path = "../rexlang-engine", version = "3.9.2" }
-rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.2" }
-rexlang-parser = { path = "../rexlang-parser", version = "3.9.2" }
-rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.2" }
-rexlang-util = { path = "../rexlang-util", version = "3.9.2" }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.3" }
+rexlang-engine = { path = "../rexlang-engine", version = "3.9.3" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.3" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.3" }
+rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.3" }
+rexlang-util = { path = "../rexlang-util", version = "3.9.3" }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 

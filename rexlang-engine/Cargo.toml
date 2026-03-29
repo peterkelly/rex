@@ -2,7 +2,8 @@
 name = "rexlang-engine"
 description.workspace = true
 edition.workspace = true
-license-file.workspace = true
+homepage.workspace = true
+license.workspace = true
 repository.workspace = true
 version.workspace = true
 
@@ -12,18 +13,18 @@ version.workspace = true
 github-imports = []
 
 [dependencies]
-rexlang-ast = { path = "../rexlang-ast", version = "3.9.2" }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.3" }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.2" }
+rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.3" }
 async-recursion = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
-rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.2" }
-rexlang-parser = { path = "../rexlang-parser", version = "3.9.2" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.3" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.3" }
 serde_json = { workspace = true }
-rexlang-util = { path = "../rexlang-util", version = "3.9.2" }
+rexlang-util = { path = "../rexlang-util", version = "3.9.3" }
 
 [lints]
 workspace = true
