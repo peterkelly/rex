@@ -10,19 +10,19 @@ version.workspace = true
 [dependencies]
 lsp-types = "0.94"
 serde_json = "1"
-rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.4" }
-rexlang-ast = { path = "../rexlang-ast", version = "3.9.4" }
-rexlang-parser = { path = "../rexlang-parser", version = "3.9.4" }
-rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.4" }
-rexlang-util = { path = "../rexlang-util", version = "3.9.4" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.5" }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.5" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.5" }
+rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.5" }
+rexlang-util = { path = "../rexlang-util", version = "3.9.5" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
 tower-lsp = { workspace = true }
 
 [dev-dependencies]
-rexlang-core = { path = "../rexlang-core", version = "3.9.4" }
-rexlang-engine = { path = "../rexlang-engine", version = "3.9.4" }
+rexlang-core = { path = "../rexlang-core", version = "3.9.5" }
+rexlang-engine = { path = "../rexlang-engine", version = "3.9.5" }
 
 [lints]
 workspace = true
