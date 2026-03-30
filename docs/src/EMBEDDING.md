@@ -161,6 +161,10 @@ Use `Library` + `Engine::inject_library(...)`:
    - optional Rex declarations with `add_declaration` (for example `pub type ...`)
 3. Inject it into the engine.
 
+`Library` also exposes its staged `declarations` and `exports` vectors directly. That is useful if
+you want to inspect, transform, or assemble a library in multiple passes before calling
+`Engine::inject_library`.
+
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
 `Err(...)`, evaluation fails with that engine error.
 `export_async` handlers follow the same rule, but return
@@ -219,7 +223,8 @@ you can use:
 - `Export::from_handler` / `Export::from_async_handler` (typed handlers)
 - `Export::from_native` / `Export::from_native_async` (runtime pointer handlers)
 
-Then add them via `Library::add_export`.
+Then add them via `Library::add_export`, or push them into `Library::exports` directly if you are
+assembling the library programmatically.
 
 This example shows how to use Rust enums and structs as Rex-facing types with ADTs declared inside
 the library itself. The host function accepts a Rust `Label` (containing a Rust `Side` enum), and
