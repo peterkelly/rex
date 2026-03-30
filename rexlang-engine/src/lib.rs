@@ -15,15 +15,14 @@ mod value;
 pub use cancel::CancellationToken;
 pub use engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineOptions,
-    Export, Handler, Library, NativeFn, NativeFuture, OverloadedFn, PRELUDE_LIBRARY_NAME,
-    PreludeMode, ROOT_LIBRARY_NAME, RexAdt, RexDefault, SyncNativeCallable,
-    collect_adts_error_to_engine,
+    Export, Handler, NativeFn, NativeFuture, OverloadedFn, PRELUDE_LIBRARY_NAME, PreludeMode,
+    ROOT_LIBRARY_NAME, RexAdt, RexDefault, SyncNativeCallable, collect_adts_error_to_engine,
 };
 pub use env::Env;
 pub use error::{EngineError, LibraryError};
 pub use libraries::virtual_export_name;
 pub use libraries::{
-    CanonicalSymbol, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
+    CanonicalSymbol, Library, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
     ResolveRequest, ResolvedLibrary, SymbolKind,
 };
 pub use stack::DEFAULT_STACK_SIZE_BYTES;

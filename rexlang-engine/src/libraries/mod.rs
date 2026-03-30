@@ -21,12 +21,14 @@ use crate::{EngineError, Pointer};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod filesystem;
+mod library;
 mod resolvers;
 mod system;
 mod types;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use filesystem::{default_local_resolver, include_resolver};
+pub use library::Library;
 #[cfg(all(not(target_arch = "wasm32"), feature = "github-imports"))]
 pub use resolvers::default_github_resolver;
 pub use resolvers::default_stdlib_resolver;
