@@ -9,13 +9,13 @@ version.workspace = true
 
 [dependencies]
 clap = { workspace = true }
-rexlang-ast = { path = "../rexlang-ast", version = "3.9.5" }
-rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.5" }
-rexlang-parser = { path = "../rexlang-parser", version = "3.9.5" }
-rexlang-proc-macro = { path = "../rexlang-proc-macro", version = "3.9.5" }
-rexlang-engine = { path = "../rexlang-engine", version = "3.9.5" }
-rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.5" }
-rexlang-util = { path = "../rexlang-util", version = "3.9.5" }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.6" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.6" }
+rexlang-parser = { path = "../rexlang-parser", version = "3.9.6" }
+rexlang-proc-macro = { path = "../rexlang-proc-macro", version = "3.9.6" }
+rexlang-engine = { path = "../rexlang-engine", version = "3.9.6" }
+rexlang-typesystem = { path = "../rexlang-typesystem", version = "3.9.6" }
+rexlang-util = { path = "../rexlang-util", version = "3.9.6" }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }

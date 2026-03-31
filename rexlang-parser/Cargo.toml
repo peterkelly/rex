@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 regex = { workspace = true }
-rexlang-ast = { path = "../rexlang-ast", version = "3.9.5" }
-rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.5" }
+rexlang-ast = { path = "../rexlang-ast", version = "3.9.6" }
+rexlang-lexer = { path = "../rexlang-lexer", version = "3.9.6" }
 thiserror = { workspace = true }
-rexlang-util = { path = "../rexlang-util", version = "3.9.5" }
+rexlang-util = { path = "../rexlang-util", version = "3.9.6" }
