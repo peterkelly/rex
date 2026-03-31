@@ -3,7 +3,7 @@ use std::sync::Arc;
 use rexlang::virtual_export_name;
 use rexlang::{
     BuiltinTypeId, Engine, EngineError, Expr, FromPointer, GasMeter, IntoPointer, Library, Parser,
-    Pointer, Rex, RexDefault, Token, Type, TypeError, TypeKind, Value,
+    Pointer, Rex, RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
 };
 use uuid::Uuid;
 
@@ -234,6 +234,40 @@ fn parse(code: &str) -> Arc<Expr> {
 
 fn unlimited_gas() -> GasMeter {
     GasMeter::default()
+}
+
+fn list_from_pointers(
+    engine: &Engine<impl Clone + Send + Sync + 'static>,
+    values: Vec<Pointer>,
+) -> Result<Pointer, EngineError> {
+    let mut list = engine.heap.alloc_adt(sym("Empty"), vec![])?;
+    for value in values.into_iter().rev() {
+        list = engine.heap.alloc_adt(sym("Cons"), vec![value, list])?;
+    }
+    Ok(list)
+}
+
+fn pointer_as_list(
+    engine: &Engine<impl Clone + Send + Sync + 'static>,
+    pointer: &Pointer,
+) -> Result<Vec<Pointer>, EngineError> {
+    let mut out = Vec::new();
+    let mut cursor = *pointer;
+    loop {
+        let (tag, args) = engine.heap.pointer_as_adt(&cursor)?;
+        if tag == sym("Empty") {
+            return Ok(out);
+        }
+        if tag == sym("Cons") && args.len() == 2 {
+            out.push(args[0]);
+            cursor = args[1];
+            continue;
+        }
+        return Err(EngineError::NativeType {
+            expected: "List a".into(),
+            got: engine.heap.type_name(&cursor)?.into(),
+        });
+    }
 }
 
 fn is_i32_or_var(ty: &Type) -> bool {
@@ -486,6 +520,119 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     assert_eq!(items.len(), 2);
     assert!(engine.heap.pointer_as_bool(&items[0]).unwrap());
     assert!(!engine.heap.pointer_as_bool(&items[1]).unwrap());
+}
+
+#[tokio::test]
+async fn generic_export_can_repeat_a_value_into_a_list() {
+    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+
+    // This demonstrates how to write a generic function by declaring a fresh
+    // type variable `T` and using it in the exported Rex type scheme.
+    let t_var = engine.type_system.fresh_type_var(Some("T".into()));
+    let t = Type::var(t_var.clone());
+    let scheme = Scheme::new(
+        vec![t_var],
+        vec![],
+        Type::fun(
+            t.clone(),
+            Type::fun(Type::builtin(BuiltinTypeId::I32), Type::list(t)),
+        ),
+    );
+    engine
+        .export_native("repeat_value", scheme, 2, |engine, _, args| {
+            let value = args[0];
+            let len = engine.heap.pointer_as_i32(&args[1])?;
+            let copies = (0..len.max(0)).map(|_| value).collect();
+            list_from_pointers(engine, copies)
+        })
+        .unwrap();
+
+    let expr = parse(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
+    let mut gas = unlimited_gas();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::list(Type::builtin(BuiltinTypeId::String)),
+            Type::list(Type::builtin(BuiltinTypeId::Bool)),
+        ])
+    );
+
+    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    let repeated_strings = pointer_as_list(&engine, &items[0]).unwrap();
+    assert_eq!(repeated_strings.len(), 3);
+    assert_eq!(
+        engine.heap.pointer_as_string(&repeated_strings[0]).unwrap(),
+        "rex"
+    );
+    assert_eq!(
+        engine.heap.pointer_as_string(&repeated_strings[1]).unwrap(),
+        "rex"
+    );
+    assert_eq!(
+        engine.heap.pointer_as_string(&repeated_strings[2]).unwrap(),
+        "rex"
+    );
+
+    let repeated_bools = pointer_as_list(&engine, &items[1]).unwrap();
+    assert_eq!(repeated_bools.len(), 2);
+    assert!(engine.heap.pointer_as_bool(&repeated_bools[0]).unwrap());
+    assert!(engine.heap.pointer_as_bool(&repeated_bools[1]).unwrap());
+}
+
+#[tokio::test]
+async fn generic_export_can_swap_two_values_of_different_types() {
+    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+
+    // This is another example of writing a generic function: it introduces
+    // independent type variables `P` and `Q` and returns them in swapped order.
+    let p_var = engine.type_system.fresh_type_var(Some("P".into()));
+    let q_var = engine.type_system.fresh_type_var(Some("Q".into()));
+    let p = Type::var(p_var.clone());
+    let q = Type::var(q_var.clone());
+    let scheme = Scheme::new(
+        vec![p_var, q_var],
+        vec![],
+        Type::fun(p.clone(), Type::fun(q.clone(), Type::tuple(vec![q, p]))),
+    );
+    engine
+        .export_native("swap_pair", scheme, 2, |engine, _, args| {
+            engine.heap.alloc_tuple(vec![args[1], args[0]])
+        })
+        .unwrap();
+
+    let expr = parse(r#"(swap_pair "left" 7, swap_pair true "right")"#);
+    let mut gas = unlimited_gas();
+    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::tuple(vec![
+                Type::builtin(BuiltinTypeId::I32),
+                Type::builtin(BuiltinTypeId::String),
+            ]),
+            Type::tuple(vec![
+                Type::builtin(BuiltinTypeId::String),
+                Type::builtin(BuiltinTypeId::Bool),
+            ]),
+        ])
+    );
+
+    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+
+    let first_swap = engine.heap.pointer_as_tuple(&items[0]).unwrap();
+    assert_eq!(engine.heap.pointer_as_i32(&first_swap[0]).unwrap(), 7);
+    assert_eq!(
+        engine.heap.pointer_as_string(&first_swap[1]).unwrap(),
+        "left"
+    );
+
+    let second_swap = engine.heap.pointer_as_tuple(&items[1]).unwrap();
+    assert_eq!(
+        engine.heap.pointer_as_string(&second_swap[0]).unwrap(),
+        "right"
+    );
+    assert!(engine.heap.pointer_as_bool(&second_swap[1]).unwrap());
 }
 
 #[tokio::test]
