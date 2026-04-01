@@ -30,7 +30,10 @@ use crate::prelude::{
     inject_show_ops,
 };
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
-use crate::{CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType};
+use crate::{
+    CancellationToken, CompileError, EngineError, Env, EvalError, ExecutionError, FromPointer,
+    IntoPointer, RexType,
+};
 
 pub trait RexDefault<State>
 where
@@ -1380,6 +1383,16 @@ pub struct CompiledProgram {
     pub externs: CompiledExterns,
     pub(crate) env: Env,
     pub(crate) expr: Arc<TypedExpr>,
+}
+
+impl CompiledProgram {
+    pub fn result_type(&self) -> &Type {
+        &self.result_type
+    }
+
+    pub fn externs(&self) -> &CompiledExterns {
+        &self.externs
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -2795,171 +2808,11 @@ where
     }
 
     fn type_check_expr(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
-        if let Some(span) = first_hole_span(expr) {
-            return Err(EngineError::Type(TypeError::Spanned {
-                span,
-                error: Box::new(TypeError::UnsupportedExpr(
-                    "typed hole `?` must be filled before evaluation",
-                )),
-            }));
-        }
-        let (typed, preds, _ty) = self.type_system.infer_typed(expr)?;
-        let (typed, preds) = default_ambiguous_types(self, typed, preds)?;
-        self.check_predicates(&preds)?;
-        self.check_natives(&typed)?;
-        Ok(typed)
-    }
-
-    fn check_predicates(&self, preds: &[Predicate]) -> Result<(), EngineError> {
-        for pred in preds {
-            if pred.typ.ftv().is_empty() {
-                let ok = entails(&self.type_system.classes, &[], pred)?;
-                if !ok {
-                    return Err(EngineError::Type(TypeError::NoInstance(
-                        pred.class.clone(),
-                        pred.typ.to_string(),
-                    )));
-                }
-            }
-        }
-        Ok(())
+        type_check_engine(self, expr)
     }
 
     fn check_natives(&self, expr: &TypedExpr) -> Result<(), EngineError> {
-        enum Frame<'b> {
-            Expr(&'b TypedExpr),
-            Push(Symbol),
-            PushMany(Vec<Symbol>),
-            Pop(usize),
-        }
-
-        let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![Frame::Expr(expr)];
-        while let Some(frame) = stack.pop() {
-            match frame {
-                Frame::Expr(expr) => match &expr.kind {
-                    TypedExprKind::Var { name, overloads } => {
-                        if bound.iter().any(|n| n == name) {
-                            continue;
-                        }
-                        if !self.natives.has_name(name) {
-                            if self.env.get(name).is_some() {
-                                continue;
-                            }
-                            if self.type_system.class_methods.contains_key(name) {
-                                continue;
-                            }
-                            return Err(EngineError::UnknownVar(name.clone()));
-                        }
-                        if !overloads.is_empty()
-                            && expr.typ.ftv().is_empty()
-                            && !overloads.iter().any(|t| unify(t, &expr.typ).is_ok())
-                        {
-                            return Err(EngineError::MissingImpl {
-                                name: name.clone(),
-                                typ: expr.typ.to_string(),
-                            });
-                        }
-                        if expr.typ.ftv().is_empty() && !self.has_native_impl(name, &expr.typ) {
-                            return Err(EngineError::MissingImpl {
-                                name: name.clone(),
-                                typ: expr.typ.to_string(),
-                            });
-                        }
-                    }
-                    TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
-                        for elem in elems.iter().rev() {
-                            stack.push(Frame::Expr(elem));
-                        }
-                    }
-                    TypedExprKind::Dict(kvs) => {
-                        for v in kvs.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                    }
-                    TypedExprKind::RecordUpdate { base, updates } => {
-                        for v in updates.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                        stack.push(Frame::Expr(base));
-                    }
-                    TypedExprKind::App(f, x) => {
-                        stack.push(Frame::Expr(x));
-                        stack.push(Frame::Expr(f));
-                    }
-                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
-                    TypedExprKind::Lam { param, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(param.clone()));
-                    }
-                    TypedExprKind::Let { name, def, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(name.clone()));
-                        stack.push(Frame::Expr(def));
-                    }
-                    TypedExprKind::LetRec { bindings, body } => {
-                        if !bindings.is_empty() {
-                            stack.push(Frame::Pop(bindings.len()));
-                            stack.push(Frame::Expr(body));
-                            for (_, def) in bindings.iter().rev() {
-                                stack.push(Frame::Expr(def));
-                            }
-                            stack.push(Frame::PushMany(
-                                bindings.iter().map(|(name, _)| name.clone()).collect(),
-                            ));
-                        } else {
-                            stack.push(Frame::Expr(body));
-                        }
-                    }
-                    TypedExprKind::Ite {
-                        cond,
-                        then_expr,
-                        else_expr,
-                    } => {
-                        stack.push(Frame::Expr(else_expr));
-                        stack.push(Frame::Expr(then_expr));
-                        stack.push(Frame::Expr(cond));
-                    }
-                    TypedExprKind::Match { scrutinee, arms } => {
-                        for (pat, arm_expr) in arms.iter().rev() {
-                            let mut bindings = Vec::new();
-                            collect_pattern_bindings(pat, &mut bindings);
-                            let count = bindings.len();
-                            if count != 0 {
-                                stack.push(Frame::Pop(count));
-                                stack.push(Frame::Expr(arm_expr));
-                                stack.push(Frame::PushMany(bindings));
-                            } else {
-                                stack.push(Frame::Expr(arm_expr));
-                            }
-                        }
-                        stack.push(Frame::Expr(scrutinee));
-                    }
-                    TypedExprKind::Bool(..)
-                    | TypedExprKind::Uint(..)
-                    | TypedExprKind::Int(..)
-                    | TypedExprKind::Float(..)
-                    | TypedExprKind::String(..)
-                    | TypedExprKind::Uuid(..)
-                    | TypedExprKind::DateTime(..) => {}
-                    TypedExprKind::Hole => return Err(EngineError::UnsupportedExpr),
-                },
-                Frame::Push(sym) => bound.push(sym),
-                Frame::PushMany(syms) => bound.extend(syms),
-                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
-            }
-        }
-        Ok(())
-    }
-
-    fn has_native_impl(&self, name: &str, typ: &Type) -> bool {
-        let sym_name = sym(name);
-        self.natives
-            .get(&sym_name)
-            .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
-            .unwrap_or(false)
+        check_natives_in_engine(self, expr)
     }
 
     fn register_typeclass_instance(
@@ -3006,6 +2859,198 @@ where
     }
 }
 
+fn type_check_engine<State>(
+    engine: &mut Engine<State>,
+    expr: &Expr,
+) -> Result<TypedExpr, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if let Some(span) = first_hole_span(expr) {
+        return Err(EngineError::Type(TypeError::Spanned {
+            span,
+            error: Box::new(TypeError::UnsupportedExpr(
+                "typed hole `?` must be filled before evaluation",
+            )),
+        }));
+    }
+    let (typed, preds, _ty) = engine.type_system.infer_typed(expr)?;
+    let (typed, preds) = default_ambiguous_types(engine, typed, preds)?;
+    check_predicates_in_engine(engine, &preds)?;
+    check_natives_in_engine(engine, &typed)?;
+    Ok(typed)
+}
+
+fn check_predicates_in_engine<State>(
+    engine: &Engine<State>,
+    preds: &[Predicate],
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    for pred in preds {
+        if pred.typ.ftv().is_empty() {
+            let ok = entails(&engine.type_system.classes, &[], pred)?;
+            if !ok {
+                return Err(EngineError::Type(TypeError::NoInstance(
+                    pred.class.clone(),
+                    pred.typ.to_string(),
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_natives_in_engine<State>(
+    engine: &Engine<State>,
+    expr: &TypedExpr,
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    enum Frame<'b> {
+        Expr(&'b TypedExpr),
+        Push(Symbol),
+        PushMany(Vec<Symbol>),
+        Pop(usize),
+    }
+
+    let mut bound: Vec<Symbol> = Vec::new();
+    let mut stack = vec![Frame::Expr(expr)];
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::Expr(expr) => match &expr.kind {
+                TypedExprKind::Var { name, overloads } => {
+                    if bound.iter().any(|n| n == name) {
+                        continue;
+                    }
+                    if !engine.natives.has_name(name) {
+                        if engine.env.get(name).is_some() {
+                            continue;
+                        }
+                        if engine.type_system.class_methods.contains_key(name) {
+                            continue;
+                        }
+                        return Err(EngineError::UnknownVar(name.clone()));
+                    }
+                    if !overloads.is_empty()
+                        && expr.typ.ftv().is_empty()
+                        && !overloads.iter().any(|t| unify(t, &expr.typ).is_ok())
+                    {
+                        return Err(EngineError::MissingImpl {
+                            name: name.clone(),
+                            typ: expr.typ.to_string(),
+                        });
+                    }
+                    if expr.typ.ftv().is_empty()
+                        && !has_native_impl_in_engine(engine, name, &expr.typ)
+                    {
+                        return Err(EngineError::MissingImpl {
+                            name: name.clone(),
+                            typ: expr.typ.to_string(),
+                        });
+                    }
+                }
+                TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
+                    for elem in elems.iter().rev() {
+                        stack.push(Frame::Expr(elem));
+                    }
+                }
+                TypedExprKind::Dict(kvs) => {
+                    for v in kvs.values().rev() {
+                        stack.push(Frame::Expr(v));
+                    }
+                }
+                TypedExprKind::RecordUpdate { base, updates } => {
+                    for v in updates.values().rev() {
+                        stack.push(Frame::Expr(v));
+                    }
+                    stack.push(Frame::Expr(base));
+                }
+                TypedExprKind::App(f, x) => {
+                    stack.push(Frame::Expr(x));
+                    stack.push(Frame::Expr(f));
+                }
+                TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
+                TypedExprKind::Lam { param, body } => {
+                    stack.push(Frame::Pop(1));
+                    stack.push(Frame::Expr(body));
+                    stack.push(Frame::Push(param.clone()));
+                }
+                TypedExprKind::Let { name, def, body } => {
+                    stack.push(Frame::Pop(1));
+                    stack.push(Frame::Expr(body));
+                    stack.push(Frame::Push(name.clone()));
+                    stack.push(Frame::Expr(def));
+                }
+                TypedExprKind::LetRec { bindings, body } => {
+                    if !bindings.is_empty() {
+                        stack.push(Frame::Pop(bindings.len()));
+                        stack.push(Frame::Expr(body));
+                        for (_, def) in bindings.iter().rev() {
+                            stack.push(Frame::Expr(def));
+                        }
+                        stack.push(Frame::PushMany(
+                            bindings.iter().map(|(name, _)| name.clone()).collect(),
+                        ));
+                    } else {
+                        stack.push(Frame::Expr(body));
+                    }
+                }
+                TypedExprKind::Ite {
+                    cond,
+                    then_expr,
+                    else_expr,
+                } => {
+                    stack.push(Frame::Expr(else_expr));
+                    stack.push(Frame::Expr(then_expr));
+                    stack.push(Frame::Expr(cond));
+                }
+                TypedExprKind::Match { scrutinee, arms } => {
+                    for (pat, arm_expr) in arms.iter().rev() {
+                        let mut bindings = Vec::new();
+                        collect_pattern_bindings(pat, &mut bindings);
+                        let count = bindings.len();
+                        if count != 0 {
+                            stack.push(Frame::Pop(count));
+                            stack.push(Frame::Expr(arm_expr));
+                            stack.push(Frame::PushMany(bindings));
+                        } else {
+                            stack.push(Frame::Expr(arm_expr));
+                        }
+                    }
+                    stack.push(Frame::Expr(scrutinee));
+                }
+                TypedExprKind::Bool(..)
+                | TypedExprKind::Uint(..)
+                | TypedExprKind::Int(..)
+                | TypedExprKind::Float(..)
+                | TypedExprKind::String(..)
+                | TypedExprKind::Uuid(..)
+                | TypedExprKind::DateTime(..) => {}
+                TypedExprKind::Hole => return Err(EngineError::UnsupportedExpr),
+            },
+            Frame::Push(sym) => bound.push(sym),
+            Frame::PushMany(syms) => bound.extend(syms),
+            Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
+        }
+    }
+    Ok(())
+}
+
+fn has_native_impl_in_engine<State>(engine: &Engine<State>, name: &str, typ: &Type) -> bool
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let sym_name = sym(name);
+    engine
+        .natives
+        .get(&sym_name)
+        .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
+        .unwrap_or(false)
+}
+
 impl<State> Compiler<State>
 where
     State: Clone + Send + Sync + 'static,
@@ -3014,7 +3059,14 @@ where
         Self { engine }
     }
 
-    pub fn compile_expr(&mut self, expr: &Expr) -> Result<CompiledProgram, EngineError> {
+    pub fn compile_expr(&mut self, expr: &Expr) -> Result<CompiledProgram, CompileError> {
+        self.compile_expr_internal(expr).map_err(CompileError::from)
+    }
+
+    pub(crate) fn compile_expr_internal(
+        &mut self,
+        expr: &Expr,
+    ) -> Result<CompiledProgram, EngineError> {
         let typed = self.type_check(expr)?;
         let env = self.engine.env.clone();
         let externs = self.collect_externs(&typed, &env);
@@ -3027,172 +3079,7 @@ where
     }
 
     pub(crate) fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
-        if let Some(span) = first_hole_span(expr) {
-            return Err(EngineError::Type(TypeError::Spanned {
-                span,
-                error: Box::new(TypeError::UnsupportedExpr(
-                    "typed hole `?` must be filled before evaluation",
-                )),
-            }));
-        }
-        let (typed, preds, _ty) = self.engine.type_system.infer_typed(expr)?;
-        let (typed, preds) = default_ambiguous_types(&self.engine, typed, preds)?;
-        self.check_predicates(&preds)?;
-        self.check_natives(&typed)?;
-        Ok(typed)
-    }
-
-    fn check_predicates(&self, preds: &[Predicate]) -> Result<(), EngineError> {
-        for pred in preds {
-            if pred.typ.ftv().is_empty() {
-                let ok = entails(&self.engine.type_system.classes, &[], pred)?;
-                if !ok {
-                    return Err(EngineError::Type(TypeError::NoInstance(
-                        pred.class.clone(),
-                        pred.typ.to_string(),
-                    )));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn check_natives(&self, expr: &TypedExpr) -> Result<(), EngineError> {
-        enum Frame<'b> {
-            Expr(&'b TypedExpr),
-            Push(Symbol),
-            PushMany(Vec<Symbol>),
-            Pop(usize),
-        }
-
-        let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![Frame::Expr(expr)];
-        while let Some(frame) = stack.pop() {
-            match frame {
-                Frame::Expr(expr) => match &expr.kind {
-                    TypedExprKind::Var { name, overloads } => {
-                        if bound.iter().any(|n| n == name) {
-                            continue;
-                        }
-                        if !self.engine.natives.has_name(name) {
-                            if self.engine.env.get(name).is_some() {
-                                continue;
-                            }
-                            if self.engine.type_system.class_methods.contains_key(name) {
-                                continue;
-                            }
-                            return Err(EngineError::UnknownVar(name.clone()));
-                        }
-                        if !overloads.is_empty()
-                            && expr.typ.ftv().is_empty()
-                            && !overloads.iter().any(|t| unify(t, &expr.typ).is_ok())
-                        {
-                            return Err(EngineError::MissingImpl {
-                                name: name.clone(),
-                                typ: expr.typ.to_string(),
-                            });
-                        }
-                        if expr.typ.ftv().is_empty() && !self.has_impl(name, &expr.typ) {
-                            return Err(EngineError::MissingImpl {
-                                name: name.clone(),
-                                typ: expr.typ.to_string(),
-                            });
-                        }
-                    }
-                    TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
-                        for elem in elems.iter().rev() {
-                            stack.push(Frame::Expr(elem));
-                        }
-                    }
-                    TypedExprKind::Dict(kvs) => {
-                        for v in kvs.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                    }
-                    TypedExprKind::RecordUpdate { base, updates } => {
-                        for v in updates.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                        stack.push(Frame::Expr(base));
-                    }
-                    TypedExprKind::App(f, x) => {
-                        stack.push(Frame::Expr(x));
-                        stack.push(Frame::Expr(f));
-                    }
-                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
-                    TypedExprKind::Lam { param, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(param.clone()));
-                    }
-                    TypedExprKind::Let { name, def, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(name.clone()));
-                        stack.push(Frame::Expr(def));
-                    }
-                    TypedExprKind::LetRec { bindings, body } => {
-                        if !bindings.is_empty() {
-                            stack.push(Frame::Pop(bindings.len()));
-                            stack.push(Frame::Expr(body));
-                            for (_, def) in bindings.iter().rev() {
-                                stack.push(Frame::Expr(def));
-                            }
-                            stack.push(Frame::PushMany(
-                                bindings.iter().map(|(name, _)| name.clone()).collect(),
-                            ));
-                        } else {
-                            stack.push(Frame::Expr(body));
-                        }
-                    }
-                    TypedExprKind::Ite {
-                        cond,
-                        then_expr,
-                        else_expr,
-                    } => {
-                        stack.push(Frame::Expr(else_expr));
-                        stack.push(Frame::Expr(then_expr));
-                        stack.push(Frame::Expr(cond));
-                    }
-                    TypedExprKind::Match { scrutinee, arms } => {
-                        for (pat, arm_expr) in arms.iter().rev() {
-                            let mut bindings = Vec::new();
-                            collect_pattern_bindings(pat, &mut bindings);
-                            let count = bindings.len();
-                            if count != 0 {
-                                stack.push(Frame::Pop(count));
-                                stack.push(Frame::Expr(arm_expr));
-                                stack.push(Frame::PushMany(bindings));
-                            } else {
-                                stack.push(Frame::Expr(arm_expr));
-                            }
-                        }
-                        stack.push(Frame::Expr(scrutinee));
-                    }
-                    TypedExprKind::Bool(..)
-                    | TypedExprKind::Uint(..)
-                    | TypedExprKind::Int(..)
-                    | TypedExprKind::Float(..)
-                    | TypedExprKind::String(..)
-                    | TypedExprKind::Uuid(..)
-                    | TypedExprKind::DateTime(..) => {}
-                    TypedExprKind::Hole => return Err(EngineError::UnsupportedExpr),
-                },
-                Frame::Push(sym) => bound.push(sym),
-                Frame::PushMany(syms) => bound.extend(syms),
-                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
-            }
-        }
-        Ok(())
-    }
-
-    fn has_impl(&self, name: &str, typ: &Type) -> bool {
-        let sym_name = sym(name);
-        self.engine
-            .natives
-            .get(&sym_name)
-            .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
-            .unwrap_or(false)
+        type_check_engine(&mut self.engine, expr)
     }
 
     fn collect_externs(&self, expr: &TypedExpr, env: &Env) -> CompiledExterns {
@@ -3352,6 +3239,16 @@ where
         &mut self,
         program: &CompiledProgram,
         gas: &mut GasMeter,
+    ) -> Result<Pointer, EvalError> {
+        self.run_internal(program, gas)
+            .await
+            .map_err(EvalError::from)
+    }
+
+    pub(crate) async fn run_internal(
+        &mut self,
+        program: &CompiledProgram,
+        gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
         check_cancelled(&self.runtime.engine)?;
         for name in &program.externs.globals {
@@ -3396,11 +3293,10 @@ where
         &mut self,
         expr: &Expr,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
-        let compiler = self
-            .compiler
-            .as_mut()
-            .ok_or_else(|| EngineError::Internal("evaluator has no compiler".into()))?;
+    ) -> Result<(Pointer, Type), ExecutionError> {
+        let compiler = self.compiler.as_mut().ok_or_else(|| {
+            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
+        })?;
         let program = compiler.compile_expr(expr)?;
         self.sync_runtime_from_compiler();
         let typ = program.result_type.clone();

@@ -256,7 +256,10 @@ async fn eval_can_be_cancelled_while_waiting_on_async_native() {
     let res = engine.evaluator().eval(expr.as_ref(), &mut gas).await;
     let joined = canceller.join();
     assert!(joined.is_ok(), "cancel thread panicked");
-    assert!(matches!(res, Err(EngineError::Cancelled)));
+    assert!(matches!(
+        res,
+        Err(ref err) if matches!(err.as_engine_error(), EngineError::Cancelled)
+    ));
 }
 
 #[tokio::test]
@@ -286,7 +289,10 @@ async fn eval_can_be_cancelled_while_waiting_on_non_cancellable_async_native() {
     let res = engine.evaluator().eval(expr.as_ref(), &mut gas).await;
     let joined = canceller.join();
     assert!(joined.is_ok(), "cancel thread panicked");
-    assert!(matches!(res, Err(EngineError::Cancelled)));
+    assert!(matches!(
+        res,
+        Err(ref err) if matches!(err.as_engine_error(), EngineError::Cancelled)
+    ));
 }
 
 #[tokio::test]
@@ -313,7 +319,7 @@ async fn native_per_impl_gas_cost_is_charged() {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
-    assert!(matches!(err, EngineError::OutOfGas(..)));
+    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
 }
 
 #[tokio::test]
@@ -358,7 +364,7 @@ async fn async_native_per_impl_gas_cost_is_charged() {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
-    assert!(matches!(err, EngineError::OutOfGas(..)));
+    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
 }
 
 #[tokio::test]
@@ -391,7 +397,7 @@ async fn cancellable_async_native_per_impl_gas_cost_is_charged() {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
-    assert!(matches!(err, EngineError::OutOfGas(..)));
+    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
 }
 
 #[tokio::test]
@@ -413,7 +419,10 @@ async fn record_update_requires_known_variant_for_sum_types() {
         .eval(program.expr.as_ref(), &mut gas)
         .await
     {
-        Err(EngineError::Type(err)) => {
+        Err(err) => {
+            let EngineError::Type(err) = err.into_engine_error() else {
+                panic!("expected type error");
+            };
             let err = strip_span(err);
             assert!(matches!(err, TypeError::FieldNotKnown { .. }));
         }

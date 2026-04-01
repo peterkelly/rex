@@ -103,7 +103,11 @@ async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     source: &str,
 ) -> Result<(Pointer, Type), rexlang_engine::EngineError> {
     let mut gas = unlimited_gas();
-    engine.evaluator().eval_snippet(source, &mut gas).await
+    engine
+        .evaluator()
+        .eval_snippet(source, &mut gas)
+        .await
+        .map_err(|err| err.into_engine_error())
 }
 
 async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
@@ -116,6 +120,7 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
         .evaluator()
         .eval_snippet_at(source, importer_path, &mut gas)
         .await
+        .map_err(|err| err.into_engine_error())
 }
 
 macro_rules! pvals {

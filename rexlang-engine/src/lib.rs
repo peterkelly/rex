@@ -20,7 +20,7 @@ pub use engine::{
     RexAdt, RexDefault, RuntimeEnv, SyncNativeCallable, collect_adts_error_to_engine,
 };
 pub use env::Env;
-pub use error::{EngineError, LibraryError};
+pub use error::{CompileError, EngineError, EvalError, ExecutionError, LibraryError};
 pub use libraries::virtual_export_name;
 pub use libraries::{
     CanonicalSymbol, Library, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,

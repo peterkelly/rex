@@ -138,7 +138,7 @@ async fn match_ascribed_library_type_with_overlapping_constructor_is_ambiguous_r
         .await
         .expect_err("expected ambiguity error for overlapping constructor in match pattern");
 
-    match err {
+    match err.into_engine_error() {
         EngineError::Type(mut e) => {
             while let TypeError::Spanned { error, .. } = e {
                 e = *error;

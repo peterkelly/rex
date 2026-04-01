@@ -1,6 +1,11 @@
 # Rex Engine (`rexlang-engine`)
 
-This crate evaluates Rex ASTs and supports host-native injection of functions and values. Evaluation is type-aware: the engine runs the Rex type system first, then evaluates a typed AST so overloads and native implementations are selected by type. The runtime operates on `Value` and supports closures, application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
+This crate evaluates Rex ASTs and supports host-native injection of functions and values. The API
+now exposes an explicit preparation boundary: `Engine` builds the host environment, `Compiler`
+prepares Rex code into `CompiledProgram`, and `Evaluator` runs prepared programs. The current
+implementation still keeps engine-backed state internally, but the compile/runtime split is now a
+first-class part of the public API. The runtime operates on `Value` and supports closures,
+application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 
 ## Quickstart
 
@@ -21,15 +26,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
+    let mut compiler = engine.compiler();
+    let mut evaluator = engine.evaluator();
     let mut gas = GasMeter::default();
-    let value = engine
-        .eval_with_gas(program.expr.as_ref(), &mut gas)
-        .await?;
+    let compiled = compiler.compile_expr(program.expr.as_ref())?;
+    let value = evaluator.run(&compiled, &mut gas).await?;
 
     assert_eq!(engine.heap.pointer_as_i32(&value)?, 43);
     Ok(())
 }
 ```
+
+Phase-specific errors:
+
+- `Compiler` returns `CompileError`
+- `Evaluator::run` returns `EvalError`
+- convenience helpers like `eval_snippet` return `ExecutionError`
 
 ## Injection API
 

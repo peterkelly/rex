@@ -25,7 +25,8 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let (pointer, ty) = engine
         .evaluator()
         .eval(program.expr.as_ref(), &mut gas)
-        .await?;
+        .await
+        .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();
     Ok((heap, pointer, ty))
 }

@@ -41,6 +41,7 @@ async fn eval_expr(
         .evaluator()
         .eval(expr, &mut gas)
         .await
+        .map_err(|err| err.into_engine_error())
         .map(|(value, _)| value)
 }
 
@@ -310,7 +311,7 @@ async fn eval_with_gas_rejects_out_of_budget() {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
-    assert!(matches!(err, EngineError::OutOfGas(..)));
+    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
 }
 
 #[test]

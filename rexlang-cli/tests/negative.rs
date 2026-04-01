@@ -35,7 +35,7 @@ async fn compile_err(code: &str) -> EngineError {
             let value_type = engine.heap.type_name(&v).unwrap_or("<invalid pointer>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");
         }
-        Err(e) => e,
+        Err(e) => e.into_engine_error(),
     }
 }
 

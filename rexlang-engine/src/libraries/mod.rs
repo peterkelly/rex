@@ -16,7 +16,9 @@ use rexlang_typesystem::{Predicate, Type};
 use rexlang_util::{GasMeter, sha256_hex};
 use uuid::Uuid;
 
-use crate::{CompiledProgram, Compiler, Engine, Evaluator};
+use crate::{
+    CompileError, CompiledProgram, Compiler, Engine, EvalError, Evaluator, ExecutionError,
+};
 use crate::{EngineError, Pointer};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2652,10 +2654,11 @@ where
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<(Vec<Predicate>, Type), EngineError> {
+    ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let (id, bytes) = self.read_local_library_bytes(path.as_ref())?;
         let source = self.decode_local_library_source(&id, bytes)?;
         self.infer_library_source(ResolvedLibrary { id, source }, gas)
+            .map_err(CompileError::from)
     }
 
     fn infer_library_source(
@@ -2695,8 +2698,9 @@ where
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<(Vec<Predicate>, Type), EngineError> {
+    ) -> Result<(Vec<Predicate>, Type), CompileError> {
         self.infer_snippet_with_gas_and_importer(source, gas, None)
+            .map_err(CompileError::from)
     }
 
     pub fn infer_snippet_at(
@@ -2704,9 +2708,10 @@ where
         source: &str,
         importer_path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<(Vec<Predicate>, Type), EngineError> {
+    ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let path = importer_path.as_ref().to_path_buf();
         self.infer_snippet_with_gas_and_importer(source, gas, Some(path))
+            .map_err(CompileError::from)
     }
 
     fn infer_snippet_with_gas_and_importer(
@@ -2744,8 +2749,9 @@ where
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, EngineError> {
+    ) -> Result<CompiledProgram, CompileError> {
         self.compile_snippet_with_gas_and_importer(source, gas, None)
+            .map_err(CompileError::from)
     }
 
     pub fn compile_snippet_at(
@@ -2753,12 +2759,41 @@ where
         source: &str,
         importer_path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, EngineError> {
+    ) -> Result<CompiledProgram, CompileError> {
         let path = importer_path.as_ref().to_path_buf();
         self.compile_snippet_with_gas_and_importer(source, gas, Some(path))
+            .map_err(CompileError::from)
+    }
+
+    pub fn compile_library_file(
+        &mut self,
+        path: impl AsRef<Path>,
+        gas: &mut GasMeter,
+    ) -> Result<CompiledProgram, CompileError> {
+        let (id, bytes) = self
+            .engine
+            .read_local_library_bytes(path.as_ref())
+            .map_err(CompileError::from)?;
+        let source = self
+            .engine
+            .decode_local_library_source(&id, bytes)
+            .map_err(CompileError::from)?;
+        self.compile_library_source(ResolvedLibrary { id, source }, gas)
+            .map_err(CompileError::from)
     }
 
     pub async fn compile_repl_program(
+        &mut self,
+        program: &Program,
+        state: &mut ReplState,
+        gas: &mut GasMeter,
+    ) -> Result<CompiledProgram, CompileError> {
+        self.compile_repl_program_internal(program, state, gas)
+            .await
+            .map_err(CompileError::from)
+    }
+
+    async fn compile_repl_program_internal(
         &mut self,
         program: &Program,
         state: &mut ReplState,
@@ -2802,7 +2837,37 @@ where
         state
             .defined_values
             .extend(decl_value_names(&program.decls));
-        self.compile_expr(rewritten.expr.as_ref())
+        self.compile_expr_internal(rewritten.expr.as_ref())
+    }
+
+    fn compile_library_source(
+        &mut self,
+        resolved: ResolvedLibrary,
+        gas: &mut GasMeter,
+    ) -> Result<CompiledProgram, EngineError> {
+        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
+        let mut loading: HashSet<LibraryId> = HashSet::new();
+
+        loading.insert(resolved.id.clone());
+
+        let prefix = prefix_for_library(&resolved.id);
+        let program =
+            parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
+        let rewritten = self.engine.rewrite_program_with_imports(
+            &program,
+            Some(resolved.id.clone()),
+            &prefix,
+            gas,
+            &mut loaded,
+            &mut loading,
+        )?;
+        self.engine.inject_decls(&rewritten.decls)?;
+
+        let exports = exports_from_program(&program, &prefix, &resolved.id);
+        loaded.insert(resolved.id.clone(), exports);
+        loading.remove(&resolved.id);
+
+        self.compile_expr_internal(rewritten.expr.as_ref())
     }
 
     fn compile_snippet_with_gas_and_importer(
@@ -2827,7 +2892,7 @@ where
         )?;
 
         self.engine.inject_decls(&rewritten.decls)?;
-        self.compile_expr(rewritten.expr.as_ref())
+        self.compile_expr_internal(rewritten.expr.as_ref())
     }
 }
 
@@ -2839,27 +2904,39 @@ where
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
+    ) -> Result<(Pointer, Type), ExecutionError> {
         let (id, bytes) = self
             .runtime
             .engine
-            .read_local_library_bytes(path.as_ref())?;
+            .read_local_library_bytes(path.as_ref())
+            .map_err(CompileError::from)?;
         let source_fingerprint = sha256_hex(&bytes);
-        if let Some(inst) = self.runtime.engine.modules.cached(&id)? {
+        if let Some(inst) = self
+            .runtime
+            .engine
+            .modules
+            .cached(&id)
+            .map_err(EvalError::from)?
+        {
             if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
                 return Ok((inst.init_value, inst.init_type));
             }
-            self.runtime.engine.invalidate_library_caches(&id)?;
+            self.runtime
+                .engine
+                .invalidate_library_caches(&id)
+                .map_err(EvalError::from)?;
         }
         let source = self
             .runtime
             .engine
-            .decode_local_library_source(&id, bytes)?;
+            .decode_local_library_source(&id, bytes)
+            .map_err(CompileError::from)?;
         let inst = self
             .runtime
             .engine
             .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
-            .await?;
+            .await
+            .map_err(CompileError::from)?;
         Ok((inst.init_value, inst.init_type))
     }
 
@@ -2867,11 +2944,17 @@ where
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
+    ) -> Result<(Pointer, Type), ExecutionError> {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
         let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-        if let Some(inst) = self.runtime.engine.modules.cached(&id)? {
+        if let Some(inst) = self
+            .runtime
+            .engine
+            .modules
+            .cached(&id)
+            .map_err(EvalError::from)?
+        {
             return Ok((inst.init_value, inst.init_type));
         }
         let inst = self
@@ -2884,7 +2967,8 @@ where
                 },
                 gas,
             )
-            .await?;
+            .await
+            .map_err(CompileError::from)?;
         Ok((inst.init_value, inst.init_type))
     }
 
@@ -2892,11 +2976,10 @@ where
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
-        let compiler = self
-            .compiler
-            .as_mut()
-            .ok_or_else(|| EngineError::Internal("evaluator has no compiler".into()))?;
+    ) -> Result<(Pointer, Type), ExecutionError> {
+        let compiler = self.compiler.as_mut().ok_or_else(|| {
+            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
+        })?;
         let program = compiler.compile_snippet(source, gas)?;
         self.sync_runtime_from_compiler();
         let ty = program.result_type.clone();
@@ -2909,11 +2992,10 @@ where
         program: &Program,
         state: &mut ReplState,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
-        let compiler = self
-            .compiler
-            .as_mut()
-            .ok_or_else(|| EngineError::Internal("evaluator has no compiler".into()))?;
+    ) -> Result<(Pointer, Type), ExecutionError> {
+        let compiler = self.compiler.as_mut().ok_or_else(|| {
+            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
+        })?;
         let compiled = compiler.compile_repl_program(program, state, gas).await?;
         self.sync_runtime_from_compiler();
         let ty = compiled.result_type.clone();
@@ -2926,12 +3008,11 @@ where
         source: &str,
         importer_path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
+    ) -> Result<(Pointer, Type), ExecutionError> {
         let path = importer_path.as_ref().to_path_buf();
-        let compiler = self
-            .compiler
-            .as_mut()
-            .ok_or_else(|| EngineError::Internal("evaluator has no compiler".into()))?;
+        let compiler = self.compiler.as_mut().ok_or_else(|| {
+            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
+        })?;
         let program = compiler.compile_snippet_at(source, path, gas)?;
         self.sync_runtime_from_compiler();
         let ty = program.result_type.clone();

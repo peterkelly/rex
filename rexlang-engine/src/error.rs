@@ -277,6 +277,58 @@ pub enum EngineError {
     Suspended,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct CompileError(#[from] EngineError);
+
+impl CompileError {
+    pub fn as_engine_error(&self) -> &EngineError {
+        &self.0
+    }
+
+    pub fn into_engine_error(self) -> EngineError {
+        self.0
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct EvalError(#[from] EngineError);
+
+impl EvalError {
+    pub fn as_engine_error(&self) -> &EngineError {
+        &self.0
+    }
+
+    pub fn into_engine_error(self) -> EngineError {
+        self.0
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutionError {
+    #[error(transparent)]
+    Compile(#[from] CompileError),
+    #[error(transparent)]
+    Eval(#[from] EvalError),
+}
+
+impl ExecutionError {
+    pub fn as_engine_error(&self) -> &EngineError {
+        match self {
+            ExecutionError::Compile(err) => err.as_engine_error(),
+            ExecutionError::Eval(err) => err.as_engine_error(),
+        }
+    }
+
+    pub fn into_engine_error(self) -> EngineError {
+        match self {
+            ExecutionError::Compile(err) => err.into_engine_error(),
+            ExecutionError::Eval(err) => err.into_engine_error(),
+        }
+    }
+}
+
 impl From<LibraryError> for EngineError {
     fn from(err: LibraryError) -> Self {
         EngineError::Library(Box::new(err))

@@ -21,9 +21,13 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - For untrusted code, set `TypeSystemLimits::safe_defaults` before inference.
 - `rexlang-engine`: runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
-  - `Engine::inject_decls(&program.decls)` to make user declarations available at runtime.
-  - `Engine::eval_with_gas(&program.expr, &mut gas).await` to evaluate.
+  - `Engine::compiler()` to create a preparation view over that environment.
+  - `Engine::runtime_env()` / `Engine::evaluator()` to create runtime views over that environment.
+  - `Compiler::compile_*` to prepare source into `CompiledProgram`.
+  - `Evaluator::run(&compiled, &mut gas).await` to execute a prepared program.
+  - convenience helpers like `Evaluator::eval_snippet` still exist, but they are just compile-then-run wrappers.
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while pointer-level APIs (`export_native*`) receive `EvaluatorRef<'_, State>`.
+  - public phase errors are split as `CompileError`, `EvalError`, and `ExecutionError` (for convenience entry points that do both phases).
   - Host library injection API: `Library` + `Export` + `Engine::inject_library`.
 - `rexlang-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
@@ -31,7 +35,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 ## Design Notes
 
-- **Typed evaluation**: `rexlang-engine` always evaluates a `TypedExpr`; it typechecks first (via `rexlang-typesystem`) and then evaluates. This keeps runtime behavior predictable and makes native-function dispatch type-directed.
+- **Typed preparation**: `rexlang-engine` prepares code into a typed form before execution. The current `CompiledProgram` still stores a typed AST plus runtime linkage metadata, but the compile/runtime boundary is now explicit in the API.
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rexlang-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)

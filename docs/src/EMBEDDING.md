@@ -19,14 +19,50 @@ Recommended defaults for untrusted input:
 
 - Always cap parsing nesting depth with `ParserLimits::safe_defaults()` (or stricter).
 - Always run with a bounded `GasMeter` for **parse + infer + eval** (and calibrate budgets with real workloads).
-- Treat `EngineError::OutOfGas` and `EngineError::Cancelled` as normal user-visible outcomes.
+- Treat `EvalError::OutOfGas` / `EvalError::Cancelled` and the same variants wrapped inside
+  `ExecutionError` as normal user-visible outcomes.
 - Run evaluation in an isolation boundary you can hard-kill (separate process/container), with CPU/RSS/time limits.
 
 Evaluation API:
 
 - Evaluation is async and gas-metered via `Engine::eval_with_gas`.
 
-## Evaluate Rex Code
+## Compile Then Run
+
+`rexlang-engine` now has an explicit preparation boundary:
+
+- `Engine` builds the host environment.
+- `Compiler` prepares user code into a `CompiledProgram`.
+- `Evaluator` runs prepared code against a `RuntimeEnv`.
+
+The current implementation still keeps engine-backed state internally, but the public API now
+separates compile-time and runtime phases.
+
+```rust
+use rexlang::{Engine, GasMeter};
+
+let engine = Engine::with_prelude(())?;
+let mut compiler = engine.compiler();
+let mut evaluator = engine.evaluator();
+let mut gas = GasMeter::default();
+
+let program = compiler.compile_snippet("let x = 1 + 2 in x * 3", &mut gas)?;
+let value = evaluator.run(&program, &mut gas).await?;
+assert_eq!(program.result_type().to_string(), "i32");
+```
+
+Phase-specific errors:
+
+- `Compiler` APIs return `CompileError`
+- `Evaluator::run` returns `EvalError`
+- convenience helpers like `eval_snippet` return `ExecutionError` because they still do both
+  phases
+
+`Evaluator` is a stateful session. Reusing one evaluator preserves the compiler/runtime snapshot it
+has accumulated so far, which matters for REPL-style workflows. Constructing a fresh evaluator from
+the same engine starts a fresh session.
+
+## Evaluate Rex Code Directly
 
 ```rust
 use rexlang::{Engine, GasMeter, Parser, Token};
@@ -38,9 +74,10 @@ let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| form
 let mut engine = Engine::with_prelude(())?;
 engine.inject_decls(&program.decls)?;
 let mut gas = GasMeter::default();
-let value = engine
-    .eval_with_gas(program.expr.as_ref(), &mut gas)
-    .await?;
+let value = engine.evaluator().run(
+    &engine.compiler().compile_expr(program.expr.as_ref())?,
+    &mut gas,
+).await?;
 println!("{value}");
 ```
 
@@ -101,6 +138,7 @@ Notes:
 - local imports are resolved relative to the importing library path.
 - include roots are searched after local-relative imports.
 - type-only workflows can use `infer_library_file` with the same resolver setup.
+- compile-only workflows can use `Compiler::compile_library_file` with the same resolver setup.
 - import clauses (`(*)` / item lists) import exported values only.
 - library aliases (`import x as M`) provide qualified access to exported values, types, and classes.
 
