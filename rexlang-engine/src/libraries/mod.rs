@@ -2745,6 +2745,22 @@ impl<State> Compiler<State>
 where
     State: Clone + Send + Sync + 'static,
 {
+    fn rewrite_and_inject_program(
+        &mut self,
+        program: &Program,
+        importer: Option<LibraryId>,
+        prefix: &str,
+        gas: &mut GasMeter,
+        loaded: &mut HashMap<LibraryId, LibraryExports>,
+        loading: &mut HashSet<LibraryId>,
+    ) -> Result<Program, EngineError> {
+        let rewritten = self
+            .engine
+            .rewrite_program_with_imports(program, importer, prefix, gas, loaded, loading)?;
+        self.engine.inject_decls(&rewritten.decls)?;
+        Ok(rewritten)
+    }
+
     pub fn compile_snippet(
         &mut self,
         source: &str,
@@ -2853,7 +2869,7 @@ where
         let prefix = prefix_for_library(&resolved.id);
         let program =
             parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
-        let rewritten = self.engine.rewrite_program_with_imports(
+        let rewritten = self.rewrite_and_inject_program(
             &program,
             Some(resolved.id.clone()),
             &prefix,
@@ -2861,7 +2877,6 @@ where
             &mut loaded,
             &mut loading,
         )?;
-        self.engine.inject_decls(&rewritten.decls)?;
 
         let exports = exports_from_program(&program, &prefix, &resolved.id);
         loaded.insert(resolved.id.clone(), exports);
@@ -2882,7 +2897,7 @@ where
         let prefix = format!("@snippet{}", Uuid::new_v4());
         let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
         let mut loading: HashSet<LibraryId> = HashSet::new();
-        let rewritten = self.engine.rewrite_program_with_imports(
+        let rewritten = self.rewrite_and_inject_program(
             &program,
             importer,
             &prefix,
@@ -2890,8 +2905,6 @@ where
             &mut loaded,
             &mut loading,
         )?;
-
-        self.engine.inject_decls(&rewritten.decls)?;
         self.compile_expr_internal(rewritten.expr.as_ref())
     }
 }
@@ -2977,14 +2990,8 @@ where
         source: &str,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
-        let compiler = self.compiler.as_mut().ok_or_else(|| {
-            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
-        })?;
-        let program = compiler.compile_snippet(source, gas)?;
-        self.sync_runtime_from_compiler();
-        let ty = program.result_type.clone();
-        let value = self.run(&program, gas).await?;
-        Ok((value, ty))
+        self.compile_and_run(gas, |compiler, gas| compiler.compile_snippet(source, gas))
+            .await
     }
 
     pub async fn eval_repl_program(
@@ -3010,13 +3017,9 @@ where
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         let path = importer_path.as_ref().to_path_buf();
-        let compiler = self.compiler.as_mut().ok_or_else(|| {
-            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
-        })?;
-        let program = compiler.compile_snippet_at(source, path, gas)?;
-        self.sync_runtime_from_compiler();
-        let ty = program.result_type.clone();
-        let value = self.run(&program, gas).await?;
-        Ok((value, ty))
+        self.compile_and_run(gas, |compiler, gas| {
+            compiler.compile_snippet_at(source, &path, gas)
+        })
+        .await
     }
 }

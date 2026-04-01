@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::future::Future;
+use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
@@ -1393,6 +1394,10 @@ impl CompiledProgram {
     pub fn externs(&self) -> &CompiledExterns {
         &self.externs
     }
+
+    pub fn link_fingerprint(&self) -> u64 {
+        self.externs.fingerprint()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1400,6 +1405,89 @@ pub struct CompiledExterns {
     pub globals: Vec<Symbol>,
     pub natives: Vec<Symbol>,
     pub class_methods: Vec<Symbol>,
+}
+
+impl CompiledExterns {
+    pub fn is_empty(&self) -> bool {
+        self.globals.is_empty() && self.natives.is_empty() && self.class_methods.is_empty()
+    }
+
+    pub fn fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        "globals".hash(&mut hasher);
+        self.globals.hash(&mut hasher);
+        "natives".hash(&mut hasher);
+        self.natives.hash(&mut hasher);
+        "class_methods".hash(&mut hasher);
+        self.class_methods.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    pub fn compatibility_with(&self, capabilities: &RuntimeCapabilities) -> RuntimeCompatibility {
+        let globals = capabilities.globals.iter().cloned().collect::<HashSet<_>>();
+        let natives = capabilities.natives.iter().cloned().collect::<HashSet<_>>();
+        let class_methods = capabilities
+            .class_methods
+            .iter()
+            .cloned()
+            .collect::<HashSet<_>>();
+
+        RuntimeCompatibility {
+            missing_globals: self
+                .globals
+                .iter()
+                .filter(|name| !globals.contains(*name))
+                .cloned()
+                .collect(),
+            missing_natives: self
+                .natives
+                .iter()
+                .filter(|name| !natives.contains(*name))
+                .cloned()
+                .collect(),
+            missing_class_methods: self
+                .class_methods
+                .iter()
+                .filter(|name| !class_methods.contains(*name))
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeCapabilities {
+    pub globals: Vec<Symbol>,
+    pub natives: Vec<Symbol>,
+    pub class_methods: Vec<Symbol>,
+}
+
+impl RuntimeCapabilities {
+    pub fn fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        "globals".hash(&mut hasher);
+        self.globals.hash(&mut hasher);
+        "natives".hash(&mut hasher);
+        self.natives.hash(&mut hasher);
+        "class_methods".hash(&mut hasher);
+        self.class_methods.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeCompatibility {
+    pub missing_globals: Vec<Symbol>,
+    pub missing_natives: Vec<Symbol>,
+    pub missing_class_methods: Vec<Symbol>,
+}
+
+impl RuntimeCompatibility {
+    pub fn is_compatible(&self) -> bool {
+        self.missing_globals.is_empty()
+            && self.missing_natives.is_empty()
+            && self.missing_class_methods.is_empty()
+    }
 }
 
 #[derive(Clone)]
@@ -1416,6 +1504,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) engine: Engine<State>,
+    capabilities: RuntimeCapabilities,
 }
 
 pub struct Evaluator<State = ()>
@@ -1534,6 +1623,7 @@ where
     pub fn runtime_env(&self) -> RuntimeEnv<State> {
         RuntimeEnv {
             engine: self.clone(),
+            capabilities: runtime_capabilities(self),
         }
     }
 
@@ -3209,12 +3299,83 @@ where
     }
 }
 
+fn env_symbols(env: &Env) -> Vec<Symbol> {
+    let mut names = HashSet::new();
+    let mut current = Some(env);
+    while let Some(frame) = current {
+        names.extend(frame.bindings().keys().cloned());
+        current = frame.parent();
+    }
+    let mut out = names.into_iter().collect::<Vec<_>>();
+    out.sort();
+    out
+}
+
+fn runtime_capabilities<State>(engine: &Engine<State>) -> RuntimeCapabilities
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let globals = env_symbols(&engine.env);
+    let mut natives = engine.natives.entries.keys().cloned().collect::<Vec<_>>();
+    let mut class_methods = engine
+        .type_system
+        .class_methods
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    natives.sort();
+    class_methods.sort();
+    RuntimeCapabilities {
+        globals,
+        natives,
+        class_methods,
+    }
+}
+
 impl<State> RuntimeEnv<State>
 where
     State: Clone + Send + Sync + 'static,
 {
     pub fn new(engine: Engine<State>) -> Self {
-        Self { engine }
+        let capabilities = runtime_capabilities(&engine);
+        Self {
+            engine,
+            capabilities,
+        }
+    }
+
+    pub fn capabilities(&self) -> &RuntimeCapabilities {
+        &self.capabilities
+    }
+
+    pub fn fingerprint(&self) -> u64 {
+        self.capabilities.fingerprint()
+    }
+
+    pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
+        program.externs.compatibility_with(&self.capabilities)
+    }
+
+    pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
+        self.validate_internal(program).map_err(EvalError::from)
+    }
+
+    pub(crate) fn validate_internal(&self, program: &CompiledProgram) -> Result<(), EngineError> {
+        let compatibility = self.compatibility_with(program);
+        if compatibility.is_compatible() {
+            Ok(())
+        } else {
+            Err(EngineError::Link {
+                missing_globals: compatibility.missing_globals,
+                missing_natives: compatibility.missing_natives,
+                missing_class_methods: compatibility.missing_class_methods,
+            })
+        }
+    }
+
+    pub(crate) fn sync_from_engine(&mut self, engine: &Engine<State>) {
+        self.engine = engine.clone();
+        self.capabilities = runtime_capabilities(engine);
     }
 }
 
@@ -3231,7 +3392,7 @@ where
 
     pub(crate) fn sync_runtime_from_compiler(&mut self) {
         if let Some(compiler) = &self.compiler {
-            self.runtime.engine = compiler.engine.clone();
+            self.runtime.sync_from_engine(&compiler.engine);
         }
     }
 
@@ -3251,35 +3412,7 @@ where
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
         check_cancelled(&self.runtime.engine)?;
-        for name in &program.externs.globals {
-            if self.runtime.engine.env.get(name).is_none()
-                && !self.runtime.engine.natives.has_name(name)
-                && !self
-                    .runtime
-                    .engine
-                    .type_system
-                    .class_methods
-                    .contains_key(name)
-            {
-                return Err(EngineError::UnknownVar(name.clone()));
-            }
-        }
-        for name in &program.externs.natives {
-            if !self.runtime.engine.natives.has_name(name) {
-                return Err(EngineError::UnknownVar(name.clone()));
-            }
-        }
-        for name in &program.externs.class_methods {
-            if !self
-                .runtime
-                .engine
-                .type_system
-                .class_methods
-                .contains_key(name)
-            {
-                return Err(EngineError::UnknownVar(name.clone()));
-            }
-        }
+        self.runtime.validate_internal(program)?;
         eval_typed_expr(
             &self.runtime.engine,
             &program.env,
@@ -3294,10 +3427,22 @@ where
         expr: &Expr,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
+        self.compile_and_run(gas, |compiler, _gas| compiler.compile_expr(expr))
+            .await
+    }
+
+    pub(crate) async fn compile_and_run<F>(
+        &mut self,
+        gas: &mut GasMeter,
+        compile: F,
+    ) -> Result<(Pointer, Type), ExecutionError>
+    where
+        F: FnOnce(&mut Compiler<State>, &mut GasMeter) -> Result<CompiledProgram, CompileError>,
+    {
         let compiler = self.compiler.as_mut().ok_or_else(|| {
             CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
         })?;
-        let program = compiler.compile_expr(expr)?;
+        let program = compile(compiler, gas)?;
         self.sync_runtime_from_compiler();
         let typ = program.result_type.clone();
         let value = self.run(&program, gas).await?;

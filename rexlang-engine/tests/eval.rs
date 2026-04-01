@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use rexlang_ast::expr::sym_eq;
+use rexlang_ast::expr::{sym, sym_eq};
 use rexlang_engine::{Engine, EngineError, EvaluatorRef, Value, assert_pointer_eq};
 use rexlang_lexer::Token;
 use rexlang_parser::Parser;
@@ -208,6 +208,51 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         }
         _ => panic!("expected tuple"),
     }
+}
+
+#[tokio::test]
+async fn runtime_env_validates_compiled_program_requirements_before_eval() {
+    let mut gas = unlimited_gas();
+    let mut compile_engine = Engine::with_prelude(()).unwrap();
+    compile_engine
+        .export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
+        .unwrap();
+
+    let mut compiler = compile_engine.compiler();
+    let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
+
+    assert_eq!(program.externs().natives, vec![sym("inc")]);
+    assert_ne!(program.link_fingerprint(), 0);
+
+    let runtime_engine = Engine::with_prelude(()).unwrap();
+    let runtime = runtime_engine.runtime_env();
+    let compatibility = runtime.compatibility_with(&program);
+    assert_eq!(compatibility.missing_natives, vec![sym("inc")]);
+    assert!(!compatibility.is_compatible());
+    assert_ne!(runtime.fingerprint(), 0);
+
+    let err = runtime.validate(&program).unwrap_err().into_engine_error();
+    assert!(matches!(
+        err,
+        EngineError::Link {
+            missing_natives,
+            ..
+        } if missing_natives == vec![sym("inc")]
+    ));
+
+    let mut evaluator = rexlang_engine::Evaluator::new(runtime);
+    let err = evaluator
+        .run(&program, &mut gas)
+        .await
+        .unwrap_err()
+        .into_engine_error();
+    assert!(matches!(
+        err,
+        EngineError::Link {
+            missing_natives,
+            ..
+        } if missing_natives == vec![sym("inc")]
+    ));
 }
 
 #[tokio::test]

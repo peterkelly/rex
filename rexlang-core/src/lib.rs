@@ -9,8 +9,8 @@ pub use rexlang_engine::{
     CompiledExterns, CompiledProgram, Compiler, Engine, EngineError, EngineOptions, EvalError,
     Evaluator, EvaluatorRef, ExecutionError, Export, FromPointer, Handler, Heap, IntoPointer,
     Library, NativeFuture, PRELUDE_LIBRARY_NAME, Pointer, PreludeMode, ROOT_LIBRARY_NAME,
-    ReplState, RexAdt, RexDefault, RexType, RuntimeEnv, SyncNativeCallable, Value,
-    ValueDisplayOptions, assert_pointer_eq, closure_debug, closure_eq,
+    ReplState, RexAdt, RexDefault, RexType, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv,
+    SyncNativeCallable, Value, ValueDisplayOptions, assert_pointer_eq, closure_debug, closure_eq,
     collect_adts_error_to_engine, pointer_display, pointer_display_with, value_debug, value_eq,
     virtual_export_name,
 };
