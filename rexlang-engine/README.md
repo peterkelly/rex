@@ -26,8 +26,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
-    let mut compiler = engine.compiler();
-    let mut evaluator = engine.evaluator();
+    let mut compiler = Compiler::new(engine.clone());
+    let mut evaluator =
+        Evaluator::new_with_compiler(RuntimeEnv::new(engine.clone()), Compiler::new(engine.clone()));
     let mut gas = GasMeter::default();
     let compiled = compiler.compile_expr(program.expr.as_ref())?;
     let value = evaluator.run(&compiled, &mut gas).await?;

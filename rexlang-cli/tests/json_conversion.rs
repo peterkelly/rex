@@ -292,30 +292,36 @@ async fn eval_entry_points_return_type_for_json_eval() {
 
     let mut gas = GasMeter::default();
     let expr_program = parse_program(rex_code);
-    let (ptr_eval, ty_eval) = engine
-        .evaluator()
-        .eval(expr_program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let (ptr_eval, ty_eval) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(expr_program.expr.as_ref(), &mut gas)
+    .await
+    .unwrap();
     assert_eval_json(&engine, &ptr_eval, &ty_eval, expected_json.clone());
 
     let mut gas = GasMeter::default();
-    let (ptr_snippet, ty_snippet) = engine
-        .evaluator()
-        .eval_snippet(rex_code, &mut gas)
-        .await
-        .unwrap();
+    let (ptr_snippet, ty_snippet) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval_snippet(rex_code, &mut gas)
+    .await
+    .unwrap();
     assert_eval_json(&engine, &ptr_snippet, &ty_snippet, expected_json.clone());
 
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
     let mut gas = GasMeter::default();
-    let (ptr_snippet_at, ty_snippet_at) = engine
-        .evaluator()
-        .eval_snippet_at(rex_code, &importer, &mut gas)
-        .await
-        .unwrap();
+    let (ptr_snippet_at, ty_snippet_at) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval_snippet_at(rex_code, &importer, &mut gas)
+    .await
+    .unwrap();
     assert_eval_json(
         &engine,
         &ptr_snippet_at,
@@ -326,10 +332,12 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let repl_program = parse_program(rex_code);
     let mut repl_state = ReplState::new();
     let mut gas = GasMeter::default();
-    let (ptr_repl, ty_repl) = engine
-        .evaluator()
-        .eval_repl_program(&repl_program, &mut repl_state, &mut gas)
-        .await
-        .unwrap();
+    let (ptr_repl, ty_repl) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval_repl_program(&repl_program, &mut repl_state, &mut gas)
+    .await
+    .unwrap();
     assert_eval_json(&engine, &ptr_repl, &ty_repl, expected_json);
 }

@@ -7512,11 +7512,13 @@ mod tests {
             .expect("parse source");
         let mut engine = Engine::with_prelude(()).expect("build engine");
         engine.inject_decls(&program.decls).expect("inject decls");
-        let (ptr, ty) = engine
-            .evaluator()
-            .eval(program.expr.as_ref(), &mut GasMeter::default())
-            .await
-            .expect("evaluate source");
+        let (ptr, ty) = rexlang_engine::Evaluator::new_with_compiler(
+            rexlang_engine::RuntimeEnv::new(engine.clone()),
+            rexlang_engine::Compiler::new(engine.clone()),
+        )
+        .eval(program.expr.as_ref(), &mut GasMeter::default())
+        .await
+        .expect("evaluate source");
         let display = pointer_display_with(
             &engine.heap,
             &ptr,

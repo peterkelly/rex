@@ -1,6 +1,7 @@
 use rexlang_typesystem::{AdtDecl, Type, collect_adts_in_types};
 
-use crate::engine::{AsyncHandler, EvaluatorRef, Export, Handler, NativeFuture};
+use crate::EvaluatorRef;
+use crate::engine::{AsyncHandler, Export, Handler, NativeFuture};
 use crate::{Engine, EngineError, Pointer, RexAdt};
 
 /// A staged host library that you build up in Rust and later inject into an [`Engine`].

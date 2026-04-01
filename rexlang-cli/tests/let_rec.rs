@@ -10,11 +10,13 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::default();
-    let (pointer, ty) = engine
-        .evaluator()
-        .eval(program.expr.as_ref(), &mut gas)
-        .await
-        .map_err(|err| err.into_engine_error())?;
+    let (pointer, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
+    .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();
     Ok((heap, pointer, ty))
 }

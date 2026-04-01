@@ -37,10 +37,12 @@ async fn run_one(input: &[u8]) {
     if engine.inject_decls(&program.decls).is_err() {
         return;
     }
-    let _ = engine
-        .evaluator()
-        .eval(program.expr.as_ref(), &mut gas)
-        .await;
+    let _ = rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await;
 }
 
 #[tokio::main]

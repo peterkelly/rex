@@ -4,30 +4,36 @@
 //! Evaluation engine for Rex.
 
 mod cancel;
+mod compiler;
 mod engine;
 mod env;
 mod error;
+mod evaluator;
 mod libraries;
 mod prelude;
+mod runtime_env;
 mod stack;
 mod value;
 
 pub use cancel::CancellationToken;
+pub use compiler::Compiler;
 pub use engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, ClassMethodCapability,
-    ClassMethodRequirement, CompiledExterns, CompiledProgram, CompiledProgramBoundary, Compiler,
-    Engine, EngineOptions, Evaluator, EvaluatorRef, Export, Handler, NativeCapability, NativeFn,
-    NativeFuture, NativeRequirement, OverloadedFn, PRELUDE_LIBRARY_NAME, PreludeMode,
-    ROOT_LIBRARY_NAME, RexAdt, RexDefault, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv,
-    RuntimeEnvBoundary, RuntimeLinkContract, SyncNativeCallable, collect_adts_error_to_engine,
+    ClassMethodRequirement, CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine,
+    EngineOptions, Export, Handler, NativeCapability, NativeFn, NativeFuture, NativeRequirement,
+    OverloadedFn, PRELUDE_LIBRARY_NAME, PreludeMode, ROOT_LIBRARY_NAME, RexAdt, RexDefault,
+    RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable,
+    collect_adts_error_to_engine,
 };
 pub use env::Env;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, LibraryError};
+pub use evaluator::{Evaluator, EvaluatorRef};
 pub use libraries::virtual_export_name;
 pub use libraries::{
     CanonicalSymbol, Library, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
     ResolveRequest, ResolvedLibrary, SymbolKind,
 };
+pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
 pub use stack::DEFAULT_STACK_SIZE_BYTES;
 pub use value::{
     Closure, FromPointer, Heap, IntoPointer, Pointer, RexType, Value, ValueDisplayOptions,

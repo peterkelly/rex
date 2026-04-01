@@ -35,11 +35,13 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
         .inject_decls(&program.decls)
         .map_err(|e| format!("{e}"))?;
     let mut gas = GasMeter::default();
-    let (pointer, ty) = engine
-        .evaluator()
-        .eval(program.expr.as_ref(), &mut gas)
-        .await
-        .map_err(|e| format!("{e}"))?;
+    let (pointer, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
+    .map_err(|e| format!("{e}"))?;
     assert!(
         type_compatible(&ty, &expected_ty),
         "eval returned unexpected type for: {code}\nactual: {ty}\nexpected: {expected_ty}"

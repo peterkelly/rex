@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use async_recursion::async_recursion;
@@ -32,8 +31,7 @@ use crate::prelude::{
 };
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{
-    CancellationToken, CompileError, EngineError, Env, EvalError, ExecutionError, FromPointer,
-    IntoPointer, RexType,
+    CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType, evaluator::EvaluatorRef,
 };
 
 pub trait RexDefault<State>
@@ -81,7 +79,7 @@ pub trait RexAdt: RexType {
     }
 }
 
-fn check_runtime_cancelled<State: Clone + Send + Sync + 'static>(
+pub(crate) fn check_runtime_cancelled<State: Clone + Send + Sync + 'static>(
     runtime: &RuntimeSnapshot<State>,
 ) -> Result<(), EngineError> {
     if runtime.cancel.is_cancelled() {
@@ -259,7 +257,7 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
     }
 }
 
-fn type_head_is_var(typ: &Type) -> bool {
+pub(crate) fn type_head_is_var(typ: &Type) -> bool {
     let mut cur = typ;
     while let TypeKind::App(head, _) = cur.as_ref() {
         cur = head;
@@ -276,7 +274,7 @@ fn sanitize_type_name_for_symbol(typ: &Type) -> String {
 
 pub type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
 type NativeId = u64;
-const RUNTIME_LINK_ABI_VERSION: u32 = 1;
+pub(crate) const RUNTIME_LINK_ABI_VERSION: u32 = 1;
 pub type SyncNativeCallable<State> = Arc<
     dyn for<'a> Fn(EvaluatorRef<'a, State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
         + Send
@@ -897,7 +895,7 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
-    async fn call(
+    pub(crate) async fn call(
         &self,
         runtime: &RuntimeSnapshot<State>,
         typ: Type,
@@ -988,11 +986,29 @@ impl NativeFn {
         }
     }
 
+    pub(crate) fn into_parts(
+        self,
+    ) -> (NativeId, Symbol, usize, Type, u64, Vec<Pointer>, Vec<Type>) {
+        (
+            self.native_id,
+            self.name,
+            self.arity,
+            self.typ,
+            self.gas_cost,
+            self.applied,
+            self.applied_types,
+        )
+    }
+
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
     }
 
-    async fn call_zero<State: Clone + Send + Sync + 'static>(
+    pub(crate) fn is_zero_unapplied(&self) -> bool {
+        self.arity == 0 && self.applied.is_empty()
+    }
+
+    pub(crate) async fn call_zero<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeSnapshot<State>,
         gas: &mut GasMeter,
@@ -1197,23 +1213,23 @@ impl OverloadedFn {
 }
 
 #[derive(Clone)]
-struct NativeImpl<State: Clone + Send + Sync + 'static> {
+pub(crate) struct NativeImpl<State: Clone + Send + Sync + 'static> {
     id: NativeId,
     name: Symbol,
     arity: usize,
     scheme: Scheme,
-    func: NativeCallable<State>,
+    pub(crate) func: NativeCallable<State>,
     gas_cost: u64,
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeImpl<State> {
-    fn to_native_fn(&self, typ: Type) -> NativeFn {
+    pub(crate) fn to_native_fn(&self, typ: Type) -> NativeFn {
         NativeFn::new(self.id, self.name.clone(), self.arity, typ, self.gas_cost)
     }
 }
 
 #[derive(Clone)]
-struct NativeRegistry<State: Clone + Send + Sync + 'static> {
+pub(crate) struct NativeRegistry<State: Clone + Send + Sync + 'static> {
     next_id: NativeId,
     entries: HashMap<Symbol, Vec<NativeImpl<State>>>,
     by_id: HashMap<NativeId, NativeImpl<State>>,
@@ -1250,11 +1266,11 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistry<State> {
         Ok(())
     }
 
-    fn get(&self, name: &Symbol) -> Option<&[NativeImpl<State>]> {
+    pub(crate) fn get(&self, name: &Symbol) -> Option<&[NativeImpl<State>]> {
         self.entries.get(name).map(|v| v.as_slice())
     }
 
-    fn has_name(&self, name: &Symbol) -> bool {
+    pub(crate) fn has_name(&self, name: &Symbol) -> bool {
         self.entries.contains_key(name)
     }
 
@@ -1274,14 +1290,14 @@ impl<State: Clone + Send + Sync + 'static> Default for NativeRegistry<State> {
 }
 
 #[derive(Clone)]
-struct TypeclassInstance {
+pub(crate) struct TypeclassInstance {
     head: Type,
     def_env: Env,
     methods: HashMap<Symbol, Arc<TypedExpr>>,
 }
 
 #[derive(Default, Clone)]
-struct TypeclassRegistry {
+pub(crate) struct TypeclassRegistry {
     entries: HashMap<Symbol, Vec<TypeclassInstance>>,
 }
 
@@ -1310,7 +1326,7 @@ impl TypeclassRegistry {
         Ok(())
     }
 
-    fn resolve(
+    pub(crate) fn resolve(
         &self,
         class: &Symbol,
         method: &Symbol,
@@ -1388,6 +1404,20 @@ pub struct CompiledProgram {
 }
 
 impl CompiledProgram {
+    pub(crate) fn new(
+        externs: CompiledExterns,
+        link_contract: RuntimeLinkContract,
+        env: Env,
+        expr: TypedExpr,
+    ) -> Self {
+        Self {
+            externs,
+            link_contract,
+            env,
+            expr: Arc::new(expr),
+        }
+    }
+
     pub fn result_type(&self) -> &Type {
         &self.expr.typ
     }
@@ -1553,51 +1583,17 @@ impl RuntimeCompatibility {
 }
 
 #[derive(Clone)]
-pub struct Compiler<State = ()>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) engine: Engine<State>,
-}
-
-#[derive(Clone)]
-pub struct RuntimeEnv<State = ()>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) loader: Engine<State>,
-    runtime: RuntimeSnapshot<State>,
-    capabilities: RuntimeCapabilities,
-}
-
-pub struct Evaluator<State = ()>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) runtime: RuntimeEnv<State>,
-    pub(crate) compiler: Option<Compiler<State>>,
-}
-
-#[derive(Clone, Copy)]
-pub struct EvaluatorRef<'a, State = ()>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    runtime: &'a RuntimeSnapshot<State>,
-}
-
-#[derive(Clone)]
 pub struct RuntimeSnapshot<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
     pub state: Arc<State>,
-    env: Env,
-    natives: NativeRegistry<State>,
-    typeclasses: TypeclassRegistry,
-    type_system: TypeSystem,
-    typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
-    cancel: CancellationToken,
+    pub(crate) env: Env,
+    pub(crate) natives: NativeRegistry<State>,
+    pub(crate) typeclasses: TypeclassRegistry,
+    pub(crate) type_system: TypeSystem,
+    pub(crate) typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
+    pub(crate) cancel: CancellationToken,
     pub heap: Heap,
 }
 
@@ -1692,24 +1688,70 @@ impl<State> Engine<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub fn compiler(&self) -> Compiler<State> {
-        Compiler {
-            engine: self.clone(),
+    pub(crate) fn env_snapshot(&self) -> Env {
+        self.env.clone()
+    }
+
+    pub(crate) fn has_native_name(&self, name: &Symbol) -> bool {
+        self.natives.has_name(name)
+    }
+
+    pub(crate) fn runtime_snapshot(&self) -> RuntimeSnapshot<State> {
+        RuntimeSnapshot {
+            state: Arc::clone(&self.state),
+            env: self.env.clone(),
+            natives: self.natives.clone(),
+            typeclasses: self.typeclasses.clone(),
+            type_system: self.type_system.clone(),
+            typeclass_cache: Arc::clone(&self.typeclass_cache),
+            cancel: self.cancel.clone(),
+            heap: self.heap.clone(),
         }
     }
 
-    pub fn runtime_env(&self) -> RuntimeEnv<State> {
-        RuntimeEnv {
-            loader: self.clone(),
-            runtime: runtime_snapshot(self),
-            capabilities: runtime_capabilities(self),
+    pub(crate) fn runtime_capabilities_snapshot(&self) -> RuntimeCapabilities {
+        let mut natives = self.natives.entries.keys().cloned().collect::<Vec<_>>();
+        let mut class_methods = self
+            .type_system
+            .class_methods
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut native_impls = HashMap::new();
+        for (name, impls) in &self.natives.entries {
+            let mut caps = impls
+                .iter()
+                .map(|imp| NativeCapability {
+                    name: name.clone(),
+                    arity: imp.arity,
+                    scheme: imp.scheme.clone(),
+                })
+                .collect::<Vec<_>>();
+            caps.sort_by(|a, b| {
+                a.arity
+                    .cmp(&b.arity)
+                    .then_with(|| a.scheme.typ.to_string().cmp(&b.scheme.typ.to_string()))
+            });
+            native_impls.insert(name.clone(), caps);
         }
-    }
-
-    pub fn evaluator(&self) -> Evaluator<State> {
-        Evaluator {
-            runtime: self.runtime_env(),
-            compiler: Some(self.compiler()),
+        let mut class_method_impls = HashMap::new();
+        for (name, info) in &self.type_system.class_methods {
+            class_method_impls.insert(
+                name.clone(),
+                ClassMethodCapability {
+                    name: name.clone(),
+                    scheme: info.scheme.clone(),
+                },
+            );
+        }
+        natives.sort();
+        class_methods.sort();
+        RuntimeCapabilities {
+            abi_version: RUNTIME_LINK_ABI_VERSION,
+            natives,
+            class_methods,
+            native_impls,
+            class_method_impls,
         }
     }
 
@@ -3028,7 +3070,7 @@ where
     }
 }
 
-fn type_check_engine<State>(
+pub(crate) fn type_check_engine<State>(
     engine: &mut Engine<State>,
     expr: &Expr,
 ) -> Result<TypedExpr, EngineError>
@@ -3220,469 +3262,6 @@ where
         .unwrap_or(false)
 }
 
-impl<State> Compiler<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub fn new(engine: Engine<State>) -> Self {
-        Self { engine }
-    }
-
-    pub fn compile_expr(&mut self, expr: &Expr) -> Result<CompiledProgram, CompileError> {
-        self.compile_expr_internal(expr).map_err(CompileError::from)
-    }
-
-    pub(crate) fn compile_expr_internal(
-        &mut self,
-        expr: &Expr,
-    ) -> Result<CompiledProgram, EngineError> {
-        let typed = self.type_check(expr)?;
-        let env = self.engine.env.clone();
-        let externs = self.collect_externs(&typed, &env);
-        let link_contract = self.link_contract(&typed, &env);
-        Ok(CompiledProgram {
-            externs,
-            link_contract,
-            env,
-            expr: Arc::new(typed),
-        })
-    }
-
-    pub(crate) fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
-        type_check_engine(&mut self.engine, expr)
-    }
-
-    fn collect_externs(&self, expr: &TypedExpr, env: &Env) -> CompiledExterns {
-        enum Frame<'b> {
-            Expr(&'b TypedExpr),
-            Push(Symbol),
-            PushMany(Vec<Symbol>),
-            Pop(usize),
-        }
-
-        let mut natives = HashSet::new();
-        let mut class_methods = HashSet::new();
-        let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![Frame::Expr(expr)];
-        while let Some(frame) = stack.pop() {
-            match frame {
-                Frame::Expr(expr) => match &expr.kind {
-                    TypedExprKind::Var { name, .. } => {
-                        if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
-                            continue;
-                        }
-                        if self.engine.type_system.class_methods.contains_key(name) {
-                            class_methods.insert(name.clone());
-                        } else if self.engine.natives.has_name(name) {
-                            natives.insert(name.clone());
-                        }
-                    }
-                    TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
-                        for elem in elems.iter().rev() {
-                            stack.push(Frame::Expr(elem));
-                        }
-                    }
-                    TypedExprKind::Dict(kvs) => {
-                        for v in kvs.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                    }
-                    TypedExprKind::RecordUpdate { base, updates } => {
-                        for v in updates.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                        stack.push(Frame::Expr(base));
-                    }
-                    TypedExprKind::App(f, x) => {
-                        stack.push(Frame::Expr(x));
-                        stack.push(Frame::Expr(f));
-                    }
-                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
-                    TypedExprKind::Lam { param, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(param.clone()));
-                    }
-                    TypedExprKind::Let { name, def, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(name.clone()));
-                        stack.push(Frame::Expr(def));
-                    }
-                    TypedExprKind::LetRec { bindings, body } => {
-                        if !bindings.is_empty() {
-                            stack.push(Frame::Pop(bindings.len()));
-                            stack.push(Frame::Expr(body));
-                            for (_, def) in bindings.iter().rev() {
-                                stack.push(Frame::Expr(def));
-                            }
-                            stack.push(Frame::PushMany(
-                                bindings.iter().map(|(name, _)| name.clone()).collect(),
-                            ));
-                        } else {
-                            stack.push(Frame::Expr(body));
-                        }
-                    }
-                    TypedExprKind::Ite {
-                        cond,
-                        then_expr,
-                        else_expr,
-                    } => {
-                        stack.push(Frame::Expr(else_expr));
-                        stack.push(Frame::Expr(then_expr));
-                        stack.push(Frame::Expr(cond));
-                    }
-                    TypedExprKind::Match { scrutinee, arms } => {
-                        for (pat, arm_expr) in arms.iter().rev() {
-                            let mut bindings = Vec::new();
-                            collect_pattern_bindings(pat, &mut bindings);
-                            let count = bindings.len();
-                            if count != 0 {
-                                stack.push(Frame::Pop(count));
-                                stack.push(Frame::Expr(arm_expr));
-                                stack.push(Frame::PushMany(bindings));
-                            } else {
-                                stack.push(Frame::Expr(arm_expr));
-                            }
-                        }
-                        stack.push(Frame::Expr(scrutinee));
-                    }
-                    TypedExprKind::Bool(..)
-                    | TypedExprKind::Uint(..)
-                    | TypedExprKind::Int(..)
-                    | TypedExprKind::Float(..)
-                    | TypedExprKind::String(..)
-                    | TypedExprKind::Uuid(..)
-                    | TypedExprKind::DateTime(..)
-                    | TypedExprKind::Hole => {}
-                },
-                Frame::Push(sym) => bound.push(sym),
-                Frame::PushMany(syms) => bound.extend(syms),
-                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
-            }
-        }
-
-        let mut natives = natives.into_iter().collect::<Vec<_>>();
-        let mut class_methods = class_methods.into_iter().collect::<Vec<_>>();
-        natives.sort();
-        class_methods.sort();
-        CompiledExterns {
-            natives,
-            class_methods,
-        }
-    }
-
-    fn link_contract(&self, expr: &TypedExpr, env: &Env) -> RuntimeLinkContract {
-        enum Frame<'b> {
-            Expr(&'b TypedExpr),
-            Push(Symbol),
-            PushMany(Vec<Symbol>),
-            Pop(usize),
-        }
-
-        let mut native_requirements = HashSet::new();
-        let mut class_method_requirements = HashSet::new();
-        let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![Frame::Expr(expr)];
-        while let Some(frame) = stack.pop() {
-            match frame {
-                Frame::Expr(expr) => match &expr.kind {
-                    TypedExprKind::Var { name, .. } => {
-                        if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
-                            continue;
-                        }
-                        if self.engine.type_system.class_methods.contains_key(name) {
-                            class_method_requirements.insert(ClassMethodRequirement {
-                                name: name.clone(),
-                                typ: expr.typ.clone(),
-                            });
-                        } else if self.engine.natives.has_name(name) {
-                            native_requirements.insert(NativeRequirement {
-                                name: name.clone(),
-                                typ: expr.typ.clone(),
-                            });
-                        }
-                    }
-                    TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
-                        for elem in elems.iter().rev() {
-                            stack.push(Frame::Expr(elem));
-                        }
-                    }
-                    TypedExprKind::Dict(kvs) => {
-                        for v in kvs.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                    }
-                    TypedExprKind::RecordUpdate { base, updates } => {
-                        for v in updates.values().rev() {
-                            stack.push(Frame::Expr(v));
-                        }
-                        stack.push(Frame::Expr(base));
-                    }
-                    TypedExprKind::App(f, x) => {
-                        stack.push(Frame::Expr(x));
-                        stack.push(Frame::Expr(f));
-                    }
-                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
-                    TypedExprKind::Lam { param, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(param.clone()));
-                    }
-                    TypedExprKind::Let { name, def, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(name.clone()));
-                        stack.push(Frame::Expr(def));
-                    }
-                    TypedExprKind::LetRec { bindings, body } => {
-                        if !bindings.is_empty() {
-                            stack.push(Frame::Pop(bindings.len()));
-                            stack.push(Frame::Expr(body));
-                            for (_, def) in bindings.iter().rev() {
-                                stack.push(Frame::Expr(def));
-                            }
-                            stack.push(Frame::PushMany(
-                                bindings.iter().map(|(name, _)| name.clone()).collect(),
-                            ));
-                        } else {
-                            stack.push(Frame::Expr(body));
-                        }
-                    }
-                    TypedExprKind::Ite {
-                        cond,
-                        then_expr,
-                        else_expr,
-                    } => {
-                        stack.push(Frame::Expr(else_expr));
-                        stack.push(Frame::Expr(then_expr));
-                        stack.push(Frame::Expr(cond));
-                    }
-                    TypedExprKind::Match { scrutinee, arms } => {
-                        for (pat, arm_expr) in arms.iter().rev() {
-                            let mut bindings = Vec::new();
-                            collect_pattern_bindings(pat, &mut bindings);
-                            let count = bindings.len();
-                            if count != 0 {
-                                stack.push(Frame::Pop(count));
-                                stack.push(Frame::Expr(arm_expr));
-                                stack.push(Frame::PushMany(bindings));
-                            } else {
-                                stack.push(Frame::Expr(arm_expr));
-                            }
-                        }
-                        stack.push(Frame::Expr(scrutinee));
-                    }
-                    TypedExprKind::Bool(..)
-                    | TypedExprKind::Uint(..)
-                    | TypedExprKind::Int(..)
-                    | TypedExprKind::Float(..)
-                    | TypedExprKind::String(..)
-                    | TypedExprKind::Uuid(..)
-                    | TypedExprKind::DateTime(..)
-                    | TypedExprKind::Hole => {}
-                },
-                Frame::Push(sym) => bound.push(sym),
-                Frame::PushMany(syms) => bound.extend(syms),
-                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
-            }
-        }
-
-        let mut natives = native_requirements.into_iter().collect::<Vec<_>>();
-        let mut class_methods = class_method_requirements.into_iter().collect::<Vec<_>>();
-        natives.sort_by(|a, b| {
-            a.name
-                .cmp(&b.name)
-                .then_with(|| a.typ.to_string().cmp(&b.typ.to_string()))
-        });
-        class_methods.sort_by(|a, b| {
-            a.name
-                .cmp(&b.name)
-                .then_with(|| a.typ.to_string().cmp(&b.typ.to_string()))
-        });
-        RuntimeLinkContract {
-            abi_version: RUNTIME_LINK_ABI_VERSION,
-            natives,
-            class_methods,
-        }
-    }
-}
-
-fn runtime_capabilities<State>(engine: &Engine<State>) -> RuntimeCapabilities
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let mut natives = engine.natives.entries.keys().cloned().collect::<Vec<_>>();
-    let mut class_methods = engine
-        .type_system
-        .class_methods
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    let mut native_impls = HashMap::new();
-    for (name, impls) in &engine.natives.entries {
-        let mut caps = impls
-            .iter()
-            .map(|imp| NativeCapability {
-                name: name.clone(),
-                arity: imp.arity,
-                scheme: imp.scheme.clone(),
-            })
-            .collect::<Vec<_>>();
-        caps.sort_by(|a, b| {
-            a.arity
-                .cmp(&b.arity)
-                .then_with(|| a.scheme.typ.to_string().cmp(&b.scheme.typ.to_string()))
-        });
-        native_impls.insert(name.clone(), caps);
-    }
-    let mut class_method_impls = HashMap::new();
-    for (name, info) in &engine.type_system.class_methods {
-        class_method_impls.insert(
-            name.clone(),
-            ClassMethodCapability {
-                name: name.clone(),
-                scheme: info.scheme.clone(),
-            },
-        );
-    }
-    natives.sort();
-    class_methods.sort();
-    RuntimeCapabilities {
-        abi_version: RUNTIME_LINK_ABI_VERSION,
-        natives,
-        class_methods,
-        native_impls,
-        class_method_impls,
-    }
-}
-
-fn runtime_compatibility(
-    contract: &RuntimeLinkContract,
-    capabilities: &RuntimeCapabilities,
-) -> RuntimeCompatibility {
-    let mut missing_natives = Vec::new();
-    let mut incompatible_natives = Vec::new();
-    for requirement in &contract.natives {
-        match capabilities.native_impls.get(&requirement.name) {
-            None => missing_natives.push(requirement.name.clone()),
-            Some(impls) => {
-                if !impls.iter().any(|capability| {
-                    native_capability_matches_requirement(capability, requirement)
-                }) {
-                    incompatible_natives.push(requirement.name.clone());
-                }
-            }
-        }
-    }
-
-    let mut missing_class_methods = Vec::new();
-    let mut incompatible_class_methods = Vec::new();
-    for requirement in &contract.class_methods {
-        match capabilities.class_method_impls.get(&requirement.name) {
-            None => missing_class_methods.push(requirement.name.clone()),
-            Some(capability) => {
-                if !class_method_capability_matches_requirement(capability, requirement) {
-                    incompatible_class_methods.push(requirement.name.clone());
-                }
-            }
-        }
-    }
-
-    RuntimeCompatibility {
-        expected_abi_version: contract.abi_version,
-        actual_abi_version: capabilities.abi_version,
-        missing_natives,
-        incompatible_natives,
-        missing_class_methods,
-        incompatible_class_methods,
-    }
-}
-
-fn runtime_snapshot<State>(engine: &Engine<State>) -> RuntimeSnapshot<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    RuntimeSnapshot {
-        state: Arc::clone(&engine.state),
-        env: engine.env.clone(),
-        natives: engine.natives.clone(),
-        typeclasses: engine.typeclasses.clone(),
-        type_system: engine.type_system.clone(),
-        typeclass_cache: Arc::clone(&engine.typeclass_cache),
-        cancel: engine.cancel.clone(),
-        heap: engine.heap.clone(),
-    }
-}
-
-impl<State> RuntimeEnv<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub fn new(engine: Engine<State>) -> Self {
-        let capabilities = runtime_capabilities(&engine);
-        let runtime = runtime_snapshot(&engine);
-        Self {
-            loader: engine,
-            runtime,
-            capabilities,
-        }
-    }
-
-    pub fn capabilities(&self) -> &RuntimeCapabilities {
-        &self.capabilities
-    }
-
-    pub fn fingerprint(&self) -> u64 {
-        self.capabilities.fingerprint()
-    }
-
-    pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
-        runtime_compatibility(program.link_contract(), &self.capabilities)
-    }
-
-    pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
-        self.validate_internal(program).map_err(EvalError::from)
-    }
-
-    pub(crate) fn validate_internal(&self, program: &CompiledProgram) -> Result<(), EngineError> {
-        let compatibility = self.compatibility_with(program);
-        if compatibility.is_compatible() {
-            Ok(())
-        } else {
-            Err(EngineError::Link {
-                expected_abi_version: compatibility.expected_abi_version,
-                actual_abi_version: compatibility.actual_abi_version,
-                missing_natives: compatibility.missing_natives,
-                incompatible_natives: compatibility.incompatible_natives,
-                missing_class_methods: compatibility.missing_class_methods,
-                incompatible_class_methods: compatibility.incompatible_class_methods,
-            })
-        }
-    }
-
-    pub(crate) fn sync_from_engine(&mut self, engine: &Engine<State>) {
-        self.loader = engine.clone();
-        self.runtime = runtime_snapshot(engine);
-        self.capabilities = runtime_capabilities(engine);
-    }
-
-    pub fn storage_boundary(&self) -> RuntimeEnvBoundary {
-        RuntimeEnvBoundary {
-            contains_runtime_snapshot: true,
-            contains_loader_state: true,
-            serializable: false,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RuntimeEnvBoundary {
-    pub contains_runtime_snapshot: bool,
-    pub contains_loader_state: bool,
-    pub serializable: bool,
-}
-
 impl<State> RuntimeSnapshot<State>
 where
     State: Clone + Send + Sync + 'static,
@@ -3692,329 +3271,6 @@ where
             .by_id(id)
             .map(|imp| imp.func.clone())
             .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
-    }
-}
-
-impl<State> Evaluator<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub fn new(runtime: RuntimeEnv<State>) -> Self {
-        Self {
-            runtime,
-            compiler: None,
-        }
-    }
-
-    pub(crate) fn sync_runtime_from_compiler(&mut self) {
-        if let Some(compiler) = &self.compiler {
-            self.runtime.sync_from_engine(&compiler.engine);
-        }
-    }
-
-    pub async fn run(
-        &mut self,
-        program: &CompiledProgram,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EvalError> {
-        self.run_internal(program, gas)
-            .await
-            .map_err(EvalError::from)
-    }
-
-    pub(crate) async fn run_internal(
-        &mut self,
-        program: &CompiledProgram,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        check_runtime_cancelled(&self.runtime.runtime)?;
-        self.runtime.validate_internal(program)?;
-        eval_typed_expr(
-            &self.runtime.runtime,
-            &program.env,
-            program.expr.as_ref(),
-            gas,
-        )
-        .await
-    }
-
-    pub async fn eval(
-        &mut self,
-        expr: &Expr,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        self.prepare_and_run(gas, |compiler, _gas| compiler.compile_expr(expr))
-            .await
-    }
-
-    pub(crate) async fn run_prepared(
-        &mut self,
-        program: CompiledProgram,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        self.sync_runtime_from_compiler();
-        let typ = program.result_type().clone();
-        let value = self.run(&program, gas).await?;
-        Ok((value, typ))
-    }
-
-    pub(crate) async fn prepare_and_run<F>(
-        &mut self,
-        gas: &mut GasMeter,
-        compile: F,
-    ) -> Result<(Pointer, Type), ExecutionError>
-    where
-        F: FnOnce(&mut Compiler<State>, &mut GasMeter) -> Result<CompiledProgram, CompileError>,
-    {
-        let compiler = self.compiler.as_mut().ok_or_else(|| {
-            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
-        })?;
-        let program = compile(compiler, gas)?;
-        self.run_prepared(program, gas).await
-    }
-}
-
-impl<'a, State> EvaluatorRef<'a, State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) fn new(runtime: &'a RuntimeSnapshot<State>) -> Self {
-        Self { runtime }
-    }
-
-    fn resolve_typeclass_method_impl(
-        &self,
-        name: &Symbol,
-        call_type: &Type,
-    ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
-        let info = self
-            .runtime
-            .type_system
-            .class_methods
-            .get(name)
-            .ok_or_else(|| EngineError::UnknownVar(name.clone()))?;
-
-        let s_method = unify(&info.scheme.typ, call_type).map_err(EngineError::Type)?;
-        let class_pred = info
-            .scheme
-            .preds
-            .iter()
-            .find(|p| p.class == info.class)
-            .ok_or(EngineError::Type(TypeError::UnsupportedExpr(
-                "method scheme missing class predicate",
-            )))?;
-        let param_type = class_pred.typ.apply(&s_method);
-        if type_head_is_var(&param_type) {
-            return Err(EngineError::AmbiguousOverload { name: name.clone() });
-        }
-
-        self.runtime
-            .typeclasses
-            .resolve(&info.class, name, &param_type)
-    }
-
-    fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
-        if !typ.ftv().is_empty() {
-            return None;
-        }
-        let cache = self.runtime.typeclass_cache.lock().ok()?;
-        cache.get(&(name.clone(), typ.clone())).cloned()
-    }
-
-    fn insert_cached_class_method(&self, name: &Symbol, typ: &Type, pointer: &Pointer) {
-        if typ.ftv().is_empty()
-            && let Ok(mut cache) = self.runtime.typeclass_cache.lock()
-        {
-            cache.insert((name.clone(), typ.clone()), *pointer);
-        }
-    }
-
-    fn resolve_class_method_plan(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-    ) -> Result<Result<(Env, TypedExpr), Pointer>, EngineError> {
-        let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
-            Ok(res) => res,
-            Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
-                let (name, typ, applied, applied_types) =
-                    OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                let pointer =
-                    self.runtime
-                        .heap
-                        .alloc_overloaded(name, typ, applied, applied_types)?;
-                return Ok(Err(pointer));
-            }
-            Err(err) => return Err(err),
-        };
-        let specialized = typed.as_ref().apply(&s);
-        Ok(Ok((def_env, specialized)))
-    }
-
-    async fn resolve_class_method(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(pointer) = self.cached_class_method(name, typ) {
-            return Ok(pointer);
-        }
-
-        let pointer = match self.resolve_class_method_plan(name, typ)? {
-            Ok((def_env, specialized)) => {
-                eval_typed_expr(self.runtime, &def_env, &specialized, gas).await?
-            }
-            Err(pointer) => pointer,
-        };
-
-        if typ.ftv().is_empty() {
-            self.insert_cached_class_method(name, typ, &pointer);
-        }
-        Ok(pointer)
-    }
-
-    fn resolve_native_impl(
-        &self,
-        name: &str,
-        typ: &Type,
-    ) -> Result<NativeImpl<State>, EngineError> {
-        let sym_name = sym(name);
-        let impls = self
-            .runtime
-            .natives
-            .get(&sym_name)
-            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<NativeImpl<State>> = impls
-            .iter()
-            .filter(|imp| impl_matches_type(imp, typ))
-            .cloned()
-            .collect();
-        match matches.len() {
-            0 => Err(EngineError::MissingImpl {
-                name: sym_name.clone(),
-                typ: typ.to_string(),
-            }),
-            1 => Ok(matches[0].clone()),
-            _ => Err(EngineError::AmbiguousImpl {
-                name: sym_name,
-                typ: typ.to_string(),
-            }),
-        }
-    }
-
-    fn resolve_native(
-        &self,
-        name: &str,
-        typ: &Type,
-        _gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        let sym_name = sym(name);
-        let impls = self
-            .runtime
-            .natives
-            .get(&sym_name)
-            .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
-        let matches: Vec<NativeImpl<State>> = impls
-            .iter()
-            .filter(|imp| impl_matches_type(imp, typ))
-            .cloned()
-            .collect();
-        match matches.len() {
-            0 => Err(EngineError::MissingImpl {
-                name: sym_name.clone(),
-                typ: typ.to_string(),
-            }),
-            1 => {
-                let imp = matches[0].clone();
-                let NativeFn {
-                    native_id,
-                    name,
-                    arity,
-                    typ,
-                    gas_cost,
-                    applied,
-                    applied_types,
-                } = imp.to_native_fn(typ.clone());
-                self.runtime.heap.alloc_native(
-                    native_id,
-                    name,
-                    arity,
-                    typ,
-                    gas_cost,
-                    applied,
-                    applied_types,
-                )
-            }
-            _ => {
-                if typ.ftv().is_empty() {
-                    Err(EngineError::AmbiguousImpl {
-                        name: sym_name.clone(),
-                        typ: typ.to_string(),
-                    })
-                } else if is_function_type(typ) {
-                    let (name, typ, applied, applied_types) =
-                        OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    self.runtime
-                        .heap
-                        .alloc_overloaded(name, typ, applied, applied_types)
-                } else {
-                    Err(EngineError::AmbiguousOverload { name: sym_name })
-                }
-            }
-        }
-    }
-
-    pub(crate) async fn resolve_global(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(ptr) = self.runtime.env.get(name) {
-            let value = self.runtime.heap.get(&ptr)?;
-            match value.as_ref() {
-                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    let mut gas = GasMeter::default();
-                    native.call_zero(self.runtime, &mut gas).await
-                }
-                _ => Ok(ptr),
-            }
-        } else if self.runtime.type_system.class_methods.contains_key(name) {
-            let mut gas = GasMeter::default();
-            self.resolve_class_method(name, typ, &mut gas).await
-        } else {
-            let mut gas = GasMeter::default();
-            let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
-            let value = self.runtime.heap.get(&pointer)?;
-            match value.as_ref() {
-                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    let mut gas = GasMeter::default();
-                    native.call_zero(self.runtime, &mut gas).await
-                }
-                _ => Ok(pointer),
-            }
-        }
-    }
-
-    pub(crate) async fn call_native_impl(
-        &self,
-        name: &str,
-        typ: &Type,
-        args: &[Pointer],
-    ) -> Result<Pointer, EngineError> {
-        let imp = self.resolve_native_impl(name, typ)?;
-        imp.func.call(self.runtime, typ.clone(), args).await
-    }
-}
-
-impl<'a, State> Deref for EvaluatorRef<'a, State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    type Target = RuntimeSnapshot<State>;
-
-    fn deref(&self) -> &Self::Target {
-        self.runtime
     }
 }
 
@@ -4282,11 +3538,11 @@ fn scheme_accepts(ts: &TypeSystem, scheme: &Scheme, typ: &Type) -> Result<bool, 
     Ok(true)
 }
 
-fn is_function_type(typ: &Type) -> bool {
+pub(crate) fn is_function_type(typ: &Type) -> bool {
     matches!(typ.as_ref(), TypeKind::Fun(..))
 }
 
-fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
+pub(crate) fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
     match pat {
         Pattern::Wildcard(..) => {}
         Pattern::Var(var) => out.push(var.name.clone()),
@@ -4359,7 +3615,7 @@ fn split_fun(typ: &Type) -> Option<(Type, Type)> {
     }
 }
 
-fn impl_matches_type<State: Clone + Send + Sync + 'static>(
+pub(crate) fn impl_matches_type<State: Clone + Send + Sync + 'static>(
     imp: &NativeImpl<State>,
     typ: &Type,
 ) -> bool {
@@ -4368,7 +3624,7 @@ fn impl_matches_type<State: Clone + Send + Sync + 'static>(
     unify(&scheme_ty, typ).is_ok()
 }
 
-fn native_capability_matches_requirement(
+pub(crate) fn native_capability_matches_requirement(
     capability: &NativeCapability,
     requirement: &NativeRequirement,
 ) -> bool {
@@ -4379,7 +3635,7 @@ fn native_capability_matches_requirement(
         && unify(&scheme_ty, &requirement.typ).is_ok()
 }
 
-fn class_method_capability_matches_requirement(
+pub(crate) fn class_method_capability_matches_requirement(
     capability: &ClassMethodCapability,
     requirement: &ClassMethodRequirement,
 ) -> bool {
@@ -4565,7 +3821,7 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
 }
 
 #[async_recursion]
-async fn eval_typed_expr<State>(
+pub(crate) async fn eval_typed_expr<State>(
     runtime: &RuntimeSnapshot<State>,
     env: &Env,
     expr: &TypedExpr,

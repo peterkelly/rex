@@ -152,11 +152,13 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
         .set_limits(rexlang_typesystem::TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through library/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
-    let (value_ptr, _value_ty) = engine
-        .evaluator()
-        .eval_snippet(source, &mut gas)
-        .await
-        .map_err(|e| format!("runtime error: {e}"))?;
+    let (value_ptr, _value_ty) = rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval_snippet(source, &mut gas)
+    .await
+    .map_err(|e| format!("runtime error: {e}"))?;
 
     pointer_display_with(&engine.heap, &value_ptr, ValueDisplayOptions::docs())
         .map_err(|e| format!("display error: {e}"))
@@ -255,11 +257,13 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
 
     let fut = async move {
         let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-        let (value_ptr, _value_ty) = engine
-            .evaluator()
-            .eval_snippet(source, &mut gas)
-            .await
-            .map_err(|e| format!("runtime error: {e}"))?;
+        let (value_ptr, _value_ty) = rexlang_engine::Evaluator::new_with_compiler(
+            rexlang_engine::RuntimeEnv::new(engine.clone()),
+            rexlang_engine::Compiler::new(engine.clone()),
+        )
+        .eval_snippet(source, &mut gas)
+        .await
+        .map_err(|e| format!("runtime error: {e}"))?;
         let rendered =
             pointer_display_with(&engine.heap, &value_ptr, ValueDisplayOptions::unsanitized())
                 .map_err(|e| format!("display error: {e}"))?;

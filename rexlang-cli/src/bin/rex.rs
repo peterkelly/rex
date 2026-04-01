@@ -321,10 +321,12 @@ async fn repl_loop(
             }
         };
 
-        match engine
-            .evaluator()
-            .eval_repl_program(&program, &mut state, &mut gas)
-            .await
+        match rexlang::Evaluator::new_with_compiler(
+            rexlang::RuntimeEnv::new(engine.clone()),
+            rexlang::Compiler::new(engine.clone()),
+        )
+        .eval_repl_program(&program, &mut state, &mut gas)
+        .await
         {
             Ok((v, _)) => {
                 let rendered =
@@ -422,17 +424,21 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     let engine = init_engine(&include)?;
 
     let (pointer, _) = if let Some(path) = file {
-        engine
-            .evaluator()
-            .eval_library_file(&path, &mut gas)
-            .await
-            .map_err(|e| format!("{e}"))?
+        rexlang::Evaluator::new_with_compiler(
+            rexlang::RuntimeEnv::new(engine.clone()),
+            rexlang::Compiler::new(engine.clone()),
+        )
+        .eval_library_file(&path, &mut gas)
+        .await
+        .map_err(|e| format!("{e}"))?
     } else {
-        engine
-            .evaluator()
-            .eval_snippet(source, &mut gas)
-            .await
-            .map_err(|e| format!("{e}"))?
+        rexlang::Evaluator::new_with_compiler(
+            rexlang::RuntimeEnv::new(engine.clone()),
+            rexlang::Compiler::new(engine.clone()),
+        )
+        .eval_snippet(source, &mut gas)
+        .await
+        .map_err(|e| format!("{e}"))?
     };
     let rendered = pointer_display_with(&engine.heap, &pointer, ValueDisplayOptions::unsanitized())
         .unwrap_or_else(|e| format!("<display error: {e}>"));

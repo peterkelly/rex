@@ -9,7 +9,8 @@ use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeKind, Types, unify};
 use uuid::Uuid;
 
 use crate::Engine;
-use crate::engine::{EvaluatorRef, RuntimeSnapshot, apply as apply_pointer, binary_arg_types};
+use crate::EvaluatorRef;
+use crate::engine::{RuntimeSnapshot, apply as apply_pointer, binary_arg_types};
 use crate::value::{Heap, Pointer, list_to_vec};
 use crate::virtual_export_name;
 use crate::{EngineError, FromPointer, IntoPointer, OverloadedFn, Value};

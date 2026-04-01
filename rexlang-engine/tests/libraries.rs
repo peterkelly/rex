@@ -103,11 +103,13 @@ async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     source: &str,
 ) -> Result<(Pointer, Type), rexlang_engine::EngineError> {
     let mut gas = unlimited_gas();
-    engine
-        .evaluator()
-        .eval_snippet(source, &mut gas)
-        .await
-        .map_err(|err| err.into_engine_error())
+    rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval_snippet(source, &mut gas)
+    .await
+    .map_err(|err| err.into_engine_error())
 }
 
 async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
@@ -116,11 +118,13 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     importer_path: impl AsRef<Path>,
 ) -> Result<(Pointer, Type), rexlang_engine::EngineError> {
     let mut gas = unlimited_gas();
-    engine
-        .evaluator()
-        .eval_snippet_at(source, importer_path, &mut gas)
-        .await
-        .map_err(|err| err.into_engine_error())
+    rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval_snippet_at(source, importer_path, &mut gas)
+    .await
+    .map_err(|err| err.into_engine_error())
 }
 
 macro_rules! pvals {
@@ -193,11 +197,13 @@ async fn eval_library_file_reloads_when_local_file_changes() {
 
     write_file(&library, "pub fn value x: i32 -> i32 = x + 1");
     let mut gas = unlimited_gas();
-    let _ = engine
-        .evaluator()
-        .eval_library_file(&library, &mut gas)
-        .await
-        .unwrap();
+    let _ = rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval_library_file(&library, &mut gas)
+    .await
+    .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
         .await
         .unwrap();
@@ -211,11 +217,13 @@ async fn eval_library_file_reloads_when_local_file_changes() {
     // library cache entries before reloading.
     write_file(&library, "pub fn value x: i32 -> i32 = x + 2");
     let mut gas = unlimited_gas();
-    let _ = engine
-        .evaluator()
-        .eval_library_file(&library, &mut gas)
-        .await
-        .unwrap();
+    let _ = rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval_library_file(&library, &mut gas)
+    .await
+    .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
         .await
         .unwrap();

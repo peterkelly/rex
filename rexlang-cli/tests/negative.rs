@@ -26,10 +26,12 @@ async fn compile_err(code: &str) -> EngineError {
         return e;
     }
     let mut gas = GasMeter::default();
-    match engine
-        .evaluator()
-        .eval(program.expr.as_ref(), &mut gas)
-        .await
+    match rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
     {
         Ok((v, _)) => {
             let value_type = engine.heap.type_name(&v).unwrap_or("<invalid pointer>");

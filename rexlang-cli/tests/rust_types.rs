@@ -9,11 +9,13 @@ async fn eval_expr(engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
     let tokens = Token::tokenize(expr).unwrap();
     let mut gas = GasMeter::default();
     let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
-    let (value, ty) = engine
-        .evaluator()
-        .eval(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap();
+    let (value, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
+    .unwrap();
     let heap = engine.into_heap();
     (value, heap, ty)
 }

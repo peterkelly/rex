@@ -41,11 +41,13 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
                         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
 
                     let mut gas = GasMeter::default();
-                    let (value, ty) = engine
-                        .evaluator()
-                        .eval_snippet(&source, &mut gas)
-                        .await
-                        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+                    let (value, ty) = rexlang::Evaluator::new_with_compiler(
+                        rexlang::RuntimeEnv::new(engine.clone()),
+                        rexlang::Compiler::new(engine.clone()),
+                    )
+                    .eval_snippet(&source, &mut gas)
+                    .await
+                    .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
                     (engine.into_heap(), value, ty)
                 })
         })

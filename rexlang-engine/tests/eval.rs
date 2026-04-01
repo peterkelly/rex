@@ -37,12 +37,14 @@ async fn eval_expr(
     expr: &rexlang_ast::expr::Expr,
 ) -> Result<rexlang_engine::Pointer, EngineError> {
     let mut gas = unlimited_gas();
-    engine
-        .evaluator()
-        .eval(expr, &mut gas)
-        .await
-        .map_err(|err| err.into_engine_error())
-        .map(|(value, _)| value)
+    rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval(expr, &mut gas)
+    .await
+    .map_err(|err| err.into_engine_error())
+    .map(|(value, _)| value)
 }
 
 macro_rules! pval {
@@ -218,7 +220,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         .export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
         .unwrap();
 
-    let mut compiler = compile_engine.compiler();
+    let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
 
     assert_eq!(program.externs().natives, vec![sym("inc")]);
@@ -231,7 +233,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     assert!(!program.storage_boundary().serializable);
     assert!(program.storage_boundary().captures_process_local_env);
 
-    let runtime = Engine::with_prelude(()).unwrap().runtime_env();
+    let runtime = rexlang_engine::RuntimeEnv::new(Engine::with_prelude(()).unwrap());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(
         compatibility.expected_abi_version,
@@ -281,14 +283,14 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
         .export("inc", |_: &(), x: i32| Ok(x + 1))
         .unwrap();
 
-    let mut compiler = compile_engine.compiler();
+    let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
 
     let mut runtime_engine = Engine::with_prelude(()).unwrap();
     runtime_engine
         .export("inc", |_: &(), value: String| Ok(value))
         .unwrap();
-    let runtime = runtime_engine.runtime_env();
+    let runtime = rexlang_engine::RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.incompatible_natives, vec![sym("inc")]);
     assert!(!compatibility.is_compatible());
@@ -308,7 +310,7 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     let mut gas = unlimited_gas();
     let compile_engine = Engine::with_prelude(()).unwrap();
 
-    let mut compiler = compile_engine.compiler();
+    let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler
         .compile_snippet(
             r#"
@@ -322,7 +324,7 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     assert!(program.externs().is_empty(), "{:?}", program.externs());
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
-    let runtime = runtime_engine.runtime_env();
+    let runtime = rexlang_engine::RuntimeEnv::new(runtime_engine.clone());
     assert!(runtime.compatibility_with(&program).is_compatible());
     runtime.validate(&program).unwrap();
 
@@ -341,14 +343,14 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
     let mut compile_engine = Engine::with_prelude(()).unwrap();
     compile_engine.export_value("answer", 41i32).unwrap();
 
-    let mut compiler = compile_engine.compiler();
+    let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("answer + 1", &mut gas).unwrap();
 
     assert_eq!(program.externs().natives, vec![sym("answer")]);
     assert_eq!(program.externs().class_methods, vec![sym("+")]);
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
-    let runtime = runtime_engine.runtime_env();
+    let runtime = rexlang_engine::RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.missing_natives, vec![sym("answer")]);
     assert!(!compatibility.is_compatible());
@@ -367,7 +369,7 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
 async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
     let mut gas = unlimited_gas();
     let compile_engine = Engine::with_prelude(()).unwrap();
-    let mut compiler = compile_engine.compiler();
+    let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler
         .compile_snippet(
             r#"
@@ -386,7 +388,7 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
     assert_eq!(program.externs().class_methods, vec![sym("pick")]);
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
-    let runtime = runtime_engine.runtime_env();
+    let runtime = rexlang_engine::RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.missing_class_methods, vec![sym("pick")]);
     assert!(!compatibility.is_compatible());
@@ -402,9 +404,7 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
 }
 
 fn runtime_engine_abi_version() -> u32 {
-    Engine::with_prelude(())
-        .unwrap()
-        .runtime_env()
+    rexlang_engine::RuntimeEnv::new(Engine::with_prelude(()).unwrap())
         .capabilities()
         .abi_version
 }
@@ -506,7 +506,13 @@ async fn eval_with_gas_rejects_out_of_budget() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let err = match engine.evaluator().eval(expr.as_ref(), &mut gas).await {
+    let err = match rexlang_engine::Evaluator::new_with_compiler(
+        rexlang_engine::RuntimeEnv::new(engine.clone()),
+        rexlang_engine::Compiler::new(engine.clone()),
+    )
+    .eval(expr.as_ref(), &mut gas)
+    .await
+    {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };

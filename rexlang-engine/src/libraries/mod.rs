@@ -1,7 +1,6 @@
 //! Library system: resolvers, loading, and import rewriting.
 
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,10 +15,7 @@ use rexlang_typesystem::{Predicate, Type};
 use rexlang_util::{GasMeter, sha256_hex};
 use uuid::Uuid;
 
-use crate::{
-    CompileError, CompiledProgram, Compiler, Engine, EvalError, Evaluator, ExecutionError,
-};
-use crate::{EngineError, Pointer};
+use crate::{CompileError, Engine, EngineError};
 
 #[cfg(not(target_arch = "wasm32"))]
 mod filesystem;
@@ -42,10 +38,10 @@ pub use types::{
 };
 
 pub(crate) use system::LibrarySystem;
-pub(crate) use types::library_key_for_library;
+pub(crate) use types::{library_key_for_library, prefix_for_library};
 
 use system::wrap_resolver;
-use types::{prefix_for_library, qualify};
+use types::qualify;
 
 fn import_specifier(path: &ImportPath) -> String {
     match path {
@@ -96,9 +92,9 @@ fn default_import_decl(library_name: &str) -> ImportDecl {
 }
 
 #[derive(Default)]
-struct ImportBindings {
-    alias_exports: HashMap<Symbol, LibraryExports>,
-    imported_values: HashMap<Symbol, CanonicalSymbol>,
+pub(crate) struct ImportBindings {
+    pub(crate) alias_exports: HashMap<Symbol, LibraryExports>,
+    pub(crate) imported_values: HashMap<Symbol, CanonicalSymbol>,
 }
 
 fn add_import_bindings(
@@ -1268,7 +1264,7 @@ fn rewrite_import_uses_type_expr(
     }
 }
 
-fn rewrite_import_uses(
+pub(crate) fn rewrite_import_uses(
     program: &Program,
     aliases: &HashMap<Symbol, LibraryExports>,
     imported_values: &HashMap<Symbol, CanonicalSymbol>,
@@ -1703,7 +1699,7 @@ fn validate_import_uses_type_expr(
     }
 }
 
-fn validate_import_uses(
+pub(crate) fn validate_import_uses(
     program: &Program,
     aliases: &HashMap<Symbol, LibraryExports>,
     shadowed_values: Option<&HashSet<Symbol>>,
@@ -1833,7 +1829,7 @@ fn validate_import_uses(
     validate_import_uses_expr(program.expr.as_ref(), &mut bound, aliases, shadowed_values)
 }
 
-fn decl_value_names(decls: &[Decl]) -> HashSet<Symbol> {
+pub(crate) fn decl_value_names(decls: &[Decl]) -> HashSet<Symbol> {
     let mut out = HashSet::new();
     for decl in decls {
         match decl {
@@ -1974,7 +1970,11 @@ fn tarjan_scc_library_ids(
     st.components
 }
 
-fn exports_from_program(program: &Program, prefix: &str, library_id: &LibraryId) -> LibraryExports {
+pub(crate) fn exports_from_program(
+    program: &Program,
+    prefix: &str,
+    library_id: &LibraryId,
+) -> LibraryExports {
     let (value_renames, type_renames, class_renames) = collect_local_renames(program, prefix);
     let module_key = library_key_for_library(library_id);
 
@@ -2065,7 +2065,7 @@ fn exports_from_program(program: &Program, prefix: &str, library_id: &LibraryId)
     }
 }
 
-fn parse_program_from_source(
+pub(crate) fn parse_program_from_source(
     source: &str,
     context: Option<&LibraryId>,
     gas: Option<&mut GasMeter>,
@@ -2150,7 +2150,7 @@ where
         }
     }
 
-    fn invalidate_library_caches(&mut self, id: &LibraryId) -> Result<(), EngineError> {
+    pub(crate) fn invalidate_library_caches(&mut self, id: &LibraryId) -> Result<(), EngineError> {
         if let Some(prev_interface) = self.library_interface_cache.get(id).cloned() {
             self.remove_type_level_symbols_for_library_interface(&prev_interface);
         }
@@ -2418,7 +2418,7 @@ where
     }
 
     #[async_recursion]
-    async fn import_bindings_for_decls(
+    pub(crate) async fn import_bindings_for_decls(
         &mut self,
         decls: &[Decl],
         importer: Option<LibraryId>,
@@ -2455,7 +2455,7 @@ where
     }
 
     #[async_recursion]
-    async fn load_library_from_resolved(
+    pub(crate) async fn load_library_from_resolved(
         &mut self,
         resolved: ResolvedLibrary,
         gas: &mut GasMeter,
@@ -2556,7 +2556,7 @@ where
         self.load_library_types_from_resolved(imported, gas, loaded, loading)
     }
 
-    fn rewrite_program_with_imports(
+    pub(crate) fn rewrite_program_with_imports(
         &mut self,
         program: &Program,
         importer: Option<LibraryId>,
@@ -2613,7 +2613,10 @@ where
         ))
     }
 
-    fn read_local_library_bytes(&self, path: &Path) -> Result<(LibraryId, Vec<u8>), EngineError> {
+    pub(crate) fn read_local_library_bytes(
+        &self,
+        path: &Path,
+    ) -> Result<(LibraryId, Vec<u8>), EngineError> {
         let canon = path
             .canonicalize()
             .map_err(|e| crate::LibraryError::InvalidLibraryPath {
@@ -2627,7 +2630,7 @@ where
         Ok((LibraryId::Local { path: canon }, bytes))
     }
 
-    fn decode_local_library_source(
+    pub(crate) fn decode_local_library_source(
         &self,
         id: &LibraryId,
         bytes: Vec<u8>,
@@ -2738,285 +2741,5 @@ where
         )?;
         self.inject_decls(&rewritten.decls)?;
         self.infer_type(rewritten.expr.as_ref(), gas)
-    }
-}
-
-impl<State> Compiler<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    fn rewrite_and_inject_program(
-        &mut self,
-        program: &Program,
-        importer: Option<LibraryId>,
-        prefix: &str,
-        gas: &mut GasMeter,
-        loaded: &mut HashMap<LibraryId, LibraryExports>,
-        loading: &mut HashSet<LibraryId>,
-    ) -> Result<Program, EngineError> {
-        let rewritten = self
-            .engine
-            .rewrite_program_with_imports(program, importer, prefix, gas, loaded, loading)?;
-        self.engine.inject_decls(&rewritten.decls)?;
-        Ok(rewritten)
-    }
-
-    pub fn compile_snippet(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, CompileError> {
-        self.compile_snippet_with_gas_and_importer(source, gas, None)
-            .map_err(CompileError::from)
-    }
-
-    pub fn compile_snippet_at(
-        &mut self,
-        source: &str,
-        importer_path: impl AsRef<Path>,
-        gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, CompileError> {
-        let path = importer_path.as_ref().to_path_buf();
-        self.compile_snippet_with_gas_and_importer(source, gas, Some(path))
-            .map_err(CompileError::from)
-    }
-
-    pub fn compile_library_file(
-        &mut self,
-        path: impl AsRef<Path>,
-        gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, CompileError> {
-        let (id, bytes) = self
-            .engine
-            .read_local_library_bytes(path.as_ref())
-            .map_err(CompileError::from)?;
-        let source = self
-            .engine
-            .decode_local_library_source(&id, bytes)
-            .map_err(CompileError::from)?;
-        self.compile_library_source(ResolvedLibrary { id, source }, gas)
-            .map_err(CompileError::from)
-    }
-
-    pub async fn compile_repl_program(
-        &mut self,
-        program: &Program,
-        state: &mut ReplState,
-        gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, CompileError> {
-        self.compile_repl_program_internal(program, state, gas)
-            .await
-            .map_err(CompileError::from)
-    }
-
-    async fn compile_repl_program_internal(
-        &mut self,
-        program: &Program,
-        state: &mut ReplState,
-        gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, EngineError> {
-        let importer = state
-            .importer_path
-            .as_ref()
-            .map(|p| LibraryId::Local { path: p.clone() });
-
-        let mut local_values = state.defined_values.clone();
-        local_values.extend(decl_value_names(&program.decls));
-        let existing_imported: HashSet<Symbol> = state.imported_values.keys().cloned().collect();
-        let import_bindings = self
-            .engine
-            .import_bindings_for_decls(
-                &program.decls,
-                importer.clone(),
-                &local_values,
-                Some(&existing_imported),
-                gas,
-            )
-            .await?;
-        state.alias_exports.extend(import_bindings.alias_exports);
-        state
-            .imported_values
-            .extend(import_bindings.imported_values);
-
-        let mut shadowed_values = state.defined_values.clone();
-        shadowed_values.extend(decl_value_names(&program.decls));
-
-        validate_import_uses(program, &state.alias_exports, Some(&shadowed_values))?;
-        let rewritten = rewrite_import_uses(
-            program,
-            &state.alias_exports,
-            &state.imported_values,
-            Some(&shadowed_values),
-        );
-
-        self.engine.inject_decls(&rewritten.decls)?;
-        state
-            .defined_values
-            .extend(decl_value_names(&program.decls));
-        self.compile_expr_internal(rewritten.expr.as_ref())
-    }
-
-    fn compile_library_source(
-        &mut self,
-        resolved: ResolvedLibrary,
-        gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, EngineError> {
-        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
-        let mut loading: HashSet<LibraryId> = HashSet::new();
-
-        loading.insert(resolved.id.clone());
-
-        let prefix = prefix_for_library(&resolved.id);
-        let program =
-            parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
-        let rewritten = self.rewrite_and_inject_program(
-            &program,
-            Some(resolved.id.clone()),
-            &prefix,
-            gas,
-            &mut loaded,
-            &mut loading,
-        )?;
-
-        let exports = exports_from_program(&program, &prefix, &resolved.id);
-        loaded.insert(resolved.id.clone(), exports);
-        loading.remove(&resolved.id);
-
-        self.compile_expr_internal(rewritten.expr.as_ref())
-    }
-
-    fn compile_snippet_with_gas_and_importer(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-        importer_path: Option<PathBuf>,
-    ) -> Result<CompiledProgram, EngineError> {
-        let program = parse_program_from_source(source, None, Some(&mut *gas))?;
-
-        let importer = importer_path.map(|p| LibraryId::Local { path: p });
-        let prefix = format!("@snippet{}", Uuid::new_v4());
-        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
-        let mut loading: HashSet<LibraryId> = HashSet::new();
-        let rewritten = self.rewrite_and_inject_program(
-            &program,
-            importer,
-            &prefix,
-            gas,
-            &mut loaded,
-            &mut loading,
-        )?;
-        self.compile_expr_internal(rewritten.expr.as_ref())
-    }
-}
-
-impl<State> Evaluator<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub async fn eval_library_file(
-        &mut self,
-        path: impl AsRef<Path>,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        let (id, bytes) = self
-            .runtime
-            .loader
-            .read_local_library_bytes(path.as_ref())
-            .map_err(CompileError::from)?;
-        let source_fingerprint = sha256_hex(&bytes);
-        if let Some(inst) = self
-            .runtime
-            .loader
-            .modules
-            .cached(&id)
-            .map_err(EvalError::from)?
-        {
-            if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
-                return Ok((inst.init_value, inst.init_type));
-            }
-            self.runtime
-                .loader
-                .invalidate_library_caches(&id)
-                .map_err(EvalError::from)?;
-        }
-        let source = self
-            .runtime
-            .loader
-            .decode_local_library_source(&id, bytes)
-            .map_err(CompileError::from)?;
-        let inst = self
-            .runtime
-            .loader
-            .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
-            .await
-            .map_err(CompileError::from)?;
-        Ok((inst.init_value, inst.init_type))
-    }
-
-    pub async fn eval_library_source(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut hasher);
-        let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-        if let Some(inst) = self
-            .runtime
-            .loader
-            .modules
-            .cached(&id)
-            .map_err(EvalError::from)?
-        {
-            return Ok((inst.init_value, inst.init_type));
-        }
-        let inst = self
-            .runtime
-            .loader
-            .load_library_from_resolved(
-                ResolvedLibrary {
-                    id,
-                    source: source.to_string(),
-                },
-                gas,
-            )
-            .await
-            .map_err(CompileError::from)?;
-        Ok((inst.init_value, inst.init_type))
-    }
-
-    pub async fn eval_snippet(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        self.prepare_and_run(gas, |compiler, gas| compiler.compile_snippet(source, gas))
-            .await
-    }
-
-    pub async fn eval_repl_program(
-        &mut self,
-        program: &Program,
-        state: &mut ReplState,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        let compiler = self.compiler.as_mut().ok_or_else(|| {
-            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
-        })?;
-        let compiled = compiler.compile_repl_program(program, state, gas).await?;
-        self.run_prepared(compiled, gas).await
-    }
-
-    pub async fn eval_snippet_at(
-        &mut self,
-        source: &str,
-        importer_path: impl AsRef<Path>,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        let path = importer_path.as_ref().to_path_buf();
-        self.prepare_and_run(gas, |compiler, gas| {
-            compiler.compile_snippet_at(source, &path, gas)
-        })
-        .await
     }
 }

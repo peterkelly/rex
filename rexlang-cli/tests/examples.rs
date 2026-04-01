@@ -20,11 +20,13 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
         .inject_decls(&program.decls)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
     let mut gas = GasMeter::default();
-    let (value, ty) = engine
-        .evaluator()
-        .eval(program.expr.as_ref(), &mut gas)
-        .await
-        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+    let (value, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
+    .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");
 
     let value = engine

@@ -68,9 +68,11 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
 
         let mut engine = Engine::with_prelude(()).unwrap();
         let _ = engine.inject_decls(&program.decls);
-        let _ = engine
-            .evaluator()
-            .eval(program.expr.as_ref(), &mut gas)
-            .await;
+        let _ = rexlang::Evaluator::new_with_compiler(
+            rexlang::RuntimeEnv::new(engine.clone()),
+            rexlang::Compiler::new(engine.clone()),
+        )
+        .eval(program.expr.as_ref(), &mut gas)
+        .await;
     }
 }

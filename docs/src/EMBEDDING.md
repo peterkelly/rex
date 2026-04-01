@@ -42,8 +42,8 @@ separates compile-time and runtime phases.
 use rexlang::{Engine, GasMeter};
 
 let engine = Engine::with_prelude(())?;
-let mut compiler = engine.compiler();
-let runtime = engine.runtime_env();
+let mut compiler = rexlang::Compiler::new(engine.clone());
+let runtime = rexlang::RuntimeEnv::new(engine.clone());
 let mut evaluator = rexlang::Evaluator::new(runtime.clone());
 let mut gas = GasMeter::default();
 
@@ -91,7 +91,7 @@ the same engine starts a fresh session.
 If you want an explicit preflight before running:
 
 ```rust
-let runtime = engine.runtime_env();
+let runtime = rexlang::RuntimeEnv::new(engine.clone());
 runtime.validate(&program)?;
 
 let mut evaluator = rexlang::Evaluator::new(runtime);
@@ -114,10 +114,11 @@ let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| form
 let mut engine = Engine::with_prelude(())?;
 engine.inject_decls(&program.decls)?;
 let mut gas = GasMeter::default();
-let value = engine.evaluator().run(
-    &engine.compiler().compile_expr(program.expr.as_ref())?,
-    &mut gas,
-).await?;
+let mut compiler = rexlang::Compiler::new(engine.clone());
+let program = compiler.compile_expr(program.expr.as_ref())?;
+let mut evaluator =
+    rexlang::Evaluator::new_with_compiler(rexlang::RuntimeEnv::new(engine.clone()), rexlang::Compiler::new(engine.clone()));
+let value = evaluator.run(&program, &mut gas).await?;
 println!("{value}");
 ```
 

@@ -539,11 +539,13 @@ mod tests {
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
         let mut gas = unlimited_gas();
-        engine
-            .evaluator()
-            .eval_snippet(code, &mut gas)
-            .await
-            .unwrap();
+        rexlang::Evaluator::new_with_compiler(
+            rexlang::RuntimeEnv::new(engine.clone()),
+            rexlang::Compiler::new(engine.clone()),
+        )
+        .eval_snippet(code, &mut gas)
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -559,11 +561,13 @@ mod tests {
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
         let mut gas = unlimited_gas();
-        let (value, ty) = engine
-            .evaluator()
-            .eval_snippet(code, &mut gas)
-            .await
-            .unwrap();
+        let (value, ty) = rexlang::Evaluator::new_with_compiler(
+            rexlang::RuntimeEnv::new(engine.clone()),
+            rexlang::Compiler::new(engine.clone()),
+        )
+        .eval_snippet(code, &mut gas)
+        .await
+        .unwrap();
         assert_eq!(
             ty,
             Type::tuple(vec![

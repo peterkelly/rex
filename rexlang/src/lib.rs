@@ -14,8 +14,8 @@ pub async fn eval(source: &str) -> Result<String, crate::ExecutionError> {
         )))
     })?;
     engine.add_default_resolvers();
-    let mut compiler = engine.compiler();
-    let runtime = engine.runtime_env();
+    let mut compiler = Compiler::new(engine.clone());
+    let runtime = RuntimeEnv::new(engine.clone());
     let program = compiler.compile_snippet(source, &mut gas)?;
     runtime.validate(&program)?;
     let mut evaluator = Evaluator::new(runtime);
