@@ -9,7 +9,7 @@ use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeKind, Types, unify};
 use uuid::Uuid;
 
 use crate::Engine;
-use crate::engine::{EvaluatorRef, apply as apply_pointer, binary_arg_types};
+use crate::engine::{EvaluatorRef, RuntimeSnapshot, apply as apply_pointer, binary_arg_types};
 use crate::value::{Heap, Pointer, list_to_vec};
 use crate::virtual_export_name;
 use crate::{EngineError, FromPointer, IntoPointer, OverloadedFn, Value};
@@ -26,7 +26,7 @@ fn values_to_ptrs<T: IntoPointer>(
 }
 
 async fn invoke_pointer_fn<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     func: Pointer,
     arg: Pointer,
     func_ty: Option<&Type>,
@@ -116,7 +116,7 @@ pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
 }
 
 pub(crate) async fn resolve_binary_op<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     name: &str,
     elem_ty: &Type,
 ) -> Result<Pointer, EngineError> {
@@ -237,7 +237,7 @@ pub(crate) fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
 }
 
 pub(crate) async fn map_values<State: Clone + Send + Sync + 'static, F, I, T>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -258,7 +258,7 @@ where
 }
 
 pub(crate) async fn filter_values<State: Clone + Send + Sync + 'static, P, I, T>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     pred: P,
     pred_ty: &Type,
     elem_ty: &Type,
@@ -282,7 +282,7 @@ where
 }
 
 pub(crate) async fn filter_map_values<State: Clone + Send + Sync + 'static, F, I, T>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -306,7 +306,7 @@ where
 }
 
 pub(crate) async fn flat_map_values<State: Clone + Send + Sync + 'static, F, I, T>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -329,7 +329,7 @@ where
 }
 
 pub(crate) async fn foldl_values<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     func: Pointer,
     func_ty: &Type,
     acc_ty: &Type,
@@ -346,7 +346,7 @@ pub(crate) async fn foldl_values<State: Clone + Send + Sync + 'static>(
 }
 
 pub(crate) async fn foldr_values<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     func: Pointer,
     func_ty: &Type,
     acc_ty: &Type,
@@ -1089,7 +1089,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u8",
             Type::builtin(BuiltinTypeId::U8),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
                     Ok(Some(engine.heap.alloc_u8(x as u8)?))
                 } else {
@@ -1100,7 +1100,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u16",
             Type::builtin(BuiltinTypeId::U16),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64
                 {
                     Ok(Some(engine.heap.alloc_u16(x as u16)?))
@@ -1112,7 +1112,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u32",
             Type::builtin(BuiltinTypeId::U32),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64
                 {
                     Ok(Some(engine.heap.alloc_u32(x as u32)?))
@@ -1124,7 +1124,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u64",
             Type::builtin(BuiltinTypeId::U64),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64
                 {
                     Ok(Some(engine.heap.alloc_u64(x as u64)?))
@@ -1136,7 +1136,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i8",
             Type::builtin(BuiltinTypeId::I8),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
                     Ok(Some(engine.heap.alloc_i8(x as i8)?))
                 } else {
@@ -1147,7 +1147,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i16",
             Type::builtin(BuiltinTypeId::I16),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64
                 {
                     Ok(Some(engine.heap.alloc_i16(x as i16)?))
@@ -1159,7 +1159,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i32",
             Type::builtin(BuiltinTypeId::I32),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64
                 {
                     Ok(Some(engine.heap.alloc_i32(x as i32)?))
@@ -1171,7 +1171,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i64",
             Type::builtin(BuiltinTypeId::I64),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64
                 {
                     Ok(Some(engine.heap.alloc_i64(x as i64)?))
@@ -1183,7 +1183,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_f32",
             Type::builtin(BuiltinTypeId::F32),
-            |engine: &Engine<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
                     Ok(Some(engine.heap.alloc_f32(x as f32)?))
                 } else {

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use rexlang::virtual_export_name;
 use rexlang::{
-    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, GasMeter, IntoPointer, Library, Parser,
-    Pointer, Rex, RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
+    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, GasMeter, Heap, IntoPointer, Library,
+    Parser, Pointer, Rex, RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
 };
 use uuid::Uuid;
 
@@ -238,25 +238,19 @@ fn unlimited_gas() -> GasMeter {
     GasMeter::default()
 }
 
-fn list_from_pointers(
-    engine: &Engine<impl Clone + Send + Sync + 'static>,
-    values: Vec<Pointer>,
-) -> Result<Pointer, EngineError> {
-    let mut list = engine.heap.alloc_adt(sym("Empty"), vec![])?;
+fn list_from_pointers(heap: &Heap, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
+    let mut list = heap.alloc_adt(sym("Empty"), vec![])?;
     for value in values.into_iter().rev() {
-        list = engine.heap.alloc_adt(sym("Cons"), vec![value, list])?;
+        list = heap.alloc_adt(sym("Cons"), vec![value, list])?;
     }
     Ok(list)
 }
 
-fn pointer_as_list(
-    engine: &Engine<impl Clone + Send + Sync + 'static>,
-    pointer: &Pointer,
-) -> Result<Vec<Pointer>, EngineError> {
+fn pointer_as_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     let mut out = Vec::new();
     let mut cursor = *pointer;
     loop {
-        let (tag, args) = engine.heap.pointer_as_adt(&cursor)?;
+        let (tag, args) = heap.pointer_as_adt(&cursor)?;
         if tag == sym("Empty") {
             return Ok(out);
         }
@@ -267,7 +261,7 @@ fn pointer_as_list(
         }
         return Err(EngineError::NativeType {
             expected: "List a".into(),
-            got: engine.heap.type_name(&cursor)?.into(),
+            got: heap.type_name(&cursor)?.into(),
         });
     }
 }
@@ -569,7 +563,7 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
             let value = args[0];
             let len = engine.heap.pointer_as_i32(&args[1])?;
             let copies = (0..len.max(0)).map(|_| value).collect();
-            list_from_pointers(&engine, copies)
+            list_from_pointers(&engine.heap, copies)
         })
         .unwrap();
 
@@ -589,7 +583,7 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
     );
 
     let items = engine.heap.pointer_as_tuple(&value).unwrap();
-    let repeated_strings = pointer_as_list(&engine, &items[0]).unwrap();
+    let repeated_strings = pointer_as_list(&engine.heap, &items[0]).unwrap();
     assert_eq!(repeated_strings.len(), 3);
     assert_eq!(
         engine.heap.pointer_as_string(&repeated_strings[0]).unwrap(),
@@ -604,7 +598,7 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
         "rex"
     );
 
-    let repeated_bools = pointer_as_list(&engine, &items[1]).unwrap();
+    let repeated_bools = pointer_as_list(&engine.heap, &items[1]).unwrap();
     assert_eq!(repeated_bools.len(), 2);
     assert!(engine.heap.pointer_as_bool(&repeated_bools[0]).unwrap());
     assert!(engine.heap.pointer_as_bool(&repeated_bools[1]).unwrap());

@@ -81,10 +81,10 @@ pub trait RexAdt: RexType {
     }
 }
 
-fn check_cancelled<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+fn check_runtime_cancelled<State: Clone + Send + Sync + 'static>(
+    runtime: &RuntimeSnapshot<State>,
 ) -> Result<(), EngineError> {
-    if engine.cancel.is_cancelled() {
+    if runtime.cancel.is_cancelled() {
         Err(EngineError::Cancelled)
     } else {
         Ok(())
@@ -92,7 +92,7 @@ fn check_cancelled<State: Clone + Send + Sync + 'static>(
 }
 
 fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     value: u64,
     typ: &Type,
 ) -> Result<Pointer, EngineError> {
@@ -176,7 +176,7 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
 }
 
 fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+    engine: &RuntimeSnapshot<State>,
     value: i64,
     typ: &Type,
 ) -> Result<Pointer, EngineError> {
@@ -898,19 +898,19 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
     async fn call(
         &self,
-        engine: &Engine<State>,
+        runtime: &RuntimeSnapshot<State>,
         typ: Type,
         args: &[Pointer],
     ) -> Result<Pointer, EngineError> {
-        let token = engine.cancellation_token();
+        let token = runtime.cancel.clone();
         if token.is_cancelled() {
             return Err(EngineError::Cancelled);
         }
 
         match self {
-            NativeCallable::Sync(f) => (f)(EvaluatorRef::new(engine), &typ, args),
+            NativeCallable::Sync(f) => (f)(EvaluatorRef::new(runtime), &typ, args),
             NativeCallable::Async(f) => {
-                let call_fut = (f)(EvaluatorRef::new(engine), typ, args).fuse();
+                let call_fut = (f)(EvaluatorRef::new(runtime), typ, args).fuse();
                 let cancel_fut = token.cancelled().fuse();
                 pin_mut!(call_fut, cancel_fut);
                 futures::select! {
@@ -925,7 +925,7 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
                 }
             }
             NativeCallable::AsyncCancellable(f) => {
-                let call_fut = (f)(EvaluatorRef::new(engine), token.clone(), typ, args).fuse();
+                let call_fut = (f)(EvaluatorRef::new(runtime), token.clone(), typ, args).fuse();
                 let cancel_fut = token.cancelled().fuse();
                 pin_mut!(call_fut, cancel_fut);
                 futures::select! {
@@ -993,7 +993,7 @@ impl NativeFn {
 
     async fn call_zero<State: Clone + Send + Sync + 'static>(
         &self,
-        engine: &Engine<State>,
+        runtime: &RuntimeSnapshot<State>,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
         let amount = gas
@@ -1009,15 +1009,15 @@ impl NativeFn {
                 got: 0,
             });
         }
-        engine
+        runtime
             .native_callable(self.native_id)?
-            .call(engine, self.typ.clone(), &[])
+            .call(runtime, self.typ.clone(), &[])
             .await
     }
 
     async fn apply<State: Clone + Send + Sync + 'static>(
         mut self,
-        engine: &Engine<State>,
+        runtime: &RuntimeSnapshot<State>,
         arg: Pointer,
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
@@ -1033,7 +1033,7 @@ impl NativeFn {
         }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(&engine.heap, arg_type, &arg)?;
+        let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
@@ -1051,7 +1051,7 @@ impl NativeFn {
                 applied,
                 applied_types,
             } = self;
-            return engine.heap.alloc_native(
+            return runtime.heap.alloc_native(
                 native_id,
                 name,
                 arity,
@@ -1077,9 +1077,9 @@ impl NativeFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        engine
+        runtime
             .native_callable(self.native_id)?
-            .call(engine, full_ty, &self.applied)
+            .call(runtime, full_ty, &self.applied)
             .await
     }
 }
@@ -1126,7 +1126,7 @@ impl OverloadedFn {
 
     async fn apply<State: Clone + Send + Sync + 'static>(
         mut self,
-        engine: &Engine<State>,
+        runtime: &RuntimeSnapshot<State>,
         arg: Pointer,
         func_type: Option<&Type>,
         arg_type: Option<&Type>,
@@ -1141,7 +1141,7 @@ impl OverloadedFn {
         }
         let (arg_ty, rest_ty) =
             split_fun(&self.typ).ok_or_else(|| EngineError::NotCallable(self.typ.to_string()))?;
-        let actual_ty = resolve_arg_type(&engine.heap, arg_type, &arg)?;
+        let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
         let subst = unify(&arg_ty, &actual_ty).map_err(|_| EngineError::NativeType {
             expected: arg_ty.to_string(),
             got: actual_ty.to_string(),
@@ -1150,7 +1150,7 @@ impl OverloadedFn {
         self.applied.push(arg);
         self.applied_types.push(actual_ty);
         if is_function_type(&rest_ty) {
-            return engine.heap.alloc_overloaded(
+            return runtime.heap.alloc_overloaded(
                 self.name,
                 rest_ty,
                 self.applied,
@@ -1161,8 +1161,8 @@ impl OverloadedFn {
         for arg_ty in self.applied_types.iter().rev() {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
-        if engine.type_system.class_methods.contains_key(&self.name) {
-            let mut func = EvaluatorRef::new(engine)
+        if runtime.type_system.class_methods.contains_key(&self.name) {
+            let mut func = EvaluatorRef::new(runtime)
                 .resolve_class_method(&self.name, &full_ty, gas)
                 .await?;
             let mut cur_ty = full_ty;
@@ -1174,13 +1174,13 @@ impl OverloadedFn {
                     got: applied_ty.to_string(),
                 })?;
                 let rest_ty = rest_ty.apply(&subst);
-                func = apply(engine, func, applied, Some(&cur_ty), Some(applied_ty), gas).await?;
+                func = apply(runtime, func, applied, Some(&cur_ty), Some(applied_ty), gas).await?;
                 cur_ty = rest_ty;
             }
             return Ok(func);
         }
 
-        let imp = EvaluatorRef::new(engine).resolve_native_impl(self.name.as_ref(), &full_ty)?;
+        let imp = EvaluatorRef::new(runtime).resolve_native_impl(self.name.as_ref(), &full_ty)?;
         let amount = gas
             .costs
             .native_call_base
@@ -1191,7 +1191,7 @@ impl OverloadedFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        imp.func.call(engine, full_ty, &self.applied).await
+        imp.func.call(runtime, full_ty, &self.applied).await
     }
 }
 
@@ -1504,6 +1504,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) engine: Engine<State>,
+    runtime: RuntimeSnapshot<State>,
     capabilities: RuntimeCapabilities,
 }
 
@@ -1520,7 +1521,22 @@ pub struct EvaluatorRef<'a, State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    engine: &'a Engine<State>,
+    runtime: &'a RuntimeSnapshot<State>,
+}
+
+#[derive(Clone)]
+pub struct RuntimeSnapshot<State = ()>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub state: Arc<State>,
+    env: Env,
+    natives: NativeRegistry<State>,
+    typeclasses: TypeclassRegistry,
+    type_system: TypeSystem,
+    typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
+    cancel: CancellationToken,
+    pub heap: Heap,
 }
 
 impl<State> Clone for Engine<State>
@@ -1623,6 +1639,7 @@ where
     pub fn runtime_env(&self) -> RuntimeEnv<State> {
         RuntimeEnv {
             engine: self.clone(),
+            runtime: runtime_snapshot(self),
             capabilities: runtime_capabilities(self),
         }
     }
@@ -2323,9 +2340,16 @@ where
             sanitize_type_name_for_symbol(&head_ty)
         );
         let native_scheme = Scheme::new(vec![], vec![], head_ty.clone());
-        self.export_native(native_name.clone(), native_scheme, 0, |engine, _, _| {
-            T::rex_default(&engine)
-        })?;
+        let engine_for_default = self.clone();
+        self.export_native(
+            native_name.clone(),
+            native_scheme,
+            0,
+            move |engine, _, _| {
+                let _ = engine;
+                T::rex_default(&engine_for_default)
+            },
+        )?;
 
         self.type_system.inject_instance(
             "Default",
@@ -2940,13 +2964,6 @@ where
         }
         Ok(schemes[0].clone())
     }
-
-    fn native_callable(&self, id: NativeId) -> Result<NativeCallable<State>, EngineError> {
-        self.natives
-            .by_id(id)
-            .map(|imp| imp.func.clone())
-            .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
-    }
 }
 
 fn type_check_engine<State>(
@@ -3332,14 +3349,32 @@ where
     }
 }
 
+fn runtime_snapshot<State>(engine: &Engine<State>) -> RuntimeSnapshot<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    RuntimeSnapshot {
+        state: Arc::clone(&engine.state),
+        env: engine.env.clone(),
+        natives: engine.natives.clone(),
+        typeclasses: engine.typeclasses.clone(),
+        type_system: engine.type_system.clone(),
+        typeclass_cache: Arc::clone(&engine.typeclass_cache),
+        cancel: engine.cancel.clone(),
+        heap: engine.heap.clone(),
+    }
+}
+
 impl<State> RuntimeEnv<State>
 where
     State: Clone + Send + Sync + 'static,
 {
     pub fn new(engine: Engine<State>) -> Self {
         let capabilities = runtime_capabilities(&engine);
+        let runtime = runtime_snapshot(&engine);
         Self {
             engine,
+            runtime,
             capabilities,
         }
     }
@@ -3375,7 +3410,20 @@ where
 
     pub(crate) fn sync_from_engine(&mut self, engine: &Engine<State>) {
         self.engine = engine.clone();
+        self.runtime = runtime_snapshot(engine);
         self.capabilities = runtime_capabilities(engine);
+    }
+}
+
+impl<State> RuntimeSnapshot<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn native_callable(&self, id: NativeId) -> Result<NativeCallable<State>, EngineError> {
+        self.natives
+            .by_id(id)
+            .map(|imp| imp.func.clone())
+            .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
     }
 }
 
@@ -3411,10 +3459,10 @@ where
         program: &CompiledProgram,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
-        check_cancelled(&self.runtime.engine)?;
+        check_runtime_cancelled(&self.runtime.runtime)?;
         self.runtime.validate_internal(program)?;
         eval_typed_expr(
-            &self.runtime.engine,
+            &self.runtime.runtime,
             &program.env,
             program.expr.as_ref(),
             gas,
@@ -3454,8 +3502,8 @@ impl<'a, State> EvaluatorRef<'a, State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub fn new(engine: &'a Engine<State>) -> Self {
-        Self { engine }
+    pub(crate) fn new(runtime: &'a RuntimeSnapshot<State>) -> Self {
+        Self { runtime }
     }
 
     fn resolve_typeclass_method_impl(
@@ -3464,7 +3512,7 @@ where
         call_type: &Type,
     ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
         let info = self
-            .engine
+            .runtime
             .type_system
             .class_methods
             .get(name)
@@ -3484,7 +3532,7 @@ where
             return Err(EngineError::AmbiguousOverload { name: name.clone() });
         }
 
-        self.engine
+        self.runtime
             .typeclasses
             .resolve(&info.class, name, &param_type)
     }
@@ -3493,13 +3541,13 @@ where
         if !typ.ftv().is_empty() {
             return None;
         }
-        let cache = self.engine.typeclass_cache.lock().ok()?;
+        let cache = self.runtime.typeclass_cache.lock().ok()?;
         cache.get(&(name.clone(), typ.clone())).cloned()
     }
 
     fn insert_cached_class_method(&self, name: &Symbol, typ: &Type, pointer: &Pointer) {
         if typ.ftv().is_empty()
-            && let Ok(mut cache) = self.engine.typeclass_cache.lock()
+            && let Ok(mut cache) = self.runtime.typeclass_cache.lock()
         {
             cache.insert((name.clone(), typ.clone()), *pointer);
         }
@@ -3516,7 +3564,7 @@ where
                 let (name, typ, applied, applied_types) =
                     OverloadedFn::new(name.clone(), typ.clone()).into_parts();
                 let pointer =
-                    self.engine
+                    self.runtime
                         .heap
                         .alloc_overloaded(name, typ, applied, applied_types)?;
                 return Ok(Err(pointer));
@@ -3539,7 +3587,7 @@ where
 
         let pointer = match self.resolve_class_method_plan(name, typ)? {
             Ok((def_env, specialized)) => {
-                eval_typed_expr(self.engine, &def_env, &specialized, gas).await?
+                eval_typed_expr(self.runtime, &def_env, &specialized, gas).await?
             }
             Err(pointer) => pointer,
         };
@@ -3557,7 +3605,7 @@ where
     ) -> Result<NativeImpl<State>, EngineError> {
         let sym_name = sym(name);
         let impls = self
-            .engine
+            .runtime
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
@@ -3587,7 +3635,7 @@ where
     ) -> Result<Pointer, EngineError> {
         let sym_name = sym(name);
         let impls = self
-            .engine
+            .runtime
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
@@ -3612,7 +3660,7 @@ where
                     applied,
                     applied_types,
                 } = imp.to_native_fn(typ.clone());
-                self.engine.heap.alloc_native(
+                self.runtime.heap.alloc_native(
                     native_id,
                     name,
                     arity,
@@ -3631,7 +3679,7 @@ where
                 } else if is_function_type(typ) {
                     let (name, typ, applied, applied_types) =
                         OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    self.engine
+                    self.runtime
                         .heap
                         .alloc_overloaded(name, typ, applied, applied_types)
                 } else {
@@ -3646,26 +3694,26 @@ where
         name: &Symbol,
         typ: &Type,
     ) -> Result<Pointer, EngineError> {
-        if let Some(ptr) = self.engine.env.get(name) {
-            let value = self.engine.heap.get(&ptr)?;
+        if let Some(ptr) = self.runtime.env.get(name) {
+            let value = self.runtime.heap.get(&ptr)?;
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                     let mut gas = GasMeter::default();
-                    native.call_zero(self.engine, &mut gas).await
+                    native.call_zero(self.runtime, &mut gas).await
                 }
                 _ => Ok(ptr),
             }
-        } else if self.engine.type_system.class_methods.contains_key(name) {
+        } else if self.runtime.type_system.class_methods.contains_key(name) {
             let mut gas = GasMeter::default();
             self.resolve_class_method(name, typ, &mut gas).await
         } else {
             let mut gas = GasMeter::default();
             let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
-            let value = self.engine.heap.get(&pointer)?;
+            let value = self.runtime.heap.get(&pointer)?;
             match value.as_ref() {
                 Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                     let mut gas = GasMeter::default();
-                    native.call_zero(self.engine, &mut gas).await
+                    native.call_zero(self.runtime, &mut gas).await
                 }
                 _ => Ok(pointer),
             }
@@ -3679,7 +3727,7 @@ where
         args: &[Pointer],
     ) -> Result<Pointer, EngineError> {
         let imp = self.resolve_native_impl(name, typ)?;
-        imp.func.call(self.engine, typ.clone(), args).await
+        imp.func.call(self.runtime, typ.clone(), args).await
     }
 }
 
@@ -3687,10 +3735,10 @@ impl<'a, State> Deref for EvaluatorRef<'a, State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    type Target = Engine<State>;
+    type Target = RuntimeSnapshot<State>;
 
     fn deref(&self) -> &Self::Target {
-        self.engine
+        self.runtime
     }
 }
 
@@ -4222,7 +4270,7 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
 
 #[async_recursion]
 async fn eval_typed_expr<State>(
-    engine: &Engine<State>,
+    runtime: &RuntimeSnapshot<State>,
     env: &Env,
     expr: &TypedExpr,
     gas: &mut GasMeter,
@@ -4230,15 +4278,15 @@ async fn eval_typed_expr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    check_cancelled(engine)?;
+    check_runtime_cancelled(runtime)?;
     let mut env = env.clone();
     let mut cur = expr;
     loop {
-        check_cancelled(engine)?;
+        check_runtime_cancelled(runtime)?;
         match &cur.kind {
             TypedExprKind::Let { name, def, body } => {
                 gas.charge(gas.costs.eval_node)?;
-                let ptr = eval_typed_expr(engine, &env, def, gas).await?;
+                let ptr = eval_typed_expr(runtime, &env, def, gas).await?;
                 env = env.extend(name.clone(), ptr);
                 cur = body;
             }
@@ -4248,51 +4296,51 @@ where
 
     gas.charge(gas.costs.eval_node)?;
     match &cur.kind {
-        TypedExprKind::Bool(v) => engine.heap.alloc_bool(*v),
-        TypedExprKind::Uint(v) => alloc_uint_literal_as(engine, *v, &cur.typ),
-        TypedExprKind::Int(v) => alloc_int_literal_as(engine, *v, &cur.typ),
-        TypedExprKind::Float(v) => engine.heap.alloc_f32(*v as f32),
-        TypedExprKind::String(v) => engine.heap.alloc_string(v.clone()),
-        TypedExprKind::Uuid(v) => engine.heap.alloc_uuid(*v),
-        TypedExprKind::DateTime(v) => engine.heap.alloc_datetime(*v),
+        TypedExprKind::Bool(v) => runtime.heap.alloc_bool(*v),
+        TypedExprKind::Uint(v) => alloc_uint_literal_as(runtime, *v, &cur.typ),
+        TypedExprKind::Int(v) => alloc_int_literal_as(runtime, *v, &cur.typ),
+        TypedExprKind::Float(v) => runtime.heap.alloc_f32(*v as f32),
+        TypedExprKind::String(v) => runtime.heap.alloc_string(v.clone()),
+        TypedExprKind::Uuid(v) => runtime.heap.alloc_uuid(*v),
+        TypedExprKind::DateTime(v) => runtime.heap.alloc_datetime(*v),
         TypedExprKind::Hole => Err(EngineError::UnsupportedExpr),
         TypedExprKind::Tuple(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
-                check_cancelled(engine)?;
-                values.push(eval_typed_expr(engine, &env, elem, gas).await?);
+                check_runtime_cancelled(runtime)?;
+                values.push(eval_typed_expr(runtime, &env, elem, gas).await?);
             }
-            engine.heap.alloc_tuple(values)
+            runtime.heap.alloc_tuple(values)
         }
         TypedExprKind::List(elems) => {
             let mut values = Vec::with_capacity(elems.len());
             for elem in elems {
-                check_cancelled(engine)?;
-                values.push(eval_typed_expr(engine, &env, elem, gas).await?);
+                check_runtime_cancelled(runtime)?;
+                values.push(eval_typed_expr(runtime, &env, elem, gas).await?);
             }
-            let mut list = engine.heap.alloc_adt(sym("Empty"), vec![])?;
+            let mut list = runtime.heap.alloc_adt(sym("Empty"), vec![])?;
             for value in values.into_iter().rev() {
-                list = engine.heap.alloc_adt(sym("Cons"), vec![value, list])?;
+                list = runtime.heap.alloc_adt(sym("Cons"), vec![value, list])?;
             }
             Ok(list)
         }
         TypedExprKind::Dict(kvs) => {
             let mut out = BTreeMap::new();
             for (k, v) in kvs {
-                check_cancelled(engine)?;
-                out.insert(k.clone(), eval_typed_expr(engine, &env, v, gas).await?);
+                check_runtime_cancelled(runtime)?;
+                out.insert(k.clone(), eval_typed_expr(runtime, &env, v, gas).await?);
             }
-            engine.heap.alloc_dict(out)
+            runtime.heap.alloc_dict(out)
         }
         TypedExprKind::RecordUpdate { base, updates } => {
-            let base_ptr = eval_typed_expr(engine, &env, base, gas).await?;
+            let base_ptr = eval_typed_expr(runtime, &env, base, gas).await?;
             let mut update_vals = BTreeMap::new();
             for (k, v) in updates {
-                check_cancelled(engine)?;
-                update_vals.insert(k.clone(), eval_typed_expr(engine, &env, v, gas).await?);
+                check_runtime_cancelled(runtime)?;
+                update_vals.insert(k.clone(), eval_typed_expr(runtime, &env, v, gas).await?);
             }
 
-            let base_val = engine.heap.get(&base_ptr)?;
+            let base_val = runtime.heap.get(&base_ptr)?;
             match base_val.as_ref() {
                 Value::Dict(map) => {
                     let mut map = map.clone();
@@ -4300,10 +4348,10 @@ where
                         gas.charge(gas.costs.eval_record_update_field)?;
                         map.insert(k, v);
                     }
-                    engine.heap.alloc_dict(map)
+                    runtime.heap.alloc_dict(map)
                 }
                 Value::Adt(tag, args) if args.len() == 1 => {
-                    let inner = engine.heap.get(&args[0])?;
+                    let inner = runtime.heap.get(&args[0])?;
                     match inner.as_ref() {
                         Value::Dict(map) => {
                             let mut out = map.clone();
@@ -4311,8 +4359,8 @@ where
                                 gas.charge(gas.costs.eval_record_update_field)?;
                                 out.insert(k, v);
                             }
-                            let dict = engine.heap.alloc_dict(out)?;
-                            engine.heap.alloc_adt(tag.clone(), vec![dict])
+                            let dict = runtime.heap.alloc_dict(out)?;
+                            runtime.heap.alloc_adt(tag.clone(), vec![dict])
                         }
                         _ => Err(EngineError::UnsupportedExpr),
                     }
@@ -4322,23 +4370,23 @@ where
         }
         TypedExprKind::Var { name, .. } => {
             if let Some(ptr) = env.get(name) {
-                let value = engine.heap.get(&ptr)?;
+                let value = runtime.heap.get(&ptr)?;
                 match value.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero(engine, gas).await
+                        native.call_zero(runtime, gas).await
                     }
                     _ => Ok(ptr),
                 }
-            } else if engine.type_system.class_methods.contains_key(name) {
-                EvaluatorRef::new(engine)
+            } else if runtime.type_system.class_methods.contains_key(name) {
+                EvaluatorRef::new(runtime)
                     .resolve_class_method(name, &cur.typ, gas)
                     .await
             } else {
                 let value =
-                    EvaluatorRef::new(engine).resolve_native(name.as_ref(), &cur.typ, gas)?;
-                match engine.heap.get(&value)?.as_ref() {
+                    EvaluatorRef::new(runtime).resolve_native(name.as_ref(), &cur.typ, gas)?;
+                match runtime.heap.get(&value)?.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero(engine, gas).await
+                        native.call_zero(runtime, gas).await
                     }
                     _ => Ok(value),
                 }
@@ -4348,19 +4396,19 @@ where
             let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
             let mut head = cur;
             while let TypedExprKind::App(f, x) = &head.kind {
-                check_cancelled(engine)?;
+                check_runtime_cancelled(runtime)?;
                 spine.push((f.typ.clone(), x.as_ref()));
                 head = f.as_ref();
             }
             spine.reverse();
 
-            let mut func = eval_typed_expr(engine, &env, head, gas).await?;
+            let mut func = eval_typed_expr(runtime, &env, head, gas).await?;
             for (func_type, arg_expr) in spine {
-                check_cancelled(engine)?;
+                check_runtime_cancelled(runtime)?;
                 gas.charge(gas.costs.eval_app_step)?;
-                let arg = eval_typed_expr(engine, &env, arg_expr, gas).await?;
+                let arg = eval_typed_expr(runtime, &env, arg_expr, gas).await?;
                 func = apply(
-                    engine,
+                    runtime,
                     func,
                     arg,
                     Some(&func_type),
@@ -4372,14 +4420,14 @@ where
             Ok(func)
         }
         TypedExprKind::Project { expr, field } => {
-            let value = eval_typed_expr(engine, &env, expr, gas).await?;
-            project_pointer(&engine.heap, field, &value)
+            let value = eval_typed_expr(runtime, &env, expr, gas).await?;
+            project_pointer(&runtime.heap, field, &value)
         }
         TypedExprKind::Lam { param, body } => {
             let param_ty = split_fun(&expr.typ)
                 .map(|(arg, _)| arg)
                 .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?;
-            engine.heap.alloc_closure(
+            runtime.heap.alloc_closure(
                 env.clone(),
                 param.clone(),
                 param_ty,
@@ -4391,42 +4439,42 @@ where
             let mut env_rec = env.clone();
             let mut slots = Vec::with_capacity(bindings.len());
             for (name, _) in bindings {
-                let placeholder = engine.heap.alloc_uninitialized(name.clone())?;
+                let placeholder = runtime.heap.alloc_uninitialized(name.clone())?;
                 env_rec = env_rec.extend(name.clone(), placeholder);
                 slots.push(placeholder);
             }
 
             for ((_, def), slot) in bindings.iter().zip(slots.iter()) {
-                check_cancelled(engine)?;
+                check_runtime_cancelled(runtime)?;
                 gas.charge(gas.costs.eval_node)?;
-                let def_ptr = eval_typed_expr(engine, &env_rec, def, gas).await?;
-                let def_value = engine.heap.get(&def_ptr)?;
-                engine.heap.overwrite(slot, def_value.as_ref().clone())?;
+                let def_ptr = eval_typed_expr(runtime, &env_rec, def, gas).await?;
+                let def_value = runtime.heap.get(&def_ptr)?;
+                runtime.heap.overwrite(slot, def_value.as_ref().clone())?;
             }
 
-            eval_typed_expr(engine, &env_rec, body, gas).await
+            eval_typed_expr(runtime, &env_rec, body, gas).await
         }
         TypedExprKind::Ite {
             cond,
             then_expr,
             else_expr,
         } => {
-            let cond_ptr = eval_typed_expr(engine, &env, cond, gas).await?;
-            match engine.heap.pointer_as_bool(&cond_ptr) {
-                Ok(true) => eval_typed_expr(engine, &env, then_expr, gas).await,
-                Ok(false) => eval_typed_expr(engine, &env, else_expr, gas).await,
+            let cond_ptr = eval_typed_expr(runtime, &env, cond, gas).await?;
+            match runtime.heap.pointer_as_bool(&cond_ptr) {
+                Ok(true) => eval_typed_expr(runtime, &env, then_expr, gas).await,
+                Ok(false) => eval_typed_expr(runtime, &env, else_expr, gas).await,
                 Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
                 Err(err) => Err(err),
             }
         }
         TypedExprKind::Match { scrutinee, arms } => {
-            let value = eval_typed_expr(engine, &env, scrutinee, gas).await?;
+            let value = eval_typed_expr(runtime, &env, scrutinee, gas).await?;
             for (pat, expr) in arms {
-                check_cancelled(engine)?;
+                check_runtime_cancelled(runtime)?;
                 gas.charge(gas.costs.eval_match_arm)?;
-                if let Some(bindings) = match_pattern_ptr(&engine.heap, pat, &value) {
+                if let Some(bindings) = match_pattern_ptr(&runtime.heap, pat, &value) {
                     let env = env.extend_many(bindings);
-                    return eval_typed_expr(engine, &env, expr, gas).await;
+                    return eval_typed_expr(runtime, &env, expr, gas).await;
                 }
             }
             Err(EngineError::MatchFailure)
@@ -4439,7 +4487,7 @@ where
 
 #[async_recursion]
 pub(crate) async fn apply<State>(
-    engine: &Engine<State>,
+    runtime: &RuntimeSnapshot<State>,
     func: Pointer,
     arg: Pointer,
     func_type: Option<&Type>,
@@ -4449,7 +4497,7 @@ pub(crate) async fn apply<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let func_value = engine.heap.get(&func)?.as_ref().clone();
+    let func_value = runtime.heap.get(&func)?.as_ref().clone();
     match func_value {
         Value::Closure(Closure {
             env,
@@ -4466,7 +4514,7 @@ where
                 })?;
                 subst = compose_subst(s_fun, subst);
             }
-            let actual_ty = resolve_arg_type(&engine.heap, arg_type, &arg)?;
+            let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
             let param_ty = param_ty.apply(&subst);
             let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
                 expected: param_ty.to_string(),
@@ -4475,12 +4523,12 @@ where
             subst = compose_subst(s_arg, subst);
             let env = env.extend(param, arg);
             let body = body.apply(&subst);
-            eval_typed_expr(engine, &env, &body, gas).await
+            eval_typed_expr(runtime, &env, &body, gas).await
         }
-        Value::Native(native) => native.apply(engine, arg, arg_type, gas).await,
-        Value::Overloaded(over) => over.apply(engine, arg, func_type, arg_type, gas).await,
+        Value::Native(native) => native.apply(runtime, arg, arg_type, gas).await,
+        Value::Overloaded(over) => over.apply(runtime, arg, func_type, arg_type, gas).await,
         _ => Err(EngineError::NotCallable(
-            engine.heap.type_name(&func)?.into(),
+            runtime.heap.type_name(&func)?.into(),
         )),
     }
 }
