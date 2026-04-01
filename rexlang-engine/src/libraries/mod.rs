@@ -16,7 +16,7 @@ use rexlang_typesystem::{Predicate, Type};
 use rexlang_util::{GasMeter, sha256_hex};
 use uuid::Uuid;
 
-use crate::{Engine, Evaluator};
+use crate::{CompiledProgram, Compiler, Engine, Evaluator};
 use crate::{EngineError, Pointer};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2202,6 +2202,10 @@ where
             loading.insert(resolved.id.clone());
             self.library_sources
                 .insert(resolved.id.clone(), resolved.source.clone());
+            let qualified = qualify_program(&program, &prefix);
+            let interfaces = interface_decls_from_program(&qualified);
+            self.library_interface_cache
+                .insert(resolved.id.clone(), interfaces);
 
             let imports = graph_imports_for_program(&program, self.default_imports());
             for import_decl in imports {
@@ -2252,6 +2256,12 @@ where
         // Tarjan yields SCCs in reverse topological order of the SCC DAG, so
         // dependencies are processed before dependents.
         for component in sccs {
+            let has_cycle = component.len() > 1;
+            if has_cycle {
+                for library_id in &component {
+                    self.ensure_cycle_interfaces_published(library_id)?;
+                }
+            }
             for library_id in &component {
                 let node = pending
                     .get(library_id)
@@ -2726,70 +2736,34 @@ where
     }
 }
 
-impl<'a, State> Evaluator<'a, State>
+impl<State> Compiler<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub async fn eval_library_file(
-        &mut self,
-        path: impl AsRef<Path>,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
-        let (id, bytes) = self.engine.read_local_library_bytes(path.as_ref())?;
-        let source_fingerprint = sha256_hex(&bytes);
-        if let Some(inst) = self.engine.modules.cached(&id)? {
-            if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
-                return Ok((inst.init_value, inst.init_type));
-            }
-            self.engine.invalidate_library_caches(&id)?;
-        }
-        let source = self.engine.decode_local_library_source(&id, bytes)?;
-        let inst = self
-            .engine
-            .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
-            .await?;
-        Ok((inst.init_value, inst.init_type))
-    }
-
-    pub async fn eval_library_source(
+    pub fn compile_snippet(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        source.hash(&mut hasher);
-        let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-        if let Some(inst) = self.engine.modules.cached(&id)? {
-            return Ok((inst.init_value, inst.init_type));
-        }
-        let inst = self
-            .engine
-            .load_library_from_resolved(
-                ResolvedLibrary {
-                    id,
-                    source: source.to_string(),
-                },
-                gas,
-            )
-            .await?;
-        Ok((inst.init_value, inst.init_type))
+    ) -> Result<CompiledProgram, EngineError> {
+        self.compile_snippet_with_gas_and_importer(source, gas, None)
     }
 
-    pub async fn eval_snippet(
+    pub fn compile_snippet_at(
         &mut self,
         source: &str,
+        importer_path: impl AsRef<Path>,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
-        self.eval_snippet_with_gas_and_importer(source, gas, None)
-            .await
+    ) -> Result<CompiledProgram, EngineError> {
+        let path = importer_path.as_ref().to_path_buf();
+        self.compile_snippet_with_gas_and_importer(source, gas, Some(path))
     }
 
-    pub async fn eval_repl_program(
+    pub async fn compile_repl_program(
         &mut self,
         program: &Program,
         state: &mut ReplState,
         gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
+    ) -> Result<CompiledProgram, EngineError> {
         let importer = state
             .importer_path
             .as_ref()
@@ -2828,7 +2802,123 @@ where
         state
             .defined_values
             .extend(decl_value_names(&program.decls));
-        self.eval(rewritten.expr.as_ref(), gas).await
+        self.compile_expr(rewritten.expr.as_ref())
+    }
+
+    fn compile_snippet_with_gas_and_importer(
+        &mut self,
+        source: &str,
+        gas: &mut GasMeter,
+        importer_path: Option<PathBuf>,
+    ) -> Result<CompiledProgram, EngineError> {
+        let program = parse_program_from_source(source, None, Some(&mut *gas))?;
+
+        let importer = importer_path.map(|p| LibraryId::Local { path: p });
+        let prefix = format!("@snippet{}", Uuid::new_v4());
+        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
+        let mut loading: HashSet<LibraryId> = HashSet::new();
+        let rewritten = self.engine.rewrite_program_with_imports(
+            &program,
+            importer,
+            &prefix,
+            gas,
+            &mut loaded,
+            &mut loading,
+        )?;
+
+        self.engine.inject_decls(&rewritten.decls)?;
+        self.compile_expr(rewritten.expr.as_ref())
+    }
+}
+
+impl<State> Evaluator<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub async fn eval_library_file(
+        &mut self,
+        path: impl AsRef<Path>,
+        gas: &mut GasMeter,
+    ) -> Result<(Pointer, Type), EngineError> {
+        let (id, bytes) = self
+            .runtime
+            .engine
+            .read_local_library_bytes(path.as_ref())?;
+        let source_fingerprint = sha256_hex(&bytes);
+        if let Some(inst) = self.runtime.engine.modules.cached(&id)? {
+            if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
+                return Ok((inst.init_value, inst.init_type));
+            }
+            self.runtime.engine.invalidate_library_caches(&id)?;
+        }
+        let source = self
+            .runtime
+            .engine
+            .decode_local_library_source(&id, bytes)?;
+        let inst = self
+            .runtime
+            .engine
+            .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
+            .await?;
+        Ok((inst.init_value, inst.init_type))
+    }
+
+    pub async fn eval_library_source(
+        &mut self,
+        source: &str,
+        gas: &mut GasMeter,
+    ) -> Result<(Pointer, Type), EngineError> {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        source.hash(&mut hasher);
+        let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
+        if let Some(inst) = self.runtime.engine.modules.cached(&id)? {
+            return Ok((inst.init_value, inst.init_type));
+        }
+        let inst = self
+            .runtime
+            .engine
+            .load_library_from_resolved(
+                ResolvedLibrary {
+                    id,
+                    source: source.to_string(),
+                },
+                gas,
+            )
+            .await?;
+        Ok((inst.init_value, inst.init_type))
+    }
+
+    pub async fn eval_snippet(
+        &mut self,
+        source: &str,
+        gas: &mut GasMeter,
+    ) -> Result<(Pointer, Type), EngineError> {
+        let compiler = self
+            .compiler
+            .as_mut()
+            .ok_or_else(|| EngineError::Internal("evaluator has no compiler".into()))?;
+        let program = compiler.compile_snippet(source, gas)?;
+        self.sync_runtime_from_compiler();
+        let ty = program.result_type.clone();
+        let value = self.run(&program, gas).await?;
+        Ok((value, ty))
+    }
+
+    pub async fn eval_repl_program(
+        &mut self,
+        program: &Program,
+        state: &mut ReplState,
+        gas: &mut GasMeter,
+    ) -> Result<(Pointer, Type), EngineError> {
+        let compiler = self
+            .compiler
+            .as_mut()
+            .ok_or_else(|| EngineError::Internal("evaluator has no compiler".into()))?;
+        let compiled = compiler.compile_repl_program(program, state, gas).await?;
+        self.sync_runtime_from_compiler();
+        let ty = compiled.result_type.clone();
+        let value = self.run(&compiled, gas).await?;
+        Ok((value, ty))
     }
 
     pub async fn eval_snippet_at(
@@ -2838,37 +2928,14 @@ where
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), EngineError> {
         let path = importer_path.as_ref().to_path_buf();
-        self.eval_snippet_with_gas_and_importer(source, gas, Some(path))
-            .await
-    }
-
-    async fn eval_snippet_with_gas_and_importer(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-        importer_path: Option<PathBuf>,
-    ) -> Result<(Pointer, Type), EngineError> {
-        let program = parse_program_from_source(source, None, Some(&mut *gas))?;
-
-        let importer = importer_path.map(|p| LibraryId::Local { path: p });
-
-        let local_values = decl_value_names(&program.decls);
-        let import_bindings = self
-            .engine
-            .import_bindings_for_decls(&program.decls, importer.clone(), &local_values, None, gas)
-            .await?;
-
-        let prefix = format!("@snippet{}", Uuid::new_v4());
-        let qualified = qualify_program(&program, &prefix);
-        validate_import_uses(&qualified, &import_bindings.alias_exports, None)?;
-        let rewritten = rewrite_import_uses(
-            &qualified,
-            &import_bindings.alias_exports,
-            &import_bindings.imported_values,
-            None,
-        );
-
-        self.engine.inject_decls(&rewritten.decls)?;
-        self.eval(rewritten.expr.as_ref(), gas).await
+        let compiler = self
+            .compiler
+            .as_mut()
+            .ok_or_else(|| EngineError::Internal("evaluator has no compiler".into()))?;
+        let program = compiler.compile_snippet_at(source, path, gas)?;
+        self.sync_runtime_from_compiler();
+        let ty = program.result_type.clone();
+        let value = self.run(&program, gas).await?;
+        Ok((value, ty))
     }
 }

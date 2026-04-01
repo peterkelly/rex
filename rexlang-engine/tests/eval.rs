@@ -298,7 +298,7 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
 #[tokio::test]
 async fn eval_with_gas_rejects_out_of_budget() {
     let expr = parse("1");
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let engine = Engine::with_prelude(()).unwrap();
     let mut gas = GasMeter::new(
         Some(0),
         GasCosts {

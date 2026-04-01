@@ -26,9 +26,10 @@ struct HeapSlot {
     value: Option<Arc<Value>>,
 }
 
+#[derive(Clone)]
 pub struct Heap {
     id: u64,
-    state: Mutex<HeapState>,
+    state: Arc<Mutex<HeapState>>,
 }
 
 impl Default for Heap {
@@ -49,7 +50,7 @@ impl Heap {
         let id = NEXT_HEAP_ID.fetch_add(1, Ordering::Relaxed);
         Self {
             id,
-            state: Mutex::new(HeapState::default()),
+            state: Arc::new(Mutex::new(HeapState::default())),
         }
     }
 

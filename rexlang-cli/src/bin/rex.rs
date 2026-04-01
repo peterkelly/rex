@@ -419,7 +419,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut engine = init_engine(&include)?;
+    let engine = init_engine(&include)?;
 
     let (pointer, _) = if let Some(path) = file {
         engine

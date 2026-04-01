@@ -110,10 +110,10 @@ async fn repl_persists_function_definitions() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
     let mut state = ReplState::new();
+    let mut evaluator = engine.evaluator();
 
     let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
-    let (v1, t1) = engine
-        .evaluator()
+    let (v1, t1) = evaluator
         .eval_repl_program(&program1, &mut state, &mut gas)
         .await
         .unwrap();
@@ -121,8 +121,7 @@ async fn repl_persists_function_definitions() {
     assert_pointer_eq!(&engine.heap, v1, engine.heap.alloc_i32(2).unwrap());
 
     let program2 = parse_program("inc 2");
-    let (v2, t2) = engine
-        .evaluator()
+    let (v2, t2) = evaluator
         .eval_repl_program(&program2, &mut state, &mut gas)
         .await
         .unwrap();
@@ -141,9 +140,9 @@ async fn repl_persists_import_aliases() {
     engine.add_include_resolver(&examples).unwrap();
 
     let mut state = ReplState::new();
+    let mut evaluator = engine.evaluator();
     let program1 = parse_program("import foo.bar as Bar\n()");
-    let (v1, t1) = engine
-        .evaluator()
+    let (v1, t1) = evaluator
         .eval_repl_program(&program1, &mut state, &mut gas)
         .await
         .unwrap();
@@ -151,8 +150,7 @@ async fn repl_persists_import_aliases() {
     assert_pointer_eq!(&engine.heap, v1, engine.heap.alloc_tuple(vec![]).unwrap());
 
     let program2 = parse_program("Bar.triple 10");
-    let (v2, t2) = engine
-        .evaluator()
+    let (v2, t2) = evaluator
         .eval_repl_program(&program2, &mut state, &mut gas)
         .await
         .unwrap();
@@ -171,9 +169,9 @@ async fn repl_persists_imported_values() {
     engine.add_include_resolver(&examples).unwrap();
 
     let mut state = ReplState::new();
+    let mut evaluator = engine.evaluator();
     let program1 = parse_program("import foo.bar (triple as t)\n()");
-    let (v1, t1) = engine
-        .evaluator()
+    let (v1, t1) = evaluator
         .eval_repl_program(&program1, &mut state, &mut gas)
         .await
         .unwrap();
@@ -181,8 +179,7 @@ async fn repl_persists_imported_values() {
     assert_pointer_eq!(&engine.heap, v1, engine.heap.alloc_tuple(vec![]).unwrap());
 
     let program2 = parse_program("t 10");
-    let (v2, t2) = engine
-        .evaluator()
+    let (v2, t2) = evaluator
         .eval_repl_program(&program2, &mut state, &mut gas)
         .await
         .unwrap();

@@ -5,7 +5,7 @@ use rexlang::{
 use serde_json::json;
 
 /// Helper to evaluate a Rex expression and return the result pointer
-async fn eval_expr(mut engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
+async fn eval_expr(engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
     let tokens = Token::tokenize(expr).unwrap();
     let mut gas = GasMeter::default();
     let program = Parser::new(tokens).parse_program(&mut gas).unwrap();

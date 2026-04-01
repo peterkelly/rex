@@ -254,7 +254,7 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
         .map_err(as_js_err)?;
 
     let fut = async move {
-        let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
+        let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
         let (value_ptr, _value_ty) = engine
             .evaluator()
             .eval_snippet(source, &mut gas)
