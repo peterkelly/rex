@@ -36,6 +36,7 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
         .map_err(|e| format!("{e}"))?;
     let mut gas = GasMeter::default();
     let (pointer, ty) = engine
+        .evaluator()
         .eval(program.expr.as_ref(), &mut gas)
         .await
         .map_err(|e| format!("{e}"))?;

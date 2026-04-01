@@ -9,7 +9,11 @@ async fn eval_expr(mut engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) 
     let tokens = Token::tokenize(expr).unwrap();
     let mut gas = GasMeter::default();
     let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
-    let (value, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let heap = engine.into_heap();
     (value, heap, ty)
 }

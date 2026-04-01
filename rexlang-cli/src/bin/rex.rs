@@ -322,6 +322,7 @@ async fn repl_loop(
         };
 
         match engine
+            .evaluator()
             .eval_repl_program(&program, &mut state, &mut gas)
             .await
         {
@@ -422,11 +423,13 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let (pointer, _) = if let Some(path) = file {
         engine
+            .evaluator()
             .eval_library_file(&path, &mut gas)
             .await
             .map_err(|e| format!("{e}"))?
     } else {
         engine
+            .evaluator()
             .eval_snippet(source, &mut gas)
             .await
             .map_err(|e| format!("{e}"))?

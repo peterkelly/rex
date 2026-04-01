@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::future::Future;
+use std::ops::Deref;
 use std::sync::{Arc, Mutex};
 
 use async_recursion::async_recursion;
@@ -272,19 +273,24 @@ fn sanitize_type_name_for_symbol(typ: &Type) -> String {
 pub type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
 type NativeId = u64;
 pub type SyncNativeCallable<State> = Arc<
-    dyn Fn(&Engine<State>, &Type, &[Pointer]) -> Result<Pointer, EngineError>
+    dyn for<'a> Fn(EvaluatorRef<'a, State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
         + Send
         + Sync
         + 'static,
 >;
 pub type AsyncNativeCallable<State> = Arc<
-    dyn for<'a> Fn(&'a Engine<State>, Type, &'a [Pointer]) -> NativeFuture<'a>
+    dyn for<'a> Fn(EvaluatorRef<'a, State>, Type, &'a [Pointer]) -> NativeFuture<'a>
         + Send
         + Sync
         + 'static,
 >;
 pub type AsyncNativeCallableCancellable<State> = Arc<
-    dyn for<'a> Fn(&'a Engine<State>, CancellationToken, Type, &'a [Pointer]) -> NativeFuture<'a>
+    dyn for<'a> Fn(
+            EvaluatorRef<'a, State>,
+            CancellationToken,
+            Type,
+            &'a [Pointer],
+        ) -> NativeFuture<'a>
         + Send
         + Sync
         + 'static,
@@ -423,16 +429,19 @@ where
         handler: F,
     ) -> Result<Self, EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                &'a Type,
+                &'a [Pointer],
+            ) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
     {
         validate_native_export_scheme(&scheme, arity)?;
         let handler = Arc::new(handler);
-        let func: SyncNativeCallable<State> = Arc::new(
-            move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| handler(engine, typ, args),
-        );
+        let func: SyncNativeCallable<State> =
+            Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
         Self::from_handler::<NativeCallableSig, _>(name, (scheme, arity, func))
     }
 
@@ -443,7 +452,7 @@ where
         handler: F,
     ) -> Result<Self, EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, Type, Vec<Pointer>) -> NativeFuture<'a>
+        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,
@@ -657,7 +666,7 @@ macro_rules! define_handler_impl {
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
                 let func: SyncNativeCallable<State> = Arc::new(
-                    move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
+                    move |engine, _: &Type, args: &[Pointer]| {
                         if args.len() != $arity {
                             return Err(EngineError::NativeArity {
                                 name: name_sym.clone(),
@@ -696,7 +705,7 @@ macro_rules! define_handler_impl {
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
                 let func: SyncNativeCallable<State> = Arc::new(
-                    move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
+                    move |engine, _: &Type, args: &[Pointer]| {
                         if args.len() != $arity {
                             return Err(EngineError::NativeArity {
                                 name: name_sym.clone(),
@@ -761,7 +770,7 @@ macro_rules! define_async_handler_impl {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
                 let func: AsyncNativeCallable<State> = Arc::new(
-                    move |engine: &Engine<State>, _: Type, args: &[Pointer]| -> NativeFuture<'_> {
+                    move |engine, _: Type, args: &[Pointer]| -> NativeFuture<'_> {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         async move {
@@ -806,7 +815,7 @@ macro_rules! define_async_handler_impl {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
                 let func: AsyncNativeCallable<State> = Arc::new(
-                    move |engine: &Engine<State>, _: Type, args: &[Pointer]| -> NativeFuture<'_> {
+                    move |engine, _: Type, args: &[Pointer]| -> NativeFuture<'_> {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         async move {
@@ -895,9 +904,9 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
         }
 
         match self {
-            NativeCallable::Sync(f) => (f)(engine, &typ, args),
+            NativeCallable::Sync(f) => (f)(EvaluatorRef::new(engine), &typ, args),
             NativeCallable::Async(f) => {
-                let call_fut = (f)(engine, typ, args).fuse();
+                let call_fut = (f)(EvaluatorRef::new(engine), typ, args).fuse();
                 let cancel_fut = token.cancelled().fuse();
                 pin_mut!(call_fut, cancel_fut);
                 futures::select! {
@@ -912,7 +921,7 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
                 }
             }
             NativeCallable::AsyncCancellable(f) => {
-                let call_fut = (f)(engine, token.clone(), typ, args).fuse();
+                let call_fut = (f)(EvaluatorRef::new(engine), token.clone(), typ, args).fuse();
                 let cancel_fut = token.cancelled().fuse();
                 pin_mut!(call_fut, cancel_fut);
                 futures::select! {
@@ -1149,7 +1158,7 @@ impl OverloadedFn {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
         if engine.type_system.class_methods.contains_key(&self.name) {
-            let mut func = engine
+            let mut func = EvaluatorRef::new(engine)
                 .resolve_class_method(&self.name, &full_ty, gas)
                 .await?;
             let mut cur_ty = full_ty;
@@ -1167,7 +1176,7 @@ impl OverloadedFn {
             return Ok(func);
         }
 
-        let imp = engine.resolve_native_impl(self.name.as_ref(), &full_ty)?;
+        let imp = EvaluatorRef::new(engine).resolve_native_impl(self.name.as_ref(), &full_ty)?;
         let amount = gas
             .costs
             .native_call_base
@@ -1365,6 +1374,21 @@ where
     pub heap: Heap,
 }
 
+pub struct Evaluator<'a, State = ()>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub(crate) engine: &'a mut Engine<State>,
+}
+
+#[derive(Clone, Copy)]
+pub struct EvaluatorRef<'a, State = ()>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    engine: &'a Engine<State>,
+}
+
 impl<State> Default for Engine<State>
 where
     State: Clone + Send + Sync + 'static + Default,
@@ -1427,6 +1451,10 @@ impl<State> Engine<State>
 where
     State: Clone + Send + Sync + 'static,
 {
+    pub fn evaluator(&mut self) -> Evaluator<'_, State> {
+        Evaluator { engine: self }
+    }
+
     pub fn new(state: State) -> Self {
         Self {
             state: Arc::new(state),
@@ -1570,7 +1598,7 @@ where
                     .resolve_class_method(&sym("show"), &show_ty, &mut gas)
                     .await?;
                 let rendered_ptr = apply(
-                    engine,
+                    &engine,
                     show_ptr,
                     args[0],
                     Some(&show_ty),
@@ -2073,7 +2101,11 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                &'a Type,
+                &'a [Pointer],
+            ) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
@@ -2113,7 +2145,7 @@ where
         );
         let native_scheme = Scheme::new(vec![], vec![], head_ty.clone());
         self.export_native(native_name.clone(), native_scheme, 0, |engine, _, _| {
-            T::rex_default(engine)
+            T::rex_default(&engine)
         })?;
 
         self.type_system.inject_instance(
@@ -2147,7 +2179,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, Type, Vec<Pointer>) -> NativeFuture<'a>
+        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,
@@ -2163,7 +2195,7 @@ where
         let typ = V::rex_type();
         let value = value.into_pointer(&self.heap)?;
         let func: SyncNativeCallable<State> =
-            Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value));
+            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func, 0);
         self.register_native_registration(ROOT_LIBRARY_NAME, name, registration)
@@ -2177,7 +2209,7 @@ where
     ) -> Result<(), EngineError> {
         let value = self.heap.alloc_value(value)?;
         let func: SyncNativeCallable<State> =
-            Arc::new(move |_engine: &Engine<State>, _: &Type, _args: &[Pointer]| Ok(value));
+            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func, 0);
         self.register_native_registration(ROOT_LIBRARY_NAME, name, registration)
@@ -2192,7 +2224,11 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                &'a Type,
+                &'a [Pointer],
+            ) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
@@ -2200,9 +2236,8 @@ where
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
         let handler = Arc::new(handler);
-        let func: SyncNativeCallable<State> = Arc::new(
-            move |engine: &Engine<State>, typ: &Type, args: &[Pointer]| handler(engine, typ, args),
-        );
+        let func: SyncNativeCallable<State> =
+            Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
         let registration = NativeRegistration::sync(scheme, arity, func, gas_cost);
         self.register_native_registration(ROOT_LIBRARY_NAME, &name, registration)
     }
@@ -2216,7 +2251,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, Type, Vec<Pointer>) -> NativeFuture<'a>
+        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,
@@ -2241,7 +2276,7 @@ where
     ) -> Result<(), EngineError>
     where
         F: for<'a> Fn(
-                &'a Engine<State>,
+                EvaluatorRef<'a, State>,
                 CancellationToken,
                 Type,
                 &'a [Pointer],
@@ -2263,7 +2298,7 @@ where
     ) -> Result<(), EngineError>
     where
         F: for<'a> Fn(
-                &'a Engine<State>,
+                EvaluatorRef<'a, State>,
                 CancellationToken,
                 Type,
                 &'a [Pointer],
@@ -2346,9 +2381,11 @@ where
         self.type_system.inject_adt(&adt);
         for (ctor, scheme) in adt.constructor_schemes() {
             let ctor_name = ctor.clone();
-            let func = Arc::new(move |engine: &Engine<State>, _: &Type, args: &[Pointer]| {
-                engine.heap.alloc_adt(ctor_name.clone(), args.to_vec())
-            });
+            let func = Arc::new(
+                move |engine: EvaluatorRef<'_, State>, _: &Type, args: &[Pointer]| {
+                    engine.heap.alloc_adt(ctor_name.clone(), args.to_vec())
+                },
+            );
             let arity = type_arity(&scheme.typ);
             self.register_native(ctor, scheme, arity, NativeCallable::Sync(func), 0)?;
         }
@@ -2427,7 +2464,7 @@ where
                     ));
                 }
 
-                let typed = self.type_check(lam_body.as_ref())?;
+                let typed = Evaluator::new(self).type_check(lam_body.as_ref())?;
                 let (param_ty, _ret_ty) = split_fun(&typed.typ)
                     .ok_or_else(|| EngineError::NotCallable(typed.typ.to_string()))?;
                 let TypedExprKind::Lam { param, body } = &typed.kind else {
@@ -2509,18 +2546,6 @@ where
 
     pub fn inject_instance(&mut self, class: &str, inst: Instance) {
         self.type_system.inject_instance(class, inst);
-    }
-
-    pub async fn eval(
-        &mut self,
-        expr: &Expr,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), EngineError> {
-        check_cancelled(self)?;
-        let typed = self.type_check(expr)?;
-        let typ = typed.typ.clone();
-        let value = eval_typed_expr(self, &self.env, &typed, gas).await?;
-        Ok((value, typ))
     }
 
     fn inject_prelude(&mut self) -> Result<(), EngineError> {
@@ -2683,22 +2708,6 @@ where
         }
     }
 
-    fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
-        if let Some(span) = first_hole_span(expr) {
-            return Err(EngineError::Type(TypeError::Spanned {
-                span,
-                error: Box::new(TypeError::UnsupportedExpr(
-                    "typed hole `?` must be filled before evaluation",
-                )),
-            }));
-        }
-        let (typed, preds, _ty) = self.type_system.infer_typed(expr)?;
-        let (typed, preds) = default_ambiguous_types(self, typed, preds)?;
-        self.check_predicates(&preds)?;
-        self.check_natives(&typed)?;
-        Ok(typed)
-    }
-
     pub(crate) fn infer_type(
         &mut self,
         expr: &Expr,
@@ -2709,10 +2718,90 @@ where
             .map_err(EngineError::Type)
     }
 
+    fn register_typeclass_instance(
+        &mut self,
+        decl: &InstanceDecl,
+        prepared: &PreparedInstanceDecl,
+    ) -> Result<(), EngineError> {
+        let mut methods: HashMap<Symbol, Arc<TypedExpr>> = HashMap::new();
+        for method in &decl.methods {
+            let typed = self
+                .type_system
+                .typecheck_instance_method(prepared, method)
+                .map_err(EngineError::Type)?;
+            Evaluator::new(self).check_natives(&typed)?;
+            methods.insert(method.name.clone(), Arc::new(typed));
+        }
+
+        self.typeclasses.insert(
+            prepared.class.clone(),
+            prepared.head.clone(),
+            self.env.clone(),
+            methods,
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn lookup_scheme(&self, name: &Symbol) -> Result<Scheme, EngineError> {
+        let schemes = self
+            .type_system
+            .env
+            .lookup(name)
+            .ok_or_else(|| EngineError::UnknownVar(name.clone()))?;
+        if schemes.len() != 1 {
+            return Err(EngineError::AmbiguousOverload { name: name.clone() });
+        }
+        Ok(schemes[0].clone())
+    }
+
+    fn native_callable(&self, id: NativeId) -> Result<NativeCallable<State>, EngineError> {
+        self.natives
+            .by_id(id)
+            .map(|imp| imp.func.clone())
+            .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
+    }
+}
+
+impl<'a, State> Evaluator<'a, State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub fn new(engine: &'a mut Engine<State>) -> Self {
+        Self { engine }
+    }
+
+    pub async fn eval(
+        &mut self,
+        expr: &Expr,
+        gas: &mut GasMeter,
+    ) -> Result<(Pointer, Type), EngineError> {
+        check_cancelled(self.engine)?;
+        let typed = self.type_check(expr)?;
+        let typ = typed.typ.clone();
+        let value = eval_typed_expr(self.engine, &self.engine.env, &typed, gas).await?;
+        Ok((value, typ))
+    }
+
+    fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
+        if let Some(span) = first_hole_span(expr) {
+            return Err(EngineError::Type(TypeError::Spanned {
+                span,
+                error: Box::new(TypeError::UnsupportedExpr(
+                    "typed hole `?` must be filled before evaluation",
+                )),
+            }));
+        }
+        let (typed, preds, _ty) = self.engine.type_system.infer_typed(expr)?;
+        let (typed, preds) = default_ambiguous_types(self.engine, typed, preds)?;
+        self.check_predicates(&preds)?;
+        self.check_natives(&typed)?;
+        Ok(typed)
+    }
+
     fn check_predicates(&self, preds: &[Predicate]) -> Result<(), EngineError> {
         for pred in preds {
             if pred.typ.ftv().is_empty() {
-                let ok = entails(&self.type_system.classes, &[], pred)?;
+                let ok = entails(&self.engine.type_system.classes, &[], pred)?;
                 if !ok {
                     return Err(EngineError::Type(TypeError::NoInstance(
                         pred.class.clone(),
@@ -2725,8 +2814,8 @@ where
     }
 
     fn check_natives(&self, expr: &TypedExpr) -> Result<(), EngineError> {
-        enum Frame<'a> {
-            Expr(&'a TypedExpr),
+        enum Frame<'b> {
+            Expr(&'b TypedExpr),
             Push(Symbol),
             PushMany(Vec<Symbol>),
             Pop(usize),
@@ -2741,11 +2830,11 @@ where
                         if bound.iter().any(|n| n == name) {
                             continue;
                         }
-                        if !self.natives.has_name(name) {
-                            if self.env.get(name).is_some() {
+                        if !self.engine.natives.has_name(name) {
+                            if self.engine.env.get(name).is_some() {
                                 continue;
                             }
-                            if self.type_system.class_methods.contains_key(name) {
+                            if self.engine.type_system.class_methods.contains_key(name) {
                                 continue;
                             }
                             return Err(EngineError::UnknownVar(name.clone()));
@@ -2783,13 +2872,10 @@ where
                         stack.push(Frame::Expr(base));
                     }
                     TypedExprKind::App(f, x) => {
-                        // Process function, then argument.
                         stack.push(Frame::Expr(x));
                         stack.push(Frame::Expr(f));
                     }
-                    TypedExprKind::Project { expr, .. } => {
-                        stack.push(Frame::Expr(expr));
-                    }
+                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
                     TypedExprKind::Lam { param, body } => {
                         stack.push(Frame::Pop(1));
                         stack.push(Frame::Expr(body));
@@ -2850,36 +2936,28 @@ where
                 },
                 Frame::Push(sym) => bound.push(sym),
                 Frame::PushMany(syms) => bound.extend(syms),
-                Frame::Pop(count) => {
-                    bound.truncate(bound.len().saturating_sub(count));
-                }
+                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
             }
         }
         Ok(())
     }
 
-    fn register_typeclass_instance(
-        &mut self,
-        decl: &InstanceDecl,
-        prepared: &PreparedInstanceDecl,
-    ) -> Result<(), EngineError> {
-        let mut methods: HashMap<Symbol, Arc<TypedExpr>> = HashMap::new();
-        for method in &decl.methods {
-            let typed = self
-                .type_system
-                .typecheck_instance_method(prepared, method)
-                .map_err(EngineError::Type)?;
-            self.check_natives(&typed)?;
-            methods.insert(method.name.clone(), Arc::new(typed));
-        }
+    fn has_impl(&self, name: &str, typ: &Type) -> bool {
+        let sym_name = sym(name);
+        self.engine
+            .natives
+            .get(&sym_name)
+            .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
+            .unwrap_or(false)
+    }
+}
 
-        self.typeclasses.insert(
-            prepared.class.clone(),
-            prepared.head.clone(),
-            self.env.clone(),
-            methods,
-        )?;
-        Ok(())
+impl<'a, State> EvaluatorRef<'a, State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub fn new(engine: &'a Engine<State>) -> Self {
+        Self { engine }
     }
 
     fn resolve_typeclass_method_impl(
@@ -2888,6 +2966,7 @@ where
         call_type: &Type,
     ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
         let info = self
+            .engine
             .type_system
             .class_methods
             .get(name)
@@ -2907,20 +2986,22 @@ where
             return Err(EngineError::AmbiguousOverload { name: name.clone() });
         }
 
-        self.typeclasses.resolve(&info.class, name, &param_type)
+        self.engine
+            .typeclasses
+            .resolve(&info.class, name, &param_type)
     }
 
     fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
         if !typ.ftv().is_empty() {
             return None;
         }
-        let cache = self.typeclass_cache.lock().ok()?;
+        let cache = self.engine.typeclass_cache.lock().ok()?;
         cache.get(&(name.clone(), typ.clone())).cloned()
     }
 
     fn insert_cached_class_method(&self, name: &Symbol, typ: &Type, pointer: &Pointer) {
         if typ.ftv().is_empty()
-            && let Ok(mut cache) = self.typeclass_cache.lock()
+            && let Ok(mut cache) = self.engine.typeclass_cache.lock()
         {
             cache.insert((name.clone(), typ.clone()), *pointer);
         }
@@ -2936,9 +3017,10 @@ where
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
                 let (name, typ, applied, applied_types) =
                     OverloadedFn::new(name.clone(), typ.clone()).into_parts();
-                let pointer = self
-                    .heap
-                    .alloc_overloaded(name, typ, applied, applied_types)?;
+                let pointer =
+                    self.engine
+                        .heap
+                        .alloc_overloaded(name, typ, applied, applied_types)?;
                 return Ok(Err(pointer));
             }
             Err(err) => return Err(err),
@@ -2959,7 +3041,7 @@ where
 
         let pointer = match self.resolve_class_method_plan(name, typ)? {
             Ok((def_env, specialized)) => {
-                eval_typed_expr(self, &def_env, &specialized, gas).await?
+                eval_typed_expr(self.engine, &def_env, &specialized, gas).await?
             }
             Err(pointer) => pointer,
         };
@@ -2970,57 +3052,6 @@ where
         Ok(pointer)
     }
 
-    pub(crate) async fn resolve_global(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(ptr) = self.env.get(name) {
-            let value = self.heap.get(&ptr)?;
-            match value.as_ref() {
-                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    let mut gas = GasMeter::default();
-                    native.call_zero(self, &mut gas).await
-                }
-                _ => Ok(ptr),
-            }
-        } else if self.type_system.class_methods.contains_key(name) {
-            let mut gas = GasMeter::default();
-            self.resolve_class_method(name, typ, &mut gas).await
-        } else {
-            let mut gas = GasMeter::default();
-            let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
-            let value = self.heap.get(&pointer)?;
-            match value.as_ref() {
-                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                    let mut gas = GasMeter::default();
-                    native.call_zero(self, &mut gas).await
-                }
-                _ => Ok(pointer),
-            }
-        }
-    }
-
-    pub(crate) fn lookup_scheme(&self, name: &Symbol) -> Result<Scheme, EngineError> {
-        let schemes = self
-            .type_system
-            .env
-            .lookup(name)
-            .ok_or_else(|| EngineError::UnknownVar(name.clone()))?;
-        if schemes.len() != 1 {
-            return Err(EngineError::AmbiguousOverload { name: name.clone() });
-        }
-        Ok(schemes[0].clone())
-    }
-
-    fn has_impl(&self, name: &str, typ: &Type) -> bool {
-        let sym_name = sym(name);
-        self.natives
-            .get(&sym_name)
-            .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
-            .unwrap_or(false)
-    }
-
     fn resolve_native_impl(
         &self,
         name: &str,
@@ -3028,6 +3059,7 @@ where
     ) -> Result<NativeImpl<State>, EngineError> {
         let sym_name = sym(name);
         let impls = self
+            .engine
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
@@ -3049,23 +3081,6 @@ where
         }
     }
 
-    fn native_callable(&self, id: NativeId) -> Result<NativeCallable<State>, EngineError> {
-        self.natives
-            .by_id(id)
-            .map(|imp| imp.func.clone())
-            .ok_or_else(|| EngineError::Internal(format!("unknown native id: {id}")))
-    }
-
-    pub(crate) async fn call_native_impl(
-        &self,
-        name: &str,
-        typ: &Type,
-        args: &[Pointer],
-    ) -> Result<Pointer, EngineError> {
-        let imp = self.resolve_native_impl(name, typ)?;
-        imp.func.call(self, typ.clone(), args).await
-    }
-
     fn resolve_native(
         &self,
         name: &str,
@@ -3074,6 +3089,7 @@ where
     ) -> Result<Pointer, EngineError> {
         let sym_name = sym(name);
         let impls = self
+            .engine
             .natives
             .get(&sym_name)
             .ok_or_else(|| EngineError::UnknownVar(sym_name.clone()))?;
@@ -3098,7 +3114,7 @@ where
                     applied,
                     applied_types,
                 } = imp.to_native_fn(typ.clone());
-                self.heap.alloc_native(
+                self.engine.heap.alloc_native(
                     native_id,
                     name,
                     arity,
@@ -3117,13 +3133,66 @@ where
                 } else if is_function_type(typ) {
                     let (name, typ, applied, applied_types) =
                         OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
-                    self.heap
+                    self.engine
+                        .heap
                         .alloc_overloaded(name, typ, applied, applied_types)
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }
             }
         }
+    }
+
+    pub(crate) async fn resolve_global(
+        &self,
+        name: &Symbol,
+        typ: &Type,
+    ) -> Result<Pointer, EngineError> {
+        if let Some(ptr) = self.engine.env.get(name) {
+            let value = self.engine.heap.get(&ptr)?;
+            match value.as_ref() {
+                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                    let mut gas = GasMeter::default();
+                    native.call_zero(self.engine, &mut gas).await
+                }
+                _ => Ok(ptr),
+            }
+        } else if self.engine.type_system.class_methods.contains_key(name) {
+            let mut gas = GasMeter::default();
+            self.resolve_class_method(name, typ, &mut gas).await
+        } else {
+            let mut gas = GasMeter::default();
+            let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
+            let value = self.engine.heap.get(&pointer)?;
+            match value.as_ref() {
+                Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                    let mut gas = GasMeter::default();
+                    native.call_zero(self.engine, &mut gas).await
+                }
+                _ => Ok(pointer),
+            }
+        }
+    }
+
+    pub(crate) async fn call_native_impl(
+        &self,
+        name: &str,
+        typ: &Type,
+        args: &[Pointer],
+    ) -> Result<Pointer, EngineError> {
+        let imp = self.resolve_native_impl(name, typ)?;
+        imp.func.call(self.engine, typ.clone(), args).await
+    }
+}
+
+impl<'a, State> Deref for EvaluatorRef<'a, State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    type Target = Engine<State>;
+
+    fn deref(&self) -> &Self::Target {
+        self.engine
     }
 }
 
@@ -3763,9 +3832,12 @@ where
                     _ => Ok(ptr),
                 }
             } else if engine.type_system.class_methods.contains_key(name) {
-                engine.resolve_class_method(name, &cur.typ, gas).await
+                EvaluatorRef::new(engine)
+                    .resolve_class_method(name, &cur.typ, gas)
+                    .await
             } else {
-                let value = engine.resolve_native(name.as_ref(), &cur.typ, gas)?;
+                let value =
+                    EvaluatorRef::new(engine).resolve_native(name.as_ref(), &cur.typ, gas)?;
                 match engine.heap.get(&value)?.as_ref() {
                     Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                         native.call_zero(engine, gas).await

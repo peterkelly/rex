@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
 use rexlang_engine::{
-    Engine, EngineOptions, Library, Pointer, PreludeMode, Value, pointer_display,
+    Engine, EngineOptions, EvaluatorRef, Library, Pointer, PreludeMode, Value, pointer_display,
 };
 use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeKind};
 use rexlang_util::GasMeter;
@@ -103,7 +103,7 @@ async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     source: &str,
 ) -> Result<(Pointer, Type), rexlang_engine::EngineError> {
     let mut gas = unlimited_gas();
-    engine.eval_snippet(source, &mut gas).await
+    engine.evaluator().eval_snippet(source, &mut gas).await
 }
 
 async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
@@ -113,6 +113,7 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
 ) -> Result<(Pointer, Type), rexlang_engine::EngineError> {
     let mut gas = unlimited_gas();
     engine
+        .evaluator()
         .eval_snippet_at(source, importer_path, &mut gas)
         .await
 }
@@ -187,7 +188,11 @@ async fn eval_library_file_reloads_when_local_file_changes() {
 
     write_file(&library, "pub fn value x: i32 -> i32 = x + 1");
     let mut gas = unlimited_gas();
-    let _ = engine.eval_library_file(&library, &mut gas).await.unwrap();
+    let _ = engine
+        .evaluator()
+        .eval_library_file(&library, &mut gas)
+        .await
+        .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
         .await
         .unwrap();
@@ -201,7 +206,11 @@ async fn eval_library_file_reloads_when_local_file_changes() {
     // library cache entries before reloading.
     write_file(&library, "pub fn value x: i32 -> i32 = x + 2");
     let mut gas = unlimited_gas();
-    let _ = engine.eval_library_file(&library, &mut gas).await.unwrap();
+    let _ = engine
+        .evaluator()
+        .eval_library_file(&library, &mut gas)
+        .await
+        .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
         .await
         .unwrap();
@@ -465,7 +474,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "pick",
             i32_binop_scheme(),
             2,
-            |engine: &Engine<bool>, _: &Type, args: &[Pointer]| {
+            |engine: EvaluatorRef<'_, bool>, _: &Type, args: &[Pointer]| {
                 let idx = if *engine.state.as_ref() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
@@ -478,7 +487,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "heap_i32",
             i32_value_scheme(),
             0,
-            |engine: &Engine<bool>, _: &Type, _args| engine.heap.alloc_i32(123),
+            |engine: EvaluatorRef<'_, bool>, _: &Type, _args| engine.heap.alloc_i32(123),
         )
         .unwrap();
 
@@ -487,7 +496,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     library
         .export_native("pick_typed", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: &Engine<bool>, typ: &Type, args: &[Pointer]| {
+            move |engine: EvaluatorRef<'_, bool>, typ: &Type, args: &[Pointer]| {
                 if typ == &expected_type {
                     typed_called.store(true, Ordering::Relaxed);
                 }
@@ -608,7 +617,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "pick_async",
             i32_binop_scheme(),
             2,
-            |engine: &Engine<bool>, _: Type, args: Vec<Pointer>| {
+            |engine: EvaluatorRef<'_, bool>, _: Type, args: Vec<Pointer>| {
                 let idx = if *engine.state.as_ref() { 1 } else { 0 };
                 async move {
                     args.get(idx).cloned().ok_or_else(|| {
@@ -624,7 +633,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "heap_i32_async",
             i32_value_scheme(),
             0,
-            |engine: &Engine<bool>, _: Type, _args: Vec<Pointer>| {
+            |engine: EvaluatorRef<'_, bool>, _: Type, _args: Vec<Pointer>| {
                 async move { engine.heap.alloc_i32(77) }.boxed()
             },
         )
@@ -635,7 +644,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     library
         .export_native_async("pick_typed_async", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: &Engine<bool>, typ: Type, args: Vec<Pointer>| {
+            move |engine: EvaluatorRef<'_, bool>, typ: Type, args: Vec<Pointer>| {
                 let type_match = typ == expected_type;
                 let idx = if *engine.state.as_ref() { 1 } else { 0 };
                 let typed_called = Arc::clone(&typed_called);
@@ -704,7 +713,7 @@ fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad",
             unary_scheme,
             2,
-            |_engine: &Engine<()>, _: &Type, _args: &[Pointer]| {
+            |_engine: EvaluatorRef<'_, ()>, _: &Type, _args: &[Pointer]| {
                 Err(rexlang_engine::EngineError::Internal("unused".into()))
             },
         )
@@ -726,7 +735,7 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad_async",
             unary_scheme,
             2,
-            |_engine: &Engine<()>, _: Type, _args: Vec<Pointer>| {
+            |_engine: EvaluatorRef<'_, ()>, _: Type, _args: Vec<Pointer>| {
                 async { Err(rexlang_engine::EngineError::Internal("unused".into())) }.boxed()
             },
         )

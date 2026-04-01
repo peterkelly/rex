@@ -1,6 +1,6 @@
 use rexlang_typesystem::{AdtDecl, Type, collect_adts_in_types};
 
-use crate::engine::{AsyncHandler, Export, Handler, NativeFuture};
+use crate::engine::{AsyncHandler, EvaluatorRef, Export, Handler, NativeFuture};
 use crate::{Engine, EngineError, Pointer, RexAdt};
 
 /// A staged host library that you build up in Rust and later inject into an [`Engine`].
@@ -328,7 +328,7 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rexlang_engine::{Engine, Library, Pointer};
+    /// use rexlang_engine::{EvaluatorRef, Library, Pointer};
     /// use rexlang_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut library = Library::<()>::new("acme.dynamic");
@@ -339,7 +339,7 @@ where
     /// );
     ///
     /// library
-    ///     .export_native("id_ptr", scheme, 1, |_engine: &Engine<()>, _typ: &Type, args: &[Pointer]| {
+    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<'_, ()>, _typ: &Type, args: &[Pointer]| {
     ///         Ok(args[0].clone())
     ///     })
     ///     .unwrap();
@@ -352,7 +352,11 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                &'a Type,
+                &'a [Pointer],
+            ) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
@@ -371,7 +375,7 @@ where
     ///
     /// ```rust,ignore
     /// use futures::FutureExt;
-    /// use rexlang_engine::{Engine, Library, Pointer};
+    /// use rexlang_engine::{EvaluatorRef, Library, Pointer};
     /// use rexlang_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut library = Library::<()>::new("acme.dynamic");
@@ -382,7 +386,7 @@ where
     ///         "answer_async",
     ///         scheme,
     ///         0,
-    ///         |engine: &Engine<()>, _typ: Type, _args: Vec<Pointer>| {
+    ///         |engine: EvaluatorRef<'_, ()>, _typ: Type, _args: Vec<Pointer>| {
     ///             async move { engine.heap.alloc_i32(42) }.boxed()
     ///         },
     ///     )
@@ -396,7 +400,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(&'a Engine<State>, Type, Vec<Pointer>) -> NativeFuture<'a>
+        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
             + Send
             + Sync
             + 'static,

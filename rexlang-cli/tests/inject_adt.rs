@@ -153,7 +153,11 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, ManualRecord::rex_type());
     let decoded = ManualRecord::from_pointer(&engine.heap, &ptr).unwrap();
     assert_eq!(
@@ -175,7 +179,11 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, DerivedRecord::rex_type());
     let decoded = DerivedRecord::from_pointer(&engine.heap, &ptr).unwrap();
     assert_eq!(
@@ -204,7 +212,11 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }
@@ -226,7 +238,11 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }
@@ -323,7 +339,11 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }
@@ -349,7 +369,11 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
 }

@@ -15,8 +15,9 @@ mod value;
 pub use cancel::CancellationToken;
 pub use engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, Engine, EngineOptions,
-    Export, Handler, NativeFn, NativeFuture, OverloadedFn, PRELUDE_LIBRARY_NAME, PreludeMode,
-    ROOT_LIBRARY_NAME, RexAdt, RexDefault, SyncNativeCallable, collect_adts_error_to_engine,
+    Evaluator, EvaluatorRef, Export, Handler, NativeFn, NativeFuture, OverloadedFn,
+    PRELUDE_LIBRARY_NAME, PreludeMode, ROOT_LIBRARY_NAME, RexAdt, RexDefault, SyncNativeCallable,
+    collect_adts_error_to_engine,
 };
 pub use env::Env;
 pub use error::{EngineError, LibraryError};

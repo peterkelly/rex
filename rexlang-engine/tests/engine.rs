@@ -113,6 +113,7 @@ async fn repl_persists_function_definitions() {
 
     let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
     let (v1, t1) = engine
+        .evaluator()
         .eval_repl_program(&program1, &mut state, &mut gas)
         .await
         .unwrap();
@@ -121,6 +122,7 @@ async fn repl_persists_function_definitions() {
 
     let program2 = parse_program("inc 2");
     let (v2, t2) = engine
+        .evaluator()
         .eval_repl_program(&program2, &mut state, &mut gas)
         .await
         .unwrap();
@@ -141,6 +143,7 @@ async fn repl_persists_import_aliases() {
     let mut state = ReplState::new();
     let program1 = parse_program("import foo.bar as Bar\n()");
     let (v1, t1) = engine
+        .evaluator()
         .eval_repl_program(&program1, &mut state, &mut gas)
         .await
         .unwrap();
@@ -149,6 +152,7 @@ async fn repl_persists_import_aliases() {
 
     let program2 = parse_program("Bar.triple 10");
     let (v2, t2) = engine
+        .evaluator()
         .eval_repl_program(&program2, &mut state, &mut gas)
         .await
         .unwrap();
@@ -169,6 +173,7 @@ async fn repl_persists_imported_values() {
     let mut state = ReplState::new();
     let program1 = parse_program("import foo.bar (triple as t)\n()");
     let (v1, t1) = engine
+        .evaluator()
         .eval_repl_program(&program1, &mut state, &mut gas)
         .await
         .unwrap();
@@ -177,6 +182,7 @@ async fn repl_persists_imported_values() {
 
     let program2 = parse_program("t 10");
     let (v2, t2) = engine
+        .evaluator()
         .eval_repl_program(&program2, &mut state, &mut gas)
         .await
         .unwrap();
@@ -197,6 +203,7 @@ async fn injected_library_can_define_pub_adt_declarations() {
     engine.inject_library(library).unwrap();
 
     let (value, _ty) = engine
+        .evaluator()
         .eval_snippet(
             r#"
             import acme.status (Failed)
@@ -249,7 +256,7 @@ async fn eval_can_be_cancelled_while_waiting_on_async_native() {
     });
 
     let mut gas = unlimited_gas();
-    let res = engine.eval(expr.as_ref(), &mut gas).await;
+    let res = engine.evaluator().eval(expr.as_ref(), &mut gas).await;
     let joined = canceller.join();
     assert!(joined.is_ok(), "cancel thread panicked");
     assert!(matches!(res, Err(EngineError::Cancelled)));
@@ -279,7 +286,7 @@ async fn eval_can_be_cancelled_while_waiting_on_non_cancellable_async_native() {
     });
 
     let mut gas = unlimited_gas();
-    let res = engine.eval(expr.as_ref(), &mut gas).await;
+    let res = engine.evaluator().eval(expr.as_ref(), &mut gas).await;
     let joined = canceller.join();
     assert!(joined.is_ok(), "cancel thread panicked");
     assert!(matches!(res, Err(EngineError::Cancelled)));
@@ -305,7 +312,7 @@ async fn native_per_impl_gas_cost_is_charged() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let err = match engine.eval(expr.as_ref(), &mut gas).await {
+    let err = match engine.evaluator().eval(expr.as_ref(), &mut gas).await {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
@@ -321,7 +328,11 @@ async fn export_value_typed_registers_global_value() {
         .unwrap();
 
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
 }
@@ -346,7 +357,7 @@ async fn async_native_per_impl_gas_cost_is_charged() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let err = match engine.eval(expr.as_ref(), &mut gas).await {
+    let err = match engine.evaluator().eval(expr.as_ref(), &mut gas).await {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
@@ -379,7 +390,7 @@ async fn cancellable_async_native_per_impl_gas_cost_is_charged() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let err = match engine.eval(expr.as_ref(), &mut gas).await {
+    let err = match engine.evaluator().eval(expr.as_ref(), &mut gas).await {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
@@ -400,7 +411,11 @@ async fn record_update_requires_known_variant_for_sum_types() {
     let mut engine = engine_with_arith();
     engine.inject_decls(&program.decls).unwrap();
     let mut gas = unlimited_gas();
-    match engine.eval(program.expr.as_ref(), &mut gas).await {
+    match engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+    {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
             assert!(matches!(err, TypeError::FieldNotKnown { .. }));

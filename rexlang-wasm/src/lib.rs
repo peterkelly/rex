@@ -153,6 +153,7 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
     // Match CLI semantics by evaluating snippets through library/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
     let (value_ptr, _value_ty) = engine
+        .evaluator()
         .eval_snippet(source, &mut gas)
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
@@ -255,6 +256,7 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
     let fut = async move {
         let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
         let (value_ptr, _value_ty) = engine
+            .evaluator()
             .eval_snippet(source, &mut gas)
             .await
             .map_err(|e| format!("runtime error: {e}"))?;

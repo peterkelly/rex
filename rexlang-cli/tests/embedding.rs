@@ -50,6 +50,7 @@ async fn library_render_label_with_library_scoped_adts_left_and_right() {
 
     let mut gas = unlimited_gas();
     let (value, ty) = engine
+        .evaluator()
         .eval_snippet(
             r#"
             import sample (Label, Left, Right, Wrong, render_label)
@@ -122,6 +123,7 @@ async fn match_ascribed_library_type_with_overlapping_constructor_is_ambiguous_r
 
     let mut gas = unlimited_gas();
     let err = engine
+        .evaluator()
         .eval_snippet(
             r#"
             import sample (Right, Wrong)
@@ -326,7 +328,11 @@ async fn injected_functions_can_read_shared_state_fields() {
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
     );
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -363,7 +369,11 @@ async fn derived_rex_default_can_read_host_state() {
 
     let expr = parse("let e: Entity1 = default in e");
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
     let decoded = Entity1::from_pointer(&engine.heap, &value).unwrap();
@@ -398,7 +408,11 @@ async fn derived_rex_default_record_update_can_override_fields() {
         r#"let e: Entity1 = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
     );
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
     let decoded = Entity1::from_pointer(&engine.heap, &value).unwrap();
@@ -431,7 +445,11 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
 
     let expr = parse(r#"Entity2 "sample" [7, 11]"#);
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
     let decoded = Entity2::from_pointer(&engine.heap, &value).unwrap();
@@ -472,7 +490,11 @@ async fn entity2_constructor_result_can_be_record_updated() {
         }"#,
     );
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
     let decoded = Entity2::from_pointer(&engine.heap, &value).unwrap();
@@ -507,7 +529,11 @@ async fn async_injected_functions_can_read_shared_state_fields() {
 
     let expr = parse("(have_role_async \"editor\", have_role_async \"admin\")");
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -543,13 +569,17 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
             let value = args[0];
             let len = engine.heap.pointer_as_i32(&args[1])?;
             let copies = (0..len.max(0)).map(|_| value).collect();
-            list_from_pointers(engine, copies)
+            list_from_pointers(&engine, copies)
         })
         .unwrap();
 
     let expr = parse(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -603,7 +633,11 @@ async fn generic_export_can_swap_two_values_of_different_types() {
 
     let expr = parse(r#"(swap_pair "left" 7, swap_pair true "right")"#);
     let mut gas = unlimited_gas();
-    let (value, ty) = engine.eval(expr.as_ref(), &mut gas).await.unwrap();
+    let (value, ty) = engine
+        .evaluator()
+        .eval(expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -691,6 +725,7 @@ async fn overloaded_exports_types_and_values() {
     assert_overload_tuple_type_shape(&inferred);
 
     let value = engine
+        .evaluator()
         .eval(parse(expr).as_ref(), &mut GasMeter::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
@@ -775,6 +810,7 @@ async fn overloaded_async_exports_types_and_values() {
     assert_overload_tuple_type_shape(&inferred);
 
     let value = engine
+        .evaluator()
         .eval(parse(expr).as_ref(), &mut GasMeter::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");

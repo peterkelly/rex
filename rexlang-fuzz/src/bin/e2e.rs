@@ -37,7 +37,10 @@ async fn run_one(input: &[u8]) {
     if engine.inject_decls(&program.decls).is_err() {
         return;
     }
-    let _ = engine.eval(program.expr.as_ref(), &mut gas).await;
+    let _ = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await;
 }
 
 #[tokio::main]

@@ -19,7 +19,10 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
 
     engine.inject_decls(&program.decls)?;
     let mut gas = GasMeter::default();
-    let (pointer, ty) = engine.eval(program.expr.as_ref(), &mut gas).await?;
+    let (pointer, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await?;
     let heap = engine.into_heap();
     Ok((heap, pointer, ty))
 }
@@ -131,7 +134,11 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
     engine.inject_decls(&program.decls).unwrap();
 
     let mut gas = GasMeter::default();
-    let (v_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (v_ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
 
     let actual_rex = rex_to_json(
         &engine.heap,
@@ -221,7 +228,11 @@ async fn derive_generic_worked_example_polymorphic_adt() {
 
     engine.inject_decls(&program.decls).unwrap();
     let mut gas = GasMeter::default();
-    let (v_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (v_ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     let expected_ty = Type::tuple(vec![Maybe::<i32>::rex_type(), Maybe::<bool>::rex_type()]);
     assert_eq!(ty, expected_ty);
     let v = engine
@@ -284,7 +295,11 @@ async fn derive_can_be_used_in_injected_native_functions() {
         .unwrap();
 
     let mut gas = GasMeter::default();
-    let (v_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (v_ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, MyStruct::rex_type());
     let bumped = MyStruct::from_pointer(&engine.heap, &v_ptr).unwrap();
     assert_eq!(bumped.y, 43);
@@ -306,7 +321,11 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let tokens = Token::tokenize("const_struct.y").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-    let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (v, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let heap = &engine.heap;
     assert_pointer_eq!(heap, v, heap.alloc_i32(100).unwrap());
@@ -333,7 +352,11 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (v, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let heap = &engine.heap;
     assert_pointer_eq!(heap, v, heap.alloc_i32(12).unwrap());
@@ -356,7 +379,11 @@ async fn derive_types_implement_rex_adt_trait() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut gas = GasMeter::default();
-    let (v, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (v, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, v, engine.heap.alloc_i32(10).unwrap());
 }
@@ -379,7 +406,11 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let mut parser = Parser::new(tokens);
     let mut gas = GasMeter::default();
     let program = parser.parse_program(&mut gas).unwrap();
-    let (v_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (v_ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![

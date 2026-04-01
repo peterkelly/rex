@@ -23,7 +23,11 @@ async fn record_update_end_to_end() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_decls(&program.decls).unwrap();
     let mut gas = GasMeter::default();
-    let (value_ptr, ty) = engine.eval(program.expr.as_ref(), &mut gas).await.unwrap();
+    let (value_ptr, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![

@@ -16,7 +16,7 @@ use rexlang_typesystem::{Predicate, Type};
 use rexlang_util::{GasMeter, sha256_hex};
 use uuid::Uuid;
 
-use crate::Engine;
+use crate::{Engine, Evaluator};
 use crate::{EngineError, Pointer};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2724,24 +2724,28 @@ where
         self.inject_decls(&rewritten.decls)?;
         self.infer_type(rewritten.expr.as_ref(), gas)
     }
+}
 
+impl<'a, State> Evaluator<'a, State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     pub async fn eval_library_file(
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), EngineError> {
-        let (id, bytes) = self.read_local_library_bytes(path.as_ref())?;
+        let (id, bytes) = self.engine.read_local_library_bytes(path.as_ref())?;
         let source_fingerprint = sha256_hex(&bytes);
-        if let Some(inst) = self.modules.cached(&id)? {
+        if let Some(inst) = self.engine.modules.cached(&id)? {
             if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
                 return Ok((inst.init_value, inst.init_type));
             }
-            // Local library identity is path-based, so file edits must explicitly
-            // invalidate path-keyed caches before reload.
-            self.invalidate_library_caches(&id)?;
+            self.engine.invalidate_library_caches(&id)?;
         }
-        let source = self.decode_local_library_source(&id, bytes)?;
+        let source = self.engine.decode_local_library_source(&id, bytes)?;
         let inst = self
+            .engine
             .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
             .await?;
         Ok((inst.init_value, inst.init_type))
@@ -2755,10 +2759,11 @@ where
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         source.hash(&mut hasher);
         let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-        if let Some(inst) = self.modules.cached(&id)? {
+        if let Some(inst) = self.engine.modules.cached(&id)? {
             return Ok((inst.init_value, inst.init_type));
         }
         let inst = self
+            .engine
             .load_library_from_resolved(
                 ResolvedLibrary {
                     id,
@@ -2794,6 +2799,7 @@ where
         local_values.extend(decl_value_names(&program.decls));
         let existing_imported: HashSet<Symbol> = state.imported_values.keys().cloned().collect();
         let import_bindings = self
+            .engine
             .import_bindings_for_decls(
                 &program.decls,
                 importer.clone(),
@@ -2818,14 +2824,13 @@ where
             Some(&shadowed_values),
         );
 
-        self.inject_decls(&rewritten.decls)?;
+        self.engine.inject_decls(&rewritten.decls)?;
         state
             .defined_values
             .extend(decl_value_names(&program.decls));
         self.eval(rewritten.expr.as_ref(), gas).await
     }
 
-    /// Evaluate a non-library snippet (with gas), but use `importer_path` for resolving local-relative imports.
     pub async fn eval_snippet_at(
         &mut self,
         source: &str,
@@ -2849,6 +2854,7 @@ where
 
         let local_values = decl_value_names(&program.decls);
         let import_bindings = self
+            .engine
             .import_bindings_for_decls(&program.decls, importer.clone(), &local_values, None, gas)
             .await?;
 
@@ -2862,7 +2868,7 @@ where
             None,
         );
 
-        self.inject_decls(&rewritten.decls)?;
+        self.engine.inject_decls(&rewritten.decls)?;
         self.eval(rewritten.expr.as_ref(), gas).await
     }
 }

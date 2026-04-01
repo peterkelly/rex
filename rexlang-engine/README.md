@@ -48,7 +48,7 @@ Operator names can be injected with parentheses (e.g., `"(+)"`); the engine norm
 returning `Err(...)` fails evaluation.
 `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`;
 returning `Err(...)` fails evaluation.
-Pointer-level APIs (`export_native*`) receive `&Engine<State>` so they can access heap/runtime internals.
+Pointer-level APIs (`export_native*`) receive `EvaluatorRef<'_, State>` so they can access heap/runtime internals.
 `export_native*` validates `Scheme`/arity compatibility during registration.
 
 ## Prelude

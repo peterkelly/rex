@@ -1,6 +1,6 @@
 use futures::FutureExt;
 use rexlang_ast::expr::sym_eq;
-use rexlang_engine::{Engine, EngineError, Value, assert_pointer_eq};
+use rexlang_engine::{Engine, EngineError, EvaluatorRef, Value, assert_pointer_eq};
 use rexlang_lexer::Token;
 use rexlang_parser::Parser;
 use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeError};
@@ -37,7 +37,11 @@ async fn eval_expr(
     expr: &rexlang_ast::expr::Expr,
 ) -> Result<rexlang_engine::Pointer, EngineError> {
     let mut gas = unlimited_gas();
-    engine.eval(expr, &mut gas).await.map(|(value, _)| value)
+    engine
+        .evaluator()
+        .eval(expr, &mut gas)
+        .await
+        .map(|(value, _)| value)
 }
 
 macro_rules! pval {
@@ -302,7 +306,7 @@ async fn eval_with_gas_rejects_out_of_budget() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let err = match engine.eval(expr.as_ref(), &mut gas).await {
+    let err = match engine.evaluator().eval(expr.as_ref(), &mut gas).await {
         Ok(_) => panic!("expected out of gas"),
         Err(e) => e,
     };
@@ -534,7 +538,7 @@ fn engine_export_native_rejects_invalid_arity_scheme_pair() {
             "bad",
             unary_scheme,
             2,
-            |_engine: &Engine<()>, _: &Type, _args| {
+            |_engine: EvaluatorRef<'_, ()>, _: &Type, _args| {
                 Err(rexlang_engine::EngineError::Internal("unused".into()))
             },
         )
@@ -563,7 +567,7 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
             "bad_async",
             unary_scheme,
             2,
-            |_engine: &Engine<()>, _: Type, _args| {
+            |_engine: EvaluatorRef<'_, ()>, _: Type, _args| {
                 async { Err(rexlang_engine::EngineError::Internal("unused".into())) }.boxed()
             },
         )

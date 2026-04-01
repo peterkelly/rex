@@ -31,6 +31,7 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
 
     let mut gas = GasMeter::default();
     let (value, ty) = engine
+        .evaluator()
         .eval_snippet(&source, &mut gas)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));

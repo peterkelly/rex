@@ -293,13 +293,18 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let mut gas = GasMeter::default();
     let expr_program = parse_program(rex_code);
     let (ptr_eval, ty_eval) = engine
+        .evaluator()
         .eval(expr_program.expr.as_ref(), &mut gas)
         .await
         .unwrap();
     assert_eval_json(&engine, &ptr_eval, &ty_eval, expected_json.clone());
 
     let mut gas = GasMeter::default();
-    let (ptr_snippet, ty_snippet) = engine.eval_snippet(rex_code, &mut gas).await.unwrap();
+    let (ptr_snippet, ty_snippet) = engine
+        .evaluator()
+        .eval_snippet(rex_code, &mut gas)
+        .await
+        .unwrap();
     assert_eval_json(&engine, &ptr_snippet, &ty_snippet, expected_json.clone());
 
     let dir = temp_dir("snippet-at");
@@ -307,6 +312,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     fs::write(&importer, "()").unwrap();
     let mut gas = GasMeter::default();
     let (ptr_snippet_at, ty_snippet_at) = engine
+        .evaluator()
         .eval_snippet_at(rex_code, &importer, &mut gas)
         .await
         .unwrap();
@@ -321,6 +327,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let mut repl_state = ReplState::new();
     let mut gas = GasMeter::default();
     let (ptr_repl, ty_repl) = engine
+        .evaluator()
         .eval_repl_program(&repl_program, &mut repl_state, &mut gas)
         .await
         .unwrap();

@@ -22,7 +22,10 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     engine.inject_decls(&program.decls)?;
 
     let mut gas = GasMeter::default();
-    let (pointer, ty) = engine.eval(program.expr.as_ref(), &mut gas).await?;
+    let (pointer, ty) = engine
+        .evaluator()
+        .eval(program.expr.as_ref(), &mut gas)
+        .await?;
     let heap = engine.into_heap();
     Ok((heap, pointer, ty))
 }

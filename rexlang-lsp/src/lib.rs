@@ -7513,6 +7513,7 @@ mod tests {
         let mut engine = Engine::with_prelude(()).expect("build engine");
         engine.inject_decls(&program.decls).expect("inject decls");
         let (ptr, ty) = engine
+            .evaluator()
             .eval(program.expr.as_ref(), &mut GasMeter::default())
             .await
             .expect("evaluate source");

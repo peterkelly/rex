@@ -11,6 +11,7 @@ pub async fn eval(source: &str) -> Result<String, EngineError> {
     engine.add_default_resolvers();
 
     let (pointer, _) = engine
+        .evaluator()
         .eval_snippet(source, &mut gas)
         .await
         .map_err(|e| format!("{e}"))?;

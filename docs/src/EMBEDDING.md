@@ -290,7 +290,7 @@ APIs and provide an explicit `Scheme` + arity:
 - `Library::export_native`
 - `Library::export_native_async`
 
-These callbacks receive `&Engine<State>` (not just `&State`), so they can:
+These callbacks receive `EvaluatorRef<'_, State>` (not just `&State`), so they can:
 
 - read state via `engine.state`
 - allocate new values via `engine.heap`
@@ -298,7 +298,7 @@ These callbacks receive `&Engine<State>` (not just `&State`), so they can:
 
 ```rust
 use futures::FutureExt;
-use rexlang_engine::{Engine, Library, Pointer};
+use rexlang_engine::{Engine, EvaluatorRef, Library, Pointer};
 use rexlang::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
@@ -307,11 +307,11 @@ engine.add_default_resolvers();
 let mut m = Library::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
-m.export_native("id_ptr", scheme.clone(), 1, |_engine: &Engine<()>, _typ: &Type, args: &[Pointer]| {
+m.export_native("id_ptr", scheme.clone(), 1, |_engine: EvaluatorRef<'_, ()>, _typ: &Type, args: &[Pointer]| {
     Ok(args[0].clone())
 })?;
 
-m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: &Engine<()>, _typ: Type, _args: Vec<Pointer>| {
+m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: EvaluatorRef<'_, ()>, _typ: Type, _args: Vec<Pointer>| {
     async move { engine.heap.alloc_i32(42) }.boxed_local()
 })?;
 
@@ -352,7 +352,7 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
 - If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
 - `export` / `export_async` callbacks receive `&State` as their first parameter.
 - Pointer-level APIs (`export_native*`) receive
-  `&Engine<State>` so
+  `EvaluatorRef<'_, State>` so
   they can use heap/runtime internals and read `engine.state`.
 
 ```rust
