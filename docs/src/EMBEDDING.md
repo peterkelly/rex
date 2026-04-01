@@ -60,6 +60,10 @@ What "compiled" means in the current design:
 - runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
 - internally, `RuntimeEnv` keeps a runtime snapshot for execution and separate engine-backed loader
   state for convenience entry points like library loading and REPL-style session sync
+- `CompiledProgram::link_contract()` and `RuntimeEnv::capabilities()` now make the runtime link
+  contract explicit, including the current ABI version and the required callable shapes
+- `CompiledProgram::storage_boundary()` and `RuntimeEnv::storage_boundary()` mark both values as
+  process-local, not serializable artifacts
 
 What is currently captured versus linked:
 
@@ -93,6 +97,10 @@ runtime.validate(&program)?;
 let mut evaluator = rexlang::Evaluator::new(runtime);
 let value = evaluator.run(&program, &mut gas).await?;
 ```
+
+The convenience helpers such as `Evaluator::eval`, `eval_snippet`, `eval_snippet_at`, and
+`eval_repl_program` now route through the same prepare/validate/run boundary internally. They are
+still sugar, but they no longer use a separate execution path.
 
 ## Evaluate Rex Code Directly
 

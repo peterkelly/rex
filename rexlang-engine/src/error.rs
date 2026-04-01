@@ -218,11 +218,15 @@ pub enum EngineError {
     #[error("unknown variable `{0}`")]
     UnknownVar(Symbol),
     #[error(
-        "runtime environment is missing required bindings (natives: {missing_natives:?}, class methods: {missing_class_methods:?})"
+        "runtime environment is incompatible with the compiled program (expected ABI {expected_abi_version}, got {actual_abi_version}; missing natives: {missing_natives:?}; incompatible natives: {incompatible_natives:?}; missing class methods: {missing_class_methods:?}; incompatible class methods: {incompatible_class_methods:?})"
     )]
     Link {
+        expected_abi_version: u32,
+        actual_abi_version: u32,
         missing_natives: Vec<Symbol>,
+        incompatible_natives: Vec<Symbol>,
         missing_class_methods: Vec<Symbol>,
+        incompatible_class_methods: Vec<Symbol>,
     },
     #[error("value is not callable: {0}")]
     NotCallable(String),

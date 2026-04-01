@@ -1,5 +1,7 @@
 use rexlang::{BuiltinTypeId, Engine, GasMeter, Heap, Pointer, Type, Value};
 
+const DEMO_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
+
 fn extract_first_interactive_rex(markdown: &str) -> String {
     let mut lines = markdown.lines();
 
@@ -22,20 +24,34 @@ fn extract_first_interactive_rex(markdown: &str) -> String {
 
 async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
     let source = extract_first_interactive_rex(markdown);
+    let name = name.to_string();
+    std::thread::Builder::new()
+        .name(format!("demo_{name}"))
+        .stack_size(DEMO_STACK_SIZE_BYTES)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let mut engine = Engine::with_prelude(()).unwrap();
+                    let mut gas = GasMeter::default();
+                    engine
+                        .infer_snippet(&source, &mut gas)
+                        .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut gas = GasMeter::default();
-    engine
-        .infer_snippet(&source, &mut gas)
-        .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
-
-    let mut gas = GasMeter::default();
-    let (value, ty) = engine
-        .evaluator()
-        .eval_snippet(&source, &mut gas)
-        .await
-        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
-    (engine.into_heap(), value, ty)
+                    let mut gas = GasMeter::default();
+                    let (value, ty) = engine
+                        .evaluator()
+                        .eval_snippet(&source, &mut gas)
+                        .await
+                        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+                    (engine.into_heap(), value, ty)
+                })
+        })
+        .unwrap()
+        .join()
+        .unwrap()
 }
 
 fn list_elements(heap: &Heap, list: &Pointer) -> Vec<Pointer> {
@@ -296,16 +312,17 @@ async fn demo_topological_sort() {
     }
 }
 
-#[tokio::test]
-async fn demo_n_queens() {
-    let (heap, value, ty) = eval_demo(
-        "n_queens",
-        include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../docs/src/demos/n_queens.md"
-        )),
-    )
-    .await;
+#[test]
+fn demo_n_queens() {
+    let markdown = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../docs/src/demos/n_queens.md"
+    ));
+    let (heap, value, ty) = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(eval_demo("n_queens", markdown));
     assert_eq!(
         ty,
         Type::tuple(vec![

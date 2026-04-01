@@ -5,12 +5,14 @@ pub mod json;
 
 pub use rexlang_ast::expr::{Decl, Expr, Program, Symbol, intern, sym};
 pub use rexlang_engine::{
-    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, CompileError,
-    CompiledExterns, CompiledProgram, Compiler, Engine, EngineError, EngineOptions, EvalError,
-    Evaluator, EvaluatorRef, ExecutionError, Export, FromPointer, Handler, Heap, IntoPointer,
-    Library, NativeFuture, PRELUDE_LIBRARY_NAME, Pointer, PreludeMode, ROOT_LIBRARY_NAME,
-    ReplState, RexAdt, RexDefault, RexType, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv,
-    SyncNativeCallable, Value, ValueDisplayOptions, assert_pointer_eq, closure_debug, closure_eq,
+    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, ClassMethodCapability,
+    ClassMethodRequirement, CompileError, CompiledExterns, CompiledProgram,
+    CompiledProgramBoundary, Compiler, Engine, EngineError, EngineOptions, EvalError, Evaluator,
+    EvaluatorRef, ExecutionError, Export, FromPointer, Handler, Heap, IntoPointer, Library,
+    NativeCapability, NativeFuture, NativeRequirement, PRELUDE_LIBRARY_NAME, Pointer, PreludeMode,
+    ROOT_LIBRARY_NAME, ReplState, RexAdt, RexDefault, RexType, RuntimeCapabilities,
+    RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary, RuntimeLinkContract, SyncNativeCallable,
+    Value, ValueDisplayOptions, assert_pointer_eq, closure_debug, closure_eq,
     collect_adts_error_to_engine, pointer_display, pointer_display_with, value_debug, value_eq,
     virtual_export_name,
 };

@@ -276,6 +276,7 @@ fn sanitize_type_name_for_symbol(typ: &Type) -> String {
 
 pub type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
 type NativeId = u64;
+const RUNTIME_LINK_ABI_VERSION: u32 = 1;
 pub type SyncNativeCallable<State> = Arc<
     dyn for<'a> Fn(EvaluatorRef<'a, State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
         + Send
@@ -1381,6 +1382,7 @@ where
 #[derive(Clone)]
 pub struct CompiledProgram {
     pub externs: CompiledExterns,
+    link_contract: RuntimeLinkContract,
     pub(crate) env: Env,
     pub(crate) expr: Arc<TypedExpr>,
 }
@@ -1394,8 +1396,20 @@ impl CompiledProgram {
         &self.externs
     }
 
+    pub fn link_contract(&self) -> &RuntimeLinkContract {
+        &self.link_contract
+    }
+
     pub fn link_fingerprint(&self) -> u64 {
-        self.externs.fingerprint()
+        self.link_contract.fingerprint()
+    }
+
+    pub fn storage_boundary(&self) -> CompiledProgramBoundary {
+        CompiledProgramBoundary {
+            contains_prepared_expr: true,
+            captures_process_local_env: true,
+            serializable: false,
+        }
     }
 }
 
@@ -1428,31 +1442,75 @@ impl CompiledExterns {
             .collect::<HashSet<_>>();
 
         RuntimeCompatibility {
+            expected_abi_version: capabilities.abi_version,
+            actual_abi_version: capabilities.abi_version,
             missing_natives: self
                 .natives
                 .iter()
                 .filter(|name| !natives.contains(*name))
                 .cloned()
                 .collect(),
+            incompatible_natives: Vec::new(),
             missing_class_methods: self
                 .class_methods
                 .iter()
                 .filter(|name| !class_methods.contains(*name))
                 .cloned()
                 .collect(),
+            incompatible_class_methods: Vec::new(),
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct NativeRequirement {
+    pub name: Symbol,
+    pub typ: Type,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ClassMethodRequirement {
+    pub name: Symbol,
+    pub typ: Type,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuntimeLinkContract {
+    pub abi_version: u32,
+    pub natives: Vec<NativeRequirement>,
+    pub class_methods: Vec<ClassMethodRequirement>,
+}
+
+impl RuntimeLinkContract {
+    pub fn fingerprint(&self) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.abi_version.hash(&mut hasher);
+        self.natives.hash(&mut hasher);
+        self.class_methods.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompiledProgramBoundary {
+    pub contains_prepared_expr: bool,
+    pub captures_process_local_env: bool,
+    pub serializable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeCapabilities {
+    pub abi_version: u32,
     pub natives: Vec<Symbol>,
     pub class_methods: Vec<Symbol>,
+    pub(crate) native_impls: HashMap<Symbol, Vec<NativeCapability>>,
+    pub(crate) class_method_impls: HashMap<Symbol, ClassMethodCapability>,
 }
 
 impl RuntimeCapabilities {
     pub fn fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.abi_version.hash(&mut hasher);
         "natives".hash(&mut hasher);
         self.natives.hash(&mut hasher);
         "class_methods".hash(&mut hasher);
@@ -1461,15 +1519,36 @@ impl RuntimeCapabilities {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeCapability {
+    pub name: Symbol,
+    pub arity: usize,
+    pub scheme: Scheme,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClassMethodCapability {
+    pub name: Symbol,
+    pub scheme: Scheme,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuntimeCompatibility {
+    pub expected_abi_version: u32,
+    pub actual_abi_version: u32,
     pub missing_natives: Vec<Symbol>,
+    pub incompatible_natives: Vec<Symbol>,
     pub missing_class_methods: Vec<Symbol>,
+    pub incompatible_class_methods: Vec<Symbol>,
 }
 
 impl RuntimeCompatibility {
     pub fn is_compatible(&self) -> bool {
-        self.missing_natives.is_empty() && self.missing_class_methods.is_empty()
+        self.expected_abi_version == self.actual_abi_version
+            && self.missing_natives.is_empty()
+            && self.incompatible_natives.is_empty()
+            && self.missing_class_methods.is_empty()
+            && self.incompatible_class_methods.is_empty()
     }
 }
 
@@ -3160,8 +3239,10 @@ where
         let typed = self.type_check(expr)?;
         let env = self.engine.env.clone();
         let externs = self.collect_externs(&typed, &env);
+        let link_contract = self.link_contract(&typed, &env);
         Ok(CompiledProgram {
             externs,
+            link_contract,
             env,
             expr: Arc::new(typed),
         })
@@ -3290,6 +3371,141 @@ where
             class_methods,
         }
     }
+
+    fn link_contract(&self, expr: &TypedExpr, env: &Env) -> RuntimeLinkContract {
+        enum Frame<'b> {
+            Expr(&'b TypedExpr),
+            Push(Symbol),
+            PushMany(Vec<Symbol>),
+            Pop(usize),
+        }
+
+        let mut native_requirements = HashSet::new();
+        let mut class_method_requirements = HashSet::new();
+        let mut bound: Vec<Symbol> = Vec::new();
+        let mut stack = vec![Frame::Expr(expr)];
+        while let Some(frame) = stack.pop() {
+            match frame {
+                Frame::Expr(expr) => match &expr.kind {
+                    TypedExprKind::Var { name, .. } => {
+                        if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
+                            continue;
+                        }
+                        if self.engine.type_system.class_methods.contains_key(name) {
+                            class_method_requirements.insert(ClassMethodRequirement {
+                                name: name.clone(),
+                                typ: expr.typ.clone(),
+                            });
+                        } else if self.engine.natives.has_name(name) {
+                            native_requirements.insert(NativeRequirement {
+                                name: name.clone(),
+                                typ: expr.typ.clone(),
+                            });
+                        }
+                    }
+                    TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
+                        for elem in elems.iter().rev() {
+                            stack.push(Frame::Expr(elem));
+                        }
+                    }
+                    TypedExprKind::Dict(kvs) => {
+                        for v in kvs.values().rev() {
+                            stack.push(Frame::Expr(v));
+                        }
+                    }
+                    TypedExprKind::RecordUpdate { base, updates } => {
+                        for v in updates.values().rev() {
+                            stack.push(Frame::Expr(v));
+                        }
+                        stack.push(Frame::Expr(base));
+                    }
+                    TypedExprKind::App(f, x) => {
+                        stack.push(Frame::Expr(x));
+                        stack.push(Frame::Expr(f));
+                    }
+                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
+                    TypedExprKind::Lam { param, body } => {
+                        stack.push(Frame::Pop(1));
+                        stack.push(Frame::Expr(body));
+                        stack.push(Frame::Push(param.clone()));
+                    }
+                    TypedExprKind::Let { name, def, body } => {
+                        stack.push(Frame::Pop(1));
+                        stack.push(Frame::Expr(body));
+                        stack.push(Frame::Push(name.clone()));
+                        stack.push(Frame::Expr(def));
+                    }
+                    TypedExprKind::LetRec { bindings, body } => {
+                        if !bindings.is_empty() {
+                            stack.push(Frame::Pop(bindings.len()));
+                            stack.push(Frame::Expr(body));
+                            for (_, def) in bindings.iter().rev() {
+                                stack.push(Frame::Expr(def));
+                            }
+                            stack.push(Frame::PushMany(
+                                bindings.iter().map(|(name, _)| name.clone()).collect(),
+                            ));
+                        } else {
+                            stack.push(Frame::Expr(body));
+                        }
+                    }
+                    TypedExprKind::Ite {
+                        cond,
+                        then_expr,
+                        else_expr,
+                    } => {
+                        stack.push(Frame::Expr(else_expr));
+                        stack.push(Frame::Expr(then_expr));
+                        stack.push(Frame::Expr(cond));
+                    }
+                    TypedExprKind::Match { scrutinee, arms } => {
+                        for (pat, arm_expr) in arms.iter().rev() {
+                            let mut bindings = Vec::new();
+                            collect_pattern_bindings(pat, &mut bindings);
+                            let count = bindings.len();
+                            if count != 0 {
+                                stack.push(Frame::Pop(count));
+                                stack.push(Frame::Expr(arm_expr));
+                                stack.push(Frame::PushMany(bindings));
+                            } else {
+                                stack.push(Frame::Expr(arm_expr));
+                            }
+                        }
+                        stack.push(Frame::Expr(scrutinee));
+                    }
+                    TypedExprKind::Bool(..)
+                    | TypedExprKind::Uint(..)
+                    | TypedExprKind::Int(..)
+                    | TypedExprKind::Float(..)
+                    | TypedExprKind::String(..)
+                    | TypedExprKind::Uuid(..)
+                    | TypedExprKind::DateTime(..)
+                    | TypedExprKind::Hole => {}
+                },
+                Frame::Push(sym) => bound.push(sym),
+                Frame::PushMany(syms) => bound.extend(syms),
+                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
+            }
+        }
+
+        let mut natives = native_requirements.into_iter().collect::<Vec<_>>();
+        let mut class_methods = class_method_requirements.into_iter().collect::<Vec<_>>();
+        natives.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.typ.to_string().cmp(&b.typ.to_string()))
+        });
+        class_methods.sort_by(|a, b| {
+            a.name
+                .cmp(&b.name)
+                .then_with(|| a.typ.to_string().cmp(&b.typ.to_string()))
+        });
+        RuntimeLinkContract {
+            abi_version: RUNTIME_LINK_ABI_VERSION,
+            natives,
+            class_methods,
+        }
+    }
 }
 
 fn runtime_capabilities<State>(engine: &Engine<State>) -> RuntimeCapabilities
@@ -3303,11 +3519,83 @@ where
         .keys()
         .cloned()
         .collect::<Vec<_>>();
+    let mut native_impls = HashMap::new();
+    for (name, impls) in &engine.natives.entries {
+        let mut caps = impls
+            .iter()
+            .map(|imp| NativeCapability {
+                name: name.clone(),
+                arity: imp.arity,
+                scheme: imp.scheme.clone(),
+            })
+            .collect::<Vec<_>>();
+        caps.sort_by(|a, b| {
+            a.arity
+                .cmp(&b.arity)
+                .then_with(|| a.scheme.typ.to_string().cmp(&b.scheme.typ.to_string()))
+        });
+        native_impls.insert(name.clone(), caps);
+    }
+    let mut class_method_impls = HashMap::new();
+    for (name, info) in &engine.type_system.class_methods {
+        class_method_impls.insert(
+            name.clone(),
+            ClassMethodCapability {
+                name: name.clone(),
+                scheme: info.scheme.clone(),
+            },
+        );
+    }
     natives.sort();
     class_methods.sort();
     RuntimeCapabilities {
+        abi_version: RUNTIME_LINK_ABI_VERSION,
         natives,
         class_methods,
+        native_impls,
+        class_method_impls,
+    }
+}
+
+fn runtime_compatibility(
+    contract: &RuntimeLinkContract,
+    capabilities: &RuntimeCapabilities,
+) -> RuntimeCompatibility {
+    let mut missing_natives = Vec::new();
+    let mut incompatible_natives = Vec::new();
+    for requirement in &contract.natives {
+        match capabilities.native_impls.get(&requirement.name) {
+            None => missing_natives.push(requirement.name.clone()),
+            Some(impls) => {
+                if !impls.iter().any(|capability| {
+                    native_capability_matches_requirement(capability, requirement)
+                }) {
+                    incompatible_natives.push(requirement.name.clone());
+                }
+            }
+        }
+    }
+
+    let mut missing_class_methods = Vec::new();
+    let mut incompatible_class_methods = Vec::new();
+    for requirement in &contract.class_methods {
+        match capabilities.class_method_impls.get(&requirement.name) {
+            None => missing_class_methods.push(requirement.name.clone()),
+            Some(capability) => {
+                if !class_method_capability_matches_requirement(capability, requirement) {
+                    incompatible_class_methods.push(requirement.name.clone());
+                }
+            }
+        }
+    }
+
+    RuntimeCompatibility {
+        expected_abi_version: contract.abi_version,
+        actual_abi_version: capabilities.abi_version,
+        missing_natives,
+        incompatible_natives,
+        missing_class_methods,
+        incompatible_class_methods,
     }
 }
 
@@ -3350,7 +3638,7 @@ where
     }
 
     pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
-        program.externs.compatibility_with(&self.capabilities)
+        runtime_compatibility(program.link_contract(), &self.capabilities)
     }
 
     pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
@@ -3363,8 +3651,12 @@ where
             Ok(())
         } else {
             Err(EngineError::Link {
+                expected_abi_version: compatibility.expected_abi_version,
+                actual_abi_version: compatibility.actual_abi_version,
                 missing_natives: compatibility.missing_natives,
+                incompatible_natives: compatibility.incompatible_natives,
                 missing_class_methods: compatibility.missing_class_methods,
+                incompatible_class_methods: compatibility.incompatible_class_methods,
             })
         }
     }
@@ -3374,6 +3666,21 @@ where
         self.runtime = runtime_snapshot(engine);
         self.capabilities = runtime_capabilities(engine);
     }
+
+    pub fn storage_boundary(&self) -> RuntimeEnvBoundary {
+        RuntimeEnvBoundary {
+            contains_runtime_snapshot: true,
+            contains_loader_state: true,
+            serializable: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RuntimeEnvBoundary {
+    pub contains_runtime_snapshot: bool,
+    pub contains_loader_state: bool,
+    pub serializable: bool,
 }
 
 impl<State> RuntimeSnapshot<State>
@@ -3436,11 +3743,22 @@ where
         expr: &Expr,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
-        self.compile_and_run(gas, |compiler, _gas| compiler.compile_expr(expr))
+        self.prepare_and_run(gas, |compiler, _gas| compiler.compile_expr(expr))
             .await
     }
 
-    pub(crate) async fn compile_and_run<F>(
+    pub(crate) async fn run_prepared(
+        &mut self,
+        program: CompiledProgram,
+        gas: &mut GasMeter,
+    ) -> Result<(Pointer, Type), ExecutionError> {
+        self.sync_runtime_from_compiler();
+        let typ = program.result_type().clone();
+        let value = self.run(&program, gas).await?;
+        Ok((value, typ))
+    }
+
+    pub(crate) async fn prepare_and_run<F>(
         &mut self,
         gas: &mut GasMeter,
         compile: F,
@@ -3452,10 +3770,7 @@ where
             CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
         })?;
         let program = compile(compiler, gas)?;
-        self.sync_runtime_from_compiler();
-        let typ = program.result_type().clone();
-        let value = self.run(&program, gas).await?;
-        Ok((value, typ))
+        self.run_prepared(program, gas).await
     }
 }
 
@@ -4051,6 +4366,26 @@ fn impl_matches_type<State: Clone + Send + Sync + 'static>(
     let mut supply = TypeVarSupply::new();
     let (_preds, scheme_ty) = instantiate(&imp.scheme, &mut supply);
     unify(&scheme_ty, typ).is_ok()
+}
+
+fn native_capability_matches_requirement(
+    capability: &NativeCapability,
+    requirement: &NativeRequirement,
+) -> bool {
+    let mut supply = TypeVarSupply::new();
+    let (_preds, scheme_ty) = instantiate(&capability.scheme, &mut supply);
+    capability.name == requirement.name
+        && capability.arity == type_arity(&requirement.typ)
+        && unify(&scheme_ty, &requirement.typ).is_ok()
+}
+
+fn class_method_capability_matches_requirement(
+    capability: &ClassMethodCapability,
+    requirement: &ClassMethodRequirement,
+) -> bool {
+    let mut supply = TypeVarSupply::new();
+    let (_preds, scheme_ty) = instantiate(&capability.scheme, &mut supply);
+    capability.name == requirement.name && unify(&scheme_ty, &requirement.typ).is_ok()
 }
 
 fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {

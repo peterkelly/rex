@@ -14,11 +14,12 @@ mod value;
 
 pub use cancel::CancellationToken;
 pub use engine::{
-    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, CompiledExterns,
-    CompiledProgram, Compiler, Engine, EngineOptions, Evaluator, EvaluatorRef, Export, Handler,
-    NativeFn, NativeFuture, OverloadedFn, PRELUDE_LIBRARY_NAME, PreludeMode, ROOT_LIBRARY_NAME,
-    RexAdt, RexDefault, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv, SyncNativeCallable,
-    collect_adts_error_to_engine,
+    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, ClassMethodCapability,
+    ClassMethodRequirement, CompiledExterns, CompiledProgram, CompiledProgramBoundary, Compiler,
+    Engine, EngineOptions, Evaluator, EvaluatorRef, Export, Handler, NativeCapability, NativeFn,
+    NativeFuture, NativeRequirement, OverloadedFn, PRELUDE_LIBRARY_NAME, PreludeMode,
+    ROOT_LIBRARY_NAME, RexAdt, RexDefault, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv,
+    RuntimeEnvBoundary, RuntimeLinkContract, SyncNativeCallable, collect_adts_error_to_engine,
 };
 pub use env::Env;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, LibraryError};

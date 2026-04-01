@@ -2990,7 +2990,7 @@ where
         source: &str,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
-        self.compile_and_run(gas, |compiler, gas| compiler.compile_snippet(source, gas))
+        self.prepare_and_run(gas, |compiler, gas| compiler.compile_snippet(source, gas))
             .await
     }
 
@@ -3004,10 +3004,7 @@ where
             CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
         })?;
         let compiled = compiler.compile_repl_program(program, state, gas).await?;
-        self.sync_runtime_from_compiler();
-        let ty = compiled.result_type().clone();
-        let value = self.run(&compiled, gas).await?;
-        Ok((value, ty))
+        self.run_prepared(compiled, gas).await
     }
 
     pub async fn eval_snippet_at(
@@ -3017,7 +3014,7 @@ where
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         let path = importer_path.as_ref().to_path_buf();
-        self.compile_and_run(gas, |compiler, gas| {
+        self.prepare_and_run(gas, |compiler, gas| {
             compiler.compile_snippet_at(source, &path, gas)
         })
         .await

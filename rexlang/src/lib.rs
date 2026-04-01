@@ -14,8 +14,12 @@ pub async fn eval(source: &str) -> Result<String, crate::ExecutionError> {
         )))
     })?;
     engine.add_default_resolvers();
-
-    let (pointer, _) = engine.evaluator().eval_snippet(source, &mut gas).await?;
+    let mut compiler = engine.compiler();
+    let runtime = engine.runtime_env();
+    let program = compiler.compile_snippet(source, &mut gas)?;
+    runtime.validate(&program)?;
+    let mut evaluator = Evaluator::new(runtime);
+    let pointer = evaluator.run(&program, &mut gas).await?;
 
     Ok(
         pointer_display_with(&engine.heap, &pointer, ValueDisplayOptions::default())

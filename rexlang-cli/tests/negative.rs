@@ -1,5 +1,5 @@
 use rexlang::{
-    Engine, EngineError, GasMeter, Parser, ParserErr, ParserLimits, Program, Token, TypeError,
+    Engine, EngineError, GasMeter, Parser, ParserErr, ParserLimits, Program, Token, TypeError, sym,
 };
 
 fn strip_span(mut err: TypeError) -> TypeError {
@@ -361,7 +361,16 @@ async fn compile_rejects_invalid_programs_engine_errors() {
         (
             "ambiguous_overload_requires_application",
             "prim_fold",
-            |e| matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "prim_fold"),
+            |e| {
+                matches!(e, EngineError::AmbiguousOverload { name } if name.as_ref() == "prim_fold")
+                    || matches!(
+                        e,
+                        EngineError::Link {
+                            incompatible_natives,
+                            ..
+                        } if incompatible_natives == &vec![sym("prim_fold")]
+                    )
+            },
         ),
         (
             "ambiguous_type_variable_only_in_constraints",

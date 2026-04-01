@@ -222,21 +222,40 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
 
     assert_eq!(program.externs().natives, vec![sym("inc")]);
+    assert_eq!(
+        program.link_contract().abi_version,
+        runtime_engine_abi_version()
+    );
+    assert_eq!(program.link_contract().natives.len(), 1);
     assert_ne!(program.link_fingerprint(), 0);
+    assert!(!program.storage_boundary().serializable);
+    assert!(program.storage_boundary().captures_process_local_env);
 
     let runtime = Engine::with_prelude(()).unwrap().runtime_env();
     let compatibility = runtime.compatibility_with(&program);
+    assert_eq!(
+        compatibility.expected_abi_version,
+        runtime.capabilities().abi_version
+    );
+    assert_eq!(
+        compatibility.actual_abi_version,
+        runtime.capabilities().abi_version
+    );
     assert_eq!(compatibility.missing_natives, vec![sym("inc")]);
     assert!(!compatibility.is_compatible());
     assert_ne!(runtime.fingerprint(), 0);
+    assert!(!runtime.storage_boundary().serializable);
+    assert!(runtime.storage_boundary().contains_loader_state);
 
     let err = runtime.validate(&program).unwrap_err().into_engine_error();
     assert!(matches!(
         err,
         EngineError::Link {
+            expected_abi_version,
+            actual_abi_version,
             missing_natives,
             ..
-        } if missing_natives == vec![sym("inc")]
+        } if expected_abi_version == actual_abi_version && missing_natives == vec![sym("inc")]
     ));
 
     let mut evaluator = rexlang_engine::Evaluator::new(runtime);
@@ -251,6 +270,36 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
             missing_natives,
             ..
         } if missing_natives == vec![sym("inc")]
+    ));
+}
+
+#[tokio::test]
+async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
+    let mut gas = unlimited_gas();
+    let mut compile_engine = Engine::with_prelude(()).unwrap();
+    compile_engine
+        .export("inc", |_: &(), x: i32| Ok(x + 1))
+        .unwrap();
+
+    let mut compiler = compile_engine.compiler();
+    let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
+
+    let mut runtime_engine = Engine::with_prelude(()).unwrap();
+    runtime_engine
+        .export("inc", |_: &(), value: String| Ok(value))
+        .unwrap();
+    let runtime = runtime_engine.runtime_env();
+    let compatibility = runtime.compatibility_with(&program);
+    assert_eq!(compatibility.incompatible_natives, vec![sym("inc")]);
+    assert!(!compatibility.is_compatible());
+
+    let err = runtime.validate(&program).unwrap_err().into_engine_error();
+    assert!(matches!(
+        err,
+        EngineError::Link {
+            incompatible_natives,
+            ..
+        } if incompatible_natives == vec![sym("inc")]
     ));
 }
 
@@ -350,6 +399,14 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
             ..
         } if missing_class_methods == vec![sym("pick")]
     ));
+}
+
+fn runtime_engine_abi_version() -> u32 {
+    Engine::with_prelude(())
+        .unwrap()
+        .runtime_env()
+        .capabilities()
+        .abi_version
 }
 
 #[tokio::test]
