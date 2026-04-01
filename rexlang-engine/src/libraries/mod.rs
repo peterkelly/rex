@@ -2920,13 +2920,13 @@ where
     ) -> Result<(Pointer, Type), ExecutionError> {
         let (id, bytes) = self
             .runtime
-            .engine
+            .loader
             .read_local_library_bytes(path.as_ref())
             .map_err(CompileError::from)?;
         let source_fingerprint = sha256_hex(&bytes);
         if let Some(inst) = self
             .runtime
-            .engine
+            .loader
             .modules
             .cached(&id)
             .map_err(EvalError::from)?
@@ -2935,18 +2935,18 @@ where
                 return Ok((inst.init_value, inst.init_type));
             }
             self.runtime
-                .engine
+                .loader
                 .invalidate_library_caches(&id)
                 .map_err(EvalError::from)?;
         }
         let source = self
             .runtime
-            .engine
+            .loader
             .decode_local_library_source(&id, bytes)
             .map_err(CompileError::from)?;
         let inst = self
             .runtime
-            .engine
+            .loader
             .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
             .await
             .map_err(CompileError::from)?;
@@ -2963,7 +2963,7 @@ where
         let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
         if let Some(inst) = self
             .runtime
-            .engine
+            .loader
             .modules
             .cached(&id)
             .map_err(EvalError::from)?
@@ -2972,7 +2972,7 @@ where
         }
         let inst = self
             .runtime
-            .engine
+            .loader
             .load_library_from_resolved(
                 ResolvedLibrary {
                     id,
@@ -3005,7 +3005,7 @@ where
         })?;
         let compiled = compiler.compile_repl_program(program, state, gas).await?;
         self.sync_runtime_from_compiler();
-        let ty = compiled.result_type.clone();
+        let ty = compiled.result_type().clone();
         let value = self.run(&compiled, gas).await?;
         Ok((value, ty))
     }

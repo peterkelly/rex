@@ -1380,7 +1380,6 @@ where
 
 #[derive(Clone)]
 pub struct CompiledProgram {
-    pub result_type: Type,
     pub externs: CompiledExterns,
     pub(crate) env: Env,
     pub(crate) expr: Arc<TypedExpr>,
@@ -1388,7 +1387,7 @@ pub struct CompiledProgram {
 
 impl CompiledProgram {
     pub fn result_type(&self) -> &Type {
-        &self.result_type
+        &self.expr.typ
     }
 
     pub fn externs(&self) -> &CompiledExterns {
@@ -1402,20 +1401,17 @@ impl CompiledProgram {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CompiledExterns {
-    pub globals: Vec<Symbol>,
     pub natives: Vec<Symbol>,
     pub class_methods: Vec<Symbol>,
 }
 
 impl CompiledExterns {
     pub fn is_empty(&self) -> bool {
-        self.globals.is_empty() && self.natives.is_empty() && self.class_methods.is_empty()
+        self.natives.is_empty() && self.class_methods.is_empty()
     }
 
     pub fn fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        "globals".hash(&mut hasher);
-        self.globals.hash(&mut hasher);
         "natives".hash(&mut hasher);
         self.natives.hash(&mut hasher);
         "class_methods".hash(&mut hasher);
@@ -1424,7 +1420,6 @@ impl CompiledExterns {
     }
 
     pub fn compatibility_with(&self, capabilities: &RuntimeCapabilities) -> RuntimeCompatibility {
-        let globals = capabilities.globals.iter().cloned().collect::<HashSet<_>>();
         let natives = capabilities.natives.iter().cloned().collect::<HashSet<_>>();
         let class_methods = capabilities
             .class_methods
@@ -1433,12 +1428,6 @@ impl CompiledExterns {
             .collect::<HashSet<_>>();
 
         RuntimeCompatibility {
-            missing_globals: self
-                .globals
-                .iter()
-                .filter(|name| !globals.contains(*name))
-                .cloned()
-                .collect(),
             missing_natives: self
                 .natives
                 .iter()
@@ -1457,7 +1446,6 @@ impl CompiledExterns {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RuntimeCapabilities {
-    pub globals: Vec<Symbol>,
     pub natives: Vec<Symbol>,
     pub class_methods: Vec<Symbol>,
 }
@@ -1465,8 +1453,6 @@ pub struct RuntimeCapabilities {
 impl RuntimeCapabilities {
     pub fn fingerprint(&self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        "globals".hash(&mut hasher);
-        self.globals.hash(&mut hasher);
         "natives".hash(&mut hasher);
         self.natives.hash(&mut hasher);
         "class_methods".hash(&mut hasher);
@@ -1477,16 +1463,13 @@ impl RuntimeCapabilities {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RuntimeCompatibility {
-    pub missing_globals: Vec<Symbol>,
     pub missing_natives: Vec<Symbol>,
     pub missing_class_methods: Vec<Symbol>,
 }
 
 impl RuntimeCompatibility {
     pub fn is_compatible(&self) -> bool {
-        self.missing_globals.is_empty()
-            && self.missing_natives.is_empty()
-            && self.missing_class_methods.is_empty()
+        self.missing_natives.is_empty() && self.missing_class_methods.is_empty()
     }
 }
 
@@ -1503,7 +1486,7 @@ pub struct RuntimeEnv<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) engine: Engine<State>,
+    pub(crate) loader: Engine<State>,
     runtime: RuntimeSnapshot<State>,
     capabilities: RuntimeCapabilities,
 }
@@ -1638,7 +1621,7 @@ where
 
     pub fn runtime_env(&self) -> RuntimeEnv<State> {
         RuntimeEnv {
-            engine: self.clone(),
+            loader: self.clone(),
             runtime: runtime_snapshot(self),
             capabilities: runtime_capabilities(self),
         }
@@ -3178,7 +3161,6 @@ where
         let env = self.engine.env.clone();
         let externs = self.collect_externs(&typed, &env);
         Ok(CompiledProgram {
-            result_type: typed.typ.clone(),
             externs,
             env,
             expr: Arc::new(typed),
@@ -3197,7 +3179,6 @@ where
             Pop(usize),
         }
 
-        let mut globals = HashSet::new();
         let mut natives = HashSet::new();
         let mut class_methods = HashSet::new();
         let mut bound: Vec<Symbol> = Vec::new();
@@ -3213,8 +3194,6 @@ where
                             class_methods.insert(name.clone());
                         } else if self.engine.natives.has_name(name) {
                             natives.insert(name.clone());
-                        } else {
-                            globals.insert(name.clone());
                         }
                     }
                     TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
@@ -3302,37 +3281,21 @@ where
             }
         }
 
-        let mut globals = globals.into_iter().collect::<Vec<_>>();
         let mut natives = natives.into_iter().collect::<Vec<_>>();
         let mut class_methods = class_methods.into_iter().collect::<Vec<_>>();
-        globals.sort();
         natives.sort();
         class_methods.sort();
         CompiledExterns {
-            globals,
             natives,
             class_methods,
         }
     }
 }
 
-fn env_symbols(env: &Env) -> Vec<Symbol> {
-    let mut names = HashSet::new();
-    let mut current = Some(env);
-    while let Some(frame) = current {
-        names.extend(frame.bindings().keys().cloned());
-        current = frame.parent();
-    }
-    let mut out = names.into_iter().collect::<Vec<_>>();
-    out.sort();
-    out
-}
-
 fn runtime_capabilities<State>(engine: &Engine<State>) -> RuntimeCapabilities
 where
     State: Clone + Send + Sync + 'static,
 {
-    let globals = env_symbols(&engine.env);
     let mut natives = engine.natives.entries.keys().cloned().collect::<Vec<_>>();
     let mut class_methods = engine
         .type_system
@@ -3343,7 +3306,6 @@ where
     natives.sort();
     class_methods.sort();
     RuntimeCapabilities {
-        globals,
         natives,
         class_methods,
     }
@@ -3373,7 +3335,7 @@ where
         let capabilities = runtime_capabilities(&engine);
         let runtime = runtime_snapshot(&engine);
         Self {
-            engine,
+            loader: engine,
             runtime,
             capabilities,
         }
@@ -3401,7 +3363,6 @@ where
             Ok(())
         } else {
             Err(EngineError::Link {
-                missing_globals: compatibility.missing_globals,
                 missing_natives: compatibility.missing_natives,
                 missing_class_methods: compatibility.missing_class_methods,
             })
@@ -3409,7 +3370,7 @@ where
     }
 
     pub(crate) fn sync_from_engine(&mut self, engine: &Engine<State>) {
-        self.engine = engine.clone();
+        self.loader = engine.clone();
         self.runtime = runtime_snapshot(engine);
         self.capabilities = runtime_capabilities(engine);
     }
@@ -3492,7 +3453,7 @@ where
         })?;
         let program = compile(compiler, gas)?;
         self.sync_runtime_from_compiler();
-        let typ = program.result_type.clone();
+        let typ = program.result_type().clone();
         let value = self.run(&program, gas).await?;
         Ok((value, typ))
     }

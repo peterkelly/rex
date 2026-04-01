@@ -224,8 +224,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     assert_eq!(program.externs().natives, vec![sym("inc")]);
     assert_ne!(program.link_fingerprint(), 0);
 
-    let runtime_engine = Engine::with_prelude(()).unwrap();
-    let runtime = runtime_engine.runtime_env();
+    let runtime = Engine::with_prelude(()).unwrap().runtime_env();
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.missing_natives, vec![sym("inc")]);
     assert!(!compatibility.is_compatible());
@@ -285,6 +284,34 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
         value,
         runtime_engine.heap.alloc_i32(41).unwrap()
     );
+}
+
+#[tokio::test]
+async fn export_value_is_runtime_linked_like_other_host_exports() {
+    let mut gas = unlimited_gas();
+    let mut compile_engine = Engine::with_prelude(()).unwrap();
+    compile_engine.export_value("answer", 41i32).unwrap();
+
+    let mut compiler = compile_engine.compiler();
+    let program = compiler.compile_snippet("answer + 1", &mut gas).unwrap();
+
+    assert_eq!(program.externs().natives, vec![sym("answer")]);
+    assert_eq!(program.externs().class_methods, vec![sym("+")]);
+
+    let runtime_engine = Engine::with_prelude(()).unwrap();
+    let runtime = runtime_engine.runtime_env();
+    let compatibility = runtime.compatibility_with(&program);
+    assert_eq!(compatibility.missing_natives, vec![sym("answer")]);
+    assert!(!compatibility.is_compatible());
+
+    let err = runtime.validate(&program).unwrap_err().into_engine_error();
+    assert!(matches!(
+        err,
+        EngineError::Link {
+            missing_natives,
+            ..
+        } if missing_natives == vec![sym("answer")]
+    ));
 }
 
 #[tokio::test]

@@ -44,6 +44,10 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   there. Host-provided exports and typeclass method bindings remain runtime-linked through
   `RuntimeEnv`, which is why `RuntimeEnv::validate` exists. So the current model is "prepared plus
   link-validated", not "fully self-contained executable artifact".
+- **RuntimeEnv split**: internally, `RuntimeEnv` now distinguishes the execution snapshot used by
+  `Evaluator` and native dispatch from the engine-backed loader state still used by convenience
+  entry points such as library loading and REPL session syncing. That keeps the public model
+  stable while shrinking execution's implicit dependence on the full engine object.
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rexlang-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)

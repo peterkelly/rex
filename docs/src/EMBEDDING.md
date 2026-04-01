@@ -58,6 +58,8 @@ What "compiled" means in the current design:
 - parsing, import rewriting, declaration injection, and typechecking have already happened
 - `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
 - runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
+- internally, `RuntimeEnv` keeps a runtime snapshot for execution and separate engine-backed loader
+  state for convenience entry points like library loading and REPL-style session sync
 
 What is currently captured versus linked:
 

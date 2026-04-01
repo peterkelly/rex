@@ -218,10 +218,9 @@ pub enum EngineError {
     #[error("unknown variable `{0}`")]
     UnknownVar(Symbol),
     #[error(
-        "runtime environment is missing required bindings (globals: {missing_globals:?}, natives: {missing_natives:?}, class methods: {missing_class_methods:?})"
+        "runtime environment is missing required bindings (natives: {missing_natives:?}, class methods: {missing_class_methods:?})"
     )]
     Link {
-        missing_globals: Vec<Symbol>,
         missing_natives: Vec<Symbol>,
         missing_class_methods: Vec<Symbol>,
     },
