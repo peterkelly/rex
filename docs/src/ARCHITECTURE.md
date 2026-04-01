@@ -24,6 +24,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Engine::compiler()` to create a preparation view over that environment.
   - `Engine::runtime_env()` / `Engine::evaluator()` to create runtime views over that environment.
   - `Compiler::compile_*` to prepare source into `CompiledProgram`.
+  - `RuntimeEnv::validate(&compiled)` to preflight runtime linkage before execution.
   - `Evaluator::run(&compiled, &mut gas).await` to execute a prepared program.
   - convenience helpers like `Evaluator::eval_snippet` still exist, but they are just compile-then-run wrappers.
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while pointer-level APIs (`export_native*`) receive `EvaluatorRef<'_, State>`.
@@ -35,7 +36,14 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 ## Design Notes
 
-- **Typed preparation**: `rexlang-engine` prepares code into a typed form before execution. The current `CompiledProgram` still stores a typed AST plus runtime linkage metadata, but the compile/runtime boundary is now explicit in the API.
+- **Typed preparation**: `rexlang-engine` prepares code into a typed form before execution. The
+  current `CompiledProgram` still stores a typed AST plus runtime linkage metadata, but the
+  compile/runtime boundary is now explicit in the API.
+- **Current linkage model**: `CompiledProgram` captures the prepared expression and the environment
+  snapshot needed to run it. Rex declarations that are part of the prepared program are captured
+  there. Host-provided exports and typeclass method bindings remain runtime-linked through
+  `RuntimeEnv`, which is why `RuntimeEnv::validate` exists. So the current model is "prepared plus
+  link-validated", not "fully self-contained executable artifact".
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rexlang-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)

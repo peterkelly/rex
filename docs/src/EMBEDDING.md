@@ -43,13 +43,33 @@ use rexlang::{Engine, GasMeter};
 
 let engine = Engine::with_prelude(())?;
 let mut compiler = engine.compiler();
-let mut evaluator = engine.evaluator();
+let runtime = engine.runtime_env();
+let mut evaluator = rexlang::Evaluator::new(runtime.clone());
 let mut gas = GasMeter::default();
 
 let program = compiler.compile_snippet("let x = 1 + 2 in x * 3", &mut gas)?;
+runtime.validate(&program)?;
 let value = evaluator.run(&program, &mut gas).await?;
 assert_eq!(program.result_type().to_string(), "i32");
 ```
+
+What "compiled" means in the current design:
+
+- parsing, import rewriting, declaration injection, and typechecking have already happened
+- `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
+- runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
+
+What is currently captured versus linked:
+
+- Rex declarations that are part of the prepared program are captured into the compiled env snapshot
+- host-provided exports registered through `export`, `export_async`, `export_native`,
+  `export_native_async`, or `export_value` are runtime-linked and must be available in the
+  `RuntimeEnv`
+- typeclass method bindings are also runtime-linked through the `RuntimeEnv`
+
+That means `CompiledProgram` is engine-independent at the API level, but it is not a fully
+self-contained serialized artifact. It is best thought of as a prepared program plus explicit
+runtime link requirements.
 
 Phase-specific errors:
 
@@ -61,6 +81,16 @@ Phase-specific errors:
 `Evaluator` is a stateful session. Reusing one evaluator preserves the compiler/runtime snapshot it
 has accumulated so far, which matters for REPL-style workflows. Constructing a fresh evaluator from
 the same engine starts a fresh session.
+
+If you want an explicit preflight before running:
+
+```rust
+let runtime = engine.runtime_env();
+runtime.validate(&program)?;
+
+let mut evaluator = rexlang::Evaluator::new(runtime);
+let value = evaluator.run(&program, &mut gas).await?;
+```
 
 ## Evaluate Rex Code Directly
 

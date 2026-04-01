@@ -256,6 +256,76 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
 }
 
 #[tokio::test]
+async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
+    let mut gas = unlimited_gas();
+    let compile_engine = Engine::with_prelude(()).unwrap();
+
+    let mut compiler = compile_engine.compiler();
+    let program = compiler
+        .compile_snippet(
+            r#"
+            let answer = 41 in
+                answer
+            "#,
+            &mut gas,
+        )
+        .unwrap();
+
+    assert!(program.externs().is_empty(), "{:?}", program.externs());
+
+    let runtime_engine = Engine::with_prelude(()).unwrap();
+    let runtime = runtime_engine.runtime_env();
+    assert!(runtime.compatibility_with(&program).is_compatible());
+    runtime.validate(&program).unwrap();
+
+    let mut evaluator = rexlang_engine::Evaluator::new(runtime);
+    let value = evaluator.run(&program, &mut gas).await.unwrap();
+    assert_pointer_eq!(
+        &runtime_engine.heap,
+        value,
+        runtime_engine.heap.alloc_i32(41).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
+    let mut gas = unlimited_gas();
+    let compile_engine = Engine::with_prelude(()).unwrap();
+    let mut compiler = compile_engine.compiler();
+    let program = compiler
+        .compile_snippet(
+            r#"
+            class Pick a where
+                pick : a -> a
+
+            instance Pick i32 where
+                pick = \x -> x
+
+            pick 1
+            "#,
+            &mut gas,
+        )
+        .unwrap();
+
+    assert_eq!(program.externs().class_methods, vec![sym("pick")]);
+
+    let runtime_engine = Engine::with_prelude(()).unwrap();
+    let runtime = runtime_engine.runtime_env();
+    let compatibility = runtime.compatibility_with(&program);
+    assert_eq!(compatibility.missing_class_methods, vec![sym("pick")]);
+    assert!(!compatibility.is_compatible());
+
+    let err = runtime.validate(&program).unwrap_err().into_engine_error();
+    assert!(matches!(
+        err,
+        EngineError::Link {
+            missing_class_methods,
+            ..
+        } if missing_class_methods == vec![sym("pick")]
+    ));
+}
+
+#[tokio::test]
 async fn eval_async_native_injection_supports_arities_0_to_8() {
     let expr = parse(
         r#"
