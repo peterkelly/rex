@@ -34,7 +34,7 @@ pub use system::ResolverFn;
 pub use types::virtual_export_name;
 pub use types::{
     CanonicalSymbol, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
-    ResolveRequest, ResolvedLibrary, SymbolKind,
+    ResolveRequest, ResolvedLibrary, SymbolKind, VirtualLibraryModule,
 };
 
 pub(crate) use system::LibrarySystem;
@@ -598,7 +598,7 @@ fn rename_expr(
     }
 }
 
-fn qualify_program(program: &Program, prefix: &str) -> Program {
+pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
     let (value_renames, type_renames, class_renames) = collect_local_renames(program, prefix);
 
     let decls = program
@@ -1850,7 +1850,7 @@ pub(crate) fn decl_value_names(decls: &[Decl]) -> HashSet<Symbol> {
     out
 }
 
-fn interface_decls_from_program(program: &Program) -> Vec<Decl> {
+pub(crate) fn interface_decls_from_program(program: &Program) -> Vec<Decl> {
     let mut out = Vec::new();
     for decl in &program.decls {
         match decl {

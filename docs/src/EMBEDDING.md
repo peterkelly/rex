@@ -280,7 +280,7 @@ let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
 let mut m = Library::new("acme.status");
-m.add_declaration("pub type Status = Ready | Failed string")?;
+m.add_raw_declaration("pub type Status = Ready | Failed string")?;
 engine.inject_library(m)?;
 ```
 

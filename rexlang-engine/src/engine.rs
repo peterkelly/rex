@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use async_recursion::async_recursion;
 use futures::{FutureExt, future::BoxFuture, pin_mut};
 use rexlang_ast::expr::{
-    ClassDecl, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, Pattern, Scope, Symbol, TypeDecl,
-    sym, sym_eq,
+    ClassDecl, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern, Program, Scope,
+    Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern, sym, sym_eq,
 };
 use rexlang_lexer::span::Span;
 use rexlang_typesystem::{
@@ -22,7 +22,8 @@ use rexlang_util::GasMeter;
 
 use crate::libraries::{
     CanonicalSymbol, Library, LibraryExports, LibraryId, LibrarySystem, ResolveRequest,
-    ResolvedLibrary, SymbolKind, library_key_for_library, virtual_export_name,
+    ResolvedLibrary, SymbolKind, VirtualLibraryModule, interface_decls_from_program,
+    library_key_for_library, prefix_for_library, qualify_program, virtual_export_name,
 };
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
@@ -349,17 +350,17 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
 }
 
 pub trait Handler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
-    fn declaration(export_name: &str) -> String;
-    fn declaration_for(&self, export_name: &str) -> String {
-        Self::declaration(export_name)
+    fn interface_decl(export_name: &str) -> DeclareFnDecl;
+    fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
+        Self::interface_decl(export_name)
     }
     fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError>;
 }
 
 pub trait AsyncHandler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
-    fn declaration(export_name: &str) -> String;
-    fn declaration_for(&self, export_name: &str) -> String {
-        Self::declaration(export_name)
+    fn interface_decl(export_name: &str) -> DeclareFnDecl;
+    fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
+        Self::interface_decl(export_name)
     }
     fn inject_async(self, engine: &mut Engine<State>, export_name: &str)
     -> Result<(), EngineError>;
@@ -373,7 +374,7 @@ struct AsyncNativeCallableSig;
 
 pub struct Export<State: Clone + Send + Sync + 'static> {
     pub name: String,
-    declaration: String,
+    interface: DeclareFnDecl,
     injector: ExportInjector<State>,
 }
 
@@ -383,7 +384,7 @@ where
 {
     fn from_injector(
         name: impl Into<String>,
-        declaration: String,
+        interface: DeclareFnDecl,
         injector: ExportInjector<State>,
     ) -> Result<Self, EngineError> {
         let name = name.into();
@@ -393,7 +394,7 @@ where
         let normalized = normalize_name(&name).to_string();
         Ok(Self {
             name: normalized,
-            declaration,
+            interface,
             injector,
         })
     }
@@ -404,10 +405,10 @@ where
     {
         let name = name.into();
         let normalized = normalize_name(&name).to_string();
-        let declaration = handler.declaration_for(&normalized);
+        let interface = handler.interface_decl_for(&normalized);
         let injector: ExportInjector<State> =
             Box::new(move |engine, qualified_name| handler.inject(engine, qualified_name));
-        Self::from_injector(name, declaration, injector)
+        Self::from_injector(name, interface, injector)
     }
 
     pub fn from_async_handler<Sig, H>(
@@ -419,10 +420,10 @@ where
     {
         let name = name.into();
         let normalized = normalize_name(&name).to_string();
-        let declaration = handler.declaration_for(&normalized);
+        let interface = handler.interface_decl_for(&normalized);
         let injector: ExportInjector<State> =
             Box::new(move |engine, qualified_name| handler.inject_async(engine, qualified_name));
-        Self::from_injector(name, declaration, injector)
+        Self::from_injector(name, interface, injector)
     }
 
     pub fn from_native<F>(
@@ -471,37 +472,167 @@ where
     }
 }
 
-fn declaration_type_string(arg_types: &[Type], ret: Type) -> String {
-    if arg_types.is_empty() {
-        return ret.to_string();
-    }
-    let mut out = ret.to_string();
-    for arg in arg_types.iter().rev() {
-        out = format!("{arg} -> {out}");
-    }
-    out
-}
-
-fn declaration_line(export_name: &str, arg_types: &[Type], ret: Type) -> String {
-    format!(
-        "pub declare fn {export_name} {}",
-        declaration_type_string(arg_types, ret)
-    )
-}
-
-fn declaration_line_from_scheme(export_name: &str, scheme: &Scheme) -> String {
-    let mut out = format!("pub declare fn {export_name} : {}", scheme.typ);
-    if !scheme.preds.is_empty() {
-        let preds = scheme
+fn declare_fn_decl_from_scheme(export_name: &str, scheme: &Scheme) -> DeclareFnDecl {
+    let (params, ret) = decompose_fun_type(&scheme.typ);
+    DeclareFnDecl {
+        span: Span::default(),
+        is_pub: true,
+        name: Var {
+            span: Span::default(),
+            name: intern(export_name),
+        },
+        params: params
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ty)| {
+                (
+                    Var {
+                        span: Span::default(),
+                        name: intern(&format!("arg{idx}")),
+                    },
+                    type_expr_from_type(&ty),
+                )
+            })
+            .collect(),
+        ret: type_expr_from_type(&ret),
+        constraints: scheme
             .preds
             .iter()
-            .map(|p| format!("{} {}", p.class, p.typ))
+            .map(|pred| TypeConstraint {
+                class: NameRef::Unqualified(pred.class.clone()),
+                typ: type_expr_from_type(&pred.typ),
+            })
+            .collect(),
+    }
+}
+
+fn render_type_decl(decl: &TypeDecl) -> String {
+    let head = if decl.params.is_empty() {
+        decl.name.to_string()
+    } else {
+        format!(
+            "{} {}",
+            decl.name,
+            decl.params
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" ")
+        )
+    };
+    let variants = decl
+        .variants
+        .iter()
+        .map(|variant| {
+            if variant.args.is_empty() {
+                variant.name.to_string()
+            } else {
+                format!(
+                    "{} {}",
+                    variant.name,
+                    variant
+                        .args
+                        .iter()
+                        .map(|arg| if matches!(arg, TypeExpr::Fun(..)) {
+                            format!("({arg})")
+                        } else {
+                            arg.to_string()
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    format!("pub type {head} = {variants}")
+}
+
+fn render_declare_fn_decl(decl: &DeclareFnDecl) -> String {
+    let mut sig = decl.ret.clone();
+    for (_, ann) in decl.params.iter().rev() {
+        sig = TypeExpr::Fun(Span::default(), Box::new(ann.clone()), Box::new(sig));
+    }
+    let mut out = format!("pub declare fn {} : {}", decl.name.name, sig);
+    if !decl.constraints.is_empty() {
+        let preds = decl
+            .constraints
+            .iter()
+            .map(|pred| format!("{} {}", pred.class, pred.typ))
             .collect::<Vec<_>>()
             .join(", ");
         out.push_str(" where ");
         out.push_str(&preds);
     }
     out
+}
+
+fn render_virtual_decl(decl: &Decl) -> Option<String> {
+    match decl {
+        Decl::Type(td) => Some(render_type_decl(td)),
+        Decl::DeclareFn(df) => Some(render_declare_fn_decl(df)),
+        _ => None,
+    }
+}
+
+fn decompose_fun_type(typ: &Type) -> (Vec<Type>, Type) {
+    let mut params = Vec::new();
+    let mut cur = typ.clone();
+    while let Some((arg, ret)) = split_fun(&cur) {
+        params.push(arg);
+        cur = ret;
+    }
+    (params, cur)
+}
+
+fn type_expr_from_type(typ: &Type) -> TypeExpr {
+    match typ.as_ref() {
+        TypeKind::Var(tv) => {
+            let name = tv
+                .name
+                .clone()
+                .unwrap_or_else(|| intern(&format!("t{}", tv.id)));
+            TypeExpr::Name(Span::default(), NameRef::Unqualified(name))
+        }
+        TypeKind::Con(con) => {
+            TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()))
+        }
+        TypeKind::App(fun, arg) => {
+            if let TypeKind::App(head, err) = fun.as_ref()
+                && let TypeKind::Con(con) = head.as_ref()
+                && con.builtin_id == Some(BuiltinTypeId::Result)
+                && con.arity == 2
+            {
+                let result =
+                    TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()));
+                let ok_expr = type_expr_from_type(arg);
+                let err_expr = type_expr_from_type(err);
+                let app1 = TypeExpr::App(Span::default(), Box::new(result), Box::new(ok_expr));
+                return TypeExpr::App(Span::default(), Box::new(app1), Box::new(err_expr));
+            }
+            TypeExpr::App(
+                Span::default(),
+                Box::new(type_expr_from_type(fun)),
+                Box::new(type_expr_from_type(arg)),
+            )
+        }
+        TypeKind::Fun(arg, ret) => TypeExpr::Fun(
+            Span::default(),
+            Box::new(type_expr_from_type(arg)),
+            Box::new(type_expr_from_type(ret)),
+        ),
+        TypeKind::Tuple(elems) => TypeExpr::Tuple(
+            Span::default(),
+            elems.iter().map(type_expr_from_type).collect(),
+        ),
+        TypeKind::Record(fields) => TypeExpr::Record(
+            Span::default(),
+            fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), type_expr_from_type(ty)))
+                .collect(),
+        ),
+    }
 }
 
 fn library_local_type_names_from_declarations(declarations: &[String]) -> HashSet<Symbol> {
@@ -523,6 +654,38 @@ fn library_local_type_names_from_declarations(declarations: &[String]) -> HashSe
         }
     }
     out
+}
+
+fn library_local_type_names_from_decls(decls: &[Decl]) -> HashSet<Symbol> {
+    let mut out = HashSet::new();
+    for decl in decls {
+        if let Decl::Type(td) = decl {
+            out.insert(td.name.clone());
+        }
+    }
+    out
+}
+
+fn render_virtual_module_source(decls: &[Decl]) -> Option<String> {
+    let rendered = decls
+        .iter()
+        .filter_map(render_virtual_decl)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!rendered.is_empty()).then_some(rendered)
+}
+
+fn build_virtual_library_source<State: Clone + Send + Sync + 'static>(
+    declarations: &[String],
+    exports: &[Export<State>],
+) -> String {
+    let mut lines = declarations.to_vec();
+    lines.extend(
+        exports
+            .iter()
+            .map(|export| render_declare_fn_decl(&export.interface)),
+    );
+    lines.join("\n")
 }
 
 fn qualify_library_type_refs(
@@ -658,8 +821,9 @@ macro_rules! define_handler_impl {
             F: for<'a> Fn(&'a State) -> Result<R, EngineError> + Send + Sync + 'static,
             R: IntoPointer + RexType,
         {
-            fn declaration(export_name: &str) -> String {
-                declaration_line(export_name, &[], R::rex_type())
+            fn interface_decl(export_name: &str) -> DeclareFnDecl {
+                let scheme = Scheme::new(vec![], vec![], R::rex_type());
+                declare_fn_decl_from_scheme(export_name, &scheme)
             }
 
             fn inject(
@@ -696,9 +860,10 @@ macro_rules! define_handler_impl {
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType),+
         {
-            fn declaration(export_name: &str) -> String {
-                let args = vec![$($arg_ty::rex_type()),+];
-                declaration_line(export_name, &args, R::rex_type())
+            fn interface_decl(export_name: &str) -> DeclareFnDecl {
+                let typ = native_fn_type!($($arg_ty),+ ; R);
+                let scheme = Scheme::new(vec![], vec![], typ);
+                declare_fn_decl_from_scheme(export_name, &scheme)
             }
 
             fn inject(
@@ -735,13 +900,13 @@ impl<State> Handler<State, NativeCallableSig> for (Scheme, usize, SyncNativeCall
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn declaration(_export_name: &str) -> String {
-        unreachable!("native callable handlers use declaration_for")
+    fn interface_decl(_export_name: &str) -> DeclareFnDecl {
+        unreachable!("native callable handlers use interface_decl_for")
     }
 
-    fn declaration_for(&self, export_name: &str) -> String {
+    fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         let (scheme, _, _) = self;
-        declaration_line_from_scheme(export_name, scheme)
+        declare_fn_decl_from_scheme(export_name, scheme)
     }
 
     fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError> {
@@ -761,8 +926,9 @@ macro_rules! define_async_handler_impl {
             Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
             R: IntoPointer + RexType,
         {
-            fn declaration(export_name: &str) -> String {
-                declaration_line(export_name, &[], R::rex_type())
+            fn interface_decl(export_name: &str) -> DeclareFnDecl {
+                let scheme = Scheme::new(vec![], vec![], R::rex_type());
+                declare_fn_decl_from_scheme(export_name, &scheme)
             }
 
             fn inject_async(
@@ -805,9 +971,10 @@ macro_rules! define_async_handler_impl {
             R: IntoPointer + RexType,
             $($arg_ty: FromPointer + RexType),+
         {
-            fn declaration(export_name: &str) -> String {
-                let args = vec![$($arg_ty::rex_type()),+];
-                declaration_line(export_name, &args, R::rex_type())
+            fn interface_decl(export_name: &str) -> DeclareFnDecl {
+                let typ = native_fn_type!($($arg_ty),+ ; R);
+                let scheme = Scheme::new(vec![], vec![], typ);
+                declare_fn_decl_from_scheme(export_name, &scheme)
             }
 
             fn inject_async(
@@ -850,13 +1017,13 @@ impl<State> AsyncHandler<State, AsyncNativeCallableSig>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn declaration(_export_name: &str) -> String {
-        unreachable!("native async callable handlers use declaration_for")
+    fn interface_decl(_export_name: &str) -> DeclareFnDecl {
+        unreachable!("native async callable handlers use interface_decl_for")
     }
 
-    fn declaration_for(&self, export_name: &str) -> String {
+    fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         let (scheme, _, _) = self;
-        declaration_line_from_scheme(export_name, scheme)
+        declare_fn_decl_from_scheme(export_name, scheme)
     }
 
     fn inject_async(
@@ -1388,7 +1555,7 @@ where
     pub(crate) library_source_fingerprints: HashMap<LibraryId, String>,
     pub(crate) published_cycle_interfaces: HashSet<LibraryId>,
     default_imports: Vec<String>,
-    virtual_libraries: HashMap<String, LibraryExports>,
+    virtual_libraries: HashMap<String, VirtualLibraryModule>,
     library_local_type_names: HashMap<String, HashSet<Symbol>>,
     registration_library_context: Option<String>,
     cancel: CancellationToken,
@@ -1591,7 +1758,7 @@ where
     pub(crate) env: Env,
     pub(crate) natives: NativeRegistry<State>,
     pub(crate) typeclasses: TypeclassRegistry,
-    pub(crate) type_system: TypeSystem,
+    pub type_system: TypeSystem,
     pub(crate) typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
     pub(crate) cancel: CancellationToken,
     pub heap: Heap,
@@ -2053,7 +2220,18 @@ where
                 let anchor = library_anchor(&id);
                 let _ = writeln!(&mut out, "<a id=\"{anchor}\"></a>");
                 let _ = writeln!(&mut out, "### `{display}`");
-                if let Some(source) = self.library_sources.get(&id) {
+                let virtual_source = match &id {
+                    LibraryId::Virtual(name) => {
+                        self.virtual_libraries.get(name).and_then(|module| {
+                            module
+                                .source
+                                .clone()
+                                .or_else(|| render_virtual_module_source(&module.decls))
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(source) = self.library_sources.get(&id).cloned().or(virtual_source) {
                     if source.trim().is_empty() {
                         let _ = writeln!(&mut out, "_Module source is empty._");
                     } else {
@@ -2066,7 +2244,9 @@ where
                 }
 
                 let exports = self.library_exports_cache.get(&id).or_else(|| match &id {
-                    LibraryId::Virtual(name) => self.virtual_libraries.get(name),
+                    LibraryId::Virtual(name) => {
+                        self.virtual_libraries.get(name).map(|m| &m.exports)
+                    }
                     _ => None,
                 });
                 if let Some(exports) = exports {
@@ -2269,28 +2449,62 @@ where
             )));
         }
 
-        let mut source = String::new();
-        for declaration in &library.declarations {
-            source.push_str(declaration);
-            source.push('\n');
-        }
-        for export in &library.exports {
-            source.push_str(&export.declaration);
-            source.push('\n');
-        }
-        self.library_sources
-            .insert(LibraryId::Virtual(library_name.clone()), source.clone());
+        let library_id = LibraryId::Virtual(library_name.clone());
+        let full_source = build_virtual_library_source(&library.declarations, &library.exports);
 
-        let local_type_names = library_local_type_names_from_declarations(&library.declarations);
-        self.library_local_type_names
-            .insert(library_name.clone(), local_type_names);
+        if library.raw_declarations.is_empty() {
+            let mut decls = library.structured_decls.clone();
+            decls.extend(
+                library
+                    .exports
+                    .iter()
+                    .map(|export| Decl::DeclareFn(export.interface.clone())),
+            );
+            let local_type_names = library_local_type_names_from_decls(&decls);
+            self.library_local_type_names
+                .insert(library_name.clone(), local_type_names);
 
-        for export in library.exports {
-            self.inject_library_export(&library_name, export)?;
+            let program = Program {
+                decls,
+                expr: Arc::new(Expr::Tuple(Span::default(), vec![])),
+            };
+            let prefix = prefix_for_library(&library_id);
+            let exports = crate::libraries::exports_from_program(&program, &prefix, &library_id);
+            let qualified = qualify_program(&program, &prefix);
+            let interfaces = interface_decls_from_program(&qualified);
+            self.library_exports_cache
+                .insert(library_id.clone(), exports.clone());
+            self.library_interface_cache
+                .insert(library_id.clone(), interfaces.clone());
+            self.virtual_libraries.insert(
+                library_name.clone(),
+                VirtualLibraryModule {
+                    exports,
+                    decls: program.decls.clone(),
+                    source: None,
+                },
+            );
+
+            for export in library.exports {
+                self.inject_library_export(&library_name, export)?;
+            }
+
+            self.inject_decls(&qualified.decls)?;
+        } else {
+            let local_type_names =
+                library_local_type_names_from_declarations(&library.declarations);
+            self.library_local_type_names
+                .insert(library_name.clone(), local_type_names);
+            self.library_sources
+                .insert(library_id.clone(), full_source.clone());
+
+            for export in library.exports {
+                self.inject_library_export(&library_name, export)?;
+            }
         }
 
         let resolver_module_name = library_name.clone();
-        let resolver_source = source.clone();
+        let resolver_source = full_source;
         self.add_resolver(
             format!("injected:{library_name}"),
             move |req: ResolveRequest| {
@@ -2328,7 +2542,7 @@ where
     ) -> Result<(), EngineError> {
         let Export {
             name,
-            declaration: _,
+            interface: _,
             injector,
         } = export;
         let qualified_name = Self::library_export_symbol(library_name, &name);
@@ -2923,17 +3137,23 @@ where
 
         self.virtual_libraries.insert(
             PRELUDE_LIBRARY_NAME.to_string(),
-            LibraryExports {
-                values,
-                types,
-                classes,
+            VirtualLibraryModule {
+                exports: LibraryExports {
+                    values,
+                    types,
+                    classes,
+                },
+                decls: Vec::new(),
+                source: None,
             },
         );
         Ok(())
     }
 
     pub(crate) fn virtual_library_exports(&self, library_name: &str) -> Option<LibraryExports> {
-        self.virtual_libraries.get(library_name).cloned()
+        self.virtual_libraries
+            .get(library_name)
+            .map(|module| module.exports.clone())
     }
 
     fn register_prelude_typeclass_instances(&mut self) -> Result<(), EngineError> {

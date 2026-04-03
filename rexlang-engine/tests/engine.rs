@@ -204,7 +204,7 @@ async fn injected_library_can_define_pub_adt_declarations() {
 
     let mut library = Library::new("acme.status");
     library
-        .add_declaration("pub type Status = Ready | Failed string")
+        .add_raw_declaration("pub type Status = Ready | Failed string")
         .unwrap();
     engine.inject_library(library).unwrap();
 

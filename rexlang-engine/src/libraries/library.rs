@@ -1,4 +1,6 @@
-use rexlang_typesystem::{AdtDecl, Type, collect_adts_in_types};
+use rexlang_ast::expr::{Decl, NameRef, TypeDecl, TypeExpr, TypeVariant, intern};
+use rexlang_lexer::span::Span;
+use rexlang_typesystem::{AdtDecl, Type, TypeKind, collect_adts_in_types};
 
 use crate::EvaluatorRef;
 use crate::engine::{AsyncHandler, Export, Handler, NativeFuture};
@@ -30,7 +32,7 @@ use crate::{Engine, EngineError, Pointer, RexAdt};
 ///
 /// let mut math = Library::new("acme.math");
 /// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-/// math.add_declaration("pub type Sign = Positive | Negative").unwrap();
+/// math.add_raw_declaration("pub type Sign = Positive | Negative").unwrap();
 ///
 /// engine.inject_library(math).unwrap();
 /// ```
@@ -68,12 +70,14 @@ pub struct Library<State: Clone + Send + Sync + 'static> {
     ///
     /// let mut library = Library::<()>::new("acme.status");
     /// library
-    ///     .add_declaration("pub type Status = Ready | Failed string")
+    ///     .add_raw_declaration("pub type Status = Ready | Failed string")
     ///     .unwrap();
     ///
     /// assert_eq!(library.declarations.len(), 1);
     /// ```
     pub declarations: Vec<String>,
+    pub(crate) raw_declarations: Vec<String>,
+    pub(crate) structured_decls: Vec<Decl>,
 
     /// Staged host exports that will become callable Rex values when the library is injected.
     ///
@@ -122,6 +126,8 @@ where
         Self {
             name: name.into(),
             declarations: Vec::new(),
+            raw_declarations: Vec::new(),
+            structured_decls: Vec::new(),
             exports: Vec::new(),
         }
     }
@@ -141,24 +147,28 @@ where
     ///
     /// let mut library = Library::<()>::new("acme.status");
     /// library
-    ///     .add_declaration("pub type Status = Ready | Failed string")
+    ///     .add_raw_declaration("pub type Status = Ready | Failed string")
     ///     .unwrap();
     /// ```
-    pub fn add_declaration(&mut self, declaration: impl Into<String>) -> Result<(), EngineError> {
+    pub fn add_raw_declaration(
+        &mut self,
+        declaration: impl Into<String>,
+    ) -> Result<(), EngineError> {
         let declaration = declaration.into();
         if declaration.trim().is_empty() {
             return Err(EngineError::Internal(
                 "library declaration cannot be empty".into(),
             ));
         }
-        self.declarations.push(declaration);
+        self.declarations.push(declaration.clone());
+        self.raw_declarations.push(declaration);
         Ok(())
     }
 
     /// Convert an [`AdtDecl`] into Rex source and append it to [`Library::declarations`].
     ///
-    /// This is a structured alternative to [`Library::add_declaration`] when you already have an
-    /// ADT declaration in typed form.
+    /// This is a structured alternative to [`Library::add_raw_declaration`] when you already have
+    /// an ADT declaration in typed form.
     ///
     /// # Examples
     ///
@@ -172,7 +182,10 @@ where
     /// library.add_adt_decl(adt).unwrap();
     /// ```
     pub fn add_adt_decl(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
-        self.add_declaration(adt_declaration_line(&adt))
+        self.declarations.push(adt_declaration_line(&adt));
+        self.structured_decls
+            .push(Decl::Type(type_decl_from_adt(&adt)));
+        Ok(())
     }
 
     /// Discover user ADTs referenced by the supplied types and append their declarations.
@@ -451,5 +464,72 @@ fn adt_variant_arg_string(typ: &Type) -> String {
         format!("({s})")
     } else {
         s
+    }
+}
+
+fn type_decl_from_adt(adt: &AdtDecl) -> TypeDecl {
+    TypeDecl {
+        span: Span::default(),
+        is_pub: true,
+        name: adt.name.clone(),
+        params: adt.params.iter().map(|p| p.name.clone()).collect(),
+        variants: adt
+            .variants
+            .iter()
+            .map(|variant| TypeVariant {
+                name: variant.name.clone(),
+                args: variant.args.iter().map(type_expr_from_type).collect(),
+            })
+            .collect(),
+    }
+}
+
+fn type_expr_from_type(typ: &Type) -> TypeExpr {
+    match typ.as_ref() {
+        TypeKind::Var(tv) => {
+            let name = tv
+                .name
+                .clone()
+                .unwrap_or_else(|| intern(&format!("t{}", tv.id)));
+            TypeExpr::Name(Span::default(), NameRef::Unqualified(name))
+        }
+        TypeKind::Con(con) => {
+            TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()))
+        }
+        TypeKind::App(fun, arg) => {
+            if let TypeKind::App(head, err) = fun.as_ref()
+                && let TypeKind::Con(con) = head.as_ref()
+                && con.builtin_id == Some(rexlang_typesystem::BuiltinTypeId::Result)
+                && con.arity == 2
+            {
+                let result =
+                    TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()));
+                let ok_expr = type_expr_from_type(arg);
+                let err_expr = type_expr_from_type(err);
+                let app1 = TypeExpr::App(Span::default(), Box::new(result), Box::new(ok_expr));
+                return TypeExpr::App(Span::default(), Box::new(app1), Box::new(err_expr));
+            }
+            TypeExpr::App(
+                Span::default(),
+                Box::new(type_expr_from_type(fun)),
+                Box::new(type_expr_from_type(arg)),
+            )
+        }
+        TypeKind::Fun(arg, ret) => TypeExpr::Fun(
+            Span::default(),
+            Box::new(type_expr_from_type(arg)),
+            Box::new(type_expr_from_type(ret)),
+        ),
+        TypeKind::Tuple(elems) => TypeExpr::Tuple(
+            Span::default(),
+            elems.iter().map(type_expr_from_type).collect(),
+        ),
+        TypeKind::Record(fields) => TypeExpr::Record(
+            Span::default(),
+            fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), type_expr_from_type(ty)))
+                .collect(),
+        ),
     }
 }

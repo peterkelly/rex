@@ -101,6 +101,13 @@ pub struct LibraryExports {
     pub classes: HashMap<Symbol, CanonicalSymbol>,
 }
 
+#[derive(Clone)]
+pub struct VirtualLibraryModule {
+    pub exports: LibraryExports,
+    pub decls: Vec<rexlang_ast::expr::Decl>,
+    pub source: Option<String>,
+}
+
 #[derive(Clone, Default)]
 pub struct ReplState {
     pub(crate) alias_exports: HashMap<Symbol, LibraryExports>,

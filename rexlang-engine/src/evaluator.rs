@@ -93,7 +93,7 @@ where
             .await
     }
 
-    pub(crate) async fn run_prepared(
+    pub async fn run_prepared(
         &mut self,
         program: CompiledProgram,
         gas: &mut GasMeter,

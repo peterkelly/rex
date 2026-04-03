@@ -4,10 +4,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
+use rexlang_ast::expr::sym;
 use rexlang_engine::{
-    Engine, EngineOptions, EvaluatorRef, Library, Pointer, PreludeMode, Value, pointer_display,
+    Engine, EngineError, EngineOptions, EvaluatorRef, Library, Pointer, PreludeMode, RexAdt,
+    RexType, Value, pointer_display,
 };
-use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeKind};
+use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind};
 use rexlang_util::GasMeter;
 use uuid::Uuid;
 
@@ -47,6 +49,25 @@ fn i32_binop_scheme() -> Scheme {
 
 fn i32_value_scheme() -> Scheme {
     Scheme::new(vec![], vec![], i32_type())
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct LocalRunSpec;
+
+impl RexType for LocalRunSpec {
+    fn rex_type() -> Type {
+        Type::con("RunSpec", 0)
+    }
+}
+
+impl RexAdt for LocalRunSpec {
+    fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
+        engine: &mut Engine<State>,
+    ) -> Result<AdtDecl, EngineError> {
+        let mut adt = engine.adt_decl("RunSpec", &[]);
+        adt.add_variant(sym("Pending"), vec![]);
+        Ok(adt)
+    }
 }
 
 #[tokio::test]
@@ -617,6 +638,39 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
             engine.heap.type_name(&xs[1].0).unwrap()
         ),
     }
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_exposes_library_local_embedder_types() {
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    let mut library = Library::new("host.delay");
+    library.inject_rex_adt::<LocalRunSpec>(&mut engine).unwrap();
+    library
+        .export_native(
+            "make_run_spec",
+            Scheme::new(vec![], vec![], LocalRunSpec::rex_type()),
+            0,
+            |engine: EvaluatorRef<'_, ()>, _typ: &Type, _args: &[Pointer]| {
+                engine.heap.alloc_adt(sym("Pending"), vec![])
+            },
+        )
+        .unwrap();
+    engine.inject_library(library).unwrap();
+
+    let (_value_ptr, ty) = eval_snippet(
+        &mut engine,
+        r#"
+        import host.delay as Delay
+        let x: Delay.RunSpec = Delay.make_run_spec in
+            0
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
 
 #[tokio::test]
