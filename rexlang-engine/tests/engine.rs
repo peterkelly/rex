@@ -104,6 +104,19 @@ fn library_add_adt_decls_from_types_rejects_conflicting_adts() {
     );
 }
 
+#[test]
+fn inject_adt_family_rejects_cycles() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut a = engine.adt_decl("A", &[]);
+    a.add_variant(sym("A"), vec![Type::con("B", 0)]);
+    let mut b = engine.adt_decl("B", &[]);
+    b.add_variant(sym("B"), vec![Type::con("A", 0)]);
+
+    let err = engine.inject_adt_family(vec![a, b]).unwrap_err();
+    assert!(matches!(err, EngineError::Custom(_)));
+    assert!(err.to_string().contains("cyclic ADT auto-registration"));
+}
+
 #[tokio::test]
 async fn repl_persists_function_definitions() {
     let mut gas = unlimited_gas();

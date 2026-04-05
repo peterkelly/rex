@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use rexlang::{
     AdtDecl, BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, Parser,
-    Pointer, Rex, RexAdt, RexType, Token, Type, assert_pointer_eq, sym,
+    Pointer, Rex, RexAdt, RexType, Token, Type, TypeVarSupply, assert_pointer_eq, sym,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -119,10 +119,9 @@ impl FromPointer for ManualEnum {
 }
 
 impl RexAdt for ManualRecord {
-    fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
-        engine: &mut Engine<State>,
-    ) -> Result<AdtDecl, EngineError> {
-        let mut adt = engine.adt_decl_from_type(&Self::rex_type())?;
+    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+        let mut supply = TypeVarSupply::new();
+        let mut adt = AdtDecl::new(&sym("ManualRecord"), &[], &mut supply);
         let record = Type::record(vec![
             (sym("enabled"), bool::rex_type()),
             (sym("count"), i32::rex_type()),
@@ -133,10 +132,9 @@ impl RexAdt for ManualRecord {
 }
 
 impl RexAdt for ManualEnum {
-    fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
-        engine: &mut Engine<State>,
-    ) -> Result<AdtDecl, EngineError> {
-        let mut adt = engine.adt_decl_from_type(&Self::rex_type())?;
+    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+        let mut supply = TypeVarSupply::new();
+        let mut adt = AdtDecl::new(&sym("ManualEnum"), &[], &mut supply);
         adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
         adt.add_variant(sym("Count"), vec![i32::rex_type()]);
         Ok(adt)

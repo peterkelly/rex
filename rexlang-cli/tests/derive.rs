@@ -61,6 +61,27 @@ enum Maybe<T> {
     Nothing,
 }
 
+#[derive(Rex, Debug, PartialEq)]
+struct SharedLeaf {
+    value: i32,
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct LeftBranch {
+    leaf: SharedLeaf,
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct RightBranch {
+    leaf: SharedLeaf,
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct RootNode {
+    left: LeftBranch,
+    right: RightBranch,
+}
+
 #[tokio::test]
 async fn derive_struct_roundtrip_value() {
     let (heap, v_ptr, ty) = eval(
@@ -179,7 +200,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     let mut engine = Engine::with_prelude(()).unwrap();
 
     // Build the ADT surface (params + variants) and sanity-check that it really uses a type var.
-    let adt = Maybe::<i32>::rex_adt_decl(&mut engine).unwrap();
+    let adt = Maybe::<i32>::rex_adt_decl().unwrap();
     assert_eq!(adt.name.as_ref(), "Maybe");
     assert_eq!(adt.params.len(), 1);
 
@@ -490,4 +511,70 @@ async fn derive_enum_constructor_currying() {
     let b = Shape::from_pointer(&heap, &items[1]).unwrap();
     assert_eq!(a, Shape::Rectangle(6, 12));
     assert_eq!(b, Shape::Rectangle(6, 8));
+}
+
+#[tokio::test]
+async fn derive_inject_rex_registers_acyclic_dependency_closure() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    RootNode::inject_rex(&mut engine).unwrap();
+
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&rexlang::sym("SharedLeaf"))
+    );
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&rexlang::sym("LeftBranch"))
+    );
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&rexlang::sym("RightBranch"))
+    );
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&rexlang::sym("RootNode"))
+    );
+
+    let tokens = Token::tokenize(
+        r#"
+        RootNode {
+            left = LeftBranch { leaf = SharedLeaf { value = 1 } },
+            right = RightBranch { leaf = SharedLeaf { value = 2 } }
+        }
+        "#,
+    )
+    .unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+
+    let mut gas = GasMeter::default();
+    let (v_ptr, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
+    .unwrap();
+
+    assert_eq!(ty, RootNode::rex_type());
+    let decoded = RootNode::from_pointer(&engine.heap, &v_ptr).unwrap();
+    assert_eq!(
+        decoded,
+        RootNode {
+            left: LeftBranch {
+                leaf: SharedLeaf { value: 1 },
+            },
+            right: RightBranch {
+                leaf: SharedLeaf { value: 2 },
+            },
+        }
+    );
 }

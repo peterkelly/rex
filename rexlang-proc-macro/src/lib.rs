@@ -64,16 +64,19 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
         }
     };
     let adt_decl_fn = adt_decl_fn(ast, &type_name, &type_param_idents)?;
+    let adt_family_fn = adt_family_fn(ast, &type_name, &type_param_idents)?;
     let mut rex_adt_generics = ast.generics.clone();
     add_bound_to_type_params(&mut rex_adt_generics, parse_quote!(::rexlang::RexType));
     let (rex_adt_impl_generics, rex_adt_ty_generics, rex_adt_where_clause) =
         rex_adt_generics.split_for_impl();
     let rex_adt_impl = quote! {
         impl #rex_adt_impl_generics ::rexlang::RexAdt for #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
-            fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
-                engine: &mut ::rexlang::Engine<State>,
-            ) -> Result<::rexlang::AdtDecl, ::rexlang::EngineError> {
+            fn rex_adt_decl() -> Result<::rexlang::AdtDecl, ::rexlang::EngineError> {
                 #adt_decl_fn
+            }
+
+            fn rex_adt_family() -> Result<::std::vec::Vec<::rexlang::AdtDecl>, ::rexlang::EngineError> {
+                #adt_family_fn
             }
         }
     };
@@ -85,10 +88,12 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
                 <Self as ::rexlang::RexAdt>::inject_rex(engine)
             }
 
-            pub fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
-                engine: &mut ::rexlang::Engine<State>,
-            ) -> Result<::rexlang::AdtDecl, ::rexlang::EngineError> {
-                <Self as ::rexlang::RexAdt>::rex_adt_decl(engine)
+            pub fn rex_adt_decl() -> Result<::rexlang::AdtDecl, ::rexlang::EngineError> {
+                <Self as ::rexlang::RexAdt>::rex_adt_decl()
+            }
+
+            pub fn rex_adt_family() -> Result<::std::vec::Vec<::rexlang::AdtDecl>, ::rexlang::EngineError> {
+                <Self as ::rexlang::RexAdt>::rex_adt_family()
             }
 
             pub fn inject_rex_with_default<State: Clone + Send + Sync + 'static>(
@@ -184,16 +189,26 @@ fn adt_decl_fn(
         .iter()
         .map(|p| LitStr::new(&p.to_string(), Span::call_site()))
         .collect();
-    let param_count = param_names.len();
     let adt_decl = if param_names.is_empty() {
         quote! {
-            let head = ::rexlang::Type::con(#type_name, 0);
-            let mut adt = engine.adt_decl_from_type_with_params(&head, &[])?;
+            let mut __rex_supply = ::rexlang::TypeVarSupply::new();
+            let mut adt = ::rexlang::AdtDecl::new(
+                &::rexlang::intern(#type_name),
+                &[],
+                &mut __rex_supply,
+            );
         }
     } else {
+        let param_syms = param_names.iter().map(|name| {
+            quote! { ::rexlang::intern(#name) }
+        });
         quote! {
-            let head = ::rexlang::Type::con(#type_name, #param_count);
-            let mut adt = engine.adt_decl_from_type_with_params(&head, &[#(#param_names,)*])?;
+            let mut __rex_supply = ::rexlang::TypeVarSupply::new();
+            let mut adt = ::rexlang::AdtDecl::new(
+                &::rexlang::intern(#type_name),
+                &[#(#param_syms,)*],
+                &mut __rex_supply,
+            );
         }
     };
 
@@ -313,6 +328,166 @@ fn adt_decl_fn(
             "`#[derive(Rex)]` only supports structs and enums",
         )),
     }
+}
+
+fn adt_family_fn(
+    ast: &DeriveInput,
+    type_name: &str,
+    type_params: &[Ident],
+) -> Result<TokenStream2, Error> {
+    let deps = collect_dependency_exprs(ast, type_name, type_params)?;
+    Ok(quote! {{
+        let mut family = ::std::vec::Vec::new();
+        #(
+            family.extend(#deps);
+        )*
+        family.push(<Self as ::rexlang::RexAdt>::rex_adt_decl()?);
+        Ok(family)
+    }})
+}
+
+fn collect_dependency_exprs(
+    ast: &DeriveInput,
+    type_name: &str,
+    type_params: &[Ident],
+) -> Result<Vec<TokenStream2>, Error> {
+    let mut deps = Vec::new();
+    match &ast.data {
+        Data::Struct(data) => match &data.fields {
+            Fields::Named(fields) => {
+                for field in &fields.named {
+                    collect_dependency_exprs_from_type(
+                        &field.ty,
+                        type_name,
+                        type_params,
+                        &mut deps,
+                    )?;
+                }
+            }
+            Fields::Unnamed(fields) => {
+                for field in &fields.unnamed {
+                    collect_dependency_exprs_from_type(
+                        &field.ty,
+                        type_name,
+                        type_params,
+                        &mut deps,
+                    )?;
+                }
+            }
+            Fields::Unit => {}
+        },
+        Data::Enum(data) => {
+            for variant in &data.variants {
+                match &variant.fields {
+                    Fields::Named(fields) => {
+                        for field in &fields.named {
+                            collect_dependency_exprs_from_type(
+                                &field.ty,
+                                type_name,
+                                type_params,
+                                &mut deps,
+                            )?;
+                        }
+                    }
+                    Fields::Unnamed(fields) => {
+                        for field in &fields.unnamed {
+                            collect_dependency_exprs_from_type(
+                                &field.ty,
+                                type_name,
+                                type_params,
+                                &mut deps,
+                            )?;
+                        }
+                    }
+                    Fields::Unit => {}
+                }
+            }
+        }
+        Data::Union(_) => {}
+    }
+    Ok(dedupe_token_streams(deps))
+}
+
+fn collect_dependency_exprs_from_type(
+    ty: &Type,
+    self_type_name: &str,
+    type_params: &[Ident],
+    deps: &mut Vec<TokenStream2>,
+) -> Result<(), Error> {
+    match ty {
+        Type::Tuple(tuple) => {
+            for elem in &tuple.elems {
+                collect_dependency_exprs_from_type(elem, self_type_name, type_params, deps)?;
+            }
+            Ok(())
+        }
+        Type::Path(type_path) => {
+            let Some(seg) = type_path.path.segments.last() else {
+                return Err(Error::new(type_path.span(), "unsupported type path"));
+            };
+            let ident = seg.ident.to_string();
+            if type_params.iter().any(|param| param == &seg.ident)
+                || ident == self_type_name
+                || is_builtin_rust_type(type_path)
+            {
+                return Ok(());
+            }
+
+            let args = match &seg.arguments {
+                PathArguments::AngleBracketed(args) => args
+                    .args
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArgument::Type(t) => Some(t),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
+
+            match ident.as_str() {
+                "Vec" | "Option" => {
+                    let [inner] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), format!("expected `{ident}<T>`")));
+                    };
+                    collect_dependency_exprs_from_type(inner, self_type_name, type_params, deps)
+                }
+                "HashMap" | "BTreeMap" => {
+                    let [_key, value] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), format!("expected `{ident}<K, V>`")));
+                    };
+                    collect_dependency_exprs_from_type(value, self_type_name, type_params, deps)
+                }
+                "Result" => {
+                    let [ok, err] = args.as_slice() else {
+                        return Err(Error::new(seg.span(), "expected `Result<T, E>`"));
+                    };
+                    collect_dependency_exprs_from_type(ok, self_type_name, type_params, deps)?;
+                    collect_dependency_exprs_from_type(err, self_type_name, type_params, deps)
+                }
+                _ => {
+                    deps.push(quote! { <#type_path as ::rexlang::RexAdt>::rex_adt_family()? });
+                    Ok(())
+                }
+            }
+        }
+        other => Err(Error::new(
+            other.span(),
+            "unsupported field type for Rex dependency discovery",
+        )),
+    }
+}
+
+fn dedupe_token_streams(tokens: Vec<TokenStream2>) -> Vec<TokenStream2> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for token in tokens {
+        let key = token.to_string();
+        if seen.insert(key) {
+            out.push(token);
+        }
+    }
+    out
 }
 
 fn rex_type_expr(
@@ -726,6 +901,30 @@ fn is_string_type(ty: &Type) -> bool {
             .unwrap_or(false),
         _ => false,
     }
+}
+
+fn is_builtin_rust_type(ty: &syn::TypePath) -> bool {
+    let Some(seg) = ty.path.segments.last() else {
+        return false;
+    };
+    matches!(
+        seg.ident.to_string().as_str(),
+        "bool"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "i8"
+            | "i16"
+            | "i32"
+            | "i64"
+            | "f32"
+            | "f64"
+            | "String"
+            | "str"
+            | "Uuid"
+            | "DateTime"
+    )
 }
 
 fn add_bound_to_type_params(generics: &mut Generics, bound: syn::TypeParamBound) {

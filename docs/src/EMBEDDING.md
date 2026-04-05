@@ -241,6 +241,10 @@ Use `Library` + `Engine::inject_library(...)`:
    - optional structured declarations with `inject_rex_adt` / `add_adt_decl`
 3. Inject it into the engine.
 
+`Library::inject_rex_adt::<T>(...)` now stages the full acyclic ADT family reachable from `T`.
+For example, if `Label` contains a `Side`, staging `Label` is enough; you do not need to stage
+`Side` separately. Cyclic ADT families are still rejected.
+
 `Library` also exposes its staged `raw_declarations`, `structured_decls`, and `exports` vectors
 directly. That is useful if you want to inspect, transform, or assemble a library in multiple
 passes before calling `Engine::inject_library`.
@@ -339,7 +343,6 @@ let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
 let mut m = Library::new("sample");
-m.inject_rex_adt::<Side>(&mut engine)?;
 m.inject_rex_adt::<Label>(&mut engine)?;
 m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
@@ -754,7 +757,12 @@ let program = parser.parse_program(&mut GasMeter::default())?;
 The derive:
 - declares an ADT in the Rex type system
 - injects runtime constructors (so Rex can *build* values)
+- discovers and registers the full acyclic ADT family needed by the root type
 - implements `FromPointer`/`IntoPointer` for converting Rust ↔ Rex
+
+That means `MyType::inject_rex(&mut engine)?` is enough for acyclic graphs of derived ADTs. You do
+not need to manually register dependencies in topological order. Cyclic ADT families are still not
+supported by this registration path.
 
 ```rust
 use rexlang::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
@@ -786,6 +794,10 @@ without `#[derive(Rex)]`.
 - Add variants with `AdtDecl::add_variant(...)`.
 - Register with `Engine::inject_adt(...)`.
 
+`Engine::inject_adt(...)` is the low-level single-ADT primitive. If you are building several ADTs
+manually, you are still responsible for supplying them in dependency order unless you batch them
+yourself before injection.
+
 ```rust
 use rexlang::{Engine, RexType, Type, sym};
 
@@ -798,11 +810,14 @@ engine.inject_adt(adt)?;
 ```
 
 If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls, implement
-`RexAdt` and provide `rex_adt_decl(...)`. Then `RexAdt::inject_rex(...)` gives the same
+`RexAdt` and provide `rex_adt_decl()`. Then `RexAdt::inject_rex(...)` gives the same
 registration workflow as derived types.
 
+If the manual Rust type depends on other ADTs, also implement `rex_adt_family()` and return the
+other required `AdtDecl`s before `Self` so the family stays acyclic and complete.
+
 ```rust
-use rexlang::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, sym};
+use rexlang::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, TypeVarSupply, sym};
 
 struct PrimitiveEither;
 
@@ -813,10 +828,9 @@ impl RexType for PrimitiveEither {
 }
 
 impl RexAdt for PrimitiveEither {
-    fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
-        engine: &mut Engine<State>,
-    ) -> Result<AdtDecl, EngineError> {
-        let mut adt = engine.adt_decl_from_type(&Self::rex_type())?;
+    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+        let mut supply = TypeVarSupply::new();
+        let mut adt = AdtDecl::new(&sym("PrimitiveEither"), &[], &mut supply);
         adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
         adt.add_variant(sym("Count"), vec![i32::rex_type()]);
         Ok(adt)

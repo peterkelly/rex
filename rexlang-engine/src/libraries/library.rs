@@ -3,7 +3,9 @@ use rexlang_lexer::span::Span;
 use rexlang_typesystem::{AdtDecl, Type, TypeKind, collect_adts_in_types};
 
 use crate::EvaluatorRef;
-use crate::engine::{AsyncHandler, Export, Handler, NativeFuture};
+use crate::engine::{
+    AsyncHandler, Export, Handler, NativeFuture, adt_shape, adt_shape_eq, order_adt_family,
+};
 use crate::{Engine, EngineError, Pointer, RexAdt};
 
 /// A staged host library that you build up in Rust and later inject into an [`Engine`].
@@ -258,8 +260,30 @@ where
     where
         T: RexAdt,
     {
-        let adt = T::rex_adt_decl(engine)?;
-        self.add_adt_decl(adt)
+        let family = order_adt_family(T::rex_adt_family()?)?;
+        for adt in family {
+            let already_staged = self.structured_decls.iter().find_map(|decl| match decl {
+                Decl::Type(type_decl) if type_decl.name == adt.name => Some(type_decl),
+                _ => None,
+            });
+            if let Some(existing_decl) = already_staged {
+                let existing_adt = engine
+                    .type_system
+                    .adt_from_decl(existing_decl)
+                    .map_err(EngineError::Type)?;
+                if !adt_shape_eq(&existing_adt, &adt) {
+                    return Err(EngineError::Custom(format!(
+                        "conflicting staged ADT registration for `{}`: existing={} new={}",
+                        adt.name,
+                        adt_shape(&existing_adt),
+                        adt_shape(&adt)
+                    )));
+                }
+                continue;
+            }
+            self.add_adt_decl(adt)?;
+        }
+        Ok(())
     }
 
     /// Append a preconstructed [`Export`] to this library.

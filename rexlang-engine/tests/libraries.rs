@@ -9,7 +9,7 @@ use rexlang_engine::{
     Engine, EngineError, EngineOptions, EvaluatorRef, Library, Pointer, PreludeMode, RexAdt,
     RexType, Value, pointer_display,
 };
-use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind};
+use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind, TypeVarSupply};
 use rexlang_util::GasMeter;
 use uuid::Uuid;
 
@@ -61,10 +61,9 @@ impl RexType for LocalRunSpec {
 }
 
 impl RexAdt for LocalRunSpec {
-    fn rex_adt_decl<State: Clone + Send + Sync + 'static>(
-        engine: &mut Engine<State>,
-    ) -> Result<AdtDecl, EngineError> {
-        let mut adt = engine.adt_decl("RunSpec", &[]);
+    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+        let mut supply = TypeVarSupply::new();
+        let mut adt = AdtDecl::new(&sym("RunSpec"), &[], &mut supply);
         adt.add_variant(sym("Pending"), vec![]);
         Ok(adt)
     }

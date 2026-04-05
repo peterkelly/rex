@@ -110,6 +110,42 @@ async fn library_render_label_with_library_scoped_adts_left_and_right() {
 }
 
 #[tokio::test]
+async fn library_inject_rex_adt_registers_acyclic_dependency_closure() {
+    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    engine.add_default_resolvers();
+
+    let mut library = Library::new("sample");
+    library.inject_rex_adt::<Label>(&mut engine).unwrap();
+    library
+        .export("render_label", |_: &(), label: Label| {
+            Ok::<String, EngineError>(render_label(label))
+        })
+        .unwrap();
+    engine.inject_library(library).unwrap();
+
+    let mut gas = unlimited_gas();
+    let (value, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval_snippet(
+        r#"
+            import sample (Label, Left, render_label)
+            render_label (Label { text = "left", side = Left })
+        "#,
+        &mut gas,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
+    assert_eq!(
+        engine.heap.pointer_as_string(&value).unwrap(),
+        format!("{:<12}", "left")
+    );
+}
+
+#[tokio::test]
 async fn match_ascribed_library_type_with_overlapping_constructor_is_ambiguous_regression() {
     // Regression guard: when two library ADTs expose overlapping constructor names
     // (e.g. both have `Right`), `match` arms that use the bare constructor after an
