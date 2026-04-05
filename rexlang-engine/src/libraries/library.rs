@@ -19,8 +19,8 @@ use crate::{Engine, EngineError, Pointer, RexAdt};
 /// from Rex code.
 ///
 /// This type is intentionally mutable and staged: you can build it incrementally, inspect its
-/// [`Library::declarations`] and [`Library::exports`], transform them, and only inject it once you
-/// are satisfied with the final module shape.
+/// raw and structured declarations plus [`Library::exports`], transform them, and only inject it
+/// once you are satisfied with the final module shape.
 ///
 /// # Examples
 ///
@@ -54,12 +54,12 @@ pub struct Library<State: Clone + Send + Sync + 'static> {
     /// ```
     pub name: String,
 
-    /// Raw Rex declarations that will be concatenated into the injected module source.
+    /// Raw Rex declarations supplied directly by the embedder.
     ///
     /// This is most commonly used for `pub type ...` declarations, but it can hold any raw Rex
     /// declaration text you want included in the virtual module source.
     ///
-    /// The usual way to append to this field is [`Library::add_declaration`], which validates that
+    /// The usual way to append to this field is [`Library::add_raw_declaration`], which validates that
     /// the added text is non-empty. The field itself is public so callers can inspect or construct
     /// a library in multiple passes.
     ///
@@ -73,11 +73,15 @@ pub struct Library<State: Clone + Send + Sync + 'static> {
     ///     .add_raw_declaration("pub type Status = Ready | Failed string")
     ///     .unwrap();
     ///
-    /// assert_eq!(library.declarations.len(), 1);
+    /// assert_eq!(library.raw_declarations.len(), 1);
     /// ```
-    pub declarations: Vec<String>,
-    pub(crate) raw_declarations: Vec<String>,
-    pub(crate) structured_decls: Vec<Decl>,
+    pub raw_declarations: Vec<String>,
+
+    /// Structured declarations registered from Rust metadata rather than Rex source.
+    ///
+    /// APIs such as [`Library::add_adt_decl`] and [`Library::inject_rex_adt`] append here instead
+    /// of synthesizing Rex source text.
+    pub structured_decls: Vec<Decl>,
 
     /// Staged host exports that will become callable Rex values when the library is injected.
     ///
@@ -119,13 +123,12 @@ where
     ///
     /// let library = Library::<()>::new("acme.math");
     /// assert_eq!(library.name, "acme.math");
-    /// assert!(library.declarations.is_empty());
+    /// assert!(library.raw_declarations.is_empty());
     /// assert!(library.exports.is_empty());
     /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            declarations: Vec::new(),
             raw_declarations: Vec::new(),
             structured_decls: Vec::new(),
             exports: Vec::new(),
@@ -160,12 +163,11 @@ where
                 "library declaration cannot be empty".into(),
             ));
         }
-        self.declarations.push(declaration.clone());
         self.raw_declarations.push(declaration);
         Ok(())
     }
 
-    /// Convert an [`AdtDecl`] into Rex source and append it to [`Library::declarations`].
+    /// Convert an [`AdtDecl`] into a structured type declaration and append it to this library.
     ///
     /// This is a structured alternative to [`Library::add_raw_declaration`] when you already have
     /// an ADT declaration in typed form.
@@ -182,7 +184,6 @@ where
     /// library.add_adt_decl(adt).unwrap();
     /// ```
     pub fn add_adt_decl(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
-        self.declarations.push(adt_declaration_line(&adt));
         self.structured_decls
             .push(Decl::Type(type_decl_from_adt(&adt)));
         Ok(())
@@ -190,15 +191,15 @@ where
 
     /// Discover user ADTs referenced by the supplied types and append their declarations.
     ///
-    /// This is useful when you have Rust-side type information and want to emit the corresponding
-    /// Rex `pub type ...` declarations for every user-defined ADT it mentions.
+    /// This is useful when you have Rust-side type information and want to register the
+    /// corresponding user-defined ADTs for every type it mentions.
     ///
     /// The discovery process:
     ///
     /// - walks the provided types recursively
     /// - deduplicates repeated ADTs
     /// - asks the engine to materialize each discovered ADT declaration
-    /// - appends the resulting declarations to this library
+    /// - appends the resulting structured declarations to this library
     ///
     /// If conflicting ADT definitions are found for the same type constructor name, this returns
     /// an [`EngineError`] that describes the conflict instead of silently picking one.
@@ -234,7 +235,7 @@ where
     /// Derive a Rex ADT declaration from a Rust type and append it to this library.
     ///
     /// This is the most ergonomic way to expose a Rust enum or struct that implements [`RexAdt`]
-    /// as a library-local Rex type declaration.
+    /// as a library-local structured Rex type declaration.
     ///
     /// Unlike [`RexAdt::inject_rex`], this stages the declaration inside the library instead of
     /// injecting it straight into the engine root environment.
@@ -422,48 +423,6 @@ where
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);
         Ok(())
-    }
-}
-
-fn adt_declaration_line(adt: &AdtDecl) -> String {
-    let head = if adt.params.is_empty() {
-        adt.name.to_string()
-    } else {
-        let params = adt
-            .params
-            .iter()
-            .map(|p| p.name.to_string())
-            .collect::<Vec<_>>()
-            .join(" ");
-        format!("{} {}", adt.name, params)
-    };
-    let variants = adt
-        .variants
-        .iter()
-        .map(|variant| {
-            if variant.args.is_empty() {
-                variant.name.to_string()
-            } else {
-                let args = variant
-                    .args
-                    .iter()
-                    .map(adt_variant_arg_string)
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                format!("{} {}", variant.name, args)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" | ");
-    format!("pub type {head} = {variants}")
-}
-
-fn adt_variant_arg_string(typ: &Type) -> String {
-    let s = typ.to_string();
-    if s.contains(" -> ") {
-        format!("({s})")
-    } else {
-        s
     }
 }
 

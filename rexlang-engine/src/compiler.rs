@@ -355,8 +355,14 @@ where
             .engine
             .decode_local_library_source(&id, bytes)
             .map_err(CompileError::from)?;
-        self.compile_library_source(ResolvedLibrary { id, source }, gas)
-            .map_err(CompileError::from)
+        self.compile_library_source(
+            ResolvedLibrary {
+                id,
+                content: crate::libraries::ResolvedLibraryContent::Source(source),
+            },
+            gas,
+        )
+        .map_err(CompileError::from)
     }
 
     pub async fn compile_repl_program(
@@ -428,8 +434,7 @@ where
         loading.insert(resolved.id.clone());
 
         let prefix = prefix_for_library(&resolved.id);
-        let program =
-            parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
+        let program = crate::libraries::program_from_resolved(&resolved, &mut *gas)?;
         let rewritten = self.rewrite_and_inject_program(
             &program,
             Some(resolved.id.clone()),

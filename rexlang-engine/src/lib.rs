@@ -31,7 +31,7 @@ pub use evaluator::{Evaluator, EvaluatorRef};
 pub use libraries::virtual_export_name;
 pub use libraries::{
     CanonicalSymbol, Library, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
-    ResolveRequest, ResolvedLibrary, SymbolKind,
+    ResolveRequest, ResolvedLibrary, ResolvedLibraryContent, SymbolKind,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
 pub use stack::DEFAULT_STACK_SIZE_BYTES;

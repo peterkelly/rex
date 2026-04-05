@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use rexlang_ast::expr::{Symbol, intern};
+use rexlang_ast::expr::{Program, Symbol, intern};
 use rexlang_typesystem::Type;
 
 use crate::Pointer;
@@ -31,9 +31,15 @@ pub struct ResolveRequest {
 }
 
 #[derive(Clone, Debug)]
+pub enum ResolvedLibraryContent {
+    Source(String),
+    Program(Program),
+}
+
+#[derive(Clone, Debug)]
 pub struct ResolvedLibrary {
     pub id: LibraryId,
-    pub source: String,
+    pub content: ResolvedLibraryContent,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

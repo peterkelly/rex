@@ -34,7 +34,7 @@ pub use system::ResolverFn;
 pub use types::virtual_export_name;
 pub use types::{
     CanonicalSymbol, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
-    ResolveRequest, ResolvedLibrary, SymbolKind, VirtualLibraryModule,
+    ResolveRequest, ResolvedLibrary, ResolvedLibraryContent, SymbolKind, VirtualLibraryModule,
 };
 
 pub(crate) use system::LibrarySystem;
@@ -2100,6 +2100,26 @@ pub(crate) fn parse_program_from_source(
     Ok(program)
 }
 
+pub(crate) fn program_from_resolved(
+    resolved: &ResolvedLibrary,
+    gas: &mut GasMeter,
+) -> Result<Program, EngineError> {
+    match &resolved.content {
+        ResolvedLibraryContent::Source(source) => {
+            parse_program_from_source(source, Some(&resolved.id), Some(gas))
+        }
+        ResolvedLibraryContent::Program(program) => {
+            if !matches!(program.expr.as_ref(), Expr::Tuple(_, elems) if elems.is_empty()) {
+                return Err(crate::LibraryError::TopLevelExprInLibrary {
+                    library: resolved.id.clone(),
+                }
+                .into());
+            }
+            Ok(program.clone())
+        }
+    }
+}
+
 impl<State> Engine<State>
 where
     State: Clone + Send + Sync + 'static,
@@ -2108,14 +2128,26 @@ where
         sha256_hex(source.as_bytes())
     }
 
-    fn refresh_if_stale(&mut self, resolved: &ResolvedLibrary) -> Result<String, EngineError> {
-        let next = Self::source_fingerprint(&resolved.source);
+    fn content_fingerprint(resolved: &ResolvedLibrary) -> Option<String> {
+        match &resolved.content {
+            ResolvedLibraryContent::Source(source) => Some(Self::source_fingerprint(source)),
+            ResolvedLibraryContent::Program(_) => None,
+        }
+    }
+
+    fn refresh_if_stale(
+        &mut self,
+        resolved: &ResolvedLibrary,
+    ) -> Result<Option<String>, EngineError> {
+        let Some(next) = Self::content_fingerprint(resolved) else {
+            return Ok(None);
+        };
         if let Some(prev) = self.library_source_fingerprints.get(&resolved.id)
             && prev != &next
         {
             self.invalidate_library_caches(&resolved.id)?;
         }
-        Ok(next)
+        Ok(Some(next))
     }
 
     fn remove_type_level_symbols_for_library_interface(&mut self, decls: &[Decl]) {
@@ -2197,13 +2229,14 @@ where
             }
 
             let prefix = prefix_for_library(&resolved.id);
-            let program =
-                parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
+            let program = program_from_resolved(&resolved, &mut *gas)?;
             let exports = exports_from_program(&program, &prefix, &resolved.id);
             loaded.insert(resolved.id.clone(), exports);
             loading.insert(resolved.id.clone());
-            self.library_sources
-                .insert(resolved.id.clone(), resolved.source.clone());
+            if let ResolvedLibraryContent::Source(source) = &resolved.content {
+                self.library_sources
+                    .insert(resolved.id.clone(), source.clone());
+            }
             let qualified = qualify_program(&program, &prefix);
             let interfaces = interface_decls_from_program(&qualified);
             self.library_interface_cache
@@ -2242,8 +2275,10 @@ where
                     prefix,
                 },
             );
-            self.library_source_fingerprints
-                .insert(library_id, fingerprint);
+            if let Some(fingerprint) = fingerprint {
+                self.library_source_fingerprints
+                    .insert(library_id, fingerprint);
+            }
         }
 
         if pending.is_empty() {
@@ -2468,9 +2503,11 @@ where
         self.modules.mark_loading(&resolved.id)?;
 
         let prefix = prefix_for_library(&resolved.id);
-        let program = parse_program_from_source(&resolved.source, Some(&resolved.id), Some(gas))?;
-        self.library_sources
-            .insert(resolved.id.clone(), resolved.source.clone());
+        let program = program_from_resolved(&resolved, gas)?;
+        if let ResolvedLibraryContent::Source(source) = &resolved.content {
+            self.library_sources
+                .insert(resolved.id.clone(), source.clone());
+        }
         let exports = exports_from_program(&program, &prefix, &resolved.id);
         self.library_exports_cache
             .insert(resolved.id.clone(), exports.clone());
@@ -2509,11 +2546,13 @@ where
             exports,
             init_value,
             init_type,
-            source_fingerprint: Some(source_fingerprint.clone()),
+            source_fingerprint: source_fingerprint.clone(),
         };
         self.modules.store_loaded(inst.clone())?;
-        self.library_source_fingerprints
-            .insert(resolved.id.clone(), source_fingerprint);
+        if let Some(source_fingerprint) = source_fingerprint {
+            self.library_source_fingerprints
+                .insert(resolved.id.clone(), source_fingerprint);
+        }
         Ok(inst)
     }
 
@@ -2660,8 +2699,14 @@ where
     ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let (id, bytes) = self.read_local_library_bytes(path.as_ref())?;
         let source = self.decode_local_library_source(&id, bytes)?;
-        self.infer_library_source(ResolvedLibrary { id, source }, gas)
-            .map_err(CompileError::from)
+        self.infer_library_source(
+            ResolvedLibrary {
+                id,
+                content: ResolvedLibraryContent::Source(source),
+            },
+            gas,
+        )
+        .map_err(CompileError::from)
     }
 
     fn infer_library_source(
@@ -2675,8 +2720,7 @@ where
         loading.insert(resolved.id.clone());
 
         let prefix = prefix_for_library(&resolved.id);
-        let program =
-            parse_program_from_source(&resolved.source, Some(&resolved.id), Some(&mut *gas))?;
+        let program = program_from_resolved(&resolved, &mut *gas)?;
 
         let rewritten = self.rewrite_program_with_imports(
             &program,

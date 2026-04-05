@@ -215,7 +215,7 @@ engine.add_resolver("host-map", {
         };
         Ok(Some(ResolvedLibrary {
             id: LibraryId::Virtual(format!("host:{}", req.library_name)),
-            source: source.clone(),
+            content: rexlang::ResolvedLibraryContent::Source(source.clone()),
         }))
     }
 });
@@ -237,12 +237,13 @@ Use `Library` + `Engine::inject_library(...)`:
 2. Add exports:
    - typed exports with `export` / `export_async`
    - runtime/native exports with `export_native` / `export_native_async`
-   - optional Rex declarations with `add_declaration` (for example `pub type ...`)
+   - optional raw Rex declarations with `add_raw_declaration` (for example `pub type ...`)
+   - optional structured declarations with `inject_rex_adt` / `add_adt_decl`
 3. Inject it into the engine.
 
-`Library` also exposes its staged `declarations` and `exports` vectors directly. That is useful if
-you want to inspect, transform, or assemble a library in multiple passes before calling
-`Engine::inject_library`.
+`Library` also exposes its staged `raw_declarations`, `structured_decls`, and `exports` vectors
+directly. That is useful if you want to inspect, transform, or assemble a library in multiple
+passes before calling `Engine::inject_library`.
 
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
 `Err(...)`, evaluation fails with that engine error.
@@ -409,6 +410,9 @@ Resolver contract:
 - return `Ok(Some(ResolvedLibrary { ... }))` when you can satisfy the library.
 - return `Ok(None)` to let the next resolver try.
 - return `Err(...)` for hard failures (invalid library payload, policy violations, etc.).
+
+`ResolvedLibrary` can carry either `ResolvedLibraryContent::Source(...)` for real Rex source or
+`ResolvedLibraryContent::Program(...)` for preconstructed structured modules.
 
 ### 5) Snippets That Import Relative Modules
 

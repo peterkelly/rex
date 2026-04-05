@@ -72,18 +72,18 @@ fn library_add_adt_decls_from_types_collects_nested_unique_adts() {
         .add_adt_decls_from_types(&mut engine, types)
         .unwrap();
 
-    assert_eq!(library.declarations.len(), 2);
+    assert_eq!(library.structured_decls.len(), 2);
     assert!(
         library
-            .declarations
+            .structured_decls
             .iter()
-            .any(|d| d.starts_with("pub type Foo t0 ="))
+            .any(|d| matches!(d, rexlang_ast::expr::Decl::Type(td) if td.name == sym("Foo")))
     );
     assert!(
         library
-            .declarations
+            .structured_decls
             .iter()
-            .any(|d| d.starts_with("pub type Bar ="))
+            .any(|d| matches!(d, rexlang_ast::expr::Decl::Type(td) if td.name == sym("Bar")))
     );
 }
 

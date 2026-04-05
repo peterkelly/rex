@@ -12,7 +12,7 @@ use crate::engine::{
     CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, check_runtime_cancelled,
     eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
 };
-use crate::libraries::{LibraryId, ReplState, ResolvedLibrary};
+use crate::libraries::{LibraryId, ReplState, ResolvedLibrary, ResolvedLibraryContent};
 use crate::value::Value;
 use crate::{
     CompileError, Compiler, EngineError, Env, EvalError, ExecutionError, Pointer, RuntimeEnv,
@@ -153,7 +153,13 @@ where
         let inst = self
             .runtime
             .loader
-            .load_library_from_resolved(ResolvedLibrary { id, source }, gas)
+            .load_library_from_resolved(
+                ResolvedLibrary {
+                    id,
+                    content: ResolvedLibraryContent::Source(source),
+                },
+                gas,
+            )
             .await
             .map_err(CompileError::from)?;
         Ok((inst.init_value, inst.init_type))
@@ -182,7 +188,7 @@ where
             .load_library_from_resolved(
                 ResolvedLibrary {
                     id,
-                    source: source.to_string(),
+                    content: ResolvedLibraryContent::Source(source.to_string()),
                 },
                 gas,
             )

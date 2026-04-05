@@ -5,7 +5,7 @@ use rexlang_util::{ImportPathError, resolve_local_import_path, sha256_hex};
 
 use crate::{EngineError, LibraryError};
 
-use super::{LibraryId, ResolveRequest, ResolvedLibrary, ResolverFn};
+use super::{LibraryId, ResolveRequest, ResolvedLibrary, ResolvedLibraryContent, ResolverFn};
 
 fn split_library_name_and_sha(library_name: String) -> (String, Option<String>) {
     match library_name.split_once('#') {
@@ -46,7 +46,7 @@ fn resolve_rex_file(
     })?;
     Ok(Some(ResolvedLibrary {
         id: LibraryId::Local { path: canon },
-        source,
+        content: ResolvedLibraryContent::Source(source),
     }))
 }
 

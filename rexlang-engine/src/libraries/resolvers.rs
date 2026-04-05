@@ -7,7 +7,7 @@ use rexlang_util::sha256_hex;
 
 use crate::LibraryError;
 
-use super::{LibraryId, ResolveRequest, ResolvedLibrary, ResolverFn};
+use super::{LibraryId, ResolveRequest, ResolvedLibrary, ResolvedLibraryContent, ResolverFn};
 
 #[cfg(feature = "github-imports")]
 pub fn default_github_resolver() -> ResolverFn {
@@ -52,7 +52,7 @@ pub fn default_github_resolver() -> ResolverFn {
 
         Ok(Some(ResolvedLibrary {
             id: LibraryId::Remote(url),
-            source,
+            content: ResolvedLibraryContent::Source(source),
         }))
     })
 }
@@ -84,7 +84,7 @@ pub fn default_stdlib_resolver() -> ResolverFn {
 
         Ok(Some(ResolvedLibrary {
             id: LibraryId::Virtual(base.to_string()),
-            source: source.to_string(),
+            content: ResolvedLibraryContent::Source(source.to_string()),
         }))
     })
 }

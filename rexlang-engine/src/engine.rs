@@ -22,8 +22,9 @@ use rexlang_util::GasMeter;
 
 use crate::libraries::{
     CanonicalSymbol, Library, LibraryExports, LibraryId, LibrarySystem, ResolveRequest,
-    ResolvedLibrary, SymbolKind, VirtualLibraryModule, interface_decls_from_program,
-    library_key_for_library, prefix_for_library, qualify_program, virtual_export_name,
+    ResolvedLibrary, ResolvedLibraryContent, SymbolKind, VirtualLibraryModule,
+    interface_decls_from_program, library_key_for_library, prefix_for_library, qualify_program,
+    virtual_export_name,
 };
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
@@ -2450,7 +2451,6 @@ where
         }
 
         let library_id = LibraryId::Virtual(library_name.clone());
-        let full_source = build_virtual_library_source(&library.declarations, &library.exports);
 
         if library.raw_declarations.is_empty() {
             let mut decls = library.structured_decls.clone();
@@ -2490,9 +2490,30 @@ where
             }
 
             self.inject_decls(&qualified.decls)?;
+            let resolver_module_name = library_name.clone();
+            let resolver_program = program;
+            self.add_resolver(
+                format!("injected:{library_name}"),
+                move |req: ResolveRequest| {
+                    let requested = req
+                        .library_name
+                        .split_once('#')
+                        .map(|(base, _)| base)
+                        .unwrap_or(req.library_name.as_str());
+                    if requested != resolver_module_name {
+                        return Ok(None);
+                    }
+                    Ok(Some(ResolvedLibrary {
+                        id: LibraryId::Virtual(resolver_module_name.clone()),
+                        content: ResolvedLibraryContent::Program(resolver_program.clone()),
+                    }))
+                },
+            );
         } else {
+            let full_source =
+                build_virtual_library_source(&library.raw_declarations, &library.exports);
             let local_type_names =
-                library_local_type_names_from_declarations(&library.declarations);
+                library_local_type_names_from_declarations(&library.raw_declarations);
             self.library_local_type_names
                 .insert(library_name.clone(), local_type_names);
             self.library_sources
@@ -2501,27 +2522,26 @@ where
             for export in library.exports {
                 self.inject_library_export(&library_name, export)?;
             }
+            let resolver_module_name = library_name.clone();
+            let resolver_source = full_source;
+            self.add_resolver(
+                format!("injected:{library_name}"),
+                move |req: ResolveRequest| {
+                    let requested = req
+                        .library_name
+                        .split_once('#')
+                        .map(|(base, _)| base)
+                        .unwrap_or(req.library_name.as_str());
+                    if requested != resolver_module_name {
+                        return Ok(None);
+                    }
+                    Ok(Some(ResolvedLibrary {
+                        id: LibraryId::Virtual(resolver_module_name.clone()),
+                        content: ResolvedLibraryContent::Source(resolver_source.clone()),
+                    }))
+                },
+            );
         }
-
-        let resolver_module_name = library_name.clone();
-        let resolver_source = full_source;
-        self.add_resolver(
-            format!("injected:{library_name}"),
-            move |req: ResolveRequest| {
-                let requested = req
-                    .library_name
-                    .split_once('#')
-                    .map(|(base, _)| base)
-                    .unwrap_or(req.library_name.as_str());
-                if requested != resolver_module_name {
-                    return Ok(None);
-                }
-                Ok(Some(ResolvedLibrary {
-                    id: LibraryId::Virtual(resolver_module_name.clone()),
-                    source: resolver_source.clone(),
-                }))
-            },
-        );
 
         self.injected_libraries.insert(library_name);
         Ok(())

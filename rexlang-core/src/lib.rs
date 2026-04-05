@@ -10,11 +10,11 @@ pub use rexlang_engine::{
     CompiledProgramBoundary, Compiler, Engine, EngineError, EngineOptions, EvalError, Evaluator,
     EvaluatorRef, ExecutionError, Export, FromPointer, Handler, Heap, IntoPointer, Library,
     NativeCapability, NativeFuture, NativeRequirement, PRELUDE_LIBRARY_NAME, Pointer, PreludeMode,
-    ROOT_LIBRARY_NAME, ReplState, RexAdt, RexDefault, RexType, RuntimeCapabilities,
-    RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary, RuntimeLinkContract, SyncNativeCallable,
-    Value, ValueDisplayOptions, assert_pointer_eq, closure_debug, closure_eq,
-    collect_adts_error_to_engine, pointer_display, pointer_display_with, value_debug, value_eq,
-    virtual_export_name,
+    ROOT_LIBRARY_NAME, ReplState, ResolveRequest, ResolvedLibrary, ResolvedLibraryContent, RexAdt,
+    RexDefault, RexType, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary,
+    RuntimeLinkContract, SyncNativeCallable, Value, ValueDisplayOptions, assert_pointer_eq,
+    closure_debug, closure_eq, collect_adts_error_to_engine, pointer_display, pointer_display_with,
+    value_debug, value_eq, virtual_export_name,
 };
 pub use rexlang_lexer::Token;
 pub use rexlang_parser::{Parser, ParserLimits, error::ParserErr};
