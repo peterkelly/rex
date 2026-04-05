@@ -1,6 +1,6 @@
 use rexlang::{
-    BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, JsonOptions, Parser, Pointer,
-    Rex, RexAdt, RexType, Token, Type, Value, assert_pointer_eq, rex_to_json,
+    BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, JsonOptions,
+    Parser, Pointer, Rex, RexAdt, RexType, Token, Type, Value, assert_pointer_eq, rex_to_json,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -80,6 +80,60 @@ struct RightBranch {
 struct RootNode {
     left: LeftBranch,
     right: RightBranch,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+struct AtomRef(i32);
+
+impl RexType for AtomRef {
+    fn rex_type() -> Type {
+        i32::rex_type()
+    }
+}
+
+impl IntoPointer for AtomRef {
+    fn into_pointer(self, heap: &rexlang::Heap) -> Result<Pointer, EngineError> {
+        self.0.into_pointer(heap)
+    }
+}
+
+impl FromPointer for AtomRef {
+    fn from_pointer(heap: &rexlang::Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        Ok(Self(i32::from_pointer(heap, pointer)?))
+    }
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct Fragment(#[rex(type_only)] Vec<AtomRef>);
+
+#[derive(Debug, PartialEq, Clone)]
+struct Xyzf32([f32; 3]);
+
+impl RexType for Xyzf32 {
+    fn rex_type() -> Type {
+        Type::tuple(vec![f32::rex_type(), f32::rex_type(), f32::rex_type()])
+    }
+}
+
+impl IntoPointer for Xyzf32 {
+    fn into_pointer(self, heap: &rexlang::Heap) -> Result<Pointer, EngineError> {
+        (self.0[0], self.0[1], self.0[2]).into_pointer(heap)
+    }
+}
+
+impl FromPointer for Xyzf32 {
+    fn from_pointer(heap: &rexlang::Heap, pointer: &Pointer) -> Result<Self, EngineError> {
+        let (x, y, z) = <(f32, f32, f32)>::from_pointer(heap, pointer)?;
+        Ok(Self([x, y, z]))
+    }
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct BoundingBox {
+    #[rex(type_only)]
+    min: Xyzf32,
+    #[rex(type_only)]
+    max: Xyzf32,
 }
 
 #[tokio::test]
@@ -575,6 +629,59 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
             right: RightBranch {
                 leaf: SharedLeaf { value: 2 },
             },
+        }
+    );
+}
+
+#[tokio::test]
+async fn derive_type_only_field_does_not_require_rex_adt_dependency() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    Fragment::inject_rex(&mut engine).unwrap();
+
+    let tokens = Token::tokenize("Fragment [1, 2, 3]").unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+
+    let mut gas = GasMeter::default();
+    let (v_ptr, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Fragment::rex_type());
+    let decoded = Fragment::from_pointer(&engine.heap, &v_ptr).unwrap();
+    assert_eq!(decoded, Fragment(vec![AtomRef(1), AtomRef(2), AtomRef(3)]));
+}
+
+#[tokio::test]
+async fn derive_type_only_record_fields_support_manual_leaf_types() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    BoundingBox::inject_rex(&mut engine).unwrap();
+
+    let tokens =
+        Token::tokenize("BoundingBox { min = (1.0, 2.0, 3.0), max = (4.0, 5.0, 6.0) }").unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+
+    let mut gas = GasMeter::default();
+    let (v_ptr, ty) = rexlang::Evaluator::new_with_compiler(
+        rexlang::RuntimeEnv::new(engine.clone()),
+        rexlang::Compiler::new(engine.clone()),
+    )
+    .eval(program.expr.as_ref(), &mut gas)
+    .await
+    .unwrap();
+
+    assert_eq!(ty, BoundingBox::rex_type());
+    let decoded = BoundingBox::from_pointer(&engine.heap, &v_ptr).unwrap();
+    assert_eq!(
+        decoded,
+        BoundingBox {
+            min: Xyzf32([1.0, 2.0, 3.0]),
+            max: Xyzf32([4.0, 5.0, 6.0]),
         }
     );
 }

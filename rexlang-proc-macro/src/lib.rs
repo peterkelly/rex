@@ -180,6 +180,28 @@ fn serde_rename_from_attrs(attrs: &[Attribute]) -> Result<Option<String>, Error>
     Ok(None)
 }
 
+fn rex_type_only_from_attrs(attrs: &[Attribute]) -> Result<bool, Error> {
+    for attr in attrs {
+        if !attr.path().is_ident("rex") {
+            continue;
+        }
+        let mut type_only = false;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("name") {
+                let value = meta.value()?;
+                let _lit: LitStr = value.parse()?;
+            } else if meta.path.is_ident("type_only") {
+                type_only = true;
+            }
+            Ok(())
+        })?;
+        if type_only {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn adt_decl_fn(
     ast: &DeriveInput,
     type_name: &str,
@@ -356,6 +378,9 @@ fn collect_dependency_exprs(
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => {
                 for field in &fields.named {
+                    if rex_type_only_from_attrs(&field.attrs)? {
+                        continue;
+                    }
                     collect_dependency_exprs_from_type(
                         &field.ty,
                         type_name,
@@ -366,6 +391,9 @@ fn collect_dependency_exprs(
             }
             Fields::Unnamed(fields) => {
                 for field in &fields.unnamed {
+                    if rex_type_only_from_attrs(&field.attrs)? {
+                        continue;
+                    }
                     collect_dependency_exprs_from_type(
                         &field.ty,
                         type_name,
@@ -381,6 +409,9 @@ fn collect_dependency_exprs(
                 match &variant.fields {
                     Fields::Named(fields) => {
                         for field in &fields.named {
+                            if rex_type_only_from_attrs(&field.attrs)? {
+                                continue;
+                            }
                             collect_dependency_exprs_from_type(
                                 &field.ty,
                                 type_name,
@@ -391,6 +422,9 @@ fn collect_dependency_exprs(
                     }
                     Fields::Unnamed(fields) => {
                         for field in &fields.unnamed {
+                            if rex_type_only_from_attrs(&field.attrs)? {
+                                continue;
+                            }
                             collect_dependency_exprs_from_type(
                                 &field.ty,
                                 type_name,

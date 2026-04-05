@@ -764,6 +764,42 @@ That means `MyType::inject_rex(&mut engine)?` is enough for acyclic graphs of de
 not need to manually register dependencies in topological order. Cyclic ADT families are still not
 supported by this registration path.
 
+If a field uses a Rust type that participates in Rex value conversion but is not itself a Rex ADT
+(for example a leaf type with manual `RexType` / `IntoPointer` / `FromPointer` impls), mark that
+field with `#[rex(type_only)]`. That keeps the Rex type mapping but skips ADT-family auto-registration
+for that field.
+
+```rust
+use rexlang::{Engine, FromPointer, IntoPointer, Pointer, Rex, RexType, Type};
+
+#[derive(Debug, PartialEq)]
+struct AtomRef(i32);
+
+impl RexType for AtomRef {
+    fn rex_type() -> Type {
+        i32::rex_type()
+    }
+}
+
+impl IntoPointer for AtomRef {
+    fn into_pointer(self, heap: &rexlang::Heap) -> Result<Pointer, rexlang::EngineError> {
+        self.0.into_pointer(heap)
+    }
+}
+
+impl FromPointer for AtomRef {
+    fn from_pointer(heap: &rexlang::Heap, pointer: &Pointer) -> Result<Self, rexlang::EngineError> {
+        Ok(Self(i32::from_pointer(heap, pointer)?))
+    }
+}
+
+#[derive(Rex, Debug, PartialEq)]
+struct Fragment(#[rex(type_only)] Vec<AtomRef>);
+
+let mut engine = Engine::with_prelude(())?;
+Fragment::inject_rex(&mut engine)?;
+```
+
 ```rust
 use rexlang::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
 
