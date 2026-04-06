@@ -23,7 +23,7 @@ use rexlang_lexer::{
 use rexlang_parser::{Parser, error::ParserErr};
 use rexlang_typesystem::{
     BuiltinTypeId, Scheme, Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr,
-    TypedExprKind, Types, instantiate, unify,
+    TypedExprKind, Types, infer, infer_typed, instantiate, unify,
 };
 use rexlang_util::{GasMeter, sha256_hex};
 use serde_json::{Value, json, to_value};
@@ -2881,7 +2881,7 @@ fn in_scope_value_types_at_position(
     }
 
     let expr = program.expr_with_fns();
-    let Ok((typed, _preds, _ty)) = ts.infer_typed(expr.as_ref()) else {
+    let Ok((typed, _preds, _ty)) = infer_typed(&mut ts, expr.as_ref()) else {
         return Vec::new();
     };
     let pos = lsp_to_rex_position(position);
@@ -3446,7 +3446,7 @@ fn hover_type_contents(uri: &Url, text: &str, position: Position) -> Option<Hove
         typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
         root_expr = method.body.as_ref();
     } else {
-        let (typed, _preds, _) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
+        let (typed, _preds, _) = infer_typed(&mut ts, expr_with_fns.as_ref()).ok()?;
         typed_root = typed;
         root_expr = expr_with_fns.as_ref();
     }
@@ -3535,7 +3535,7 @@ fn expected_type_at_position_type(uri: &Url, text: &str, position: Position) -> 
         typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
         root_expr = method.body.as_ref();
     } else {
-        let (typed, _preds, _) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
+        let (typed, _preds, _) = infer_typed(&mut ts, expr_with_fns.as_ref()).ok()?;
         typed_root = typed;
         root_expr = expr_with_fns.as_ref();
     }
@@ -3586,7 +3586,7 @@ fn inferred_type_at_position_type(uri: &Url, text: &str, position: Position) -> 
         typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
         root_expr = method.body.as_ref();
     } else {
-        let (typed, _preds, _) = ts.infer_typed(expr_with_fns.as_ref()).ok()?;
+        let (typed, _preds, _) = infer_typed(&mut ts, expr_with_fns.as_ref()).ok()?;
         typed_root = typed;
         root_expr = expr_with_fns.as_ref();
     }
@@ -5369,7 +5369,7 @@ fn push_type_diagnostics(
         }
     }
 
-    if let Err(err) = ts.infer(program.expr.as_ref()) {
+    if let Err(err) = infer(&mut ts, program.expr.as_ref()) {
         let before = diagnostics.len();
         push_ts_error(
             err,

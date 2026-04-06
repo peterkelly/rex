@@ -16,7 +16,7 @@ use rexlang_lexer::span::Span;
 use rexlang_typesystem::{
     AdtDecl, BuiltinTypeId, CollectAdtsError, Instance, Predicate, PreparedInstanceDecl, Scheme,
     Subst, Type, TypeError, TypeKind, TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types,
-    compose_subst, entails, instantiate, unify,
+    compose_subst, entails, infer_typed, infer_with_gas, instantiate, unify,
 };
 use rexlang_util::GasMeter;
 
@@ -3287,9 +3287,7 @@ where
         expr: &Expr,
         gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        self.type_system
-            .infer_with_gas(expr, gas)
-            .map_err(EngineError::Type)
+        infer_with_gas(&mut self.type_system, expr, gas).map_err(EngineError::Type)
     }
 
     fn type_check_expr(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
@@ -3352,7 +3350,7 @@ where
             )),
         }));
     }
-    let (typed, preds, _ty) = engine.type_system.infer_typed(expr)?;
+    let (typed, preds, _ty) = infer_typed(&mut engine.type_system, expr)?;
     let (typed, preds) = default_ambiguous_types(engine, typed, preds)?;
     check_predicates_in_engine(engine, &preds)?;
     check_natives_in_engine(engine, &typed)?;

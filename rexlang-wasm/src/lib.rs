@@ -10,7 +10,7 @@ use rexlang_lsp::{
     hover_for_source, references_for_source_public, rename_for_source_public,
 };
 use rexlang_parser::{Parser, ParserLimits, error::ParserErr};
-use rexlang_typesystem::{TypeSystem, TypeSystemLimits};
+use rexlang_typesystem::{TypeSystem, TypeSystemLimits, infer_with_gas};
 use rexlang_util::{GasCosts, GasMeter};
 use wasm_bindgen::prelude::*;
 
@@ -65,8 +65,7 @@ pub fn infer_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, Str
     ts.register_decls(&program.decls)
         .map_err(|e| format!("type declaration error: {e}"))?;
 
-    let (preds, typ) = ts
-        .infer_with_gas(program.expr.as_ref(), &mut gas)
+    let (preds, typ) = infer_with_gas(&mut ts, program.expr.as_ref(), &mut gas)
         .map_err(|e| format!("type error: {e}"))?;
 
     let payload = serde_json::json!({

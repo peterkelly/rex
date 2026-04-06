@@ -515,7 +515,7 @@ match (to_list bytes) with
 ## Typecheck Without Evaluating
 
 ```rust
-use rexlang::{Parser, Token, TypeSystem};
+use rexlang::{Parser, Token, TypeSystem, infer};
 
 let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
@@ -533,7 +533,7 @@ for decl in &program.decls {
     }
 }
 
-let (preds, ty) = ts.infer(program.expr.as_ref())?;
+let (preds, ty) = infer(&mut ts, program.expr.as_ref())?;
 println!("type: {ty}");
 if !preds.is_empty() {
     println!(
@@ -557,7 +557,7 @@ Users can declare new type classes and instances directly in Rex source. As the 
 ### Typecheck: Inject Class/Instance Decls into `TypeSystem`
 
 ```rust
-use rexlang::{Parser, Token, TypeSystem};
+use rexlang::{Parser, Token, TypeSystem, infer};
 
 let code = r#"
 class Size a
@@ -588,7 +588,7 @@ for decl in &program.decls {
     }
 }
 
-let (_preds, ty) = ts.infer(program.expr.as_ref())?;
+let (_preds, ty) = infer(&mut ts, program.expr.as_ref())?;
 assert_eq!(ty.to_string(), "i32");
 ```
 
@@ -747,7 +747,7 @@ assert!(matches!(res, Err(EngineError::Cancelled)));
 To defend against untrusted/large programs, you can run the pipeline with a gas budget:
 
 - `Parser::parse_program`
-- `TypeSystem::infer_with_gas` / `infer_typed_with_gas`
+- `infer_with_gas(&mut ts, ...)` / `infer_typed_with_gas(&mut ts, ...)`
 - `Engine::eval_with_gas`
 
 ### Parsing Limits

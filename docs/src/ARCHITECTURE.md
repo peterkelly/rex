@@ -17,7 +17,8 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - For untrusted code, set `ParserLimits::safe_defaults` before parsing.
 - `rexlang-typesystem`: type system. Entry points:
   - `TypeSystem::new_with_prelude()?` to create a typing environment with standard types/classes.
-  - `TypeSystem::infer_typed` / `TypeSystem::infer` for type inference.
+  - `infer_typed(&mut ts, expr)` / `infer(&mut ts, expr)` for type inference.
+  - The inference implementation itself lives in `rexlang-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
   - For untrusted code, set `TypeSystemLimits::safe_defaults` before inference.
 - `rexlang-engine`: runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).

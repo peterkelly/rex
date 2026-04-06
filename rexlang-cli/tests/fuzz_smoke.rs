@@ -1,4 +1,6 @@
-use rexlang::{Engine, GasCosts, GasMeter, Library, Parser, ParserLimits, Token, TypeSystem};
+use rexlang::{
+    Engine, GasCosts, GasMeter, Library, Parser, ParserLimits, Token, TypeSystem, infer_with_gas,
+};
 
 #[derive(Clone)]
 struct XorShift64 {
@@ -64,7 +66,7 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
 
         let mut ts = TypeSystem::new_with_prelude().unwrap();
         let _ = ts.register_decls(&program.decls);
-        let _ = ts.infer_with_gas(program.expr.as_ref(), &mut gas);
+        let _ = infer_with_gas(&mut ts, program.expr.as_ref(), &mut gas);
 
         let mut engine = Engine::with_prelude(()).unwrap();
         let mut library = Library::global();
