@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use rexlang_ast::expr::{Symbol, sym, sym_eq};
-use rexlang_typesystem::{BuiltinTypeId, Type, TypedExpr};
+use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Type, TypedExpr};
 use uuid::Uuid;
 
 use crate::EngineError;
@@ -1214,6 +1214,10 @@ pub trait FromPointer: Sized {
 
 pub trait RexType {
     fn rex_type() -> Type;
+
+    fn collect_rex_family(_out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+        Ok(())
+    }
 }
 
 impl IntoPointer for Value {

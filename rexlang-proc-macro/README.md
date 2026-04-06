@@ -14,9 +14,9 @@ In practice this means injecting the top-level derived Rust type is enough for a
 derived ADTs; manual dependency ordering is no longer required. Cyclic ADT families are still
 rejected at registration time.
 
-If a field uses a Rust type that should contribute only its `RexType` mapping and conversion logic,
-not ADT-family registration, mark that field with `#[rex(type_only)]`. This is useful for manual
-leaf types that implement `RexType` / `IntoPointer` / `FromPointer` but are not `RexAdt`s.
+Leaf types that implement `RexType` / `IntoPointer` / `FromPointer` but are not `RexAdt`s now work
+without any field annotation. The derive uses `RexType::collect_rex_family`, whose default
+implementation is a no-op for non-ADT leaves.
 
 The generated code now targets the public `rexlang` crate path, so embedders only need `rexlang`
 instead of `rexlang-core`.

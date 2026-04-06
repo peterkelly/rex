@@ -51,13 +51,15 @@ Phase-specific errors:
 - `export_async(name, handler)`: inject a typed async native function.
 - `export_native` / `export_native_async`: inject pointer-level natives with explicit `Scheme` + arity.
 - `adt_decl` + `inject_adt`: declare and register ADT constructors (mirrors `type` declarations).
-- `inject_rex_adt::<T>()`: register a Rust `RexAdt` type and its full acyclic ADT family.
+- `inject_rex_adt::<T>()`: collect `T`'s Rex family via `RexType::collect_rex_family` and register the resulting acyclic ADT family.
 - `inject_class`: register a type class (mirrors `class` declarations).
 - `inject_instance`: register a type class instance in the checker (mirrors `instance` declarations).
 
 `inject_adt` remains the low-level primitive for one already-built `AdtDecl`. Higher-level Rust
-registration paths (`RexAdt::inject_rex`, `Library::inject_rex_adt`) now walk the reachable
-acyclic ADT family automatically and reject cycles explicitly.
+registration paths collect family declarations through `RexType::collect_rex_family`, then inject
+the reachable acyclic ADT family automatically and reject cycles explicitly. Ordinary leaf types
+inherit the default no-op implementation, so they participate in Rex type mapping without
+pretending to be ADTs.
 
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 

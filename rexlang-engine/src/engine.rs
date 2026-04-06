@@ -72,7 +72,9 @@ pub trait RexAdt: RexType {
     fn rex_adt_decl() -> Result<AdtDecl, EngineError>;
 
     fn rex_adt_family() -> Result<Vec<AdtDecl>, EngineError> {
-        Ok(vec![Self::rex_adt_decl()?])
+        let mut out = Vec::new();
+        <Self as RexType>::collect_rex_family(&mut out)?;
+        Ok(out)
     }
 
     fn inject_rex<State: Clone + Send + Sync + 'static>(
@@ -2869,9 +2871,10 @@ where
 
     pub fn inject_rex_adt<T>(&mut self) -> Result<(), EngineError>
     where
-        T: RexAdt,
+        T: RexType,
     {
-        let family = T::rex_adt_family()?;
+        let mut family = Vec::new();
+        T::collect_rex_family(&mut family)?;
         self.inject_adt_family(family)
     }
 

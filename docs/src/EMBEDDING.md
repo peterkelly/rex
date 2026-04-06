@@ -242,8 +242,10 @@ Use `Library` + `Engine::inject_library(...)`:
 3. Inject it into the engine.
 
 `Library::inject_rex_adt::<T>(...)` now stages the full acyclic ADT family reachable from `T`.
-For example, if `Label` contains a `Side`, staging `Label` is enough; you do not need to stage
-`Side` separately. Cyclic ADT families are still rejected.
+This is driven by `RexType::collect_rex_family(...)`: ADT types contribute declarations there,
+while leaf Rex types inherit a no-op default. For example, if `Label` contains a `Side`, staging
+`Label` is enough; you do not need to stage `Side` separately. Cyclic ADT families are still
+rejected.
 
 `Library` also exposes its staged `raw_declarations`, `structured_decls`, and `exports` vectors
 directly. That is useful if you want to inspect, transform, or assemble a library in multiple
@@ -765,9 +767,9 @@ not need to manually register dependencies in topological order. Cyclic ADT fami
 supported by this registration path.
 
 If a field uses a Rust type that participates in Rex value conversion but is not itself a Rex ADT
-(for example a leaf type with manual `RexType` / `IntoPointer` / `FromPointer` impls), mark that
-field with `#[rex(type_only)]`. That keeps the Rex type mapping but skips ADT-family auto-registration
-for that field.
+(for example a leaf type with manual `RexType` / `IntoPointer` / `FromPointer` impls), no extra
+field annotation is required. Such leaf types inherit the default no-op family collection from
+`RexType`, so derived ADTs can contain them without trying to register them as ADTs.
 
 ```rust
 use rexlang::{Engine, FromPointer, IntoPointer, Pointer, Rex, RexType, Type};
@@ -794,7 +796,7 @@ impl FromPointer for AtomRef {
 }
 
 #[derive(Rex, Debug, PartialEq)]
-struct Fragment(#[rex(type_only)] Vec<AtomRef>);
+struct Fragment(Vec<AtomRef>);
 
 let mut engine = Engine::with_prelude(())?;
 Fragment::inject_rex(&mut engine)?;
@@ -849,8 +851,8 @@ If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls,
 `RexAdt` and provide `rex_adt_decl()`. Then `RexAdt::inject_rex(...)` gives the same
 registration workflow as derived types.
 
-If the manual Rust type depends on other ADTs, also implement `rex_adt_family()` and return the
-other required `AdtDecl`s before `Self` so the family stays acyclic and complete.
+If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(...)` and add its
+`AdtDecl` there. Leaf types can inherit the default no-op implementation.
 
 ```rust
 use rexlang::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, TypeVarSupply, sym};
@@ -860,6 +862,11 @@ struct PrimitiveEither;
 impl RexType for PrimitiveEither {
     fn rex_type() -> Type {
         Type::con("PrimitiveEither", 0)
+    }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+        out.push(<Self as RexAdt>::rex_adt_decl()?);
+        Ok(())
     }
 }
 

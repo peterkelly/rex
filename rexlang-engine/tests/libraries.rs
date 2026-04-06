@@ -58,6 +58,11 @@ impl RexType for LocalRunSpec {
     fn rex_type() -> Type {
         Type::con("RunSpec", 0)
     }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+        out.push(<Self as RexAdt>::rex_adt_decl()?);
+        Ok(())
+    }
 }
 
 impl RexAdt for LocalRunSpec {

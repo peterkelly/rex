@@ -104,7 +104,7 @@ impl FromPointer for AtomRef {
 }
 
 #[derive(Rex, Debug, PartialEq)]
-struct Fragment(#[rex(type_only)] Vec<AtomRef>);
+struct Fragment(Vec<AtomRef>);
 
 #[derive(Debug, PartialEq, Clone)]
 struct Xyzf32([f32; 3]);
@@ -130,9 +130,7 @@ impl FromPointer for Xyzf32 {
 
 #[derive(Rex, Debug, PartialEq)]
 struct BoundingBox {
-    #[rex(type_only)]
     min: Xyzf32,
-    #[rex(type_only)]
     max: Xyzf32,
 }
 
@@ -634,7 +632,7 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
 }
 
 #[tokio::test]
-async fn derive_type_only_field_does_not_require_rex_adt_dependency() {
+async fn derive_leaf_rex_type_field_does_not_require_rex_adt_dependency() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Fragment::inject_rex(&mut engine).unwrap();
 
@@ -657,7 +655,7 @@ async fn derive_type_only_field_does_not_require_rex_adt_dependency() {
 }
 
 #[tokio::test]
-async fn derive_type_only_record_fields_support_manual_leaf_types() {
+async fn derive_leaf_rex_type_record_fields_support_manual_leaf_types() {
     let mut engine = Engine::with_prelude(()).unwrap();
     BoundingBox::inject_rex(&mut engine).unwrap();
 

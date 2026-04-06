@@ -6,7 +6,7 @@ use crate::EvaluatorRef;
 use crate::engine::{
     AsyncHandler, Export, Handler, NativeFuture, adt_shape, adt_shape_eq, order_adt_family,
 };
-use crate::{Engine, EngineError, Pointer, RexAdt};
+use crate::{Engine, EngineError, Pointer, RexType};
 
 /// A staged host library that you build up in Rust and later inject into an [`Engine`].
 ///
@@ -236,16 +236,16 @@ where
 
     /// Derive a Rex ADT declaration from a Rust type and append it to this library.
     ///
-    /// This is the most ergonomic way to expose a Rust enum or struct that implements [`RexAdt`]
+    /// This is the most ergonomic way to expose a Rust enum or struct that implements [`RexType`]
     /// as a library-local structured Rex type declaration.
     ///
-    /// Unlike [`RexAdt::inject_rex`], this stages the declaration inside the library instead of
+    /// Unlike the direct engine registration helpers, this stages the declaration inside the library instead of
     /// injecting it straight into the engine root environment.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rexlang_engine::{Engine, Library, RexAdt};
+    /// use rexlang_engine::{Engine, Library};
     ///
     /// #[derive(rexlang::Rex)]
     /// struct Label {
@@ -258,9 +258,11 @@ where
     /// ```
     pub fn inject_rex_adt<T>(&mut self, engine: &mut Engine<State>) -> Result<(), EngineError>
     where
-        T: RexAdt,
+        T: RexType,
     {
-        let family = order_adt_family(T::rex_adt_family()?)?;
+        let mut family = Vec::new();
+        T::collect_rex_family(&mut family)?;
+        let family = order_adt_family(family)?;
         for adt in family {
             let already_staged = self.structured_decls.iter().find_map(|decl| match decl {
                 Decl::Type(type_decl) if type_decl.name == adt.name => Some(type_decl),

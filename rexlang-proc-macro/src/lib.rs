@@ -54,6 +54,7 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     let rex_type_params = type_param_idents.iter().map(|ident| {
         quote! { <#ident as ::rexlang::RexType>::rex_type() }
     });
+    let rex_type_collect_family = adt_family_fn(ast, &type_name, &type_param_idents)?;
     let rex_type_impl = quote! {
         impl #rex_type_impl_generics ::rexlang::RexType for #rust_ident #rex_type_ty_generics #rex_type_where_clause {
             fn rex_type() -> ::rexlang::Type {
@@ -61,10 +62,15 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
                 #( ty = ::rexlang::Type::app(ty, #rex_type_params); )*
                 ty
             }
+
+            fn collect_rex_family(
+                out: &mut ::std::vec::Vec<::rexlang::AdtDecl>,
+            ) -> Result<(), ::rexlang::EngineError> {
+                #rex_type_collect_family
+            }
         }
     };
     let adt_decl_fn = adt_decl_fn(ast, &type_name, &type_param_idents)?;
-    let adt_family_fn = adt_family_fn(ast, &type_name, &type_param_idents)?;
     let mut rex_adt_generics = ast.generics.clone();
     add_bound_to_type_params(&mut rex_adt_generics, parse_quote!(::rexlang::RexType));
     let (rex_adt_impl_generics, rex_adt_ty_generics, rex_adt_where_clause) =
@@ -73,10 +79,6 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
         impl #rex_adt_impl_generics ::rexlang::RexAdt for #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
             fn rex_adt_decl() -> Result<::rexlang::AdtDecl, ::rexlang::EngineError> {
                 #adt_decl_fn
-            }
-
-            fn rex_adt_family() -> Result<::std::vec::Vec<::rexlang::AdtDecl>, ::rexlang::EngineError> {
-                #adt_family_fn
             }
         }
     };
@@ -178,28 +180,6 @@ fn serde_rename_from_attrs(attrs: &[Attribute]) -> Result<Option<String>, Error>
         }
     }
     Ok(None)
-}
-
-fn rex_type_only_from_attrs(attrs: &[Attribute]) -> Result<bool, Error> {
-    for attr in attrs {
-        if !attr.path().is_ident("rex") {
-            continue;
-        }
-        let mut type_only = false;
-        attr.parse_nested_meta(|meta| {
-            if meta.path.is_ident("name") {
-                let value = meta.value()?;
-                let _lit: LitStr = value.parse()?;
-            } else if meta.path.is_ident("type_only") {
-                type_only = true;
-            }
-            Ok(())
-        })?;
-        if type_only {
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 fn adt_decl_fn(
@@ -359,12 +339,11 @@ fn adt_family_fn(
 ) -> Result<TokenStream2, Error> {
     let deps = collect_dependency_exprs(ast, type_name, type_params)?;
     Ok(quote! {{
-        let mut family = ::std::vec::Vec::new();
         #(
-            family.extend(#deps);
+            #deps
         )*
-        family.push(<Self as ::rexlang::RexAdt>::rex_adt_decl()?);
-        Ok(family)
+        out.push(<Self as ::rexlang::RexAdt>::rex_adt_decl()?);
+        Ok(())
     }})
 }
 
@@ -378,9 +357,6 @@ fn collect_dependency_exprs(
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => {
                 for field in &fields.named {
-                    if rex_type_only_from_attrs(&field.attrs)? {
-                        continue;
-                    }
                     collect_dependency_exprs_from_type(
                         &field.ty,
                         type_name,
@@ -391,9 +367,6 @@ fn collect_dependency_exprs(
             }
             Fields::Unnamed(fields) => {
                 for field in &fields.unnamed {
-                    if rex_type_only_from_attrs(&field.attrs)? {
-                        continue;
-                    }
                     collect_dependency_exprs_from_type(
                         &field.ty,
                         type_name,
@@ -409,9 +382,6 @@ fn collect_dependency_exprs(
                 match &variant.fields {
                     Fields::Named(fields) => {
                         for field in &fields.named {
-                            if rex_type_only_from_attrs(&field.attrs)? {
-                                continue;
-                            }
                             collect_dependency_exprs_from_type(
                                 &field.ty,
                                 type_name,
@@ -422,9 +392,6 @@ fn collect_dependency_exprs(
                     }
                     Fields::Unnamed(fields) => {
                         for field in &fields.unnamed {
-                            if rex_type_only_from_attrs(&field.attrs)? {
-                                continue;
-                            }
                             collect_dependency_exprs_from_type(
                                 &field.ty,
                                 type_name,
@@ -500,7 +467,9 @@ fn collect_dependency_exprs_from_type(
                     collect_dependency_exprs_from_type(err, self_type_name, type_params, deps)
                 }
                 _ => {
-                    deps.push(quote! { <#type_path as ::rexlang::RexAdt>::rex_adt_family()? });
+                    deps.push(
+                        quote! { <#type_path as ::rexlang::RexType>::collect_rex_family(out)?; },
+                    );
                     Ok(())
                 }
             }

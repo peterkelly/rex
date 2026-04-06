@@ -38,6 +38,11 @@ impl RexType for ManualRecord {
     fn rex_type() -> Type {
         Type::con("ManualRecord", 0)
     }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+        out.push(<Self as RexAdt>::rex_adt_decl()?);
+        Ok(())
+    }
 }
 
 impl IntoPointer for ManualRecord {
@@ -83,6 +88,11 @@ impl FromPointer for ManualRecord {
 impl RexType for ManualEnum {
     fn rex_type() -> Type {
         Type::con("ManualEnum", 0)
+    }
+
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+        out.push(<Self as RexAdt>::rex_adt_decl()?);
+        Ok(())
     }
 }
 
