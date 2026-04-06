@@ -595,6 +595,19 @@ pub enum Decl {
     Instance(InstanceDecl),
 }
 
+impl std::fmt::Display for Decl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        match self {
+            Decl::Type(d) => write!(f, "{}", d.name),
+            Decl::Fn(d) => write!(f, "{}", d.name),
+            Decl::DeclareFn(d) => write!(f, "{}", d.name),
+            Decl::Import(d) => write!(f, "{}", d.alias),
+            Decl::Class(d) => write!(f, "{}", d.name),
+            Decl::Instance(d) => write!(f, "{} {}", d.class, d.head),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct Program {
     pub decls: Vec<Decl>,
