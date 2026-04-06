@@ -120,19 +120,6 @@ fn subprocess_registry() -> &'static SubprocessRegistry {
 }
 
 pub fn inject_cli_prelude_engine(engine: &mut Engine) -> Result<(), EngineError> {
-    engine.inject_tracing_log_function(&virtual_export_name("std.io", "debug"), |s| {
-        tracing::debug!("{s}")
-    })?;
-    engine.inject_tracing_log_function(&virtual_export_name("std.io", "info"), |s| {
-        tracing::info!("{s}")
-    })?;
-    engine.inject_tracing_log_function(&virtual_export_name("std.io", "warn"), |s| {
-        tracing::warn!("{s}")
-    })?;
-    engine.inject_tracing_log_function(&virtual_export_name("std.io", "error"), |s| {
-        tracing::error!("{s}")
-    })?;
-
     inject_cli_io_natives(engine)?;
     inject_cli_process_natives(engine)?;
     Ok(())
@@ -143,6 +130,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let u8_ty = Type::builtin(BuiltinTypeId::U8);
     let array_u8 = array_type(u8_ty);
     let mut library = Library::new("std.io");
+    library.export_tracing_log_functions()?;
 
     let read_all_sym = sym("read_all");
     library.export_native_async(

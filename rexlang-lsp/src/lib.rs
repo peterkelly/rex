@@ -7512,7 +7512,9 @@ mod tests {
             .parse_program(&mut GasMeter::default())
             .expect("parse source");
         let mut engine = Engine::with_prelude(()).expect("build engine");
-        engine.inject_decls(&program.decls).expect("inject decls");
+        let mut library = rexlang_engine::Library::global();
+        library.add_decls(program.decls.clone());
+        engine.inject_library(library).expect("inject decls");
         let (ptr, ty) = rexlang_engine::Evaluator::new_with_compiler(
             rexlang_engine::RuntimeEnv::new(engine.clone()),
             rexlang_engine::Compiler::new(engine.clone()),

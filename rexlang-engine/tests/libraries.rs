@@ -650,7 +650,7 @@ async fn module_injected_from_rust_exposes_library_local_embedder_types() {
     engine.add_default_resolvers();
 
     let mut library = Library::new("host.delay");
-    library.inject_rex_adt::<LocalRunSpec>(&mut engine).unwrap();
+    library.add_rex_adt::<LocalRunSpec>().unwrap();
     library
         .export_native(
             "make_run_spec",

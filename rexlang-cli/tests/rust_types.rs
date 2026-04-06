@@ -1,8 +1,17 @@
 use rexlang::{
-    BuiltinTypeId, Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Parser, Pointer,
-    Rex, RexType, Token, Type, assert_pointer_eq, sym,
+    BuiltinTypeId, Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Library, Parser,
+    Pointer, Rex, RexType, Token, Type, assert_pointer_eq, sym,
 };
 use serde_json::json;
+
+fn inject_globals(
+    engine: &mut Engine<()>,
+    build: impl FnOnce(&mut Library<()>) -> Result<(), EngineError>,
+) {
+    let mut library = Library::global();
+    build(&mut library).unwrap();
+    engine.inject_library(library).unwrap();
+}
 
 /// Helper to evaluate a Rex expression and return the result pointer
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
@@ -35,7 +44,9 @@ async fn vec_from_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("accept_vec", accept_vec).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_vec", accept_vec)
+    });
 
     let (result, heap, ty) =
         eval_expr(engine, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
@@ -55,7 +66,9 @@ async fn vec_from_value_accepts_list_literal_without_conversion() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("accept_vec", accept_vec).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_vec", accept_vec)
+    });
 
     let (result, heap, ty) = eval_expr(engine, r#"accept_vec [1, 2, 3]"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
@@ -74,7 +87,9 @@ async fn vec_to_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_vec", return_vec).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_vec", return_vec)
+    });
 
     let (result, heap, ty) = eval_expr(engine, r#"return_vec "hello""#).await;
     assert_eq!(ty, Type::array(Type::builtin(BuiltinTypeId::I32)));
@@ -99,7 +114,9 @@ async fn vec_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_vec", return_vec).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_vec", return_vec)
+    });
 
     let ty = infer_type(&mut engine, r#"return_vec "hello""#);
     assert_eq!(
@@ -118,7 +135,9 @@ async fn to_list_allows_pattern_matching_host_arrays() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_vec", return_vec).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_vec", return_vec)
+    });
 
     let (result, heap, ty) = eval_expr(
         engine,
@@ -165,7 +184,9 @@ async fn option_from_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("accept_opt", accept_opt).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_opt", accept_opt)
+    });
     let (result, heap, ty) = eval_expr(engine, r#"(accept_opt (Some 4), accept_opt None)"#).await;
     assert_eq!(
         ty,
@@ -197,7 +218,9 @@ async fn option_into_value() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_opt", return_opt).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_opt", return_opt)
+    });
     let (result, heap, ty) = eval_expr(engine, r#"(return_opt "hello", return_opt "")"#).await;
     assert_eq!(
         ty,
@@ -229,7 +252,9 @@ async fn option_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_opt", return_opt).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_opt", return_opt)
+    });
 
     let ty = infer_type(&mut engine, r#"return_opt "hello""#);
     assert_eq!(
@@ -285,7 +310,9 @@ async fn result_from_value_primitives() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("accept_result", accept_result).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_result", accept_result)
+    });
     let (result, heap, ty) = eval_expr(
         engine,
         r#"(accept_result (Ok 42), accept_result (Err "failed"))"#,
@@ -318,7 +345,9 @@ async fn result_from_value_different_primitives() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("accept_result", accept_result).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_result", accept_result)
+    });
     let (result, heap, ty) = eval_expr(
         engine,
         r#"(accept_result (Ok 3.14), accept_result (Err 404))"#,
@@ -355,7 +384,9 @@ async fn result_into_value_primitives() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_result", return_result).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_result", return_result)
+    });
     let (result, heap, ty) =
         eval_expr(engine, r#"(return_result "hello", return_result "")"#).await;
     assert_eq!(
@@ -398,7 +429,9 @@ async fn result_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_result", return_result).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_result", return_result)
+    });
 
     let ty = infer_type(&mut engine, r#"return_result "hello""#);
     assert_eq!(
@@ -437,7 +470,9 @@ async fn result_from_value_custom_types() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Point::inject_rex(&mut engine).unwrap();
     ErrorInfo::inject_rex(&mut engine).unwrap();
-    engine.export("accept_result", accept_result).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_result", accept_result)
+    });
 
     let (result, heap, ty) = eval_expr(
         engine,
@@ -483,7 +518,9 @@ async fn result_into_value_custom_types() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Point::inject_rex(&mut engine).unwrap();
     ErrorInfo::inject_rex(&mut engine).unwrap();
-    engine.export("return_result", return_result).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_result", return_result)
+    });
 
     let (result, heap, ty) =
         eval_expr(engine, r#"(return_result true, return_result false)"#).await;
@@ -525,7 +562,9 @@ async fn serde_json_value_into_pointer() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_json", return_json).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_json", return_json)
+    });
 
     let (result, heap, ty) = eval_expr(engine, r#"return_json "test_key""#).await;
     assert_eq!(ty, Type::con("serde_json::Value", 0));
@@ -551,10 +590,10 @@ async fn serde_json_value_from_pointer() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("accept_json", accept_json).unwrap();
-    engine
-        .export_value("test_json", json!({"key": "manual_key", "count": 99}))
-        .unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_json", accept_json)?;
+        library.export_value("test_json", json!({"key": "manual_key", "count": 99}))
+    });
 
     let (result, heap, ty) = eval_expr(engine, r#"accept_json test_json"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
@@ -574,7 +613,9 @@ async fn serde_json_value_roundtrip() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("roundtrip", roundtrip).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("roundtrip", roundtrip)
+    });
 
     let original = json!({
         "string": "hello",
@@ -585,7 +626,9 @@ async fn serde_json_value_roundtrip() {
         "array": [1, 2, 3],
         "object": {"nested": "value"}
     });
-    engine.export_value("test_json", original.clone()).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export_value("test_json", original.clone())
+    });
 
     let (result, heap, ty) = eval_expr(engine, r#"roundtrip test_json"#).await;
     assert_eq!(ty, Type::con("serde_json::Value", 0));
@@ -601,7 +644,9 @@ async fn serde_json_value_rex_type() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("return_json", return_json).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("return_json", return_json)
+    });
 
     let ty = infer_type(&mut engine, r#"return_json "test""#);
     assert_eq!(ty, Type::con("serde_json::Value", 0));
@@ -626,14 +671,14 @@ async fn serde_json_value_primitives() {
     }
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine
-        .export("accept_primitives", accept_primitives)
-        .unwrap();
-
-    engine.export_value("null_val", json!(null)).unwrap();
-    engine.export_value("bool_val", json!(true)).unwrap();
-    engine.export_value("num_val", json!(42)).unwrap();
-    engine.export_value("str_val", json!("hello")).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("accept_primitives", accept_primitives)?;
+        library.export_value("null_val", json!(null))?;
+        library.export_value("bool_val", json!(true))?;
+        library.export_value("num_val", json!(42))?;
+        library.export_value("str_val", json!("hello"))?;
+        Ok(())
+    });
 
     let (result, heap, ty) = eval_expr(
         engine,

@@ -36,6 +36,15 @@ fn unlimited_gas() -> GasMeter {
     GasMeter::default()
 }
 
+fn inject_globals(
+    engine: &mut Engine,
+    build: impl FnOnce(&mut Library<()>) -> Result<(), EngineError>,
+) {
+    let mut library = Library::<()>::global();
+    build(&mut library).unwrap();
+    engine.inject_library(library).unwrap();
+}
+
 #[test]
 fn registry_markdown_lists_core_sections() {
     let engine = Engine::with_prelude(()).unwrap();
@@ -112,7 +121,8 @@ fn inject_adt_family_rejects_cycles() {
     let mut b = engine.adt_decl("B", &[]);
     b.add_variant(sym("B"), vec![Type::con("A", 0)]);
 
-    let err = engine.inject_adt_family(vec![a, b]).unwrap_err();
+    let mut library = Library::<()>::global();
+    let err = library.add_adt_family(vec![a, b]).unwrap_err();
     assert!(matches!(err, EngineError::Custom(_)));
     assert!(err.to_string().contains("cyclic ADT auto-registration"));
 }
@@ -252,8 +262,8 @@ async fn eval_can_be_cancelled_while_waiting_on_async_native() {
 
     let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    engine
-        .export_native_async_cancellable(
+    inject_globals(&mut engine, |library| {
+        library.export_native_async_cancellable(
             "stall",
             scheme,
             0,
@@ -267,7 +277,7 @@ async fn eval_can_be_cancelled_while_waiting_on_async_native() {
                 .boxed()
             },
         )
-        .unwrap();
+    });
 
     let token = engine.cancellation_token();
     let canceller = std::thread::spawn(move || {
@@ -297,15 +307,15 @@ async fn eval_can_be_cancelled_while_waiting_on_non_cancellable_async_native() {
     let mut engine = Engine::with_prelude(()).unwrap();
 
     let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-    engine
-        .export_async("stall", move |_state: &()| {
+    inject_globals(&mut engine, |library| {
+        library.export_async("stall", move |_state: &()| {
             let started_tx = started_tx.clone();
             async move {
                 let _ = started_tx.send(());
                 futures::future::pending::<Result<i32, EngineError>>().await
             }
         })
-        .unwrap();
+    });
 
     let token = engine.cancellation_token();
     let canceller = std::thread::spawn(move || {
@@ -334,11 +344,11 @@ async fn native_per_impl_gas_cost_is_charged() {
     let expr = parse("foo");
     let mut engine = Engine::with_prelude(()).unwrap();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    engine
-        .export_native_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
+    inject_globals(&mut engine, |library| {
+        library.export_native_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
             engine.heap.alloc_i32(1)
         })
-        .unwrap();
+    });
 
     let mut gas = GasMeter::new(
         Some(10),
@@ -366,9 +376,9 @@ async fn native_per_impl_gas_cost_is_charged() {
 async fn export_value_typed_registers_global_value() {
     let expr = parse("answer");
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine
-        .export_value_typed("answer", Type::builtin(BuiltinTypeId::I32), Value::I32(42))
-        .unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export_value_typed("answer", Type::builtin(BuiltinTypeId::I32), Value::I32(42))
+    });
 
     let mut gas = unlimited_gas();
     let (value, ty) = rexlang_engine::Evaluator::new_with_compiler(
@@ -387,11 +397,11 @@ async fn async_native_per_impl_gas_cost_is_charged() {
     let expr = parse("foo");
     let mut engine = Engine::with_prelude(()).unwrap();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    engine
-        .export_native_async_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
+    inject_globals(&mut engine, |library| {
+        library.export_native_async_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
             async move { engine.heap.alloc_i32(1) }.boxed()
         })
-        .unwrap();
+    });
 
     let mut gas = GasMeter::new(
         Some(10),
@@ -420,8 +430,8 @@ async fn cancellable_async_native_per_impl_gas_cost_is_charged() {
     let expr = parse("foo");
     let mut engine = Engine::with_prelude(()).unwrap();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    engine
-        .export_native_async_cancellable_with_gas_cost(
+    inject_globals(&mut engine, |library| {
+        library.export_native_async_cancellable_with_gas_cost(
             "foo",
             scheme,
             0,
@@ -430,7 +440,7 @@ async fn cancellable_async_native_per_impl_gas_cost_is_charged() {
                 async move { engine.heap.alloc_i32(1) }.boxed()
             },
         )
-        .unwrap();
+    });
 
     let mut gas = GasMeter::new(
         Some(10),
@@ -466,7 +476,9 @@ async fn record_update_requires_known_variant_for_sum_types() {
         "#,
     );
     let mut engine = engine_with_arith();
-    engine.inject_decls(&program.decls).unwrap();
+    let mut library = Library::global();
+    library.add_decls(program.decls.clone());
+    engine.inject_library(library).unwrap();
     let mut gas = unlimited_gas();
     match rexlang_engine::Evaluator::new_with_compiler(
         rexlang_engine::RuntimeEnv::new(engine.clone()),

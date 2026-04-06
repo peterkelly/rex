@@ -1,4 +1,4 @@
-use rexlang::{BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, Value};
+use rexlang::{BuiltinTypeId, Engine, GasMeter, Library, Parser, Token, Type, Value};
 
 #[tokio::test]
 async fn record_update_end_to_end() {
@@ -21,7 +21,9 @@ async fn record_update_end_to_end() {
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_decls(&program.decls).unwrap();
+    let mut library = Library::global();
+    library.add_decls(program.decls.clone());
+    engine.inject_library(library).unwrap();
     let mut gas = GasMeter::default();
     let (value_ptr, ty) = rexlang::Evaluator::new_with_compiler(
         rexlang::RuntimeEnv::new(engine.clone()),

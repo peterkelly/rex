@@ -1,6 +1,6 @@
 use futures::FutureExt;
-use rexlang_ast::expr::{sym, sym_eq};
-use rexlang_engine::{Engine, EngineError, EvaluatorRef, Value, assert_pointer_eq};
+use rexlang_ast::expr::{Decl, sym, sym_eq};
+use rexlang_engine::{Engine, EngineError, EvaluatorRef, Library, Value, assert_pointer_eq};
 use rexlang_lexer::Token;
 use rexlang_parser::Parser;
 use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeError};
@@ -30,6 +30,34 @@ fn engine_with_arith() -> Engine {
 
 fn unlimited_gas() -> GasMeter {
     GasMeter::default()
+}
+
+fn inject_globals(
+    engine: &mut Engine,
+    build: impl FnOnce(&mut Library<()>) -> Result<(), EngineError>,
+) {
+    let mut library = Library::global();
+    build(&mut library).unwrap();
+    engine.inject_library(library).unwrap();
+}
+
+fn inject_global_decls(engine: &mut Engine, decls: &[Decl]) {
+    let mut library = Library::global();
+    library.add_decls(decls.iter().cloned());
+    engine.inject_library(library).unwrap();
+}
+
+fn inject_global_type_decls(engine: &mut Engine, decls: &[Decl]) {
+    inject_global_decls(
+        engine,
+        &decls
+            .iter()
+            .filter_map(|decl| match decl {
+                Decl::Type(ty) => Some(Decl::Type(ty.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+    );
 }
 
 async fn eval_expr(
@@ -127,9 +155,9 @@ async fn eval_let_lambda() {
 async fn eval_native_injection() {
     let expr = parse("inc 1");
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine
-        .export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
-        .unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
+    });
 
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
@@ -153,46 +181,35 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export("f0", |_: &()| Ok(0i32)).unwrap();
-    engine.export("f1", |_: &(), a: i32| Ok(a)).unwrap();
-    engine
-        .export("f2", |_: &(), a: i32, b: i32| Ok(a + b))
-        .unwrap();
-    engine
-        .export("f3", |_: &(), a: i32, b: i32, c: i32| Ok(a + b + c))
-        .unwrap();
-    engine
-        .export("f4", |_: &(), a: i32, b: i32, c: i32, d: i32| {
+    inject_globals(&mut engine, |library| {
+        library.export("f0", |_: &()| Ok(0i32))?;
+        library.export("f1", |_: &(), a: i32| Ok(a))?;
+        library.export("f2", |_: &(), a: i32, b: i32| Ok(a + b))?;
+        library.export("f3", |_: &(), a: i32, b: i32, c: i32| Ok(a + b + c))?;
+        library.export("f4", |_: &(), a: i32, b: i32, c: i32, d: i32| {
             Ok(a + b + c + d)
-        })
-        .unwrap();
-    engine
-        .export("f5", |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| {
+        })?;
+        library.export("f5", |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| {
             Ok(a + b + c + d + e)
-        })
-        .unwrap();
-    engine
-        .export(
+        })?;
+        library.export(
             "f6",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| Ok(a + b + c + d + e + g),
-        )
-        .unwrap();
-    engine
-        .export(
+        )?;
+        library.export(
             "f7",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| {
                 Ok(a + b + c + d + e + g + h)
             },
-        )
-        .unwrap();
-    engine
-        .export(
+        )?;
+        library.export(
             "f8",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| {
                 Ok(a + b + c + d + e + g + h + i)
             },
-        )
-        .unwrap();
+        )?;
+        Ok(())
+    });
 
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
@@ -216,9 +233,9 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
 async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     let mut gas = unlimited_gas();
     let mut compile_engine = Engine::with_prelude(()).unwrap();
-    compile_engine
-        .export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
-        .unwrap();
+    inject_globals(&mut compile_engine, |library| {
+        library.export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
+    });
 
     let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
@@ -279,17 +296,17 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
 async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
     let mut gas = unlimited_gas();
     let mut compile_engine = Engine::with_prelude(()).unwrap();
-    compile_engine
-        .export("inc", |_: &(), x: i32| Ok(x + 1))
-        .unwrap();
+    inject_globals(&mut compile_engine, |library| {
+        library.export("inc", |_: &(), x: i32| Ok(x + 1))
+    });
 
     let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
 
     let mut runtime_engine = Engine::with_prelude(()).unwrap();
-    runtime_engine
-        .export("inc", |_: &(), value: String| Ok(value))
-        .unwrap();
+    inject_globals(&mut runtime_engine, |library| {
+        library.export("inc", |_: &(), value: String| Ok(value))
+    });
     let runtime = rexlang_engine::RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.incompatible_natives, vec![sym("inc")]);
@@ -341,7 +358,9 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
 async fn export_value_is_runtime_linked_like_other_host_exports() {
     let mut gas = unlimited_gas();
     let mut compile_engine = Engine::with_prelude(()).unwrap();
-    compile_engine.export_value("answer", 41i32).unwrap();
+    inject_globals(&mut compile_engine, |library| {
+        library.export_value("answer", 41i32)
+    });
 
     let mut compiler = rexlang_engine::Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("answer + 1", &mut gas).unwrap();
@@ -427,55 +446,40 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine
-        .export_async("af0", |_: &()| async { Ok(0i32) })
-        .unwrap();
-    engine
-        .export_async("af1", |_: &(), a: i32| async move { Ok(a) })
-        .unwrap();
-    engine
-        .export_async("af2", |_: &(), a: i32, b: i32| async move { Ok(a + b) })
-        .unwrap();
-    engine
-        .export_async("af3", |_: &(), a: i32, b: i32, c: i32| async move {
+    inject_globals(&mut engine, |library| {
+        library.export_async("af0", |_: &()| async { Ok(0i32) })?;
+        library.export_async("af1", |_: &(), a: i32| async move { Ok(a) })?;
+        library.export_async("af2", |_: &(), a: i32, b: i32| async move { Ok(a + b) })?;
+        library.export_async("af3", |_: &(), a: i32, b: i32, c: i32| async move {
             Ok(a + b + c)
-        })
-        .unwrap();
-    engine
-        .export_async("af4", |_: &(), a: i32, b: i32, c: i32, d: i32| async move {
+        })?;
+        library.export_async("af4", |_: &(), a: i32, b: i32, c: i32, d: i32| async move {
             Ok(a + b + c + d)
-        })
-        .unwrap();
-    engine
-        .export_async(
+        })?;
+        library.export_async(
             "af5",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32| async move { Ok(a + b + c + d + e) },
-        )
-        .unwrap();
-    engine
-        .export_async(
+        )?;
+        library.export_async(
             "af6",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32| async move {
                 Ok(a + b + c + d + e + g)
             },
-        )
-        .unwrap();
-    engine
-        .export_async(
+        )?;
+        library.export_async(
             "af7",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32| async move {
                 Ok(a + b + c + d + e + g + h)
             },
-        )
-        .unwrap();
-    engine
-        .export_async(
+        )?;
+        library.export_async(
             "af8",
             |_: &(), a: i32, b: i32, c: i32, d: i32, e: i32, g: i32, h: i32, i: i32| async move {
                 Ok(a + b + c + d + e + g + h + i)
             },
-        )
-        .unwrap();
+        )?;
+        Ok(())
+    });
 
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
@@ -616,7 +620,7 @@ async fn eval_record_update_single_variant_adt() {
         "#,
     );
     let mut engine = engine_with_arith();
-    engine.inject_decls(&program.decls).unwrap();
+    inject_global_decls(&mut engine, &program.decls);
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(6).unwrap());
 }
@@ -635,7 +639,7 @@ async fn eval_record_update_refined_by_match() {
         "#,
     );
     let mut engine = engine_with_arith();
-    engine.inject_decls(&program.decls).unwrap();
+    inject_global_decls(&mut engine, &program.decls);
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
 }
@@ -651,7 +655,7 @@ async fn eval_record_update_plain_record_type() {
         "#,
     );
     let mut engine = engine_with_arith();
-    engine.inject_decls(&program.decls).unwrap();
+    inject_global_decls(&mut engine, &program.decls);
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(9).unwrap());
 }
@@ -695,11 +699,12 @@ async fn eval_typed_hole_reports_type_error_not_runtime_error() {
 #[tokio::test]
 async fn eval_sync_native_injection() {
     let mut engine = Engine::new(());
-    engine.export("zero", |_: &()| Ok(0u32)).unwrap();
-    engine
-        .export("(+)", |_: &(), x: u32, y: u32| Ok(x + y))
-        .unwrap();
-    engine.export_value("one", 1u32).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("zero", |_: &()| Ok(0u32))?;
+        library.export("(+)", |_: &(), x: u32, y: u32| Ok(x + y))?;
+        library.export_value("one", 1u32)?;
+        Ok(())
+    });
 
     let expr = parse("one + one");
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
@@ -713,11 +718,11 @@ async fn eval_sync_native_injection() {
 #[tokio::test]
 async fn eval_export_err_is_evaluation_failure() {
     let mut engine = Engine::new(());
-    engine
-        .export("fail", |_: &()| {
+    inject_globals(&mut engine, |library| {
+        library.export("fail", |_: &()| {
             Err::<i32, _>(EngineError::Custom("boom".into()))
         })
-        .unwrap();
+    });
 
     let expr = parse("fail");
     match eval_expr(&mut engine, expr.as_ref()).await {
@@ -729,7 +734,7 @@ async fn eval_export_err_is_evaluation_failure() {
 
 #[test]
 fn engine_export_native_rejects_invalid_arity_scheme_pair() {
-    let mut engine = Engine::new(());
+    let mut library = Library::global();
     let unary_scheme = Scheme::new(
         vec![],
         vec![],
@@ -739,7 +744,7 @@ fn engine_export_native_rejects_invalid_arity_scheme_pair() {
         ),
     );
 
-    let err = engine
+    let err = library
         .export_native(
             "bad",
             unary_scheme,
@@ -758,7 +763,7 @@ fn engine_export_native_rejects_invalid_arity_scheme_pair() {
 
 #[test]
 fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
-    let mut engine = Engine::new(());
+    let mut library = Library::global();
     let unary_scheme = Scheme::new(
         vec![],
         vec![],
@@ -768,7 +773,7 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
         ),
     );
 
-    let err = engine
+    let err = library
         .export_native_async(
             "bad_async",
             unary_scheme,
@@ -1052,11 +1057,7 @@ async fn eval_user_adt_declaration() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    for decl in &program.decls {
-        if let rexlang_ast::expr::Decl::Type(ty) = decl {
-            engine.inject_type_decl(ty).unwrap();
-        }
-    }
+    inject_global_type_decls(&mut engine, &program.decls);
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
 }
@@ -1070,11 +1071,7 @@ async fn eval_fn_decl_simple() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    for decl in &program.decls {
-        if let rexlang_ast::expr::Decl::Type(ty) = decl {
-            engine.inject_type_decl(ty).unwrap();
-        }
-    }
+    inject_global_type_decls(&mut engine, &program.decls);
     let expr = program.expr_with_fns();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
@@ -1089,11 +1086,7 @@ async fn eval_fn_decl_with_where_constraints() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    for decl in &program.decls {
-        if let rexlang_ast::expr::Decl::Type(ty) = decl {
-            engine.inject_type_decl(ty).unwrap();
-        }
-    }
+    inject_global_type_decls(&mut engine, &program.decls);
     let expr = program.expr_with_fns();
     let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
@@ -1111,11 +1104,7 @@ async fn eval_adt_record_projection_single_variant() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    for decl in &program.decls {
-        if let rexlang_ast::expr::Decl::Type(ty) = decl {
-            engine.inject_type_decl(ty).unwrap();
-        }
-    }
+    inject_global_type_decls(&mut engine, &program.decls);
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     let value = pval!(engine, value);
     match value {
@@ -1149,11 +1138,7 @@ async fn eval_adt_record_projection_match_arm() {
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
-    for decl in &program.decls {
-        if let rexlang_ast::expr::Decl::Type(ty) = decl {
-            engine.inject_type_decl(ty).unwrap();
-        }
-    }
+    inject_global_type_decls(&mut engine, &program.decls);
     let value = eval_expr(&mut engine, program.expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
 }
@@ -1435,7 +1420,9 @@ async fn eval_result_filter_pipeline() {
 #[tokio::test]
 async fn eval_array_combinators() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.export_value("arr", vec![1i32, 2i32, 3i32]).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export_value("arr", vec![1i32, 2i32, 3i32])
+    });
     let expr = parse(
         r#"
         let

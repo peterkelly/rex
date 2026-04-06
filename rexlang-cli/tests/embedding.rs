@@ -32,15 +32,24 @@ fn render_label(label: Label) -> String {
     }
 }
 
+fn inject_globals<State: Clone + Send + Sync + 'static>(
+    engine: &mut Engine<State>,
+    build: impl FnOnce(&mut Library<State>) -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    let mut library = Library::global();
+    build(&mut library)?;
+    engine.inject_library(library)
+}
+
 #[tokio::test]
 async fn library_render_label_with_library_scoped_adts_left_and_right() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
     let mut library = Library::new("sample");
-    library.inject_rex_adt::<Side>(&mut engine).unwrap();
-    library.inject_rex_adt::<Correctness>(&mut engine).unwrap();
-    library.inject_rex_adt::<Label>(&mut engine).unwrap();
+    library.add_rex_adt::<Side>().unwrap();
+    library.add_rex_adt::<Correctness>().unwrap();
+    library.add_rex_adt::<Label>().unwrap();
     library
         .export("render_label", |_: &(), label: Label| {
             Ok::<String, EngineError>(render_label(label))
@@ -115,7 +124,7 @@ async fn library_inject_rex_adt_registers_acyclic_dependency_closure() {
     engine.add_default_resolvers();
 
     let mut library = Library::new("sample");
-    library.inject_rex_adt::<Label>(&mut engine).unwrap();
+    library.add_rex_adt::<Label>().unwrap();
     library
         .export("render_label", |_: &(), label: Label| {
             Ok::<String, EngineError>(render_label(label))
@@ -155,8 +164,8 @@ async fn match_ascribed_library_type_with_overlapping_constructor_is_ambiguous_r
     engine.add_default_resolvers();
 
     let mut library = Library::new("sample");
-    library.inject_rex_adt::<Side>(&mut engine).unwrap();
-    library.inject_rex_adt::<Correctness>(&mut engine).unwrap();
+    library.add_rex_adt::<Side>().unwrap();
+    library.add_rex_adt::<Correctness>().unwrap();
     engine.inject_library(library).unwrap();
 
     let mut gas = unlimited_gas();
@@ -349,14 +358,14 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    engine
-        .export("current_account_id", current_account_id)
-        .unwrap();
-    engine
-        .export("current_project_id", current_project_id)
-        .unwrap();
-    engine.export("is_admin", is_admin).unwrap();
-    engine.export("have_role", have_role).unwrap();
+    inject_globals(&mut engine, |library| {
+        library.export("current_account_id", current_account_id)?;
+        library.export("current_project_id", current_project_id)?;
+        library.export("is_admin", is_admin)?;
+        library.export("have_role", have_role)?;
+        Ok(())
+    })
+    .unwrap();
 
     let expr = parse(
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
@@ -565,11 +574,12 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    engine
-        .export_async("have_role_async", |state: &HostState, role: String| {
+    inject_globals(&mut engine, |library| {
+        library.export_async("have_role_async", |state: &HostState, role: String| {
             have_role_async(state.clone(), role)
         })
-        .unwrap();
+    })
+    .unwrap();
 
     let expr = parse("(have_role_async \"editor\", have_role_async \"admin\")");
     let mut gas = unlimited_gas();
@@ -610,14 +620,15 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
             Type::fun(Type::builtin(BuiltinTypeId::I32), Type::list(t)),
         ),
     );
-    engine
-        .export_native("repeat_value", scheme, 2, |engine, _, args| {
+    inject_globals(&mut engine, |library| {
+        library.export_native("repeat_value", scheme, 2, |engine, _, args| {
             let value = args[0];
             let len = engine.heap.pointer_as_i32(&args[1])?;
             let copies = (0..len.max(0)).map(|_| value).collect();
             list_from_pointers(&engine.heap, copies)
         })
-        .unwrap();
+    })
+    .unwrap();
 
     let expr = parse(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
     let mut gas = unlimited_gas();
@@ -673,11 +684,12 @@ async fn generic_export_can_swap_two_values_of_different_types() {
         vec![],
         Type::fun(p.clone(), Type::fun(q.clone(), Type::tuple(vec![q, p]))),
     );
-    engine
-        .export_native("swap_pair", scheme, 2, |engine, _, args| {
+    inject_globals(&mut engine, |library| {
+        library.export_native("swap_pair", scheme, 2, |engine, _, args| {
             engine.heap.alloc_tuple(vec![args[1], args[0]])
         })
-        .unwrap();
+    })
+    .unwrap();
 
     let expr = parse(r#"(swap_pair "left" 7, swap_pair true "right")"#);
     let mut gas = unlimited_gas();
@@ -725,38 +737,29 @@ async fn overloaded_exports_types_and_values() {
 
     EmbedRecord::inject_rex(&mut engine).unwrap();
 
-    engine
-        .export("over1", |_state: &(), x: i32| Ok(x + 1))
-        .unwrap();
-    engine
-        .export("over1", |_state: &(), x: bool| {
+    inject_globals(&mut engine, |library| {
+        library.export("over1", |_state: &(), x: i32| Ok(x + 1))?;
+        library.export("over1", |_state: &(), x: bool| {
             Ok(if x {
                 "bool:true".to_string()
             } else {
                 "bool:false".to_string()
             })
-        })
-        .unwrap();
-    engine
-        .export("over1", |_state: &(), rec: EmbedRecord| Ok(rec.n > 10))
-        .unwrap();
-
-    engine
-        .export("over3", |_state: &(), a: i32, b: i32, c: i32| Ok(a + b + c))
-        .unwrap();
-    engine
-        .export("over3", |_state: &(), a: String, b: String, c: String| {
+        })?;
+        library.export("over1", |_state: &(), rec: EmbedRecord| Ok(rec.n > 10))?;
+        library.export("over3", |_state: &(), a: i32, b: i32, c: i32| Ok(a + b + c))?;
+        library.export("over3", |_state: &(), a: String, b: String, c: String| {
             Ok(a.len() < b.len() + c.len())
-        })
-        .unwrap();
-    engine
-        .export(
+        })?;
+        library.export(
             "over3",
             |_state: &(), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| {
                 Ok(format!("records:{}:{}:{}", a.n, b.n, c.n))
             },
-        )
-        .unwrap();
+        )?;
+        Ok(())
+    })
+    .unwrap();
 
     let expr = r#"
     (
@@ -805,45 +808,36 @@ async fn overloaded_async_exports_types_and_values() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     EmbedRecord::inject_rex(&mut engine).unwrap();
 
-    engine
-        .export_async("a1", |_state: &(), x: i32| async move { Ok(x + 1) })
-        .unwrap();
-    engine
-        .export_async("a1", |_state: &(), x: bool| async move {
+    inject_globals(&mut engine, |library| {
+        library.export_async("a1", |_state: &(), x: i32| async move { Ok(x + 1) })?;
+        library.export_async("a1", |_state: &(), x: bool| async move {
             Ok(if x {
                 "bool:true".to_string()
             } else {
                 "bool:false".to_string()
             })
-        })
-        .unwrap();
-    engine
-        .export_async("a1", |_state: &(), rec: EmbedRecord| async move {
+        })?;
+        library.export_async("a1", |_state: &(), rec: EmbedRecord| async move {
             Ok(rec.n > 10)
-        })
-        .unwrap();
-
-    engine
-        .export_async("a3", |_state: &(), a: i32, b: i32, c: i32| async move {
+        })?;
+        library.export_async("a3", |_state: &(), a: i32, b: i32, c: i32| async move {
             Ok(a + b + c)
-        })
-        .unwrap();
-    engine
-        .export_async(
+        })?;
+        library.export_async(
             "a3",
             |_state: &(), a: String, b: String, c: String| async move {
                 Ok(a.len() < b.len() + c.len())
             },
-        )
-        .unwrap();
-    engine
-        .export_async(
+        )?;
+        library.export_async(
             "a3",
             |_state: &(), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| async move {
                 Ok(format!("records:{}:{}:{}", a.n, b.n, c.n))
             },
-        )
-        .unwrap();
+        )?;
+        Ok(())
+    })
+    .unwrap();
 
     let expr = r#"
     (

@@ -1,6 +1,6 @@
 use rexlang::{
-    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type, TypeError,
-    Value,
+    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Library, Parser, Pointer, Token, Type,
+    TypeError, Value,
 };
 
 fn strip_type_span(mut err: TypeError) -> TypeError {
@@ -15,7 +15,9 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_decls(&program.decls)?;
+    let mut library = Library::global();
+    library.add_decls(program.decls.clone());
+    engine.inject_library(library)?;
     let mut gas = GasMeter::default();
     let (pointer, ty) = rexlang::Evaluator::new_with_compiler(
         rexlang::RuntimeEnv::new(engine.clone()),

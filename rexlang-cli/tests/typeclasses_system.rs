@@ -1,5 +1,5 @@
 use rexlang::{
-    BuiltinTypeId, Engine, GasMeter, Parser, Token, Type, TypeKind, ValueDisplayOptions,
+    BuiltinTypeId, Engine, GasMeter, Library, Parser, Token, Type, TypeKind, ValueDisplayOptions,
     pointer_display_with,
 };
 
@@ -31,9 +31,9 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
         .map_err(|errs| format!("parse error: {errs:?}"))?;
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine
-        .inject_decls(&program.decls)
-        .map_err(|e| format!("{e}"))?;
+    let mut library = Library::global();
+    library.add_decls(program.decls.clone());
+    engine.inject_library(library).map_err(|e| format!("{e}"))?;
     let mut gas = GasMeter::default();
     let (pointer, ty) = rexlang::Evaluator::new_with_compiler(
         rexlang::RuntimeEnv::new(engine.clone()),

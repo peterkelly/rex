@@ -23,8 +23,8 @@ use rexlang_util::GasMeter;
 use crate::libraries::{
     CanonicalSymbol, Library, LibraryExports, LibraryId, LibrarySystem, ResolveRequest,
     ResolvedLibrary, ResolvedLibraryContent, SymbolKind, VirtualLibraryModule,
-    interface_decls_from_program, library_key_for_library, prefix_for_library, qualify_program,
-    virtual_export_name,
+    interface_decls_from_program, library_key_for_library, parse_program_from_source,
+    prefix_for_library, qualify_program, virtual_export_name,
 };
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
@@ -83,7 +83,12 @@ pub trait RexAdt: RexType {
     where
         Self: Sized,
     {
-        engine.inject_rex_adt::<Self>()
+        let mut family = Vec::new();
+        <Self as RexType>::collect_rex_family(&mut family)?;
+        for adt in order_adt_family(family)? {
+            engine.inject_adt(adt)?;
+        }
+        Ok(())
     }
 }
 
@@ -449,11 +454,39 @@ where
             + Sync
             + 'static,
     {
+        Self::from_native_with_gas_cost(name, scheme, arity, 0, handler)
+    }
+
+    pub fn from_native_with_gas_cost<F>(
+        name: impl Into<String>,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<Self, EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                &'a Type,
+                &'a [Pointer],
+            ) -> Result<Pointer, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
         validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
+        let normalized = normalize_name(&name).to_string();
+        let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
         let handler = Arc::new(handler);
-        let func: SyncNativeCallable<State> =
-            Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
-        Self::from_handler::<NativeCallableSig, _>(name, (scheme, arity, func))
+        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
+            let handler = Arc::clone(&handler);
+            let func: SyncNativeCallable<State> =
+                Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
+            let registration = NativeRegistration::sync(scheme.clone(), arity, func, gas_cost);
+            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+        });
+        Self::from_injector(name, interface, injector)
     }
 
     pub fn from_native_async<F>(
@@ -468,14 +501,120 @@ where
             + Sync
             + 'static,
     {
+        Self::from_native_async_with_gas_cost(name, scheme, arity, 0, handler)
+    }
+
+    pub fn from_native_async_with_gas_cost<F>(
+        name: impl Into<String>,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<Self, EngineError>
+    where
+        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
         validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
+        let normalized = normalize_name(&name).to_string();
+        let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
         let handler = Arc::new(handler);
-        let func: AsyncNativeCallable<State> = Arc::new(move |engine, typ, args| {
-            let args = args.to_vec();
+        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let handler = Arc::clone(&handler);
-            handler(engine, typ, args)
+            let func: AsyncNativeCallable<State> = Arc::new(move |engine, typ, args| {
+                let args = args.to_vec();
+                let handler = Arc::clone(&handler);
+                handler(engine, typ, args)
+            });
+            let registration = NativeRegistration::r#async(scheme.clone(), arity, func, gas_cost);
+            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
         });
-        Self::from_async_handler::<AsyncNativeCallableSig, _>(name, (scheme, arity, func))
+        Self::from_injector(name, interface, injector)
+    }
+
+    pub fn from_native_async_cancellable_with_gas_cost<F>(
+        name: impl Into<String>,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<Self, EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                CancellationToken,
+                Type,
+                &'a [Pointer],
+            ) -> NativeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
+        let normalized = normalize_name(&name).to_string();
+        let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
+        let handler = Arc::new(handler);
+        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
+            let handler = Arc::clone(&handler);
+            let func: AsyncNativeCallableCancellable<State> =
+                Arc::new(move |engine, token, typ, args| handler(engine, token, typ, args));
+            let registration =
+                NativeRegistration::async_cancellable(scheme.clone(), arity, func, gas_cost);
+            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+        });
+        Self::from_injector(name, interface, injector)
+    }
+
+    pub fn from_value<V>(name: impl Into<String>, value: V) -> Result<Self, EngineError>
+    where
+        V: IntoPointer + RexType + Clone + Send + Sync + 'static,
+    {
+        let name = name.into();
+        let typ = V::rex_type();
+        let interface = declare_fn_decl_from_scheme(
+            normalize_name(&name).as_ref(),
+            &Scheme::new(vec![], vec![], typ.clone()),
+        );
+        let name = interface.name.name.to_string();
+        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
+            let stored = value.clone();
+            let func: SyncNativeCallable<State> =
+                Arc::new(move |engine, _: &Type, _args: &[Pointer]| {
+                    stored.clone().into_pointer(&engine.heap)
+                });
+            let registration =
+                NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func, 0);
+            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+        });
+        Self::from_injector(name, interface, injector)
+    }
+
+    pub fn from_value_typed(
+        name: impl Into<String>,
+        typ: Type,
+        value: Value,
+    ) -> Result<Self, EngineError> {
+        let name = name.into();
+        let interface = declare_fn_decl_from_scheme(
+            normalize_name(&name).as_ref(),
+            &Scheme::new(vec![], vec![], typ.clone()),
+        );
+        let name = interface.name.name.to_string();
+        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
+            let stored = value.clone();
+            let func: SyncNativeCallable<State> =
+                Arc::new(move |engine, _: &Type, _args: &[Pointer]| {
+                    engine.heap.alloc_value(stored.clone())
+                });
+            let registration =
+                NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func, 0);
+            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+        });
+        Self::from_injector(name, interface, injector)
     }
 }
 
@@ -1994,101 +2133,6 @@ where
         self.heap
     }
 
-    /// Inject `debug`/`info`/`warn`/`error` logging functions backed by `tracing`.
-    ///
-    /// Each function has the Rex type `a -> str where Show a` and logs
-    /// `show x` at the corresponding level, returning the rendered string.
-    pub fn inject_tracing_log_functions(&mut self) -> Result<(), EngineError> {
-        let string = Type::builtin(BuiltinTypeId::String);
-
-        let make_scheme = |engine: &mut Engine<State>| {
-            let a_tv = engine.type_system.supply.fresh(Some("a".into()));
-            let a = Type::var(a_tv.clone());
-            Scheme::new(
-                vec![a_tv],
-                vec![Predicate::new("Show", a.clone())],
-                Type::fun(a, string.clone()),
-            )
-        };
-
-        let debug_scheme = make_scheme(self);
-        self.inject_tracing_log_function_with_scheme("debug", debug_scheme, |s| {
-            tracing::debug!("{s}")
-        })?;
-        let info_scheme = make_scheme(self);
-        self.inject_tracing_log_function_with_scheme("info", info_scheme, |s| {
-            tracing::info!("{s}")
-        })?;
-        let warn_scheme = make_scheme(self);
-        self.inject_tracing_log_function_with_scheme("warn", warn_scheme, |s| {
-            tracing::warn!("{s}")
-        })?;
-        let error_scheme = make_scheme(self);
-        self.inject_tracing_log_function_with_scheme("error", error_scheme, |s| {
-            tracing::error!("{s}")
-        })?;
-        Ok(())
-    }
-
-    pub fn inject_tracing_log_function(
-        &mut self,
-        name: &str,
-        log: fn(&str),
-    ) -> Result<(), EngineError> {
-        let string = Type::builtin(BuiltinTypeId::String);
-        let a_tv = self.type_system.supply.fresh(Some("a".into()));
-        let a = Type::var(a_tv.clone());
-        let scheme = Scheme::new(
-            vec![a_tv],
-            vec![Predicate::new("Show", a.clone())],
-            Type::fun(a, string),
-        );
-        self.inject_tracing_log_function_with_scheme(name, scheme, log)
-    }
-
-    fn inject_tracing_log_function_with_scheme(
-        &mut self,
-        name: &str,
-        scheme: Scheme,
-        log: fn(&str),
-    ) -> Result<(), EngineError> {
-        let name_sym = sym(name);
-        self.export_native_async(name, scheme, 1, move |engine, call_type, args| {
-            let name_sym = name_sym.clone();
-            async move {
-                if args.len() != 1 {
-                    return Err(EngineError::NativeArity {
-                        name: name_sym.clone(),
-                        expected: 1,
-                        got: args.len(),
-                    });
-                }
-
-                let (arg_ty, _ret_ty) = split_fun(&call_type)
-                    .ok_or_else(|| EngineError::NotCallable(call_type.to_string()))?;
-                let show_ty = Type::fun(arg_ty.clone(), Type::builtin(BuiltinTypeId::String));
-                let mut gas = GasMeter::default();
-                let show_ptr = engine
-                    .resolve_class_method(&sym("show"), &show_ty, &mut gas)
-                    .await?;
-                let rendered_ptr = apply(
-                    &engine,
-                    show_ptr,
-                    args[0],
-                    Some(&show_ty),
-                    Some(&arg_ty),
-                    &mut gas,
-                )
-                .await?;
-                let message = engine.heap.pointer_as_string(&rendered_ptr)?;
-
-                log(&message);
-                engine.heap.alloc_string(message)
-            }
-            .boxed()
-        })
-    }
-
     pub fn cancellation_token(&self) -> CancellationToken {
         self.cancel.clone()
     }
@@ -2450,10 +2494,44 @@ where
         if library_name.is_empty() {
             return Err(EngineError::Internal("library name cannot be empty".into()));
         }
-        if self.injected_libraries.contains(&library_name) {
+        let is_global = library_name == ROOT_LIBRARY_NAME;
+        if !is_global && self.injected_libraries.contains(&library_name) {
             return Err(EngineError::Internal(format!(
                 "library `{library_name}` already injected"
             )));
+        }
+
+        if is_global {
+            for adt in &library.staged_adts {
+                self.inject_adt(adt.clone())?;
+            }
+
+            let staged_adt_names: HashSet<Symbol> = library
+                .staged_adts
+                .iter()
+                .map(|adt| adt.name.clone())
+                .collect();
+            let decls = if library.raw_declarations.is_empty() {
+                library
+                    .structured_decls
+                    .iter()
+                    .filter(|decl| match decl {
+                        Decl::Type(ty) => !staged_adt_names.contains(&ty.name),
+                        _ => true,
+                    })
+                    .cloned()
+                    .collect()
+            } else {
+                let source = library.raw_declarations.join("\n");
+                let context = LibraryId::Virtual(ROOT_LIBRARY_NAME.to_string());
+                parse_program_from_source(&source, Some(&context), None)?.decls
+            };
+
+            for export in library.exports {
+                self.inject_library_export(ROOT_LIBRARY_NAME, export)?;
+            }
+            self.inject_decls(&decls)?;
+            return Ok(());
         }
 
         let library_id = LibraryId::Virtual(library_name.clone());
@@ -2615,25 +2693,18 @@ where
         self.register_native(name, scheme, arity, callable, gas_cost)
     }
 
-    pub fn export<Sig, H>(&mut self, name: impl Into<String>, handler: H) -> Result<(), EngineError>
+    pub(crate) fn export<Sig, H>(
+        &mut self,
+        name: impl Into<String>,
+        handler: H,
+    ) -> Result<(), EngineError>
     where
         H: Handler<State, Sig>,
     {
         self.inject_root_export(Export::from_handler(name, handler)?)
     }
 
-    pub fn export_async<Sig, H>(
-        &mut self,
-        name: impl Into<String>,
-        handler: H,
-    ) -> Result<(), EngineError>
-    where
-        H: AsyncHandler<State, Sig>,
-    {
-        self.inject_root_export(Export::from_async_handler(name, handler)?)
-    }
-
-    pub fn export_native<F>(
+    pub(crate) fn export_native<F>(
         &mut self,
         name: impl Into<String>,
         scheme: Scheme,
@@ -2718,7 +2789,7 @@ where
         Ok(())
     }
 
-    pub fn export_native_async<F>(
+    pub(crate) fn export_native_async<F>(
         &mut self,
         name: impl Into<String>,
         scheme: Scheme,
@@ -2734,7 +2805,7 @@ where
         self.export_native_async_with_gas_cost(name, scheme, arity, 0, handler)
     }
 
-    pub fn export_value<V: IntoPointer + RexType>(
+    pub(crate) fn export_value<V: IntoPointer + RexType>(
         &mut self,
         name: &str,
         value: V,
@@ -2748,21 +2819,7 @@ where
         self.register_native_registration(ROOT_LIBRARY_NAME, name, registration)
     }
 
-    pub fn export_value_typed(
-        &mut self,
-        name: &str,
-        typ: Type,
-        value: Value,
-    ) -> Result<(), EngineError> {
-        let value = self.heap.alloc_value(value)?;
-        let func: SyncNativeCallable<State> =
-            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value));
-        let scheme = Scheme::new(vec![], vec![], typ);
-        let registration = NativeRegistration::sync(scheme, 0, func, 0);
-        self.register_native_registration(ROOT_LIBRARY_NAME, name, registration)
-    }
-
-    pub fn export_native_with_gas_cost<F>(
+    pub(crate) fn export_native_with_gas_cost<F>(
         &mut self,
         name: impl Into<String>,
         scheme: Scheme,
@@ -2789,7 +2846,7 @@ where
         self.register_native_registration(ROOT_LIBRARY_NAME, &name, registration)
     }
 
-    pub fn export_native_async_with_gas_cost<F>(
+    pub(crate) fn export_native_async_with_gas_cost<F>(
         &mut self,
         name: impl Into<String>,
         scheme: Scheme,
@@ -2814,68 +2871,10 @@ where
         self.register_native_registration(ROOT_LIBRARY_NAME, &name, registration)
     }
 
-    pub fn export_native_async_cancellable<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                CancellationToken,
-                Type,
-                &'a [Pointer],
-            ) -> NativeFuture<'a>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.export_native_async_cancellable_with_gas_cost(name, scheme, arity, 0, handler)
-    }
-
-    pub fn export_native_async_cancellable_with_gas_cost<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                CancellationToken,
-                Type,
-                &'a [Pointer],
-            ) -> NativeFuture<'a>
-            + Send
-            + Sync
-            + 'static,
-    {
-        validate_native_export_scheme(&scheme, arity)?;
-        let name = name.into();
-        let handler = Arc::new(handler);
-        let func: AsyncNativeCallableCancellable<State> =
-            Arc::new(move |engine, token, typ, args| handler(engine, token, typ, args));
-        let registration = NativeRegistration::async_cancellable(scheme, arity, func, gas_cost);
-        self.register_native_registration(ROOT_LIBRARY_NAME, &name, registration)
-    }
-
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
         let name_sym = sym(name);
         let param_syms: Vec<Symbol> = params.iter().map(|p| sym(p)).collect();
         AdtDecl::new(&name_sym, &param_syms, &mut self.type_system.supply)
-    }
-
-    pub fn inject_rex_adt<T>(&mut self) -> Result<(), EngineError>
-    where
-        T: RexType,
-    {
-        let mut family = Vec::new();
-        T::collect_rex_family(&mut family)?;
-        self.inject_adt_family(family)
     }
 
     /// Seed an `AdtDecl` from a Rex type constructor.
@@ -2931,11 +2930,33 @@ where
         Ok(self.adt_decl(name.as_ref(), params))
     }
 
-    pub fn inject_adt(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
+    pub(crate) fn inject_adt(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
+        let register_type = match self.type_system.adts.get(&adt.name) {
+            Some(existing) if adt_shape_eq(existing, &adt) => false,
+            Some(existing) => {
+                return Err(EngineError::Custom(format!(
+                    "conflicting ADT registration for `{}`: existing={} new={}",
+                    adt.name,
+                    adt_shape(existing),
+                    adt_shape(&adt)
+                )));
+            }
+            None => true,
+        };
+
         // Type system gets the constructor schemes; runtime gets constructor functions
         // that build `Value::Adt` with the constructor tag and evaluated args.
-        self.type_system.register_adt(&adt);
+        if register_type {
+            self.type_system.register_adt(&adt);
+        }
         for (ctor, scheme) in adt.constructor_schemes() {
+            if self
+                .natives
+                .get(&ctor)
+                .is_some_and(|existing| existing.iter().any(|imp| imp.scheme == scheme))
+            {
+                continue;
+            }
             let ctor_name = ctor.clone();
             let func = Arc::new(
                 move |engine: EvaluatorRef<'_, State>, _: &Type, args: &[Pointer]| {
@@ -2948,26 +2969,7 @@ where
         Ok(())
     }
 
-    pub fn inject_adt_family(&mut self, adts: Vec<AdtDecl>) -> Result<(), EngineError> {
-        let ordered = order_adt_family(adts)?;
-        for adt in ordered {
-            match self.type_system.adts.get(&adt.name) {
-                Some(existing) if adt_shape_eq(existing, &adt) => continue,
-                Some(existing) => {
-                    return Err(EngineError::Custom(format!(
-                        "conflicting ADT registration for `{}`: existing={} new={}",
-                        adt.name,
-                        adt_shape(existing),
-                        adt_shape(&adt)
-                    )));
-                }
-                None => self.inject_adt(adt)?,
-            }
-        }
-        Ok(())
-    }
-
-    pub fn inject_type_decl(&mut self, decl: &TypeDecl) -> Result<(), EngineError> {
+    pub(crate) fn inject_type_decl(&mut self, decl: &TypeDecl) -> Result<(), EngineError> {
         let adt = self
             .type_system
             .adt_from_decl(decl)
@@ -2975,13 +2977,13 @@ where
         self.inject_adt(adt)
     }
 
-    pub fn inject_class_decl(&mut self, decl: &ClassDecl) -> Result<(), EngineError> {
+    pub(crate) fn inject_class_decl(&mut self, decl: &ClassDecl) -> Result<(), EngineError> {
         self.type_system
             .register_class_decl(decl)
             .map_err(EngineError::Type)
     }
 
-    pub fn inject_instance_decl(&mut self, decl: &InstanceDecl) -> Result<(), EngineError> {
+    pub(crate) fn inject_instance_decl(&mut self, decl: &InstanceDecl) -> Result<(), EngineError> {
         let prepared = self
             .type_system
             .register_instance_decl(decl)
@@ -2989,11 +2991,7 @@ where
         self.register_typeclass_instance(decl, &prepared)
     }
 
-    pub fn inject_fn_decl(&mut self, decl: &FnDecl) -> Result<(), EngineError> {
-        self.inject_fn_decls(std::slice::from_ref(decl))
-    }
-
-    pub fn inject_fn_decls(&mut self, decls: &[FnDecl]) -> Result<(), EngineError> {
+    pub(crate) fn inject_fn_decls(&mut self, decls: &[FnDecl]) -> Result<(), EngineError> {
         if decls.is_empty() {
             return Ok(());
         }
@@ -3069,7 +3067,7 @@ where
         Ok(())
     }
 
-    pub fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+    pub(crate) fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
         let mut pending_fns: Vec<FnDecl> = Vec::new();
         for decl in decls {
             if let Decl::Fn(fd) = decl {
@@ -3112,11 +3110,6 @@ where
             self.env = self.env.extend(df.name.name.clone(), placeholder);
         }
         Ok(())
-    }
-
-    pub fn inject_class(&mut self, name: &str, supers: Vec<String>) {
-        let supers = supers.into_iter().map(|s| sym(&s)).collect();
-        self.type_system.classes.add_class(sym(name), supers);
     }
 
     pub fn inject_instance(&mut self, class: &str, inst: Instance) {

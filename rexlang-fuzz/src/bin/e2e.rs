@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use rexlang_engine::Engine;
+use rexlang_engine::{Engine, Library};
 use rexlang_fuzz::{
     FuzzError, gas_meter_from_env, parser_limits_from_env, read_stdin_bytes, tokenize_fuzz_input,
 };
@@ -34,7 +34,9 @@ async fn run_one(input: &[u8]) {
     let Ok(mut engine) = Engine::with_prelude(()) else {
         return;
     };
-    if engine.inject_decls(&program.decls).is_err() {
+    let mut library = Library::global();
+    library.add_decls(program.decls.clone());
+    if engine.inject_library(library).is_err() {
         return;
     }
     let _ = rexlang_engine::Evaluator::new_with_compiler(

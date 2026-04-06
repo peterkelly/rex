@@ -1,5 +1,6 @@
 use rexlang::{
-    Engine, EngineError, GasMeter, Parser, ParserErr, ParserLimits, Program, Token, TypeError, sym,
+    Engine, EngineError, GasMeter, Library, Parser, ParserErr, ParserLimits, Program, Token,
+    TypeError, sym,
 };
 
 fn strip_span(mut err: TypeError) -> TypeError {
@@ -22,7 +23,9 @@ async fn compile_err(code: &str) -> EngineError {
     });
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    if let Err(e) = engine.inject_decls(&program.decls) {
+    let mut library = Library::global();
+    library.add_decls(program.decls.clone());
+    if let Err(e) = engine.inject_library(library) {
         return e;
     }
     let mut gas = GasMeter::default();

@@ -10,7 +10,7 @@ application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 ## Quickstart
 
 ```rust
-use rex_engine::Engine;
+use rex_engine::{Engine, Library};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_util::{GasCosts, GasMeter};
@@ -18,8 +18,10 @@ use rex_util::{GasCosts, GasMeter};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = Engine::with_prelude(())?;
-    engine.export("(+)", |_state, x: i32, y: i32| { Ok(x + y) })?;
-    engine.export_value("answer", 42i32)?;
+    let mut globals = Library::global();
+    globals.export("(+)", |_state, x: i32, y: i32| { Ok(x + y) })?;
+    globals.export_value("answer", 42i32)?;
+    engine.inject_library(globals)?;
 
     let tokens = Token::tokenize("answer + 1")?;
     let mut parser = Parser::new(tokens);
@@ -46,20 +48,18 @@ Phase-specific errors:
 
 ## Injection API
 
-- `export_value(name, value)`: inject a constant value (numbers, strings, arrays, etc.).
-- `export(name, handler)`: inject a typed native function.
-- `export_async(name, handler)`: inject a typed async native function.
-- `export_native` / `export_native_async`: inject pointer-level natives with explicit `Scheme` + arity.
-- `adt_decl` + `inject_adt`: declare and register ADT constructors (mirrors `type` declarations).
-- `inject_rex_adt::<T>()`: collect `T`'s Rex family via `RexType::collect_rex_family` and register the resulting acyclic ADT family.
-- `inject_class`: register a type class (mirrors `class` declarations).
-- `inject_instance`: register a type class instance in the checker (mirrors `instance` declarations).
+- Build staged host APIs with `Library`.
+- Use `Library::global()` for root-scope values/functions.
+- Use `Library::new("acme.math")` for importable modules.
+- Add typed exports with `export` / `export_async`.
+- Add pointer-level exports with `export_native` / `export_native_async`.
+- Add constant values with `export_value`.
+- Add ADTs with `add_adt_decl` or `add_rex_adt::<T>()`.
+- Materialize the staged library with `Engine::inject_library(...)`.
 
-`inject_adt` remains the low-level primitive for one already-built `AdtDecl`. Higher-level Rust
-registration paths collect family declarations through `RexType::collect_rex_family`, then inject
-the reachable acyclic ADT family automatically and reject cycles explicitly. Ordinary leaf types
-inherit the default no-op implementation, so they participate in Rex type mapping without
-pretending to be ADTs.
+`Library::add_rex_adt::<T>()` collects `T`'s Rex family via `RexType::collect_rex_family` and
+stages the reachable acyclic ADT family automatically. Ordinary leaf types inherit the default
+no-op implementation, so they participate in Rex type mapping without pretending to be ADTs.
 
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 

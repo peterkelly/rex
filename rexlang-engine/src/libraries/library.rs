@@ -1,12 +1,18 @@
-use rexlang_ast::expr::{Decl, NameRef, TypeDecl, TypeExpr, TypeVariant, intern};
+use futures::FutureExt;
+use rexlang_ast::expr::{Decl, NameRef, TypeDecl, TypeExpr, TypeVariant, intern, sym};
 use rexlang_lexer::span::Span;
-use rexlang_typesystem::{AdtDecl, Type, TypeKind, collect_adts_in_types};
+use rexlang_typesystem::{
+    AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeKind, TypeVar, collect_adts_in_types,
+};
+use rexlang_util::GasMeter;
 
 use crate::EvaluatorRef;
-use crate::engine::{
-    AsyncHandler, Export, Handler, NativeFuture, adt_shape, adt_shape_eq, order_adt_family,
+use crate::engine::{AsyncHandler, Export, Handler, NativeFuture, apply, order_adt_family};
+use crate::evaluator::EvaluatorRef as RuntimeEvaluatorRef;
+use crate::{
+    CancellationToken, Engine, EngineError, FromPointer, IntoPointer, Pointer, ROOT_LIBRARY_NAME,
+    RexType, Value,
 };
-use crate::{Engine, EngineError, Pointer, RexType};
 
 /// A staged host library that you build up in Rust and later inject into an [`Engine`].
 ///
@@ -81,9 +87,11 @@ pub struct Library<State: Clone + Send + Sync + 'static> {
 
     /// Structured declarations registered from Rust metadata rather than Rex source.
     ///
-    /// APIs such as [`Library::add_adt_decl`] and [`Library::inject_rex_adt`] append here instead
+    /// APIs such as [`Library::add_adt_decl`] and [`Library::add_rex_adt`] append here instead
     /// of synthesizing Rex source text.
     pub structured_decls: Vec<Decl>,
+
+    pub(crate) staged_adts: Vec<AdtDecl>,
 
     /// Staged host exports that will become callable Rex values when the library is injected.
     ///
@@ -113,6 +121,24 @@ impl<State> Library<State>
 where
     State: Clone + Send + Sync + 'static,
 {
+    fn tracing_log_scheme() -> Scheme {
+        let a_tv = TypeVar::new(0, Some(sym("a")));
+        let a = Type::var(a_tv.clone());
+        Scheme::new(
+            vec![a_tv],
+            vec![Predicate::new("Show", a.clone())],
+            Type::fun(a, Type::builtin(BuiltinTypeId::String)),
+        )
+    }
+
+    /// Create an empty staged library that targets the engine root namespace.
+    ///
+    /// Injecting a global library installs its declarations and exports directly
+    /// into the engine rather than making them importable as a named module.
+    pub fn global() -> Self {
+        Self::new(ROOT_LIBRARY_NAME)
+    }
+
     /// Create an empty staged library with the given import name.
     ///
     /// The returned library contains no declarations and no exports yet. Add those with the
@@ -133,6 +159,7 @@ where
             name: name.into(),
             raw_declarations: Vec::new(),
             structured_decls: Vec::new(),
+            staged_adts: Vec::new(),
             exports: Vec::new(),
         }
     }
@@ -169,6 +196,16 @@ where
         Ok(())
     }
 
+    /// Append a structured Rex declaration to this staged library.
+    pub fn add_decl(&mut self, decl: Decl) {
+        self.structured_decls.push(decl);
+    }
+
+    /// Append multiple structured Rex declarations to this staged library.
+    pub fn add_decls(&mut self, decls: impl IntoIterator<Item = Decl>) {
+        self.structured_decls.extend(decls);
+    }
+
     /// Convert an [`AdtDecl`] into a structured type declaration and append it to this library.
     ///
     /// This is a structured alternative to [`Library::add_raw_declaration`] when you already have
@@ -186,8 +223,32 @@ where
     /// library.add_adt_decl(adt).unwrap();
     /// ```
     pub fn add_adt_decl(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
-        self.structured_decls
-            .push(Decl::Type(type_decl_from_adt(&adt)));
+        self.add_adt_family(vec![adt])
+    }
+
+    /// Append an acyclic family of ADT declarations to this staged library.
+    ///
+    /// Families are ordered before insertion so declarations are staged in
+    /// dependency order, and cycles are rejected.
+    pub fn add_adt_family(&mut self, adts: Vec<AdtDecl>) -> Result<(), EngineError> {
+        for adt in order_adt_family(adts)? {
+            let candidate = type_decl_from_adt(&adt);
+            let already_staged = self.structured_decls.iter().find_map(|decl| match decl {
+                Decl::Type(type_decl) if type_decl.name == adt.name => Some(type_decl),
+                _ => None,
+            });
+            if let Some(existing_decl) = already_staged {
+                if existing_decl != &candidate {
+                    return Err(EngineError::Custom(format!(
+                        "conflicting staged ADT registration for `{}`: existing declaration differs from new ADT declaration",
+                        adt.name,
+                    )));
+                }
+                continue;
+            }
+            self.staged_adts.push(adt);
+            self.structured_decls.push(Decl::Type(candidate));
+        }
         Ok(())
     }
 
@@ -239,8 +300,9 @@ where
     /// This is the most ergonomic way to expose a Rust enum or struct that implements [`RexType`]
     /// as a library-local structured Rex type declaration.
     ///
-    /// Unlike the direct engine registration helpers, this stages the declaration inside the library instead of
-    /// injecting it straight into the engine root environment.
+    /// Unlike older engine-level registration helpers, this stages the declaration
+    /// inside the library so the caller can choose whether to inject it globally or
+    /// as a named module.
     ///
     /// # Examples
     ///
@@ -254,38 +316,15 @@ where
     ///
     /// let mut engine = Engine::with_prelude(()).unwrap();
     /// let mut library = Library::new("sample");
-    /// library.inject_rex_adt::<Label>(&mut engine).unwrap();
+    /// library.add_rex_adt::<Label>().unwrap();
     /// ```
-    pub fn inject_rex_adt<T>(&mut self, engine: &mut Engine<State>) -> Result<(), EngineError>
+    pub fn add_rex_adt<T>(&mut self) -> Result<(), EngineError>
     where
         T: RexType,
     {
         let mut family = Vec::new();
         T::collect_rex_family(&mut family)?;
-        let family = order_adt_family(family)?;
-        for adt in family {
-            let already_staged = self.structured_decls.iter().find_map(|decl| match decl {
-                Decl::Type(type_decl) if type_decl.name == adt.name => Some(type_decl),
-                _ => None,
-            });
-            if let Some(existing_decl) = already_staged {
-                let existing_adt = engine
-                    .type_system
-                    .adt_from_decl(existing_decl)
-                    .map_err(EngineError::Type)?;
-                if !adt_shape_eq(&existing_adt, &adt) {
-                    return Err(EngineError::Custom(format!(
-                        "conflicting staged ADT registration for `{}`: existing={} new={}",
-                        adt.name,
-                        adt_shape(&existing_adt),
-                        adt_shape(&adt)
-                    )));
-                }
-                continue;
-            }
-            self.add_adt_decl(adt)?;
-        }
-        Ok(())
+        self.add_adt_family(family)
     }
 
     /// Append a preconstructed [`Export`] to this library.
@@ -357,6 +396,67 @@ where
         Ok(())
     }
 
+    /// Stage a tracing-backed log export with type `a -> str where Show a`.
+    pub fn export_tracing_log_function(
+        &mut self,
+        name: impl Into<String>,
+        log: fn(&str),
+    ) -> Result<(), EngineError> {
+        let name = name.into();
+        let name_sym = sym(&name);
+        let scheme = Self::tracing_log_scheme();
+        self.exports.push(Export::from_native_async(
+            name,
+            scheme,
+            1,
+            move |engine, call_type, args| {
+                let name_sym = name_sym.clone();
+                async move {
+                    if args.len() != 1 {
+                        return Err(EngineError::NativeArity {
+                            name: name_sym.clone(),
+                            expected: 1,
+                            got: args.len(),
+                        });
+                    }
+
+                    let (arg_ty, _ret_ty) = match call_type.as_ref() {
+                        TypeKind::Fun(arg, ret) => (arg.clone(), ret.clone()),
+                        _ => return Err(EngineError::NotCallable(call_type.to_string())),
+                    };
+                    let show_ty = Type::fun(arg_ty.clone(), Type::builtin(BuiltinTypeId::String));
+                    let mut gas = GasMeter::default();
+                    let show_ptr = RuntimeEvaluatorRef::new(&engine)
+                        .resolve_class_method(&sym("show"), &show_ty, &mut gas)
+                        .await?;
+                    let rendered_ptr = apply(
+                        &engine,
+                        show_ptr,
+                        args[0],
+                        Some(&show_ty),
+                        Some(&arg_ty),
+                        &mut gas,
+                    )
+                    .await?;
+                    let rendered = String::from_pointer(&engine.heap, &rendered_ptr)?;
+                    log(&rendered);
+                    engine.heap.alloc_string(rendered)
+                }
+                .boxed()
+            },
+        )?);
+        Ok(())
+    }
+
+    /// Stage the standard `debug`/`info`/`warn`/`error` tracing exports.
+    pub fn export_tracing_log_functions(&mut self) -> Result<(), EngineError> {
+        self.export_tracing_log_function("debug", |s| tracing::debug!("{s}"))?;
+        self.export_tracing_log_function("info", |s| tracing::info!("{s}"))?;
+        self.export_tracing_log_function("warn", |s| tracing::warn!("{s}"))?;
+        self.export_tracing_log_function("error", |s| tracing::error!("{s}"))?;
+        Ok(())
+    }
+
     /// Stage a pointer-level synchronous native export with an explicit Rex type scheme.
     ///
     /// This lower-level API is intended for dynamic or runtime-defined integrations where the
@@ -407,6 +507,30 @@ where
         Ok(())
     }
 
+    pub fn export_native_with_gas_cost<F>(
+        &mut self,
+        name: impl Into<String>,
+        scheme: rexlang_typesystem::Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<(), EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                &'a Type,
+                &'a [Pointer],
+            ) -> Result<Pointer, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.exports.push(Export::from_native_with_gas_cost(
+            name, scheme, arity, gas_cost, handler,
+        )?);
+        Ok(())
+    }
+
     /// Stage a pointer-level asynchronous native export with an explicit Rex type scheme.
     ///
     /// This is the async counterpart to [`Library::export_native`]. Use it when the export needs
@@ -448,6 +572,92 @@ where
     {
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);
+        Ok(())
+    }
+
+    pub fn export_native_async_with_gas_cost<F>(
+        &mut self,
+        name: impl Into<String>,
+        scheme: rexlang_typesystem::Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<(), EngineError>
+    where
+        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.exports.push(Export::from_native_async_with_gas_cost(
+            name, scheme, arity, gas_cost, handler,
+        )?);
+        Ok(())
+    }
+
+    pub fn export_native_async_cancellable<F>(
+        &mut self,
+        name: impl Into<String>,
+        scheme: rexlang_typesystem::Scheme,
+        arity: usize,
+        handler: F,
+    ) -> Result<(), EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                CancellationToken,
+                Type,
+                &'a [Pointer],
+            ) -> NativeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.export_native_async_cancellable_with_gas_cost(name, scheme, arity, 0, handler)
+    }
+
+    pub fn export_native_async_cancellable_with_gas_cost<F>(
+        &mut self,
+        name: impl Into<String>,
+        scheme: rexlang_typesystem::Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<(), EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                CancellationToken,
+                Type,
+                &'a [Pointer],
+            ) -> NativeFuture<'a>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.exports
+            .push(Export::from_native_async_cancellable_with_gas_cost(
+                name, scheme, arity, gas_cost, handler,
+            )?);
+        Ok(())
+    }
+
+    pub fn export_value<V>(&mut self, name: impl Into<String>, value: V) -> Result<(), EngineError>
+    where
+        V: IntoPointer + RexType + Clone + Send + Sync + 'static,
+    {
+        self.exports.push(Export::from_value(name, value)?);
+        Ok(())
+    }
+
+    pub fn export_value_typed(
+        &mut self,
+        name: impl Into<String>,
+        typ: Type,
+        value: Value,
+    ) -> Result<(), EngineError> {
+        self.exports
+            .push(Export::from_value_typed(name, typ, value)?);
         Ok(())
     }
 }

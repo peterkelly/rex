@@ -1,15 +1,18 @@
-use rexlang::{BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Parser, Pointer, Token, Type};
+use rexlang::{
+    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Library, Parser, Pointer, Token, Type,
+};
 
 fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), EngineError> {
-    engine.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
-    engine.export("num_u16", |_state: &(), x: u16| Ok(format!("{x}:u16")))?;
-    engine.export("num_u32", |_state: &(), x: u32| Ok(format!("{x}:u32")))?;
-    engine.export("num_u64", |_state: &(), x: u64| Ok(format!("{x}:u64")))?;
-    engine.export("num_i8", |_state: &(), x: i8| Ok(format!("{x}:i8")))?;
-    engine.export("num_i16", |_state: &(), x: i16| Ok(format!("{x}:i16")))?;
-    engine.export("num_i32", |_state: &(), x: i32| Ok(format!("{x}:i32")))?;
-    engine.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
-    Ok(())
+    let mut library = Library::global();
+    library.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
+    library.export("num_u16", |_state: &(), x: u16| Ok(format!("{x}:u16")))?;
+    library.export("num_u32", |_state: &(), x: u32| Ok(format!("{x}:u32")))?;
+    library.export("num_u64", |_state: &(), x: u64| Ok(format!("{x}:u64")))?;
+    library.export("num_i8", |_state: &(), x: i8| Ok(format!("{x}:i8")))?;
+    library.export("num_i16", |_state: &(), x: i16| Ok(format!("{x}:i16")))?;
+    library.export("num_i32", |_state: &(), x: i32| Ok(format!("{x}:i32")))?;
+    library.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
+    engine.inject_library(library)
 }
 
 async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
@@ -19,7 +22,9 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
 
     let mut engine = Engine::with_prelude(()).unwrap();
     register_integer_literal_natives(&mut engine)?;
-    engine.inject_decls(&program.decls)?;
+    let mut library = Library::global();
+    library.add_decls(program.decls.clone());
+    engine.inject_library(library)?;
 
     let mut gas = GasMeter::default();
     let (pointer, ty) = rexlang::Evaluator::new_with_compiler(

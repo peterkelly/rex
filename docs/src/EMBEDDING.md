@@ -105,14 +105,16 @@ still sugar, but they no longer use a separate execution path.
 ## Evaluate Rex Code Directly
 
 ```rust
-use rexlang::{Engine, GasMeter, Parser, Token};
+use rexlang::{Engine, GasMeter, Library, Parser, Token};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
-engine.inject_decls(&program.decls)?;
+let mut globals = Library::global();
+globals.add_decls(program.decls.clone());
+engine.inject_library(globals)?;
 let mut gas = GasMeter::default();
 let mut compiler = rexlang::Compiler::new(engine.clone());
 let program = compiler.compile_expr(program.expr.as_ref())?;
@@ -238,10 +240,10 @@ Use `Library` + `Engine::inject_library(...)`:
    - typed exports with `export` / `export_async`
    - runtime/native exports with `export_native` / `export_native_async`
    - optional raw Rex declarations with `add_raw_declaration` (for example `pub type ...`)
-   - optional structured declarations with `inject_rex_adt` / `add_adt_decl`
+   - optional structured declarations with `add_rex_adt` / `add_adt_decl`
 3. Inject it into the engine.
 
-`Library::inject_rex_adt::<T>(...)` now stages the full acyclic ADT family reachable from `T`.
+`Library::add_rex_adt::<T>()` now stages the full acyclic ADT family reachable from `T`.
 This is driven by `RexType::collect_rex_family(...)`: ADT types contribute declarations there,
 while leaf Rex types inherit a no-op default. For example, if `Label` contains a `Side`, staging
 `Label` is enough; you do not need to stage `Side` separately. Cyclic ADT families are still
@@ -345,7 +347,7 @@ let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
 let mut m = Library::new("sample");
-m.inject_rex_adt::<Label>(&mut engine)?;
+m.add_rex_adt::<Label>()?;
 m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
 })?;
@@ -457,9 +459,11 @@ let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
     roles: vec!["admin".into(), "editor".into()],
 })?;
 
-engine.export("have_role", |state, role: String| {
+let mut globals = Library::global();
+globals.export("have_role", |state, role: String| {
     Ok(state.roles.iter().any(|r| r == &role))
 })?;
+engine.inject_library(globals)?;
 ```
 
 ## Array/List Interop at Host Boundaries
@@ -613,7 +617,9 @@ let mut parser = Parser::new(tokens);
 let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
-engine.inject_decls(&program.decls)?;
+let mut globals = Library::global();
+globals.add_decls(program.decls.clone());
+engine.inject_library(globals)?;
 let mut gas = GasMeter::default();
 let value = engine
     .eval_with_gas(program.expr.as_ref(), &mut gas)
@@ -625,16 +631,17 @@ println!("{value}");
 
 `rexlang-engine` is the boundary where Rust provides implementations for Rex values.
 
-For host-provided *modules*, prefer `Library` + `inject_library` (above). The direct injection APIs
-below register exports into the root scope (the engine's root library), which is useful for values
-or functions you want available without importing a host library.
+For host-provided *modules*, prefer `Library` + `inject_library` (above). For root-scope values
+or functions, use `Library::global()` and inject that staged library into the engine.
 
 ```rust
-use rexlang_engine::Engine;
+use rexlang_engine::{Engine, Library};
 
 let mut engine = Engine::with_prelude(())?;
-engine.export_value("answer", 42i32)?;
-engine.export("inc", |_state, x: i32| { Ok(x + 1) })?;
+let mut globals = Library::global();
+globals.export_value("answer", 42i32)?;
+globals.export("inc", |_state, x: i32| { Ok(x + 1) })?;
+engine.inject_library(globals)?;
 ```
 
 ### Integer Literal Overloading with Host Natives
@@ -643,12 +650,14 @@ Integer literals are overloaded (`Integral a`) and can specialize at call sites.
 direct calls, `let` bindings, and lambda wrappers:
 
 ```rust
-use rexlang_engine::Engine;
+use rexlang_engine::{Engine, Library};
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
-engine.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
-engine.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
+let mut globals = Library::global();
+globals.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
+globals.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
+engine.inject_library(globals)?;
 
 for code in [
     "num_u8 4",
@@ -671,15 +680,17 @@ while `num_u32 (-3)` is a type error.
 
 ### Async Natives
 
-If your host functions are async, inject them with `export_async` and evaluate with
+If your host functions are async, stage them in a library with `export_async` and evaluate with
 `Engine::eval_with_gas`.
 
 ```rust
-use rexlang_engine::Engine;
+use rexlang_engine::{Engine, Library};
 use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
-engine.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
+let mut globals = Library::global();
+globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
+engine.inject_library(globals)?;
 
 let tokens = Token::tokenize("inc 1")?;
 let mut parser = Parser::new(tokens);
@@ -698,7 +709,7 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 
 ```rust
 use futures::FutureExt;
-use rexlang_engine::{CancellationToken, Engine, EngineError};
+use rexlang_engine::{CancellationToken, Engine, EngineError, Library};
 use rexlang::{BuiltinTypeId, Scheme, Type};
 use rex_util::{GasCosts, GasMeter};
 
@@ -711,18 +722,15 @@ let expr = parser
 
 let mut engine = Engine::with_prelude(())?;
 let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-engine.export_native_async_cancellable(
-    "stall",
-    scheme,
-    0,
-    |engine, token: CancellationToken, _, _args| {
+let mut globals = Library::global();
+globals.export_native_async_cancellable("stall", scheme, 0, |engine, token: CancellationToken, _, _args| {
         async move {
             token.cancelled().await;
             engine.heap.alloc_i32(0)
         }
         .boxed_local()
-    },
-)?;
+    })?;
+engine.inject_library(globals)?;
 
 let token = engine.cancellation_token();
 std::thread::spawn(move || {
@@ -830,21 +838,22 @@ without `#[derive(Rex)]`.
 
 - Use `Engine::adt_decl_from_type(...)` to seed an ADT declaration from a Rex type head.
 - Add variants with `AdtDecl::add_variant(...)`.
-- Register with `Engine::inject_adt(...)`.
+- Stage it with `Library::add_adt_decl(...)`, then inject that library with `Engine::inject_library(...)`.
 
-`Engine::inject_adt(...)` is the low-level single-ADT primitive. If you are building several ADTs
-manually, you are still responsible for supplying them in dependency order unless you batch them
-yourself before injection.
+`Library::add_adt_decl(...)` is the low-level single-ADT staging primitive. If you are building
+several ADTs manually, prefer batching them in one library with `add_adt_family(...)`.
 
 ```rust
-use rexlang::{Engine, RexType, Type, sym};
+use rexlang::{Engine, Library, RexType, Type, sym};
 
 let mut engine = Engine::with_prelude(())?;
+let mut globals = Library::global();
 
 let mut adt = engine.adt_decl_from_type(&Type::con("PrimitiveEither", 0))?;
 adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
 adt.add_variant(sym("Count"), vec![i32::rex_type()]);
-engine.inject_adt(adt)?;
+globals.add_adt_decl(adt)?;
+engine.inject_library(globals)?;
 ```
 
 If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls, implement
