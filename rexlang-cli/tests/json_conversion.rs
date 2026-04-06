@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn mk_type_system() -> TypeSystem {
-    TypeSystem::with_prelude().unwrap()
+    TypeSystem::new_with_prelude().unwrap()
 }
 
 fn mk_unit_enum(name: &str, variants: &[&str]) -> AdtDecl {
@@ -157,7 +157,7 @@ fn struct_like_single_variant_adt_roundtrip() {
             (sym("b"), Type::builtin(BuiltinTypeId::String)),
         ])],
     );
-    ts.inject_adt(&foo);
+    ts.register_adt(&foo);
 
     let foo_ty = Type::con("Foo", 0);
     let foo_json = json!({ "a": 42, "b": "Hello" });
@@ -179,7 +179,7 @@ fn unit_enum_string_roundtrip() {
     let opts = JsonOptions::default();
 
     let color = mk_unit_enum("Color", &["Red", "Green", "Blue"]);
-    ts.inject_adt(&color);
+    ts.register_adt(&color);
     let color_ty = Type::con("Color", 0);
 
     for v in [json!("Red"), json!("Green"), json!("Blue")] {
@@ -194,7 +194,7 @@ fn unit_enum_integer_roundtrip_with_patches() {
     let mut ts = mk_type_system();
     let heap = Heap::new();
     let color = mk_unit_enum("Color", &["Red", "Green", "Blue"]);
-    ts.inject_adt(&color);
+    ts.register_adt(&color);
     let color_ty = Type::con("Color", 0);
 
     let mut opts = JsonOptions::default();
@@ -259,7 +259,7 @@ fn unit_enum_integer_unknown_discriminant_errors() {
     let mut ts = mk_type_system();
     let heap = Heap::new();
     let color = mk_unit_enum("Color", &["Red", "Green", "Blue"]);
-    ts.inject_adt(&color);
+    ts.register_adt(&color);
     let color_ty = Type::con("Color", 0);
 
     let mut opts = JsonOptions::default();

@@ -46,7 +46,7 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let descriptions = load_descriptions(Path::new(DESCRIPTIONS_PATH))?;
-    let ts = TypeSystem::with_prelude().map_err(|e| format!("{e}"))?;
+    let ts = TypeSystem::new_with_prelude().map_err(|e| format!("{e}"))?;
     let program = prelude_typeclasses_program().map_err(|e| format!("{e}"))?;
 
     let mut type_arity = BTreeMap::<String, usize>::new();

@@ -16,7 +16,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - `rexlang-parser`: recursive-descent parser. Entry point: `rexlang_parser::Parser::parse_program`.
   - For untrusted code, set `ParserLimits::safe_defaults` before parsing.
 - `rexlang-typesystem`: type system. Entry points:
-  - `TypeSystem::with_prelude()?` to create a typing environment with standard types/classes.
+  - `TypeSystem::new_with_prelude()?` to create a typing environment with standard types/classes.
   - `TypeSystem::infer_typed` / `TypeSystem::infer` for type inference.
   - For untrusted code, set `TypeSystemLimits::safe_defaults` before inference.
 - `rexlang-engine`: runtime evaluator. Entry points:
@@ -56,7 +56,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   `RuntimeEnv::storage_boundary()` make it explicit that both values still contain process-local
   state and are not serialization-ready artifacts.
 - **Prelude split**: The type system prelude is a combination of:
-  - ADT/typeclass *heads* injected by `TypeSystem::with_prelude()?`
+  - ADT/typeclass *heads* injected by `TypeSystem::new_with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rexlang-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
 - **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parser/typechecker limit APIs provide bounded recursion for production/untrusted workloads.
 - **Import-use rewrite/validation**: library processing resolves import aliases across expression

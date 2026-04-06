@@ -12,9 +12,9 @@ fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeE
     let program = prelude_typeclasses_program()?;
     for decl in &program.decls {
         match decl {
-            Decl::Class(class_decl) => ts.inject_class_decl(class_decl)?,
+            Decl::Class(class_decl) => ts.register_class_decl(class_decl)?,
             Decl::Instance(inst_decl) => {
-                ts.inject_instance_decl(inst_decl)?;
+                ts.register_instance_decl(inst_decl)?;
             }
             Decl::Type(..) | Decl::Fn(..) | Decl::DeclareFn(..) | Decl::Import(..) => {}
         }
@@ -838,7 +838,7 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
         let list_a = list_adt.result_type();
         list_adt.add_variant(sym("Empty"), vec![]);
         list_adt.add_variant(sym("Cons"), vec![a.clone(), list_a.clone()]);
-        ts.inject_adt(&list_adt);
+        ts.register_adt(&list_adt);
     }
     {
         let option_name = sym("Option");
@@ -850,7 +850,7 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
         })?;
         option_adt.add_variant(sym("Some"), vec![t]);
         option_adt.add_variant(sym("None"), vec![]);
-        ts.inject_adt(&option_adt);
+        ts.register_adt(&option_adt);
     }
     {
         let result_name = sym("Result");
@@ -866,7 +866,7 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
         })?;
         result_adt.add_variant(sym("Err"), vec![e]);
         result_adt.add_variant(sym("Ok"), vec![t]);
-        ts.inject_adt(&result_adt);
+        ts.register_adt(&result_adt);
     }
 
     inject_prelude_primops(ts);

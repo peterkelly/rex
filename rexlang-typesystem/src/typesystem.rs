@@ -1769,27 +1769,27 @@ impl TypeSystem {
         self.limits = limits;
     }
 
-    pub fn with_prelude() -> Result<Self, TypeError> {
+    pub fn new_with_prelude() -> Result<Self, TypeError> {
         let mut ts = TypeSystem::new();
         prelude::build_prelude(&mut ts)?;
         Ok(ts)
     }
 
-    pub fn inject_decl(&mut self, decl: &Decl) -> Result<(), TypeError> {
+    fn register_decl(&mut self, decl: &Decl) -> Result<(), TypeError> {
         match decl {
-            Decl::Type(ty) => self.inject_type_decl(ty),
-            Decl::Class(class_decl) => self.inject_class_decl(class_decl),
+            Decl::Type(ty) => self.register_type_decl(ty),
+            Decl::Class(class_decl) => self.register_class_decl(class_decl),
             Decl::Instance(inst_decl) => {
-                let _ = self.inject_instance_decl(inst_decl)?;
+                let _ = self.register_instance_decl(inst_decl)?;
                 Ok(())
             }
-            Decl::Fn(fd) => self.inject_fn_decls(std::slice::from_ref(fd)),
+            Decl::Fn(fd) => self.register_fn_decls(std::slice::from_ref(fd)),
             Decl::DeclareFn(fd) => self.inject_declare_fn_decl(fd),
             Decl::Import(..) => Ok(()),
         }
     }
 
-    pub fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), TypeError> {
+    pub fn register_decls(&mut self, decls: &[Decl]) -> Result<(), TypeError> {
         let mut pending_fns: Vec<FnDecl> = Vec::new();
         for decl in decls {
             if let Decl::Fn(fd) = decl {
@@ -1798,14 +1798,14 @@ impl TypeSystem {
             }
 
             if !pending_fns.is_empty() {
-                self.inject_fn_decls(&pending_fns)?;
+                self.register_fn_decls(&pending_fns)?;
                 pending_fns.clear();
             }
 
-            self.inject_decl(decl)?;
+            self.register_decl(decl)?;
         }
         if !pending_fns.is_empty() {
-            self.inject_fn_decls(&pending_fns)?;
+            self.register_fn_decls(&pending_fns)?;
         }
         Ok(())
     }
@@ -1822,15 +1822,11 @@ impl TypeSystem {
         self.env.extend_overload(name, scheme);
     }
 
-    pub fn inject_class(&mut self, name: impl AsRef<str>, supers: Vec<Symbol>) {
-        self.classes.add_class(sym(name.as_ref()), supers);
-    }
-
-    pub fn inject_instance(&mut self, class: impl AsRef<str>, inst: Instance) {
+    pub fn register_instance(&mut self, class: impl AsRef<str>, inst: Instance) {
         self.classes.add_instance(sym(class.as_ref()), inst);
     }
 
-    pub fn inject_class_decl(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
+    pub fn register_class_decl(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
         let span = decl.span;
         (|| {
             // Classes are global, and Rex does not support reopening/merging them.
@@ -1937,7 +1933,7 @@ impl TypeSystem {
         .map_err(|err| with_span(&span, err))
     }
 
-    pub fn inject_instance_decl(
+    pub fn register_instance_decl(
         &mut self,
         decl: &InstanceDecl,
     ) -> Result<PreparedInstanceDecl, TypeError> {
@@ -2056,11 +2052,7 @@ impl TypeSystem {
         .map_err(|err| with_span(&span, err))
     }
 
-    pub fn inject_fn_decl(&mut self, decl: &FnDecl) -> Result<(), TypeError> {
-        self.inject_fn_decls(std::slice::from_ref(decl))
-    }
-
-    pub fn inject_fn_decls(&mut self, decls: &[FnDecl]) -> Result<(), TypeError> {
+    pub fn register_fn_decls(&mut self, decls: &[FnDecl]) -> Result<(), TypeError> {
         if decls.is_empty() {
             return Ok(());
         }
@@ -2415,7 +2407,7 @@ impl TypeSystem {
     /// Register constructor schemes for an ADT in the type environment.
     /// This makes constructors (e.g. `Some`, `None`, `Ok`, `Err`) available
     /// to the type checker as normal values.
-    pub fn inject_adt(&mut self, adt: &AdtDecl) {
+    pub fn register_adt(&mut self, adt: &AdtDecl) {
         self.adts.insert(adt.name.clone(), adt.clone());
         for (name, scheme) in adt.constructor_schemes() {
             self.register_value_scheme(&name, scheme);
@@ -2440,12 +2432,12 @@ impl TypeSystem {
         Ok(adt)
     }
 
-    pub fn inject_type_decl(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
+    pub fn register_type_decl(&mut self, decl: &TypeDecl) -> Result<(), TypeError> {
         if BuiltinTypeId::from_symbol(&decl.name).is_some() {
             return Err(TypeError::ReservedTypeName(decl.name.clone()));
         }
         let adt = self.adt_from_decl(decl)?;
-        self.inject_adt(&adt);
+        self.register_adt(&adt);
         Ok(())
     }
 
@@ -4941,7 +4933,7 @@ mod tests {
 
     #[test]
     fn entail_superclasses() {
-        let ts = TypeSystem::with_prelude().unwrap();
+        let ts = TypeSystem::new_with_prelude().unwrap();
         let pred = Predicate::new("Semiring", Type::builtin(BuiltinTypeId::I32));
         let given = [Predicate::new(
             "AdditiveGroup",
@@ -4952,7 +4944,7 @@ mod tests {
 
     #[test]
     fn entail_instances() {
-        let ts = TypeSystem::with_prelude().unwrap();
+        let ts = TypeSystem::new_with_prelude().unwrap();
         let pred = Predicate::new("Field", Type::builtin(BuiltinTypeId::F32));
         assert!(entails(&ts.classes, &[], &pred).unwrap());
 
@@ -4962,7 +4954,7 @@ mod tests {
 
     #[test]
     fn prelude_injects_functions() {
-        let ts = TypeSystem::with_prelude().unwrap();
+        let ts = TypeSystem::new_with_prelude().unwrap();
         let minus = ts.env.lookup(&sym("-")).expect("minus in env");
         let div = ts.env.lookup(&sym("/")).expect("div in env");
         assert_eq!(minus.len(), 1);
@@ -4977,7 +4969,7 @@ mod tests {
 
     #[test]
     fn adt_constructors_are_present() {
-        let ts = TypeSystem::with_prelude().unwrap();
+        let ts = TypeSystem::new_with_prelude().unwrap();
         assert!(ts.env.lookup(&sym("Empty")).is_some());
         assert!(ts.env.lookup(&sym("Cons")).is_some());
         assert!(ts.env.lookup(&sym("Ok")).is_some());
@@ -5022,7 +5014,7 @@ mod tests {
             .unwrap();
         let program = parse_handle.join().unwrap().unwrap();
         let expr = program.expr;
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(
             ty,
@@ -5079,7 +5071,7 @@ mod tests {
         code.push_str(" in xs");
 
         let program = parse_program(&code);
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         ts.set_limits(TypeSystemLimits {
             max_infer_depth: Some(8),
         });
@@ -5099,8 +5091,8 @@ mod tests {
             id 1
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        ts.inject_decls(&program.decls).unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        ts.register_decls(&program.decls).unwrap();
         let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert!(
             preds.is_empty()
@@ -5112,7 +5104,7 @@ mod tests {
 
     #[test]
     fn declare_fn_is_noop_when_matching_existing_scheme() {
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         ts.add_value(
             "foo",
             Scheme::new(
@@ -5145,8 +5137,8 @@ mod tests {
             unit_id ()
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        ts.inject_decls(&program.decls).unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        ts.register_decls(&program.decls).unwrap();
         let (preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
         assert!(preds.is_empty());
         assert_eq!(ty, Type::tuple(vec![]));
@@ -5162,7 +5154,7 @@ mod tests {
     #[test]
     fn type_errors_include_span() {
         let expr = parse_expr("missing");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = ts.infer(expr.as_ref()).unwrap_err();
         match err {
             TypeError::Spanned { span, error } => {
@@ -5179,7 +5171,7 @@ mod tests {
     #[test]
     fn infer_with_gas_rejects_out_of_budget() {
         let expr = parse_expr("1");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let mut gas = GasMeter::new(
             Some(0),
             GasCosts {
@@ -5195,11 +5187,11 @@ mod tests {
     #[test]
     fn reject_user_redefinition_of_primitive_type_name() {
         let program = parse_program("type i32 = I32Wrap i32");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let rexlang_ast::expr::Decl::Type(decl) = &program.decls[0] else {
             panic!("expected type decl");
         };
-        let err = ts.inject_type_decl(decl).unwrap_err();
+        let err = ts.register_type_decl(decl).unwrap_err();
         assert!(matches!(
             err,
             TypeError::ReservedTypeName(name) if name.as_ref() == "i32"
@@ -5209,11 +5201,11 @@ mod tests {
     #[test]
     fn reject_user_redefinition_of_prelude_adt_name() {
         let program = parse_program("type Result e a = Nope e a");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let rexlang_ast::expr::Decl::Type(decl) = &program.decls[0] else {
             panic!("expected type decl");
         };
-        let err = ts.inject_type_decl(decl).unwrap_err();
+        let err = ts.register_type_decl(decl).unwrap_err();
         assert!(matches!(
             err,
             TypeError::ReservedTypeName(name) if name.as_ref() == "Result"
@@ -5230,7 +5222,7 @@ mod tests {
                 id (id 420, id 6.9, id "str")
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
             Type::builtin(BuiltinTypeId::I32),
@@ -5243,7 +5235,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_ok() {
         let expr = parse_expr("let x: i32 = 42 in x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
@@ -5251,7 +5243,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_lambda_param() {
         let expr = parse_expr("\\ (a : f32) -> a");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(
             ty,
@@ -5265,7 +5257,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_is_alias() {
         let expr = parse_expr("\"hi\" is str");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     }
@@ -5273,7 +5265,7 @@ mod tests {
     #[test]
     fn infer_type_annotation_mismatch_error() {
         let expr = parse_expr("let x: i32 = 3.14 in x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -5289,10 +5281,10 @@ mod tests {
                 (x.field1, x.field2)
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         for decl in &program.decls {
             if let rexlang_ast::expr::Decl::Type(decl) = decl {
-                ts.inject_type_decl(decl).unwrap();
+                ts.register_type_decl(decl).unwrap();
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
@@ -5314,10 +5306,10 @@ mod tests {
                 x.field1
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         for decl in &program.decls {
             if let rexlang_ast::expr::Decl::Type(decl) = decl {
-                ts.inject_type_decl(decl).unwrap();
+                ts.register_type_decl(decl).unwrap();
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
@@ -5335,10 +5327,10 @@ mod tests {
                 x.field1
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         for decl in &program.decls {
             if let rexlang_ast::expr::Decl::Type(decl) = decl {
-                ts.inject_type_decl(decl).unwrap();
+                ts.register_type_decl(decl).unwrap();
             }
         }
         let err = strip_span(ts.infer(program.expr.as_ref()).unwrap_err());
@@ -5356,10 +5348,10 @@ mod tests {
                 f (Boxed { value = 1 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         for decl in &program.decls {
             if let rexlang_ast::expr::Decl::Type(decl) = decl {
-                ts.inject_type_decl(decl).unwrap();
+                ts.register_type_decl(decl).unwrap();
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
@@ -5379,10 +5371,10 @@ mod tests {
                     when MyVariant2 _ -> 0
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         for decl in &program.decls {
             if let rexlang_ast::expr::Decl::Type(decl) = decl {
-                ts.inject_type_decl(decl).unwrap();
+                ts.register_type_decl(decl).unwrap();
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
@@ -5407,7 +5399,7 @@ mod tests {
                     when None -> 0
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
@@ -5424,7 +5416,7 @@ mod tests {
                 (apply id 1, apply id "hi", apply wrap true)
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
             Type::builtin(BuiltinTypeId::I32),
@@ -5451,7 +5443,7 @@ mod tests {
                 unwrap (Ok (Some 5))
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
@@ -5469,7 +5461,7 @@ mod tests {
                 (head_or 0 [1, 2, 3], head_or 0 [])
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
             Type::builtin(BuiltinTypeId::I32),
@@ -5491,7 +5483,7 @@ mod tests {
                 (head_or 0 (Cons 1 (Cons 2 Empty)), head_or 0 Empty)
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         let expected = Type::tuple(vec![
             Type::builtin(BuiltinTypeId::I32),
@@ -5513,10 +5505,10 @@ mod tests {
                 sum (Pair { left = 1, right = 2 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         for decl in &program.decls {
             if let rexlang_ast::expr::Decl::Type(decl) = decl {
-                ts.inject_type_decl(decl).unwrap();
+                ts.register_type_decl(decl).unwrap();
             }
         }
         let (_preds, ty) = ts.infer(program.expr.as_ref()).unwrap();
@@ -5531,7 +5523,7 @@ mod tests {
             add 1 2
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -5545,7 +5537,7 @@ mod tests {
             add 1 2
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -5559,7 +5551,7 @@ mod tests {
             (my_add 1 2, my_add 1.0 2.0)
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let expr = program.expr_with_fns();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(
@@ -5574,7 +5566,7 @@ mod tests {
     #[test]
     fn infer_additive_monoid_constraint() {
         let expr = parse_expr("\\x y -> x + y");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "AdditiveMonoid");
@@ -5593,7 +5585,7 @@ mod tests {
     #[test]
     fn infer_multiplicative_monoid_constraint() {
         let expr = parse_expr("\\x y -> x * y");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "MultiplicativeMonoid");
@@ -5612,7 +5604,7 @@ mod tests {
     #[test]
     fn infer_additive_group_constraint() {
         let expr = parse_expr("\\x y -> x - y");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "AdditiveGroup");
@@ -5631,7 +5623,7 @@ mod tests {
     #[test]
     fn infer_integral_constraint() {
         let expr = parse_expr("\\x y -> x % y");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(preds.len(), 1);
         assert_eq!(preds[0].class.as_ref(), "Integral");
@@ -5650,7 +5642,7 @@ mod tests {
     #[test]
     fn infer_literal_addition_defaults() {
         let expr = parse_expr("1 + 2");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert_eq!(preds.len(), 2);
@@ -5666,7 +5658,7 @@ mod tests {
     #[test]
     fn infer_mod_defaults() {
         let expr = parse_expr("1 % 2");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert_eq!(preds.len(), 1);
@@ -5677,7 +5669,7 @@ mod tests {
     #[test]
     fn infer_get_list_type() {
         let expr = parse_expr("get 1 [1, 2, 3]");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert!(preds.iter().any(|p| p.class.as_ref() == "Indexable"));
@@ -5693,19 +5685,19 @@ mod tests {
     #[test]
     fn infer_get_tuple_type() {
         let expr = parse_expr("(1, 'Hello', true).0");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
         assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
         let expr = parse_expr("(1, 'Hello', true).1");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
         assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
         let expr = parse_expr("(1, 'Hello', true).2");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
         assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
@@ -5714,7 +5706,7 @@ mod tests {
     #[test]
     fn infer_division_defaults() {
         let expr = parse_expr("1.0 / 2.0");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
         assert_eq!(preds.len(), 1);
@@ -5726,7 +5718,7 @@ mod tests {
     #[test]
     fn infer_unbound_variable_error() {
         let expr = parse_expr("missing");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(
             err,
@@ -5737,7 +5729,7 @@ mod tests {
     #[test]
     fn infer_if_branch_type_mismatch_error() {
         let expr = parse_expr(r#"if true then 1 else "no""#);
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -5751,7 +5743,7 @@ mod tests {
     #[test]
     fn infer_unknown_pattern_constructor_error() {
         let expr = parse_expr("match 1 when Nope -> 1");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(
             err,
@@ -5779,7 +5771,7 @@ mod tests {
     #[test]
     fn infer_if_cond_not_bool_error() {
         let expr = parse_expr("if 1 then 2 else 3");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -5793,7 +5785,7 @@ mod tests {
     #[test]
     fn infer_apply_non_function_error() {
         let expr = parse_expr("1 2");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -5801,7 +5793,7 @@ mod tests {
     #[test]
     fn infer_list_element_mismatch_error() {
         let expr = parse_expr("[1, true]");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -5815,7 +5807,7 @@ mod tests {
     #[test]
     fn infer_dict_value_mismatch_error() {
         let expr = parse_expr("{a = 1, b = true}");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -5829,14 +5821,14 @@ mod tests {
     #[test]
     fn infer_match_list_on_non_list_error() {
         let expr = parse_expr("match 1 when [x] -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         assert!(ts.infer(expr.as_ref()).is_err());
     }
 
     #[test]
     fn infer_pattern_constructor_arity_error() {
         let expr = parse_expr("match (Ok 1) when Ok x y -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(
             err,
@@ -5847,7 +5839,7 @@ mod tests {
     #[test]
     fn infer_match_arm_type_mismatch_error() {
         let expr = parse_expr(r#"match 1 when _ -> 1 when _ -> "no""#);
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::Unification(a, b) => {
@@ -5861,14 +5853,14 @@ mod tests {
     #[test]
     fn infer_match_option_on_non_option_error() {
         let expr = parse_expr("match 1 when Some x -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         assert!(ts.infer(expr.as_ref()).is_err());
     }
 
     #[test]
     fn infer_dict_pattern_on_non_dict_error() {
         let expr = parse_expr("match 1 when {a} -> a");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -5876,14 +5868,14 @@ mod tests {
     #[test]
     fn infer_cons_pattern_on_non_list_error() {
         let expr = parse_expr("match 1 when x::xs -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         assert!(ts.infer(expr.as_ref()).is_err());
     }
 
     #[test]
     fn infer_apply_wrong_arg_type_error() {
         let expr = parse_expr("(\\x -> x + 1) true");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -5891,7 +5883,7 @@ mod tests {
     #[test]
     fn infer_self_application_occurs_error() {
         let expr = parse_expr("\\x -> x x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Occurs(_, _)));
     }
@@ -5899,7 +5891,7 @@ mod tests {
     #[test]
     fn infer_apply_constructor_too_many_args_error() {
         let expr = parse_expr("Some 1 2");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -5907,7 +5899,7 @@ mod tests {
     #[test]
     fn infer_operator_type_mismatch_error() {
         let expr = parse_expr("1 + true");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -5915,7 +5907,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_match_is_error() {
         let expr = parse_expr("match (Ok 1) when Ok x -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -5923,7 +5915,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_match_on_bound_var_error() {
         let expr = parse_expr("let x = Ok 1 in match x when Ok y -> y");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -5931,7 +5923,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_match_in_lambda_error() {
         let expr = parse_expr("\\x -> match x when Ok y -> y");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -5939,7 +5931,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_option_match_error() {
         let expr = parse_expr("match (Some 1) when Some x -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -5952,7 +5944,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_result_match_error() {
         let expr = parse_expr("match (Err 1) when Ok x -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -5965,7 +5957,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_list_missing_empty_error() {
         let expr = parse_expr("match [1, 2] when x::xs -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -5978,7 +5970,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_list_match_on_bound_var_error() {
         let expr = parse_expr("let xs = [1, 2] in match xs when x::xs -> x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
     }
@@ -5986,7 +5978,7 @@ mod tests {
     #[test]
     fn infer_non_exhaustive_list_missing_cons_error() {
         let expr = parse_expr("match [1] when [] -> 0");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         match err {
             TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -5999,7 +5991,7 @@ mod tests {
     #[test]
     fn infer_match_list_patterns_on_result_error() {
         let expr = parse_expr("match (Ok 1) when [] -> 0 when x::xs -> 1");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)));
     }
@@ -6025,7 +6017,7 @@ mod tests {
             };
 
             let expr = parse_expr(code);
-            let mut ts = TypeSystem::with_prelude().unwrap();
+            let mut ts = TypeSystem::new_with_prelude().unwrap();
             let (preds, ty) = ts.infer(expr.as_ref()).unwrap();
             if let Some(expected) = expected_ty {
                 assert_eq!(ty, expected, "{name}");
@@ -6051,8 +6043,8 @@ mod tests {
               bar
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        ts.inject_decls(&program.decls).unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        ts.register_decls(&program.decls).unwrap();
         let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(typ.to_string(), "Foo");
     }
@@ -6068,8 +6060,8 @@ mod tests {
               { foo with { y = 2 } }
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        ts.inject_decls(&program.decls).unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        ts.register_decls(&program.decls).unwrap();
         let err = ts.infer(program.expr.as_ref()).unwrap_err();
         let err = strip_span(err);
         assert!(matches!(err, TypeError::UnknownField { .. }));
@@ -6086,8 +6078,8 @@ mod tests {
               f (Bar { x = 1 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        ts.inject_decls(&program.decls).unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        ts.register_decls(&program.decls).unwrap();
         let err = ts.infer(program.expr.as_ref()).unwrap_err();
         let err = strip_span(err);
         assert!(matches!(err, TypeError::FieldNotKnown { .. }));
@@ -6107,8 +6099,8 @@ mod tests {
               f (Bar { x = 1 })
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        ts.inject_decls(&program.decls).unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        ts.register_decls(&program.decls).unwrap();
         let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(typ.to_string(), "Foo");
     }
@@ -6123,8 +6115,8 @@ mod tests {
               f { x = 1, y = 2 }
             "#,
         );
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        ts.inject_decls(&program.decls).unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        ts.register_decls(&program.decls).unwrap();
         let (_preds, typ) = ts.infer(program.expr.as_ref()).unwrap();
         assert_eq!(typ.to_string(), "{x: i32, y: i32}");
     }
@@ -6132,7 +6124,7 @@ mod tests {
     #[test]
     fn infer_typed_hole_expr_is_hole_kind() {
         let expr = parse_expr("?");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (typed, _preds, _ty) = ts.infer_typed(expr.as_ref()).unwrap();
         assert!(
             matches!(typed.kind, TypedExprKind::Hole),
@@ -6143,7 +6135,7 @@ mod tests {
     #[test]
     fn infer_hole_with_annotation_unifies_to_annotation() {
         let expr = parse_expr("let x : i32 = ? in x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
@@ -6151,7 +6143,7 @@ mod tests {
     #[test]
     fn infer_hole_in_if_condition_is_bool_constrained() {
         let expr = parse_expr("if ? then 1 else 2");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
@@ -6159,7 +6151,7 @@ mod tests {
     #[test]
     fn infer_hole_in_arithmetic_is_numeric_constrained() {
         let expr = parse_expr("? + 1");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = ts.infer(expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     }
@@ -6167,7 +6159,7 @@ mod tests {
     #[test]
     fn infer_hole_arithmetic_conflicting_annotation_failure() {
         let expr = parse_expr("let x : string = (? + 1) in x");
-        let mut ts = TypeSystem::with_prelude().unwrap();
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
         let err = strip_span(ts.infer(expr.as_ref()).unwrap_err());
         assert!(matches!(err, TypeError::Unification(_, _)), "err={err:#?}");
     }

@@ -517,15 +517,15 @@ let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
-let mut ts = TypeSystem::with_prelude()?;
+let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
     match decl {
-        rex_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
-        rex_ast::expr::Decl::Class(d) => ts.inject_class_decl(d)?,
+        rex_ast::expr::Decl::Type(d) => ts.register_type_decl(d)?,
+        rex_ast::expr::Decl::Class(d) => ts.register_class_decl(d)?,
         rex_ast::expr::Decl::Instance(d) => {
-            ts.inject_instance_decl(d)?;
+            ts.register_instance_decl(d)?;
         }
-        rex_ast::expr::Decl::Fn(d) => ts.inject_fn_decl(d)?,
+        rex_ast::expr::Decl::Fn(d) => ts.register_fn_decls(std::slice::from_ref(d))?,
     }
 }
 
@@ -572,15 +572,15 @@ let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
-let mut ts = TypeSystem::with_prelude()?;
+let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
     match decl {
-        rex_ast::expr::Decl::Type(d) => ts.inject_type_decl(d)?,
-        rex_ast::expr::Decl::Class(d) => ts.inject_class_decl(d)?,
+        rex_ast::expr::Decl::Type(d) => ts.register_type_decl(d)?,
+        rex_ast::expr::Decl::Class(d) => ts.register_class_decl(d)?,
         rex_ast::expr::Decl::Instance(d) => {
-            ts.inject_instance_decl(d)?;
+            ts.register_instance_decl(d)?;
         }
-        rex_ast::expr::Decl::Fn(d) => ts.inject_fn_decl(d)?,
+        rex_ast::expr::Decl::Fn(d) => ts.register_fn_decls(std::slice::from_ref(d))?,
     }
 }
 

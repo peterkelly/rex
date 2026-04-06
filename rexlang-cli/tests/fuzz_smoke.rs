@@ -62,8 +62,8 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
             Err(_) => continue,
         };
 
-        let mut ts = TypeSystem::with_prelude().unwrap();
-        let _ = ts.inject_decls(&program.decls);
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        let _ = ts.register_decls(&program.decls);
         let _ = ts.infer_with_gas(program.expr.as_ref(), &mut gas);
 
         let mut engine = Engine::with_prelude(()).unwrap();

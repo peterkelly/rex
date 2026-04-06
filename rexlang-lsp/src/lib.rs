@@ -219,7 +219,7 @@ fn is_ident_like(name: &str) -> bool {
 fn prelude_completion_values() -> &'static Vec<(String, CompletionItemKind)> {
     static PRELUDE_VALUES: OnceLock<Vec<(String, CompletionItemKind)>> = OnceLock::new();
     PRELUDE_VALUES.get_or_init(|| {
-        let ts = match TypeSystem::with_prelude() {
+        let ts = match TypeSystem::new_with_prelude() {
             Ok(ts) => ts,
             Err(e) => {
                 eprintln!("rexlang-lsp: failed to build prelude for completions: {e}");
@@ -266,7 +266,7 @@ fn inject_program_decls(
             if pending.is_empty() {
                 return Ok(());
             }
-            ts.inject_decls(pending)?;
+            ts.register_decls(pending)?;
             pending.clear();
             Ok(())
         };
@@ -275,7 +275,7 @@ fn inject_program_decls(
         match decl {
             Decl::Instance(inst_decl) => {
                 flush_non_instances(ts, &mut pending_non_instances)?;
-                let prepared = ts.inject_instance_decl(inst_decl)?;
+                let prepared = ts.register_instance_decl(inst_decl)?;
                 if want_prepared_instance.is_some_and(|want| want == idx) {
                     prepared_target = Some(prepared.clone());
                 }
@@ -1200,7 +1200,8 @@ fn prepare_program_with_imports(
     uri: &Url,
     program: &Program,
 ) -> std::result::Result<PreparedProgram, String> {
-    let mut ts = TypeSystem::with_prelude().map_err(|e| format!("failed to build prelude: {e}"))?;
+    let mut ts =
+        TypeSystem::new_with_prelude().map_err(|e| format!("failed to build prelude: {e}"))?;
     let mut diagnostics = Vec::new();
 
     let importer = uri_to_file_path(uri);
@@ -1416,7 +1417,7 @@ fn prepare_program_with_imports(
                 params: td.params.clone(),
                 variants,
             };
-            let _ = ts.inject_type_decl(&td2);
+            let _ = ts.register_type_decl(&td2);
         }
 
         let mut value_map: HashMap<rexlang_ast::expr::Symbol, rexlang_ast::expr::Symbol> =

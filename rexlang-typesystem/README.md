@@ -18,7 +18,7 @@ use rex_ast::expr::intern;
 use rex_ts::{BuiltinTypeId, Predicate, Type, TypeSystem};
 
 fn main() -> Result<(), rex_ts::TypeError> {
-    let mut ts = TypeSystem::with_prelude()?;
+    let mut ts = TypeSystem::new_with_prelude()?;
 
     // Register an additional function: id :: a -> a
     let a = Type::var(ts.supply.fresh(Some(intern("a"))));
@@ -87,4 +87,4 @@ cargo test -p rexlang-typesystem
 
 ## Extending
 
-You can add more classes or instances via `TypeSystem::inject_class`/`inject_instance`, and you can inject new ADTs with `AdtDecl` + `TypeSystem::inject_adt`. The `TypeSystem` exposes a `supply` for generating fresh type variables when building new schemes.
+You can register new ADTs with `AdtDecl` + `TypeSystem::register_adt`. The `TypeSystem` also exposes `register_instance` for low-level instance-head injection and a `supply` for generating fresh type variables when building new schemes.

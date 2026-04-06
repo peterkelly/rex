@@ -21,10 +21,10 @@ async fn run_one(input: &[u8]) {
         Err(_) => return,
     };
 
-    let Ok(mut ts) = TypeSystem::with_prelude() else {
+    let Ok(mut ts) = TypeSystem::new_with_prelude() else {
         return;
     };
-    if ts.inject_decls(&program.decls).is_err() {
+    if ts.register_decls(&program.decls).is_err() {
         return;
     }
     if ts.infer_with_gas(program.expr.as_ref(), &mut gas).is_err() {

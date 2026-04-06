@@ -1959,7 +1959,7 @@ where
 
     pub fn with_options(state: State, options: EngineOptions) -> Result<Self, EngineError> {
         let type_system = match options.prelude {
-            PreludeMode::Enabled => TypeSystem::with_prelude()?,
+            PreludeMode::Enabled => TypeSystem::new_with_prelude()?,
             PreludeMode::Disabled => TypeSystem::new(),
         };
         let mut engine = Engine {
@@ -2695,7 +2695,7 @@ where
             },
         )?;
 
-        self.type_system.inject_instance(
+        self.type_system.register_instance(
             "Default",
             Instance::new(vec![], Predicate::new(class.clone(), head_ty.clone())),
         );
@@ -2934,7 +2934,7 @@ where
     pub fn inject_adt(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
         // Type system gets the constructor schemes; runtime gets constructor functions
         // that build `Value::Adt` with the constructor tag and evaluated args.
-        self.type_system.inject_adt(&adt);
+        self.type_system.register_adt(&adt);
         for (ctor, scheme) in adt.constructor_schemes() {
             let ctor_name = ctor.clone();
             let func = Arc::new(
@@ -2977,14 +2977,14 @@ where
 
     pub fn inject_class_decl(&mut self, decl: &ClassDecl) -> Result<(), EngineError> {
         self.type_system
-            .inject_class_decl(decl)
+            .register_class_decl(decl)
             .map_err(EngineError::Type)
     }
 
     pub fn inject_instance_decl(&mut self, decl: &InstanceDecl) -> Result<(), EngineError> {
         let prepared = self
             .type_system
-            .inject_instance_decl(decl)
+            .register_instance_decl(decl)
             .map_err(EngineError::Type)?;
         self.register_typeclass_instance(decl, &prepared)
     }
@@ -3000,7 +3000,7 @@ where
 
         // Register declared types first so bodies can typecheck mutually-recursively.
         self.type_system
-            .inject_fn_decls(decls)
+            .register_fn_decls(decls)
             .map_err(EngineError::Type)?;
 
         // Build a recursive runtime environment with placeholders, then fill each slot.
@@ -3116,11 +3116,11 @@ where
 
     pub fn inject_class(&mut self, name: &str, supers: Vec<String>) {
         let supers = supers.into_iter().map(|s| sym(&s)).collect();
-        self.type_system.inject_class(name, supers);
+        self.type_system.classes.add_class(sym(name), supers);
     }
 
     pub fn inject_instance(&mut self, class: &str, inst: Instance) {
-        self.type_system.inject_instance(class, inst);
+        self.type_system.register_instance(class, inst);
     }
 
     fn inject_prelude(&mut self) -> Result<(), EngineError> {

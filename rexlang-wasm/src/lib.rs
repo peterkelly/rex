@@ -60,9 +60,9 @@ pub fn infer_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, Str
     let mut gas = new_gas(gas_limit);
     let program = parse_program_with_limits(source, &mut gas, ParserLimits::safe_defaults())?;
 
-    let mut ts = TypeSystem::with_prelude().map_err(|e| format!("type system error: {e}"))?;
+    let mut ts = TypeSystem::new_with_prelude().map_err(|e| format!("type system error: {e}"))?;
     ts.set_limits(TypeSystemLimits::safe_defaults());
-    ts.inject_decls(&program.decls)
+    ts.register_decls(&program.decls)
         .map_err(|e| format!("type declaration error: {e}"))?;
 
     let (preds, typ) = ts
