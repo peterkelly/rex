@@ -8,14 +8,16 @@ Some types take type parameters:
 
 - `List a`
 - `Option a`
+- `Promise a`
 - `Result a e`
 
-The bare names `List` and `Option` are *type constructors* (they still need an `a`).
+The bare names `List`, `Option`, and `Promise` are *type constructors* (they still need an `a`).
 
 In informal kind notation:
 
 - `List : * -> *`
 - `Option : * -> *`
+- `Promise : * -> *`
 - `Result : * -> * -> *`
 
 ## Why `Functor` talks about `f a`
@@ -27,7 +29,7 @@ class Functor f
   map : (a -> b) -> f a -> f b
 ```
 
-`f` here stands for a unary type constructor like `List` or `Option`.
+`f` here stands for a unary type constructor like `List`, `Option`, or `Promise`.
 
 ## `Result` is binary — so how can it be a `Functor`?
 

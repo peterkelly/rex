@@ -10,7 +10,7 @@ Examples of primitive and constructed types:
 
 - `bool`, `i32`, `f32`, `string`
 - `(a, b)` for tuples
-- `List a`, `Option a`, `Result a e` (prelude)
+- `List a`, `Option a`, `Promise a`, `Result a e` (prelude/built-in constructors)
 
 Function types are right-associative:
 

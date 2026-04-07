@@ -240,6 +240,7 @@ Functions are right-associative: `a -> b -> c` means `a -> (b -> c)`.
 - List type: `List a` (prelude)
 - Array type: `Array a` (prelude)
 - Dict type: `Dict a` (prelude; key type is a symbol/field label at runtime)
+- Promise type: `Promise a` (built-in unary type constructor; embedders may attach their own operations)
 
 ### ADTs
 

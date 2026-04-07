@@ -2522,6 +2522,20 @@ mod tests {
     }
 
     #[test]
+    fn reject_user_redefinition_of_promise_type_name() {
+        let program = parse_program("type Promise a = PromiseWrap a");
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        let rexlang_ast::expr::Decl::Type(decl) = &program.decls[0] else {
+            panic!("expected type decl");
+        };
+        let err = ts.register_type_decl(decl).unwrap_err();
+        assert!(matches!(
+            err,
+            TypeError::ReservedTypeName(name) if name.as_ref() == "Promise"
+        ));
+    }
+
+    #[test]
     fn infer_polymorphic_id_tuple() {
         let expr = parse_expr(
             r#"
@@ -2569,6 +2583,15 @@ mod tests {
         let mut ts = TypeSystem::new_with_prelude().unwrap();
         let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
+    }
+
+    #[test]
+    fn infer_type_annotation_with_promise_constructor() {
+        let expr = parse_expr("\\(x: Promise i32) -> x");
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
+        let promise_i32 = Type::promise(Type::builtin(BuiltinTypeId::I32));
+        assert_eq!(ty, Type::fun(promise_i32.clone(), promise_i32));
     }
 
     #[test]

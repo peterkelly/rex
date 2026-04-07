@@ -43,6 +43,7 @@ pub enum BuiltinTypeId {
     Array,
     Dict,
     Option,
+    Promise,
     Result,
 }
 
@@ -71,13 +72,14 @@ impl BuiltinTypeId {
             Self::Array => "Array",
             Self::Dict => "Dict",
             Self::Option => "Option",
+            Self::Promise => "Promise",
             Self::Result => "Result",
         }
     }
 
     pub fn arity(self) -> usize {
         match self {
-            Self::List | Self::Array | Self::Dict | Self::Option => 1,
+            Self::List | Self::Array | Self::Dict | Self::Option | Self::Promise => 1,
             Self::Result => 2,
             _ => 0,
         }
@@ -107,6 +109,7 @@ impl BuiltinTypeId {
             "Array" => Some(Self::Array),
             "Dict" => Some(Self::Dict),
             "Option" => Some(Self::Option),
+            "Promise" => Some(Self::Promise),
             "Result" => Some(Self::Result),
             _ => None,
         }
@@ -219,6 +222,10 @@ impl Type {
 
     pub fn option(elem: Type) -> Type {
         Type::app(Type::builtin(BuiltinTypeId::Option), elem)
+    }
+
+    pub fn promise(elem: Type) -> Type {
+        Type::app(Type::builtin(BuiltinTypeId::Promise), elem)
     }
 
     pub fn result(ok: Type, err: Type) -> Type {
