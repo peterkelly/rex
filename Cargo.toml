@@ -24,7 +24,7 @@ homepage = "https://rexlang.ai"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/talo/rex"
-version = "3.9.9"
+version = "3.9.10"
 
 [workspace.dependencies]
 # External dependencies

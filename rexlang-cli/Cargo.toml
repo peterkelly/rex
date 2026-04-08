@@ -9,7 +9,7 @@ version.workspace = true
 
 [dependencies]
 clap = { workspace = true }
-rexlang = { path = "../rexlang", version = "3.9.9" }
+rexlang = { path = "../rexlang", version = "3.9.10" }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
