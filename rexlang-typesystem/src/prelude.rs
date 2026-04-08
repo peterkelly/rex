@@ -966,6 +966,14 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
         let a = Type::var(a_tv.clone());
         let opt_a = option_of(a.clone());
         ts.add_value(
+            "unwrap",
+            Scheme::new(
+                vec![a_tv.clone()],
+                vec![],
+                Type::fun(opt_a.clone(), a.clone()),
+            ),
+        );
+        ts.add_value(
             "is_some",
             Scheme::new(
                 vec![a_tv.clone()],
@@ -990,6 +998,14 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
         let t = Type::var(t_tv.clone());
         let e = Type::var(e_tv.clone());
         let res_te = result_of(t.clone(), e.clone());
+        ts.add_overload(
+            "unwrap",
+            Scheme::new(
+                vec![t_tv.clone(), e_tv.clone()],
+                vec![],
+                Type::fun(res_te.clone(), t.clone()),
+            ),
+        );
         ts.add_value(
             "is_ok",
             Scheme::new(

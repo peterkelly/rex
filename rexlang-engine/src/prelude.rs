@@ -3146,6 +3146,40 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
 pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
+    let unwrap = sym("unwrap");
+    let unwrap_schemes = engine
+        .type_system
+        .env
+        .lookup(&unwrap)
+        .ok_or_else(|| EngineError::UnknownVar(unwrap.clone()))?
+        .to_vec();
+    for scheme in unwrap_schemes {
+        let typ = scheme.typ.clone();
+        match typ.as_ref() {
+            TypeKind::Fun(arg_ty, _) if matches!(arg_ty.as_ref(), TypeKind::App(head, _) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option"))) =>
+            {
+                engine.export_native("unwrap", scheme, 1, |engine, _, args| match option_value(
+                    &engine.heap,
+                    &args[0],
+                )? {
+                    Some(value) => Ok(value),
+                    None => Err(EngineError::Custom("called unwrap on None".into())),
+                })?;
+            }
+            TypeKind::Fun(arg_ty, _) if matches!(arg_ty.as_ref(), TypeKind::App(head, _) if matches!(head.as_ref(), TypeKind::App(head2, _) if matches!(head2.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Result")))) =>
+            {
+                engine.export_native("unwrap", scheme, 1, |engine, _, args| match result_value(
+                    &engine.heap,
+                    &args[0],
+                )? {
+                    Ok(value) => Ok(value),
+                    Err(_) => Err(EngineError::Custom("called unwrap on Err".into())),
+                })?;
+            }
+            _ => {}
+        }
+    }
+
     let is_some = sym("is_some");
     let is_some_scheme = engine.lookup_scheme(&is_some)?;
     engine.export_native("is_some", is_some_scheme, 1, |engine, _, args| {

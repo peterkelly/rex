@@ -254,4 +254,5 @@ Methods:
 | `sum` | `Foldable 'f, AdditiveMonoid 'a`<br>`=> (('f 'a) -> 'a)` | Sum all elements in a foldable container. |
 | `to_array` | `((List 'a) -> (Array 'a))` | Convert a list to an array. |
 | `to_list` | `((Array 'a) -> (List 'a))` | Convert an array to a list. |
+| `unwrap` | `((Option 'a) -> 'a)`<br><br>`((Result 't 'e) -> 't)` | Extract the inner value from `Some`/`Ok`, or raise an error for `None`/`Err`. |
 | `||` | `(bool -> (bool -> bool))` | Boolean disjunction. |

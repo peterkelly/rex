@@ -1272,10 +1272,12 @@ async fn eval_option_result_helpers() {
             opt = map (\x -> x + 1) (Some (1 is i32)),
             opt2 = bind (\x -> Some (x + 1)) opt,
             res = map (\x -> x + 1) ((Ok (1 is i32)) is Result i32 string),
+            unwrapped_opt = unwrap opt2,
+            unwrapped_res = unwrap res,
             ok = is_ok res,
             err = is_err (Err "nope")
         in
-            (opt2, res, ok, err)
+            (opt2, res, unwrapped_opt, unwrapped_res, ok, err)
         "#,
     );
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -1284,21 +1286,50 @@ async fn eval_option_result_helpers() {
     match value {
         Value::Tuple(xs) => {
             let xs = pvals!(engine, xs);
-            assert_eq!(xs.len(), 4);
+            assert_eq!(xs.len(), 6);
             assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
             assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "Ok")));
             assert_pointer_eq!(
                 &engine.heap,
                 engine.heap.alloc_value(xs[2].clone()).unwrap(),
-                engine.heap.alloc_bool(true).unwrap()
+                engine.heap.alloc_i32(3).unwrap()
             );
             assert_pointer_eq!(
                 &engine.heap,
                 engine.heap.alloc_value(xs[3].clone()).unwrap(),
+                engine.heap.alloc_i32(2).unwrap()
+            );
+            assert_pointer_eq!(
+                &engine.heap,
+                engine.heap.alloc_value(xs[4].clone()).unwrap(),
+                engine.heap.alloc_bool(true).unwrap()
+            );
+            assert_pointer_eq!(
+                &engine.heap,
+                engine.heap.alloc_value(xs[5].clone()).unwrap(),
                 engine.heap.alloc_bool(true).unwrap()
             );
         }
         _ => panic!("expected tuple result"),
+    }
+}
+
+#[tokio::test]
+async fn eval_unwrap_errors_for_empty_option_and_err_result() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+
+    let none_expr = parse("(unwrap ((None is Option i32)))");
+    match eval_expr(&mut engine, none_expr.as_ref()).await {
+        Err(EngineError::Custom(msg)) => assert_eq!(msg, "called unwrap on None"),
+        Err(other) => panic!("expected custom error, got {other:?}"),
+        Ok(_) => panic!("expected evaluation failure"),
+    }
+
+    let err_expr = parse(r#"(unwrap ((Err "boom") is Result i32 string))"#);
+    match eval_expr(&mut engine, err_expr.as_ref()).await {
+        Err(EngineError::Custom(msg)) => assert_eq!(msg, "called unwrap on Err"),
+        Err(other) => panic!("expected custom error, got {other:?}"),
+        Ok(_) => panic!("expected evaluation failure"),
     }
 }
 
