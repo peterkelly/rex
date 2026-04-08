@@ -8,6 +8,7 @@ use serde_json::json;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 fn mk_type_system() -> TypeSystem {
     TypeSystem::new_with_prelude().unwrap()
@@ -37,6 +38,10 @@ fn parse_program(source: &str) -> Program {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
     parser.parse_program(&mut GasMeter::default()).unwrap()
+}
+
+fn fixed_uuid() -> Uuid {
+    Uuid::parse_str("12345678-1234-5678-90ab-cdef12345678").unwrap()
 }
 
 #[derive(Rex, Serialize)]
@@ -118,6 +123,44 @@ fn option_and_result_roundtrip() {
         rex_to_json(&heap, &err_ptr, &res_ty, &ts, &opts).unwrap(),
         err_json
     );
+}
+
+#[test]
+fn promise_roundtrip_from_json() {
+    let ts = mk_type_system();
+    let heap = Heap::new();
+    let opts = JsonOptions::default();
+    let promise_ty = Type::promise(Type::builtin(BuiltinTypeId::I32));
+    let promise_json = json!(fixed_uuid());
+
+    let promise_ptr = json_to_rex(&heap, &promise_json, &promise_ty, &ts, &opts).unwrap();
+    let (tag, args) = heap.pointer_as_adt(&promise_ptr).unwrap();
+    assert_eq!(tag.as_ref(), "Promise");
+    assert_eq!(args.len(), 1);
+    assert_eq!(heap.pointer_as_uuid(&args[0]).unwrap(), fixed_uuid());
+    assert_eq!(
+        rex_to_json(&heap, &promise_ptr, &promise_ty, &ts, &opts).unwrap(),
+        promise_json
+    );
+}
+
+#[test]
+fn promise_roundtrip_from_runtime_value() {
+    let ts = mk_type_system();
+    let heap = Heap::new();
+    let opts = JsonOptions::default();
+    let promise_ty = Type::promise(Type::builtin(BuiltinTypeId::String));
+    let promise_id = heap.alloc_uuid(fixed_uuid()).unwrap();
+    let promise_ptr = heap.alloc_adt(sym("Promise"), vec![promise_id]).unwrap();
+
+    let promise_json = rex_to_json(&heap, &promise_ptr, &promise_ty, &ts, &opts).unwrap();
+    assert_eq!(promise_json, json!(fixed_uuid()));
+
+    let roundtrip_ptr = json_to_rex(&heap, &promise_json, &promise_ty, &ts, &opts).unwrap();
+    let (tag, args) = heap.pointer_as_adt(&roundtrip_ptr).unwrap();
+    assert_eq!(tag.as_ref(), "Promise");
+    assert_eq!(args.len(), 1);
+    assert_eq!(heap.pointer_as_uuid(&args[0]).unwrap(), fixed_uuid());
 }
 
 #[test]

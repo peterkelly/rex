@@ -240,6 +240,12 @@ fn json_to_pointer_for_con(
             }
         },
 
+        ("Promise", [_inner]) => {
+            let promise_id =
+                json_to_rex(heap, json, &Type::builtin(BuiltinTypeId::Uuid), ts, opts)?;
+            heap.alloc_adt(sym("Promise"), vec![promise_id])
+        }
+
         // Internal argument order is Result err ok.
         ("Result", [err_t, ok_t]) => match json {
             Value::Object(obj) if obj.len() == 1 => {
@@ -358,6 +364,24 @@ fn pointer_to_json_for_con(
                     heap,
                     pointer,
                     &Type::app(Type::builtin(BuiltinTypeId::Option), inner_t.clone()),
+                )),
+            }
+        }
+
+        ("Promise", [inner_t]) => {
+            let (tag, args) = heap.pointer_as_adt(pointer)?;
+            match (tag.as_ref(), args.as_slice()) {
+                ("Promise", [promise_id]) => rex_to_json(
+                    heap,
+                    promise_id,
+                    &Type::builtin(BuiltinTypeId::Uuid),
+                    ts,
+                    opts,
+                ),
+                _ => Err(type_mismatch_pointer(
+                    heap,
+                    pointer,
+                    &Type::app(Type::builtin(BuiltinTypeId::Promise), inner_t.clone()),
                 )),
             }
         }
