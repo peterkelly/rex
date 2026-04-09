@@ -1,3 +1,7 @@
+#![allow(clippy::disallowed_names)]
+
+extern crate rexlang_core as rexlang;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -5,12 +9,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
 use rexlang_ast::expr::sym;
+use rexlang_core::{JsonOptions, rex_to_json};
 use rexlang_engine::{
     Engine, EngineError, EngineOptions, EvaluatorRef, Library, Pointer, PreludeMode, RexAdt,
     RexType, Value, pointer_display,
 };
 use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind, TypeVarSupply};
 use rexlang_util::GasMeter;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -72,6 +78,20 @@ impl RexAdt for LocalRunSpec {
         adt.add_variant(sym("Pending"), vec![]);
         Ok(adt)
     }
+}
+
+#[derive(rexlang::Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
+enum EchoEnum {
+    Foo,
+    #[serde(rename = "BAR")]
+    Bar,
+}
+
+#[derive(rexlang::Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
+struct EchoRecord {
+    foo: u8,
+    bar: u8,
+    optbar: Option<u8>,
 }
 
 #[tokio::test]
@@ -208,6 +228,81 @@ async fn library_import_local_pub() {
             engine.heap.type_name(&value_ptr).unwrap()
         ),
     }
+}
+
+#[tokio::test]
+async fn injected_echo_library_roundtrips_embedder_types_through_json() {
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    let mut library = Library::new("echo");
+    library.add_rex_adt::<EchoEnum>().unwrap();
+    library.add_rex_adt::<EchoRecord>().unwrap();
+    library
+        .export(
+            "echo",
+            |_state: &(), variant: EchoEnum, record: EchoRecord| Ok((variant, record)),
+        )
+        .unwrap();
+    engine.inject_library(library).unwrap();
+
+    let (value_ptr, ty) = eval_snippet(
+        &mut engine,
+        r#"
+        import echo (EchoEnum, EchoRecord, Foo, BAR, echo)
+
+        let
+          foo_variant: EchoEnum = Foo,
+          foo_record: EchoRecord =
+            EchoRecord {
+              foo = (1 is u8),
+              bar = (2 is u8),
+              optbar = Some (3 is u8)
+            },
+          bar_variant: EchoEnum = BAR,
+          bar_record: EchoRecord =
+            EchoRecord {
+              foo = (4 is u8),
+              bar = (5 is u8),
+              optbar = None
+            },
+          foo_result = echo foo_variant foo_record,
+          bar_result = echo bar_variant bar_record
+        in
+          [foo_result, bar_result]
+        "#,
+    )
+    .await
+    .unwrap();
+
+    let parsed = rex_to_json(
+        &engine.heap,
+        &value_ptr,
+        &ty,
+        &engine.type_system,
+        &JsonOptions::default(),
+    )
+    .unwrap();
+    let items = parsed.as_array().expect("expected top-level array");
+    assert_eq!(items.len(), 2);
+
+    let first = items[0].as_array().expect("expected tuple JSON array");
+    assert_eq!(first.len(), 2);
+    assert_eq!(
+        first[1],
+        serde_json::json!({ "foo": 1, "bar": 2, "optbar": 3 })
+    );
+    let first_variant = first[0].as_str().expect("expected enum JSON string");
+    assert_eq!(first_variant, "Foo");
+
+    let second = items[1].as_array().expect("expected tuple JSON array");
+    assert_eq!(second.len(), 2);
+    assert_eq!(
+        second[1],
+        serde_json::json!({ "foo": 4, "bar": 5, "optbar": null })
+    );
+    let second_variant = second[0].as_str().expect("expected enum JSON string");
+    assert_eq!(second_variant, "BAR");
 }
 
 #[tokio::test]

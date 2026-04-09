@@ -248,7 +248,7 @@ async fn injected_library_can_define_pub_adt_declarations() {
     let v = engine.heap.get(&value).unwrap();
     match v.as_ref() {
         Value::Adt(tag, args) => {
-            assert!(tag.as_ref().ends_with(".Failed"));
+            assert_eq!(tag.as_ref(), "Failed");
             assert_eq!(args.len(), 1);
         }
         _ => panic!("expected ADT value"),

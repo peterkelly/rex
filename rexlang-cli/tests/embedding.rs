@@ -103,7 +103,7 @@ async fn library_render_label_with_library_scoped_adts_left_and_right() {
     let right = engine.heap.get(&items[2]).unwrap();
     match right.as_ref() {
         Value::Adt(tag, args) => {
-            assert!(tag.as_ref().ends_with(".Right"));
+            assert_eq!(tag.as_ref(), "Right");
             assert!(args.is_empty());
         }
         _ => panic!("expected ADT value for Correctness.Right"),
@@ -111,7 +111,7 @@ async fn library_render_label_with_library_scoped_adts_left_and_right() {
     let wrong = engine.heap.get(&items[3]).unwrap();
     match wrong.as_ref() {
         Value::Adt(tag, args) => {
-            assert!(tag.as_ref().ends_with(".Wrong"));
+            assert_eq!(tag.as_ref(), "Wrong");
             assert!(args.is_empty());
         }
         _ => panic!("expected ADT value for Correctness.Wrong"),

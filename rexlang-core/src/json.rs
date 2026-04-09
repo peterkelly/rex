@@ -4,6 +4,18 @@ use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Type, TypeKind, TypeSystem};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 
+fn local_name(name: &Symbol) -> &str {
+    name.as_ref().rsplit('.').next().unwrap_or(name.as_ref())
+}
+
+fn local_name_matches(name: &Symbol, expected: &str) -> bool {
+    local_name(name) == expected
+}
+
+fn runtime_ctor(name: &Symbol) -> Symbol {
+    sym(local_name(name))
+}
+
 #[derive(Clone, Debug)]
 pub struct EnumPatch {
     /// Variant name (kept as `enum_name` for backward compatibility).
@@ -471,7 +483,7 @@ fn json_to_pointer_for_adt(
             {
                 for (idx, v) in adt.variants.iter().enumerate() {
                     if variant_discriminant(&enum_name, &v.name, idx, opts) == Some(i) {
-                        return heap.alloc_adt(v.name.clone(), vec![]);
+                        return heap.alloc_adt(runtime_ctor(&v.name), vec![]);
                     }
                 }
             }
@@ -481,8 +493,12 @@ fn json_to_pointer_for_adt(
             )));
         }
         if let Value::String(tag) = json {
-            if let Some(v) = adt.variants.iter().find(|v| v.name.as_ref() == tag) {
-                return heap.alloc_adt(v.name.clone(), vec![]);
+            if let Some(v) = adt
+                .variants
+                .iter()
+                .find(|v| local_name_matches(&v.name, tag))
+            {
+                return heap.alloc_adt(runtime_ctor(&v.name), vec![]);
             }
             return Err(error(format!(
                 "unknown enum tag `{}` for `{}`",
@@ -499,9 +515,9 @@ fn json_to_pointer_for_adt(
         && let Some(v) = adt
             .variants
             .iter()
-            .find(|v| v.args.is_empty() && v.name.as_ref() == tag)
+            .find(|v| v.args.is_empty() && local_name_matches(&v.name, tag))
     {
-        return heap.alloc_adt(v.name.clone(), vec![]);
+        return heap.alloc_adt(runtime_ctor(&v.name), vec![]);
     }
 
     if let Value::Object(obj) = json
@@ -513,7 +529,11 @@ fn json_to_pointer_for_adt(
                 adt_name, json
             )));
         };
-        if let Some(v) = adt.variants.iter().find(|v| v.name.as_ref() == tag) {
+        if let Some(v) = adt
+            .variants
+            .iter()
+            .find(|v| local_name_matches(&v.name, tag))
+        {
             let arg_types = instantiate_types(&v.args, &subst);
             return decode_wrapped_variant(heap, payload, &v.name, &arg_types, ts, opts);
         }
@@ -540,12 +560,16 @@ fn pointer_to_json_for_adt(
     let subst = adt_subst(adt, type_args)?;
 
     let (tag, args) = heap.pointer_as_adt(pointer)?;
-    let v = adt.variants.iter().find(|v| v.name == tag).ok_or_else(|| {
-        error(format!(
-            "constructor `{}` is not in ADT `{}`",
-            tag, adt_name
-        ))
-    })?;
+    let v = adt
+        .variants
+        .iter()
+        .find(|v| local_name_matches(&v.name, local_name(&tag)))
+        .ok_or_else(|| {
+            error(format!(
+                "constructor `{}` is not in ADT `{}`",
+                tag, adt_name
+            ))
+        })?;
     let arg_types = instantiate_types(&v.args, &subst);
     if args.len() != arg_types.len() {
         return Err(error(format!(
@@ -567,7 +591,7 @@ fn pointer_to_json_for_adt(
             let idx = adt
                 .variants
                 .iter()
-                .position(|v| v.name == tag)
+                .position(|v| local_name_matches(&v.name, local_name(&tag)))
                 .ok_or_else(|| error(format!("missing enum variant `{}`", tag)))?;
             let d = variant_discriminant(&enum_name, &tag, idx, opts).ok_or_else(|| {
                 error(format!(
@@ -577,16 +601,16 @@ fn pointer_to_json_for_adt(
             })?;
             return Ok(Value::Number(d.into()));
         }
-        return Ok(Value::String(tag.to_string()));
+        return Ok(Value::String(local_name(&tag).to_string()));
     }
 
     if args.is_empty() {
-        return Ok(Value::String(tag.to_string()));
+        return Ok(Value::String(local_name(&tag).to_string()));
     }
 
     let payload = encode_wrapped_variant(heap, &args, &arg_types, ts, opts)?;
     let mut out = Map::new();
-    out.insert(tag.to_string(), payload);
+    out.insert(local_name(&tag).to_string(), payload);
     Ok(Value::Object(out))
 }
 
@@ -600,16 +624,19 @@ fn decode_direct_variant(
 ) -> Result<Pointer, EngineError> {
     match arg_types {
         [] => match json {
-            Value::Null => heap.alloc_adt(ctor.clone(), vec![]),
-            Value::String(tag) if tag == ctor.as_ref() => heap.alloc_adt(ctor.clone(), vec![]),
+            Value::Null => heap.alloc_adt(runtime_ctor(ctor), vec![]),
+            Value::String(tag) if tag == local_name(ctor) => {
+                heap.alloc_adt(runtime_ctor(ctor), vec![])
+            }
             _ => Err(error(format!(
                 "expected null or `{}` for unit constructor, got {}",
-                ctor, json
+                local_name(ctor),
+                json
             ))),
         },
         [t0] => {
             let p = json_to_rex(heap, json, t0, ts, opts)?;
-            heap.alloc_adt(ctor.clone(), vec![p])
+            heap.alloc_adt(runtime_ctor(ctor), vec![p])
         }
         _ => match json {
             Value::Array(items) if items.len() == arg_types.len() => {
@@ -617,11 +644,12 @@ fn decode_direct_variant(
                 for (item, t) in items.iter().zip(arg_types.iter()) {
                     args.push(json_to_rex(heap, item, t, ts, opts)?);
                 }
-                heap.alloc_adt(ctor.clone(), args)
+                heap.alloc_adt(runtime_ctor(ctor), args)
             }
             _ => Err(error(format!(
                 "expected array payload for constructor `{}`, got {}",
-                ctor, json
+                local_name(ctor),
+                json
             ))),
         },
     }
@@ -636,10 +664,10 @@ fn decode_wrapped_variant(
     opts: &JsonOptions,
 ) -> Result<Pointer, EngineError> {
     match arg_types {
-        [] => heap.alloc_adt(ctor.clone(), vec![]),
+        [] => heap.alloc_adt(runtime_ctor(ctor), vec![]),
         [t0] => {
             let p = json_to_rex(heap, payload, t0, ts, opts)?;
-            heap.alloc_adt(ctor.clone(), vec![p])
+            heap.alloc_adt(runtime_ctor(ctor), vec![p])
         }
         _ => match payload {
             Value::Array(items) if items.len() == arg_types.len() => {
@@ -647,11 +675,12 @@ fn decode_wrapped_variant(
                 for (item, t) in items.iter().zip(arg_types.iter()) {
                     args.push(json_to_rex(heap, item, t, ts, opts)?);
                 }
-                heap.alloc_adt(ctor.clone(), args)
+                heap.alloc_adt(runtime_ctor(ctor), args)
             }
             _ => Err(error(format!(
                 "expected array payload for constructor `{}`, got {}",
-                ctor, payload
+                local_name(ctor),
+                payload
             ))),
         },
     }
@@ -666,7 +695,7 @@ fn encode_direct_variant(
     opts: &JsonOptions,
 ) -> Result<Value, EngineError> {
     match arg_types {
-        [] => Ok(Value::String(ctor.to_string())),
+        [] => Ok(Value::String(local_name(ctor).to_string())),
         [t0] => rex_to_json(heap, &args[0], t0, ts, opts),
         _ => {
             let mut out = Vec::with_capacity(args.len());
@@ -753,7 +782,7 @@ fn variant_discriminant(
 ) -> Option<i64> {
     let patches = opts.int_enums.get(enum_type_name)?;
     for p in patches {
-        if p.enum_name == variant_name.as_ref() {
+        if p.enum_name == variant_name.as_ref() || p.enum_name == local_name(variant_name) {
             return Some(p.discriminant);
         }
     }

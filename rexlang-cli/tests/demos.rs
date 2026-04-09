@@ -305,11 +305,7 @@ async fn demo_topological_sort() {
         let Value::Adt(tag, args) = value.as_ref() else {
             panic!("expected ADT constructor");
         };
-        assert!(
-            tag.as_ref().ends_with(&format!(".{expected_tag}")),
-            "expected constructor ending with .{expected_tag}, got {}",
-            tag.as_ref()
-        );
+        assert_eq!(tag.as_ref(), *expected_tag, "unexpected constructor tag");
         assert!(args.is_empty(), "{expected_tag} should have no payload");
     }
 }

@@ -12,7 +12,6 @@ use crate::Engine;
 use crate::EvaluatorRef;
 use crate::engine::{RuntimeSnapshot, apply as apply_pointer, binary_arg_types};
 use crate::value::{Heap, Pointer, list_to_vec};
-use crate::virtual_export_name;
 use crate::{EngineError, FromPointer, IntoPointer, OverloadedFn, Value};
 use rexlang_util::GasMeter;
 
@@ -1388,12 +1387,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         let tags = Tags {
-            null: sym(&virtual_export_name("std.json", "Null")),
-            bool_: sym(&virtual_export_name("std.json", "Bool")),
-            string: sym(&virtual_export_name("std.json", "String")),
-            number: sym(&virtual_export_name("std.json", "Number")),
-            array: sym(&virtual_export_name("std.json", "Array")),
-            object: sym(&virtual_export_name("std.json", "Object")),
+            null: sym("Null"),
+            bool_: sym("Bool"),
+            string: sym("String"),
+            number: sym("Number"),
+            array: sym("Array"),
+            object: sym("Object"),
         };
 
         fn to_serde_json(heap: &Heap, v: &Value, tags: &Tags) -> Option<serde_json::Value> {
@@ -1492,12 +1491,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         let tags = Tags {
-            null: sym(&virtual_export_name("std.json", "Null")),
-            bool_: sym(&virtual_export_name("std.json", "Bool")),
-            string: sym(&virtual_export_name("std.json", "String")),
-            number: sym(&virtual_export_name("std.json", "Number")),
-            array: sym(&virtual_export_name("std.json", "Array")),
-            object: sym(&virtual_export_name("std.json", "Object")),
+            null: sym("Null"),
+            bool_: sym("Bool"),
+            string: sym("String"),
+            number: sym("Number"),
+            array: sym("Array"),
+            object: sym("Object"),
         };
 
         fn to_json_value(

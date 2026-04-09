@@ -36,6 +36,23 @@ use crate::{
     CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType, evaluator::EvaluatorRef,
 };
 
+fn runtime_ctor_symbol(name: &Symbol) -> Symbol {
+    intern(name.as_ref().rsplit('.').next().unwrap_or(name.as_ref()))
+}
+
+fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
+    actual
+        .as_ref()
+        .rsplit('.')
+        .next()
+        .unwrap_or(actual.as_ref())
+        == expected
+            .as_ref()
+            .rsplit('.')
+            .next()
+            .unwrap_or(expected.as_ref())
+}
+
 pub trait RexDefault<State>
 where
     State: Clone + Send + Sync + 'static,
@@ -2960,7 +2977,9 @@ where
             let ctor_name = ctor.clone();
             let func = Arc::new(
                 move |engine: EvaluatorRef<'_, State>, _: &Type, args: &[Pointer]| {
-                    engine.heap.alloc_adt(ctor_name.clone(), args.to_vec())
+                    engine
+                        .heap
+                        .alloc_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())
                 },
             );
             let arity = type_arity(&scheme.typ);
@@ -4517,7 +4536,8 @@ fn match_pattern_ptr(
             let v = heap.get(value).ok()?;
             match v.as_ref() {
                 Value::Adt(vname, args)
-                    if vname == &name.to_dotted_symbol() && args.len() == ps.len() =>
+                    if runtime_ctor_matches(vname, &name.to_dotted_symbol())
+                        && args.len() == ps.len() =>
                 {
                     match_patterns(heap, ps, args)
                 }

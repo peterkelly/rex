@@ -296,7 +296,8 @@ in
 "#;
         let full = wasm_eval_to_json(source, None).expect("wasm eval failed");
         assert!(full.contains("2i32"));
-        assert!(full.contains("@snippet"));
+        assert!(full.contains("A"));
+        assert!(full.contains("B"));
 
         let sanitized = block_on(eval_to_string(source, None)).expect("wasm string eval failed");
         assert_eq!(sanitized, "(2, [A, B])");
