@@ -301,6 +301,54 @@ impl Type {
             }
         }
     }
+
+    pub fn for_each<F>(&self, mut f: F) -> Type
+    where
+        F: FnMut(&Type),
+    {
+        self.transform(|t| {
+            f(t);
+            None
+        })
+    }
+
+    pub fn transform<F>(&self, mut f: F) -> Type
+    where
+        F: FnMut(&Type) -> Option<Type>,
+    {
+        self.transform_ref(&mut f)
+    }
+
+    fn transform_ref<F>(&self, f: &mut F) -> Type
+    where
+        F: FnMut(&Type) -> Option<Type>,
+    {
+        if let Some(repl) = f(self) {
+            return repl;
+        }
+
+        match self.as_ref() {
+            TypeKind::Var(type_var) => Type(Arc::new(TypeKind::Var(type_var.clone()))),
+            TypeKind::Con(type_const) => Type(Arc::new(TypeKind::Con(type_const.clone()))),
+            TypeKind::App(fun, arg) => Type(Arc::new(TypeKind::App(
+                fun.transform_ref(f),
+                arg.transform_ref(f),
+            ))),
+            TypeKind::Fun(arg, res) => Type(Arc::new(TypeKind::Fun(
+                arg.transform_ref(f),
+                res.transform_ref(f),
+            ))),
+            TypeKind::Tuple(ts) => Type(Arc::new(TypeKind::Tuple(
+                ts.iter().map(|t| t.transform_ref(f)).collect(),
+            ))),
+            TypeKind::Record(fields) => Type(Arc::new(TypeKind::Record(
+                fields
+                    .iter()
+                    .map(|(s, t)| (s.clone(), t.transform_ref(f)))
+                    .collect(),
+            ))),
+        }
+    }
 }
 
 impl AsRef<TypeKind> for Type {
@@ -2631,15 +2679,12 @@ pub struct CollectAdtsError {
 /// assert_eq!(err.conflicts[0].name.as_ref(), "Thing");
 /// ```
 pub fn collect_adts_in_types(types: Vec<Type>) -> Result<Vec<Type>, CollectAdtsError> {
-    fn visit(
-        typ: &Type,
-        out: &mut Vec<Type>,
-        seen: &mut HashSet<Type>,
-        defs_by_name: &mut BTreeMap<Symbol, Vec<Type>>,
-    ) {
-        match typ.as_ref() {
-            TypeKind::Var(_) => {}
-            TypeKind::Con(tc) => {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    let mut defs_by_name: BTreeMap<Symbol, Vec<Type>> = BTreeMap::new();
+    for typ in &types {
+        typ.for_each(|t| {
+            if let TypeKind::Con(tc) = t.as_ref() {
                 // Builtins are not embeddable ADT declarations.
                 if tc.builtin_id.is_none() {
                     let adt = Type::new(TypeKind::Con(tc.clone()));
@@ -2652,32 +2697,7 @@ pub fn collect_adts_in_types(types: Vec<Type>) -> Result<Vec<Type>, CollectAdtsE
                     }
                 }
             }
-            TypeKind::App(fun, arg) => {
-                visit(fun, out, seen, defs_by_name);
-                visit(arg, out, seen, defs_by_name);
-            }
-            TypeKind::Fun(arg, ret) => {
-                visit(arg, out, seen, defs_by_name);
-                visit(ret, out, seen, defs_by_name);
-            }
-            TypeKind::Tuple(elems) => {
-                for elem in elems {
-                    visit(elem, out, seen, defs_by_name);
-                }
-            }
-            TypeKind::Record(fields) => {
-                for (_name, field_ty) in fields {
-                    visit(field_ty, out, seen, defs_by_name);
-                }
-            }
-        }
-    }
-
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let mut defs_by_name: BTreeMap<Symbol, Vec<Type>> = BTreeMap::new();
-    for typ in &types {
-        visit(typ, &mut out, &mut seen, &mut defs_by_name);
+        });
     }
 
     let conflicts: Vec<AdtConflict> = defs_by_name

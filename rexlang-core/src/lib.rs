@@ -21,8 +21,8 @@ pub use rexlang_parser::{Parser, ParserLimits, error::ParserErr};
 pub use rexlang_proc_macro::Rex;
 pub use rexlang_typesystem::{
     AdtConflict, AdtDecl, BuiltinTypeId, CollectAdtsError, Instance, Predicate, Scheme, Type,
-    TypeError, TypeKind, TypeSystem, TypeVarSupply, collect_adts_in_types, infer, infer_typed,
-    infer_typed_with_gas, infer_with_gas, prelude_typeclasses_program,
+    TypeConst, TypeError, TypeKind, TypeSystem, TypeVar, TypeVarSupply, collect_adts_in_types,
+    infer, infer_typed, infer_typed_with_gas, infer_with_gas, prelude_typeclasses_program,
 };
 pub use rexlang_util::{GasCosts, GasMeter};
 
