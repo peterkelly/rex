@@ -382,6 +382,42 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
 }
 
 #[tokio::test]
+async fn library_import_selected_clause_can_import_class_exports() {
+    let dir = temp_dir("library_import_selected_clause_can_import_class_exports");
+    let dep = dir.join("dep.rex");
+    let main = dir.join("main.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Pick a where
+            pick : a
+        ()
+        "#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (Pick)
+
+        instance Pick i32 where
+            pick = 7
+
+        pick is i32
+        "#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 7),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
 async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name() {
     let dir = temp_dir("imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name");
     let dep = dir.join("dep.rex");
@@ -1095,6 +1131,341 @@ async fn library_import_selected_clause_missing_export() {
     };
     let msg = err.to_string();
     assert!(msg.contains("does not export"), "{msg}");
+}
+
+#[tokio::test]
+async fn library_import_selected_clause_can_import_type_exports() {
+    let dir = temp_dir("library_import_selected_clause_can_import_type_exports");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Status = Ready | Failed
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (Status, Ready)
+
+        let id: Status -> Status = \x -> x in
+        id Ready
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::Adt(tag, fields) => {
+            assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
+            assert!(fields.is_empty());
+        }
+        other => panic!("expected adt value, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn library_import_selected_clause_single_name_can_bind_type_and_constructor() {
+    let dir = temp_dir("library_import_selected_clause_single_name_can_bind_type_and_constructor");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Token = Token
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (Token)
+
+        let id: Token -> Token = \x -> x in
+        id (Token ())
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::Adt(tag, fields) => {
+            assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
+            assert_eq!(fields.len(), 1);
+            match engine.heap.get(&fields[0]).unwrap().as_ref() {
+                Value::Tuple(items) => assert!(items.is_empty()),
+                other => panic!("expected unit payload, got {}", other.value_type_name()),
+            }
+        }
+        other => panic!("expected adt value, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn library_import_selected_clause_alias_binds_type_and_constructor_facets() {
+    let dir = temp_dir("library_import_selected_clause_alias_binds_type_and_constructor_facets");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Token = Token
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (Token as Wrapped)
+
+        let wrap: Wrapped = Wrapped () in
+        wrap
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::Adt(tag, fields) => {
+            assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
+            assert_eq!(fields.len(), 1);
+            match engine.heap.get(&fields[0]).unwrap().as_ref() {
+                Value::Tuple(items) => assert!(items.is_empty()),
+                other => panic!("expected unit payload, got {}", other.value_type_name()),
+            }
+        }
+        other => panic!("expected adt value, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn library_import_wildcard_clause_imports_type_exports_too() {
+    let dir = temp_dir("library_import_wildcard_clause_imports_type_exports_too");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Status = Ready | Failed
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (*)
+
+        let id: Status -> Status = \x -> x in
+        id Ready
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::Adt(tag, fields) => {
+            assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
+            assert!(fields.is_empty());
+        }
+        other => panic!("expected adt value, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn library_import_wildcard_clause_imports_class_exports_too() {
+    let dir = temp_dir("library_import_wildcard_clause_imports_class_exports_too");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Pick a where
+            pick : a
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (*)
+
+        instance Pick i32 where
+            pick = 11
+
+        pick is i32
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::I32(v) => assert_eq!(*v, 11),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn library_import_alias_and_selected_clause_can_coexist_for_same_module() {
+    let dir = temp_dir("library_import_alias_and_selected_clause_can_coexist_for_same_module");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Status = Ready | Failed
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep as D
+        import dep (Status, Ready)
+
+        let from_alias: D.Status = D.Ready in
+        let from_item: Status = Ready in
+        (from_alias, from_item)
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let TypeKind::Tuple(items) = ty.as_ref() else {
+        panic!("expected tuple type, got {ty}");
+    };
+    assert_eq!(items.len(), 2);
+    let Value::Tuple(vals) = engine.heap.get(&value_ptr).unwrap().as_ref().clone() else {
+        panic!("expected tuple value");
+    };
+    assert_eq!(vals.len(), 2);
+    for pointer in vals {
+        match engine.heap.get(&pointer).unwrap().as_ref() {
+            Value::Adt(tag, fields) => {
+                assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
+                assert!(fields.is_empty());
+            }
+            other => panic!("expected adt value, got {}", other.value_type_name()),
+        }
+    }
+}
+
+#[tokio::test]
+async fn library_import_selected_clause_type_name_does_not_create_value_facet() {
+    let dir = temp_dir("library_import_selected_clause_type_name_does_not_create_value_facet");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub type Status = Ready | Failed
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (Status)
+        Status
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_library_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("Status"), "{msg}");
+}
+
+#[tokio::test]
+async fn library_import_selected_clause_class_name_does_not_create_type_facet() {
+    let dir = temp_dir("library_import_selected_clause_class_name_does_not_create_type_facet");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+
+    write_file(
+        &dep,
+        r#"
+        pub class Pick a where
+            pick : a
+        ()
+"#,
+    );
+    write_file(
+        &main,
+        r#"
+        import dep (Pick)
+        let x: Pick = 1 in
+        x
+"#,
+    );
+
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+    let err = match eval_library_file(&mut engine, &main).await {
+        Ok(v) => panic!("expected error, got {v:?}"),
+        Err(e) => e,
+    };
+    let msg = err.to_string();
+    assert!(msg.contains("Pick"), "{msg}");
+}
+
+#[tokio::test]
+async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_imports() {
+    let mut engine = engine_with_prelude();
+    engine.add_default_resolvers();
+
+    let mut library = Library::new("host.types");
+    library
+        .add_adt_decls_from_types(&mut engine, vec![LocalRunSpec::rex_type()])
+        .unwrap();
+    library
+        .export_native(
+            "pending",
+            Scheme::new(vec![], vec![], Type::con("RunSpec", 0)),
+            0,
+            |engine: EvaluatorRef<'_, ()>, _: &Type, _args| {
+                engine.heap.alloc_adt(sym("Pending"), vec![])
+            },
+        )
+        .unwrap();
+    engine.inject_library(library).unwrap();
+
+    let (value_ptr, _ty) = eval_snippet(
+        &mut engine,
+        r#"
+        import host.types (RunSpec, pending)
+        let x: RunSpec = pending in
+        x
+"#,
+    )
+    .await
+    .unwrap();
+    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+        Value::Adt(tag, fields) => {
+            assert_eq!(tag.as_ref(), "Pending");
+            assert!(fields.is_empty());
+        }
+        other => panic!("expected adt value, got {}", other.value_type_name()),
+    }
 }
 
 #[tokio::test]

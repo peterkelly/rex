@@ -48,16 +48,46 @@ Semantics:
   - expression/pattern positions use exported values and constructors (`Bar.value`).
   - type positions use exported types (`Bar.Type`).
   - class-constraint positions use exported classes (`Bar.Class`).
-- `import foo.bar (*)` imports all exported values into local unqualified scope.
-- `import foo.bar (x, y as z)` imports selected exported values; `y` is bound locally as `z`.
+- `import foo.bar (*)` imports every exported name into local unqualified scope.
+- `import foo.bar (x, y as z)` imports selected exported names; `y` is bound locally as `z`.
+- Unqualified imports are context-sensitive:
+  - expression/pattern positions use the imported value facet
+  - type positions use the imported type facet
+  - class-constraint positions use the imported class facet
+- Importing a name does not invent missing facets. For example, importing a type name does not make
+  it usable as a value unless the library also exports a value with that same spelling.
+- A single exported name may carry multiple facets at once. ADTs commonly do this: `Boxed` can be
+  both a type name and a constructor value.
 - Library alias imports and clause imports are mutually exclusive in one import declaration.
-- Only `pub` values are importable into unqualified local scope via `(*)` / item clauses.
+- Only `pub` names are importable.
 - If two imports introduce the same unqualified name (including via `(*)`), resolution fails with
   a library error.
 - Importing a name that conflicts with a local top-level declaration is a library error.
 - Lexical bindings (`let`, lambda params, pattern bindings) can shadow imported names.
 - For binder forms with annotations, the annotation is resolved before the new binder name enters
   expression scope.
+
+Examples:
+
+```rex
+import sample (Boxed)
+
+let id: Boxed -> Boxed = \x -> x in
+id (Boxed 1)
+```
+
+Here `Boxed` is imported once, but it can be used in both type position and expression position.
+
+```rex
+import sample (Status, Ready)
+
+let id: Status -> Status = \x -> x in
+id Ready
+```
+
+This only works if `sample` exports `Status` as a type and `Ready` as a value. Importing `Status`
+alone does not make `Status` available as an expression unless the module also exports a value
+named `Status`.
 
 Path resolution:
 

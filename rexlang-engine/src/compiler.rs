@@ -11,8 +11,9 @@ use crate::engine::{
     RUNTIME_LINK_ABI_VERSION, RuntimeLinkContract, collect_pattern_bindings, type_check_engine,
 };
 use crate::libraries::{
-    LibraryExports, LibraryId, ReplState, ResolvedLibrary, decl_value_names, exports_from_program,
-    parse_program_from_source, prefix_for_library, rewrite_import_uses, validate_import_uses,
+    LibraryExports, LibraryId, ReplState, ResolvedLibrary, decl_type_names, decl_value_names,
+    exports_from_program, parse_program_from_source, prefix_for_library, rewrite_import_uses,
+    validate_import_uses,
 };
 use crate::{CompileError, EngineError, Env};
 
@@ -389,30 +390,44 @@ where
 
         let mut local_values = state.defined_values.clone();
         local_values.extend(decl_value_names(&program.decls));
+        let local_types = decl_type_names(&program.decls);
         let existing_imported: HashSet<Symbol> = state.imported_values.keys().cloned().collect();
+        let existing_imported_types: HashSet<Symbol> =
+            state.imported_types.keys().cloned().collect();
+        let existing_imported_classes: HashSet<Symbol> =
+            state.imported_classes.keys().cloned().collect();
+        let import_policy = crate::libraries::ImportBindingPolicy {
+            forbidden_values: &local_values,
+            forbidden_types: &local_types,
+            existing_imported_values: Some(&existing_imported),
+            existing_imported_types: Some(&existing_imported_types),
+            existing_imported_classes: Some(&existing_imported_classes),
+        };
         let import_bindings = self
             .engine
-            .import_bindings_for_decls(
-                &program.decls,
-                importer.clone(),
-                &local_values,
-                Some(&existing_imported),
-                gas,
-            )
+            .import_bindings_for_decls(&program.decls, importer.clone(), &import_policy, gas)
             .await?;
         state.alias_exports.extend(import_bindings.alias_exports);
         state
             .imported_values
             .extend(import_bindings.imported_values);
+        state.imported_types.extend(import_bindings.imported_types);
+        state
+            .imported_classes
+            .extend(import_bindings.imported_classes);
 
         let mut shadowed_values = state.defined_values.clone();
         shadowed_values.extend(decl_value_names(&program.decls));
+        let shadowed_types = decl_type_names(&program.decls);
 
         validate_import_uses(program, &state.alias_exports, Some(&shadowed_values))?;
         let rewritten = rewrite_import_uses(
             program,
             &state.alias_exports,
             &state.imported_values,
+            &state.imported_types,
+            &state.imported_classes,
+            Some(&shadowed_types),
             Some(&shadowed_values),
         );
 

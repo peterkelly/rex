@@ -182,8 +182,11 @@ Notes:
 - include roots are searched after local-relative imports.
 - type-only workflows can use `infer_library_file` with the same resolver setup.
 - compile-only workflows can use `Compiler::compile_library_file` with the same resolver setup.
-- import clauses (`(*)` / item lists) import exported values only.
+- import clauses (`(*)` / item lists) import exported names into unqualified scope.
+- unqualified imports are context-sensitive: expression positions use values, type positions use
+  types, and class/constraint positions use classes.
 - library aliases (`import x as M`) provide qualified access to exported values, types, and classes.
+- importing a name only brings in the facets that actually exist under that name.
 
 ### 2) Inject In-Memory Rex Modules
 
@@ -293,14 +296,19 @@ m.add_raw_declaration("pub type Status = Ready | Failed string")?;
 engine.inject_library(m)?;
 ```
 
-Then Rex code can import and use those constructors from the library:
+Then Rex code can import and use those names from the library:
 
 ```rex
-import acme.status (Failed)
-match (Failed "boom")
+import acme.status (Status, Failed)
+
+let fail: string -> Status = \msg -> Failed msg in
+match (fail "boom")
   when Failed msg -> length msg
   when _ -> 0
 ```
+
+`Status` is used here in type position, while `Failed` is used in expression/pattern positions.
+They are imported through the same name-based mechanism.
 
 Internally this generates library declarations and injects host implementations under qualified
 library export symbols.
@@ -368,6 +376,12 @@ let value = engine
     .await?;
 println!("{value}"); // ("left        ", "       right")
 ```
+
+In that example:
+
+- `Label` is imported once and then used as both a type name and a constructor value.
+- `Left` and `Right` are imported as constructor values.
+- `render_label` is imported as a value.
 
 ### 3a) Runtime-Defined Signatures (`Pointer` APIs)
 

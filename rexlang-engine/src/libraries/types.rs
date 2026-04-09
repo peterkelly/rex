@@ -101,10 +101,91 @@ impl CanonicalSymbol {
 }
 
 #[derive(Clone)]
+pub struct ExportEntry {
+    pub value: Option<CanonicalSymbol>,
+    pub typ: Option<CanonicalSymbol>,
+    pub class: Option<CanonicalSymbol>,
+}
+
+impl ExportEntry {
+    pub fn new() -> Self {
+        Self {
+            value: None,
+            typ: None,
+            class: None,
+        }
+    }
+}
+
+impl Default for ExportEntry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct LibraryExports {
-    pub values: HashMap<Symbol, CanonicalSymbol>,
-    pub types: HashMap<Symbol, CanonicalSymbol>,
-    pub classes: HashMap<Symbol, CanonicalSymbol>,
+    pub entries: HashMap<Symbol, ExportEntry>,
+}
+
+impl LibraryExports {
+    pub fn entry(&self, name: &Symbol) -> Option<&ExportEntry> {
+        self.entries.get(name)
+    }
+
+    pub fn value(&self, name: &Symbol) -> Option<&CanonicalSymbol> {
+        self.entry(name).and_then(|entry| entry.value.as_ref())
+    }
+
+    pub fn typ(&self, name: &Symbol) -> Option<&CanonicalSymbol> {
+        self.entry(name).and_then(|entry| entry.typ.as_ref())
+    }
+
+    pub fn class(&self, name: &Symbol) -> Option<&CanonicalSymbol> {
+        self.entry(name).and_then(|entry| entry.class.as_ref())
+    }
+
+    pub fn insert_value(&mut self, name: Symbol, symbol: CanonicalSymbol) {
+        self.entries.entry(name).or_default().value = Some(symbol);
+    }
+
+    pub fn insert_type(&mut self, name: Symbol, symbol: CanonicalSymbol) {
+        self.entries.entry(name).or_default().typ = Some(symbol);
+    }
+
+    pub fn insert_class(&mut self, name: Symbol, symbol: CanonicalSymbol) {
+        self.entries.entry(name).or_default().class = Some(symbol);
+    }
+
+    pub fn values(&self) -> impl Iterator<Item = (&Symbol, &CanonicalSymbol)> {
+        self.entries
+            .iter()
+            .filter_map(|(name, entry)| entry.value.as_ref().map(|symbol| (name, symbol)))
+    }
+
+    pub fn types(&self) -> impl Iterator<Item = (&Symbol, &CanonicalSymbol)> {
+        self.entries
+            .iter()
+            .filter_map(|(name, entry)| entry.typ.as_ref().map(|symbol| (name, symbol)))
+    }
+
+    pub fn classes(&self) -> impl Iterator<Item = (&Symbol, &CanonicalSymbol)> {
+        self.entries
+            .iter()
+            .filter_map(|(name, entry)| entry.class.as_ref().map(|symbol| (name, symbol)))
+    }
+
+    pub fn value_names(&self) -> Vec<Symbol> {
+        self.values().map(|(name, _)| name.clone()).collect()
+    }
+
+    pub fn type_names(&self) -> Vec<Symbol> {
+        self.types().map(|(name, _)| name.clone()).collect()
+    }
+
+    pub fn class_names(&self) -> Vec<Symbol> {
+        self.classes().map(|(name, _)| name.clone()).collect()
+    }
 }
 
 #[derive(Clone)]
@@ -118,6 +199,8 @@ pub struct VirtualLibraryModule {
 pub struct ReplState {
     pub(crate) alias_exports: HashMap<Symbol, LibraryExports>,
     pub(crate) imported_values: HashMap<Symbol, CanonicalSymbol>,
+    pub(crate) imported_types: HashMap<Symbol, CanonicalSymbol>,
+    pub(crate) imported_classes: HashMap<Symbol, CanonicalSymbol>,
     pub(crate) defined_values: HashSet<Symbol>,
     pub(crate) importer_path: Option<PathBuf>,
 }

@@ -2301,9 +2301,9 @@ where
                     _ => None,
                 });
                 if let Some(exports) = exports {
-                    let mut values: Vec<Symbol> = exports.values.keys().cloned().collect();
-                    let mut types: Vec<Symbol> = exports.types.keys().cloned().collect();
-                    let mut classes: Vec<Symbol> = exports.classes.keys().cloned().collect();
+                    let mut values: Vec<Symbol> = exports.value_names();
+                    let mut types: Vec<Symbol> = exports.type_names();
+                    let mut classes: Vec<Symbol> = exports.class_names();
                     values.sort();
                     types.sort();
                     classes.sort();
@@ -3137,10 +3137,10 @@ where
 
         let module_key =
             library_key_for_library(&LibraryId::Virtual(PRELUDE_LIBRARY_NAME.to_string()));
-        let mut values: HashMap<Symbol, CanonicalSymbol> = HashMap::new();
+        let mut exports = LibraryExports::default();
         for (name, _) in self.type_system.env.values.iter() {
             if !name.as_ref().starts_with("@m") {
-                values.insert(
+                exports.insert_value(
                     name.clone(),
                     CanonicalSymbol::from_symbol(
                         module_key,
@@ -3152,10 +3152,9 @@ where
             }
         }
 
-        let mut types: HashMap<Symbol, CanonicalSymbol> = HashMap::new();
         for name in self.type_system.adts.keys() {
             if !name.as_ref().starts_with("@m") {
-                types.insert(
+                exports.insert_type(
                     name.clone(),
                     CanonicalSymbol::from_symbol(
                         module_key,
@@ -3167,10 +3166,9 @@ where
             }
         }
 
-        let mut classes: HashMap<Symbol, CanonicalSymbol> = HashMap::new();
         for name in self.type_system.class_info.keys() {
             if !name.as_ref().starts_with("@m") {
-                classes.insert(
+                exports.insert_class(
                     name.clone(),
                     CanonicalSymbol::from_symbol(
                         module_key,
@@ -3185,11 +3183,7 @@ where
         self.virtual_libraries.insert(
             PRELUDE_LIBRARY_NAME.to_string(),
             VirtualLibraryModule {
-                exports: LibraryExports {
-                    values,
-                    types,
-                    classes,
-                },
+                exports,
                 decls: Vec::new(),
                 source: None,
             },
