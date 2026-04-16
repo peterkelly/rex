@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use rexlang_ast::expr::{Symbol, sym, sym_eq};
-use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Type, TypedExpr};
+use rexlang_typesystem::types::{AdtDecl, BuiltinTypeId, Type, TypedExpr};
 use uuid::Uuid;
 
 use crate::EngineError;

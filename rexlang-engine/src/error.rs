@@ -4,7 +4,7 @@ use std::process::ExitStatus;
 use rexlang_ast::expr::Symbol;
 use rexlang_lexer::LexicalError;
 use rexlang_parser::error::ParserErr;
-use rexlang_typesystem::TypeError;
+use rexlang_typesystem::error::TypeError;
 use rexlang_util::OutOfGas;
 
 use crate::libraries::LibraryId;

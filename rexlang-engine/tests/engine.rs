@@ -8,7 +8,10 @@ use rexlang_engine::{
 };
 use rexlang_lexer::Token;
 use rexlang_parser::Parser;
-use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeError, TypeVar};
+use rexlang_typesystem::{
+    error::TypeError,
+    types::{BuiltinTypeId, Scheme, Type, TypeVar},
+};
 use rexlang_util::{GasCosts, GasMeter};
 
 fn parse(code: &str) -> Arc<Expr> {

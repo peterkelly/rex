@@ -5,7 +5,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rexlang_ast::expr::{Expr, Program, Symbol, sym};
-use rexlang_typesystem::{Subst, Type, TypeError, TypedExpr, Types, unify};
+use rexlang_typesystem::{
+    error::TypeError,
+    types::{Type, TypedExpr, Types},
+    unification::{Subst, unify},
+};
 use rexlang_util::{GasMeter, sha256_hex};
 
 use crate::engine::{

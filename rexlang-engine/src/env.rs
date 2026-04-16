@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rexlang_ast::expr::Symbol;
@@ -11,7 +11,7 @@ pub struct Env(Arc<EnvFrame>);
 #[derive(Default, Debug, PartialEq)]
 struct EnvFrame {
     parent: Option<Env>,
-    bindings: HashMap<Symbol, Pointer>,
+    bindings: BTreeMap<Symbol, Pointer>,
 }
 
 impl Env {
@@ -20,7 +20,7 @@ impl Env {
     }
 
     pub fn extend(&self, name: Symbol, value: Pointer) -> Self {
-        let mut bindings = HashMap::new();
+        let mut bindings = BTreeMap::new();
         bindings.insert(name, value);
         Env(Arc::new(EnvFrame {
             parent: Some(self.clone()),
@@ -28,7 +28,7 @@ impl Env {
         }))
     }
 
-    pub fn extend_many(&self, bindings: HashMap<Symbol, Pointer>) -> Self {
+    pub fn extend_many(&self, bindings: BTreeMap<Symbol, Pointer>) -> Self {
         Env(Arc::new(EnvFrame {
             parent: Some(self.clone()),
             bindings,
@@ -50,7 +50,7 @@ impl Env {
         self.0.parent.as_ref()
     }
 
-    pub(crate) fn bindings(&self) -> &HashMap<Symbol, Pointer> {
+    pub(crate) fn bindings(&self) -> &BTreeMap<Symbol, Pointer> {
         &self.0.bindings
     }
 }

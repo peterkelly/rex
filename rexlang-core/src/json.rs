@@ -1,6 +1,9 @@
 use crate::{EngineError, Heap, Pointer};
 use rexlang_ast::expr::{Symbol, sym};
-use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Type, TypeKind, TypeSystem};
+use rexlang_typesystem::{
+    types::{AdtDecl, BuiltinTypeId, Type, TypeKind},
+    typesystem::TypeSystem,
+};
 use serde_json::{Map, Number, Value};
 use std::collections::BTreeMap;
 

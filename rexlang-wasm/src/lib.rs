@@ -10,7 +10,10 @@ use rexlang_lsp::{
     hover_for_source, references_for_source_public, rename_for_source_public,
 };
 use rexlang_parser::{Parser, ParserLimits, error::ParserErr};
-use rexlang_typesystem::{TypeSystem, TypeSystemLimits, infer_with_gas};
+use rexlang_typesystem::{
+    inference::infer_with_gas,
+    typesystem::{TypeSystem, TypeSystemLimits},
+};
 use rexlang_util::{GasCosts, GasMeter};
 use wasm_bindgen::prelude::*;
 
@@ -146,9 +149,7 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
     let _ = parse_program_with_limits(source, &mut gas, ParserLimits::unlimited())?;
 
     let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-    engine
-        .type_system
-        .set_limits(rexlang_typesystem::TypeSystemLimits::unlimited());
+    engine.type_system.set_limits(TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through library/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
     let (value_ptr, _value_ty) = rexlang_engine::Evaluator::new_with_compiler(

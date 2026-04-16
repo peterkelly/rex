@@ -1,6 +1,6 @@
 //! Core engine implementation for Rex.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -14,9 +14,16 @@ use rexlang_ast::expr::{
 };
 use rexlang_lexer::span::Span;
 use rexlang_typesystem::{
-    AdtDecl, BuiltinTypeId, CollectAdtsError, Instance, Predicate, PreparedInstanceDecl, Scheme,
-    Subst, Type, TypeError, TypeKind, TypeSystem, TypeVarSupply, TypedExpr, TypedExprKind, Types,
-    compose_subst, entails, infer_typed, infer_with_gas, instantiate, unify,
+    error::{CollectAdtsError, TypeError},
+    inference::{infer_typed, infer_with_gas},
+    prelude::prelude_typeclasses_program,
+    types::{
+        AdtDecl, BuiltinTypeId, Instance, Predicate, Scheme, Type, TypeKind, TypedExpr,
+        TypedExprKind, Types, collect_adts_in_types,
+    },
+    typesystem::{PreparedInstanceDecl, TypeSystem, TypeVarSupply},
+    typesystem::{entails, instantiate},
+    unification::{Subst, compose_subst, unify},
 };
 use rexlang_util::GasMeter;
 
@@ -798,8 +805,8 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
     }
 }
 
-fn library_local_type_names_from_declarations(declarations: &[String]) -> HashSet<Symbol> {
-    let mut out = HashSet::new();
+fn library_local_type_names_from_declarations(declarations: &[String]) -> BTreeSet<Symbol> {
+    let mut out = BTreeSet::new();
     for declaration in declarations {
         let mut s = declaration.trim_start();
         if let Some(rest) = s.strip_prefix("pub ") {
@@ -819,8 +826,8 @@ fn library_local_type_names_from_declarations(declarations: &[String]) -> HashSe
     out
 }
 
-fn library_local_type_names_from_decls(decls: &[Decl]) -> HashSet<Symbol> {
-    let mut out = HashSet::new();
+fn library_local_type_names_from_decls(decls: &[Decl]) -> BTreeSet<Symbol> {
+    let mut out = BTreeSet::new();
     for decl in decls {
         if let Decl::Type(td) = decl {
             out.insert(td.name.clone());
@@ -854,7 +861,7 @@ fn build_virtual_library_source<State: Clone + Send + Sync + 'static>(
 fn qualify_library_type_refs(
     typ: &Type,
     library_name: &str,
-    local_type_names: &HashSet<Symbol>,
+    local_type_names: &BTreeSet<Symbol>,
 ) -> Type {
     match typ.as_ref() {
         TypeKind::Con(tc) => {
@@ -899,7 +906,7 @@ fn qualify_library_type_refs(
 fn qualify_library_scheme_refs(
     scheme: &Scheme,
     library_name: &str,
-    local_type_names: &HashSet<Symbol>,
+    local_type_names: &BTreeSet<Symbol>,
 ) -> Scheme {
     let typ = qualify_library_type_refs(&scheme.typ, library_name, local_type_names);
     let preds = scheme
@@ -1561,8 +1568,8 @@ impl<State: Clone + Send + Sync + 'static> NativeImpl<State> {
 #[derive(Clone)]
 pub(crate) struct NativeRegistry<State: Clone + Send + Sync + 'static> {
     next_id: NativeId,
-    entries: HashMap<Symbol, Vec<NativeImpl<State>>>,
-    by_id: HashMap<NativeId, NativeImpl<State>>,
+    entries: BTreeMap<Symbol, Vec<NativeImpl<State>>>,
+    by_id: BTreeMap<NativeId, NativeImpl<State>>,
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeRegistry<State> {
@@ -1613,8 +1620,8 @@ impl<State: Clone + Send + Sync + 'static> Default for NativeRegistry<State> {
     fn default() -> Self {
         Self {
             next_id: 0,
-            entries: HashMap::new(),
-            by_id: HashMap::new(),
+            entries: BTreeMap::new(),
+            by_id: BTreeMap::new(),
         }
     }
 }
@@ -1623,12 +1630,12 @@ impl<State: Clone + Send + Sync + 'static> Default for NativeRegistry<State> {
 pub(crate) struct TypeclassInstance {
     head: Type,
     def_env: Env,
-    methods: HashMap<Symbol, Arc<TypedExpr>>,
+    methods: BTreeMap<Symbol, Arc<TypedExpr>>,
 }
 
 #[derive(Default, Clone)]
 pub(crate) struct TypeclassRegistry {
-    entries: HashMap<Symbol, Vec<TypeclassInstance>>,
+    entries: BTreeMap<Symbol, Vec<TypeclassInstance>>,
 }
 
 impl TypeclassRegistry {
@@ -1637,7 +1644,7 @@ impl TypeclassRegistry {
         class: Symbol,
         head: Type,
         def_env: Env,
-        methods: HashMap<Symbol, Arc<TypedExpr>>,
+        methods: BTreeMap<Symbol, Arc<TypedExpr>>,
     ) -> Result<(), EngineError> {
         let entry = self.entries.entry(class.clone()).or_default();
         for existing in entry.iter() {
@@ -1709,17 +1716,17 @@ where
     natives: NativeRegistry<State>,
     typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
-    typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
+    typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
     pub(crate) modules: LibrarySystem,
-    injected_libraries: HashSet<String>,
-    pub(crate) library_exports_cache: HashMap<LibraryId, LibraryExports>,
-    pub(crate) library_interface_cache: HashMap<LibraryId, Vec<Decl>>,
-    pub(crate) library_sources: HashMap<LibraryId, String>,
-    pub(crate) library_source_fingerprints: HashMap<LibraryId, String>,
-    pub(crate) published_cycle_interfaces: HashSet<LibraryId>,
+    injected_libraries: BTreeSet<String>,
+    pub(crate) library_exports_cache: BTreeMap<LibraryId, LibraryExports>,
+    pub(crate) library_interface_cache: BTreeMap<LibraryId, Vec<Decl>>,
+    pub(crate) library_sources: BTreeMap<LibraryId, String>,
+    pub(crate) library_source_fingerprints: BTreeMap<LibraryId, String>,
+    pub(crate) published_cycle_interfaces: BTreeSet<LibraryId>,
     default_imports: Vec<String>,
-    virtual_libraries: HashMap<String, VirtualLibraryModule>,
-    library_local_type_names: HashMap<String, HashSet<Symbol>>,
+    virtual_libraries: BTreeMap<String, VirtualLibraryModule>,
+    library_local_type_names: BTreeMap<String, BTreeSet<Symbol>>,
     registration_library_context: Option<String>,
     cancel: CancellationToken,
     pub heap: Heap,
@@ -1794,12 +1801,16 @@ impl CompiledExterns {
     }
 
     pub fn compatibility_with(&self, capabilities: &RuntimeCapabilities) -> RuntimeCompatibility {
-        let natives = capabilities.natives.iter().cloned().collect::<HashSet<_>>();
+        let natives = capabilities
+            .natives
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
         let class_methods = capabilities
             .class_methods
             .iter()
             .cloned()
-            .collect::<HashSet<_>>();
+            .collect::<BTreeSet<_>>();
 
         RuntimeCompatibility {
             expected_abi_version: capabilities.abi_version,
@@ -1822,13 +1833,13 @@ impl CompiledExterns {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct NativeRequirement {
     pub name: Symbol,
     pub typ: Type,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ClassMethodRequirement {
     pub name: Symbol,
     pub typ: Type,
@@ -1863,8 +1874,8 @@ pub struct RuntimeCapabilities {
     pub abi_version: u32,
     pub natives: Vec<Symbol>,
     pub class_methods: Vec<Symbol>,
-    pub(crate) native_impls: HashMap<Symbol, Vec<NativeCapability>>,
-    pub(crate) class_method_impls: HashMap<Symbol, ClassMethodCapability>,
+    pub(crate) native_impls: BTreeMap<Symbol, Vec<NativeCapability>>,
+    pub(crate) class_method_impls: BTreeMap<Symbol, ClassMethodCapability>,
 }
 
 impl RuntimeCapabilities {
@@ -1922,7 +1933,7 @@ where
     pub(crate) natives: NativeRegistry<State>,
     pub(crate) typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
-    pub(crate) typeclass_cache: Arc<Mutex<HashMap<(Symbol, Type), Pointer>>>,
+    pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
     pub(crate) cancel: CancellationToken,
     pub heap: Heap,
 }
@@ -2047,7 +2058,7 @@ where
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        let mut native_impls = HashMap::new();
+        let mut native_impls = BTreeMap::new();
         for (name, impls) in &self.natives.entries {
             let mut caps = impls
                 .iter()
@@ -2064,7 +2075,7 @@ where
             });
             native_impls.insert(name.clone(), caps);
         }
-        let mut class_method_impls = HashMap::new();
+        let mut class_method_impls = BTreeMap::new();
         for (name, info) in &self.type_system.class_methods {
             class_method_impls.insert(
                 name.clone(),
@@ -2092,17 +2103,17 @@ where
             natives: NativeRegistry::<State>::default(),
             typeclasses: TypeclassRegistry::default(),
             type_system: TypeSystem::new(),
-            typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
+            typeclass_cache: Arc::new(Mutex::new(BTreeMap::new())),
             modules: LibrarySystem::default(),
-            injected_libraries: HashSet::new(),
-            library_exports_cache: HashMap::new(),
-            library_interface_cache: HashMap::new(),
-            library_sources: HashMap::new(),
-            library_source_fingerprints: HashMap::new(),
-            published_cycle_interfaces: HashSet::new(),
+            injected_libraries: BTreeSet::new(),
+            library_exports_cache: BTreeMap::new(),
+            library_interface_cache: BTreeMap::new(),
+            library_sources: BTreeMap::new(),
+            library_source_fingerprints: BTreeMap::new(),
+            published_cycle_interfaces: BTreeSet::new(),
             default_imports: Vec::new(),
-            virtual_libraries: HashMap::new(),
-            library_local_type_names: HashMap::new(),
+            virtual_libraries: BTreeMap::new(),
+            library_local_type_names: BTreeMap::new(),
             registration_library_context: None,
             cancel: CancellationToken::new(),
             heap: Heap::new(),
@@ -2124,17 +2135,17 @@ where
             natives: NativeRegistry::<State>::default(),
             typeclasses: TypeclassRegistry::default(),
             type_system,
-            typeclass_cache: Arc::new(Mutex::new(HashMap::new())),
+            typeclass_cache: Arc::new(Mutex::new(BTreeMap::new())),
             modules: LibrarySystem::default(),
-            injected_libraries: HashSet::new(),
-            library_exports_cache: HashMap::new(),
-            library_interface_cache: HashMap::new(),
-            library_sources: HashMap::new(),
-            library_source_fingerprints: HashMap::new(),
-            published_cycle_interfaces: HashSet::new(),
+            injected_libraries: BTreeSet::new(),
+            library_exports_cache: BTreeMap::new(),
+            library_interface_cache: BTreeMap::new(),
+            library_sources: BTreeMap::new(),
+            library_source_fingerprints: BTreeMap::new(),
+            published_cycle_interfaces: BTreeSet::new(),
             default_imports: options.default_imports,
-            virtual_libraries: HashMap::new(),
-            library_local_type_names: HashMap::new(),
+            virtual_libraries: BTreeMap::new(),
+            library_local_type_names: BTreeMap::new(),
             registration_library_context: None,
             cancel: CancellationToken::new(),
             heap: Heap::new(),
@@ -2523,7 +2534,7 @@ where
                 self.inject_adt(adt.clone())?;
             }
 
-            let staged_adt_names: HashSet<Symbol> = library
+            let staged_adt_names: BTreeSet<Symbol> = library
                 .staged_adts
                 .iter()
                 .map(|adt| adt.name.clone())
@@ -2788,7 +2799,7 @@ where
             Instance::new(vec![], Predicate::new(class.clone(), head_ty.clone())),
         );
 
-        let mut methods: HashMap<Symbol, Arc<TypedExpr>> = HashMap::new();
+        let mut methods: BTreeMap<Symbol, Arc<TypedExpr>> = BTreeMap::new();
         methods.insert(
             method.clone(),
             Arc::new(TypedExpr::new(
@@ -3220,8 +3231,7 @@ where
         // The type system prelude injects the *heads* of the standard instances.
         // The evaluator also needs the *method bodies* so class method lookup can
         // produce actual values at runtime.
-        let program =
-            rexlang_typesystem::prelude_typeclasses_program().map_err(EngineError::Type)?;
+        let program = prelude_typeclasses_program().map_err(EngineError::Type)?;
         for decl in program.decls.iter() {
             let Decl::Instance(inst_decl) = decl else {
                 continue;
@@ -3316,7 +3326,7 @@ where
         decl: &InstanceDecl,
         prepared: &PreparedInstanceDecl,
     ) -> Result<(), EngineError> {
-        let mut methods: HashMap<Symbol, Arc<TypedExpr>> = HashMap::new();
+        let mut methods: BTreeMap<Symbol, Arc<TypedExpr>> = BTreeMap::new();
         for method in &decl.methods {
             let typed = self
                 .type_system
@@ -3882,7 +3892,7 @@ fn type_head(typ: &Type) -> Result<Type, EngineError> {
 }
 
 pub(crate) fn adt_shape(adt: &AdtDecl) -> String {
-    let param_names: HashMap<_, _> = adt
+    let param_names: BTreeMap<_, _> = adt
         .params
         .iter()
         .enumerate()
@@ -3905,7 +3915,7 @@ pub(crate) fn adt_shape(adt: &AdtDecl) -> String {
     format!("{}[{}]", adt.name, variants.join(" | "))
 }
 
-fn normalize_type_for_shape(typ: &Type, param_names: &HashMap<usize, String>) -> String {
+fn normalize_type_for_shape(typ: &Type, param_names: &BTreeMap<usize, String>) -> String {
     match typ.as_ref() {
         TypeKind::Var(tv) => param_names
             .get(&tv.id)
@@ -3954,13 +3964,12 @@ fn adt_direct_dependencies(adt: &AdtDecl) -> Result<Vec<Type>, EngineError> {
         .iter()
         .flat_map(|variant| variant.args.iter().cloned())
         .collect::<Vec<_>>();
-    let deps =
-        rexlang_typesystem::collect_adts_in_types(types).map_err(collect_adts_error_to_engine)?;
+    let deps = collect_adts_in_types(types).map_err(collect_adts_error_to_engine)?;
     deps.into_iter().map(|typ| type_head(&typ)).collect()
 }
 
 pub(crate) fn order_adt_family(adts: Vec<AdtDecl>) -> Result<Vec<AdtDecl>, EngineError> {
-    let mut unique = HashMap::new();
+    let mut unique = BTreeMap::new();
     for adt in adts {
         match unique.get(&adt.name) {
             Some(existing) if adt_shape_eq(existing, &adt) => {}
@@ -3979,14 +3988,14 @@ pub(crate) fn order_adt_family(adts: Vec<AdtDecl>) -> Result<Vec<AdtDecl>, Engin
     }
 
     let mut visiting = Vec::<Symbol>::new();
-    let mut visited = HashSet::<Symbol>::new();
+    let mut visited = BTreeSet::<Symbol>::new();
     let mut ordered = Vec::<AdtDecl>::new();
 
     fn visit(
         name: &Symbol,
-        unique: &HashMap<Symbol, AdtDecl>,
+        unique: &BTreeMap<Symbol, AdtDecl>,
         visiting: &mut Vec<Symbol>,
-        visited: &mut HashSet<Symbol>,
+        visited: &mut BTreeSet<Symbol>,
         ordered: &mut Vec<AdtDecl>,
     ) -> Result<(), EngineError> {
         if visited.contains(name) {
@@ -4524,11 +4533,11 @@ fn match_pattern_ptr(
     heap: &Heap,
     pat: &Pattern,
     value: &Pointer,
-) -> Option<HashMap<Symbol, Pointer>> {
+) -> Option<BTreeMap<Symbol, Pointer>> {
     match pat {
-        Pattern::Wildcard(..) => Some(HashMap::new()),
+        Pattern::Wildcard(..) => Some(BTreeMap::new()),
         Pattern::Var(var) => {
-            let mut bindings = HashMap::new();
+            let mut bindings = BTreeMap::new();
             bindings.insert(var.name.clone(), *value);
             Some(bindings)
         }
@@ -4576,7 +4585,7 @@ fn match_pattern_ptr(
             let v = heap.get(value).ok()?;
             match v.as_ref() {
                 Value::Dict(map) => {
-                    let mut bindings = HashMap::new();
+                    let mut bindings = BTreeMap::new();
                     for (key, pat) in fields {
                         let v = map.get(key)?;
                         let sub = match_pattern_ptr(heap, pat, v)?;
@@ -4594,8 +4603,8 @@ fn match_patterns(
     heap: &Heap,
     patterns: &[Pattern],
     values: &[Pointer],
-) -> Option<HashMap<Symbol, Pointer>> {
-    let mut bindings = HashMap::new();
+) -> Option<BTreeMap<Symbol, Pointer>> {
+    let mut bindings = BTreeMap::new();
     for (p, v) in patterns.iter().zip(values.iter()) {
         let sub = match_pattern_ptr(heap, p, v)?;
         bindings.extend(sub);

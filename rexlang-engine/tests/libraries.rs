@@ -14,7 +14,10 @@ use rexlang_engine::{
     Engine, EngineError, EngineOptions, EvaluatorRef, Library, Pointer, PreludeMode, RexAdt,
     RexType, Value, pointer_display,
 };
-use rexlang_typesystem::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind, TypeVarSupply};
+use rexlang_typesystem::{
+    types::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind},
+    typesystem::TypeVarSupply,
+};
 use rexlang_util::GasMeter;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

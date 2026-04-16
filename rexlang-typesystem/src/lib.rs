@@ -10,8 +10,9 @@
 //! - Basic ADTs (List, Result, Option) and numeric/string primitives in the prelude.
 //! - Utilities to register additional function/type declarations (e.g. `(-)`, `(/)`).
 
-mod prelude;
-mod typesystem;
-
-pub use prelude::prelude_typeclasses_program;
-pub use typesystem::*;
+pub mod error;
+pub mod inference;
+pub mod prelude;
+pub mod types;
+pub mod typesystem;
+pub mod unification;

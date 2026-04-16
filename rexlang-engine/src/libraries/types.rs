@@ -1,13 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use rexlang_ast::expr::{Program, Symbol, intern};
-use rexlang_typesystem::Type;
+use rexlang_typesystem::types::Type;
 
 use crate::Pointer;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum LibraryId {
     Local { path: PathBuf },
     Remote(String),
@@ -24,7 +24,7 @@ impl fmt::Display for LibraryId {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ResolveRequest {
     pub library_name: String,
     pub importer: Option<LibraryId>,
@@ -42,7 +42,7 @@ pub struct ResolvedLibrary {
     pub content: ResolvedLibraryContent,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct LibraryKey(u64);
 
 impl LibraryKey {
@@ -51,19 +51,19 @@ impl LibraryKey {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum SymbolKind {
     Value,
     Type,
     Class,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct CanonicalSymbol {
     pub library: LibraryKey,
     pub kind: SymbolKind,
     pub local: Symbol,
-    symbol: Symbol,
+    pub symbol: Symbol,
 }
 
 impl CanonicalSymbol {
@@ -100,7 +100,7 @@ impl CanonicalSymbol {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ExportEntry {
     pub value: Option<CanonicalSymbol>,
     pub typ: Option<CanonicalSymbol>,
@@ -123,9 +123,9 @@ impl Default for ExportEntry {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub struct LibraryExports {
-    pub entries: HashMap<Symbol, ExportEntry>,
+    pub entries: BTreeMap<Symbol, ExportEntry>,
 }
 
 impl LibraryExports {
@@ -197,11 +197,11 @@ pub struct VirtualLibraryModule {
 
 #[derive(Clone, Default)]
 pub struct ReplState {
-    pub(crate) alias_exports: HashMap<Symbol, LibraryExports>,
-    pub(crate) imported_values: HashMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_types: HashMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_classes: HashMap<Symbol, CanonicalSymbol>,
-    pub(crate) defined_values: HashSet<Symbol>,
+    pub(crate) alias_exports: BTreeMap<Symbol, LibraryExports>,
+    pub(crate) imported_values: BTreeMap<Symbol, CanonicalSymbol>,
+    pub(crate) imported_types: BTreeMap<Symbol, CanonicalSymbol>,
+    pub(crate) imported_classes: BTreeMap<Symbol, CanonicalSymbol>,
+    pub(crate) defined_values: BTreeSet<Symbol>,
     pub(crate) importer_path: Option<PathBuf>,
 }
 

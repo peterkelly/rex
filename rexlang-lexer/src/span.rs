@@ -2,13 +2,12 @@
 //! in which nodes can be defined. It is used to link nodes back to their
 //! origins in the source.
 
+use serde::{Deserialize, Serialize};
 use std::fmt::{self, Display, Formatter};
 
 /// A Position represents an arbitrary source position. It includes the line
 /// number, and column number.
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Deserialize, serde::Serialize,
-)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub struct Position {
     pub line: usize,
@@ -50,9 +49,7 @@ impl fmt::Display for Position {
 
 /// A Span represents an arbitrary source range. It includes the beginning and
 /// ending Positions.
-#[derive(
-    Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, serde::Deserialize, serde::Serialize,
-)]
+#[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub struct Span {
     pub begin: Position,

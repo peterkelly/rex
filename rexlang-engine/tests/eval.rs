@@ -3,7 +3,10 @@ use rexlang_ast::expr::{Decl, sym, sym_eq};
 use rexlang_engine::{Engine, EngineError, EvaluatorRef, Library, Value, assert_pointer_eq};
 use rexlang_lexer::Token;
 use rexlang_parser::Parser;
-use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeError};
+use rexlang_typesystem::{
+    error::TypeError,
+    types::{BuiltinTypeId, Scheme, Type},
+};
 use rexlang_util::{GasCosts, GasMeter};
 use std::sync::Arc;
 

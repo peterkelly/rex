@@ -5,7 +5,11 @@ use rexlang_lexer::Token;
 use rexlang_parser::Parser;
 use rexlang_util::GasMeter;
 
-use crate::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeError, TypeSystem};
+use crate::{
+    error::TypeError,
+    types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type},
+    typesystem::TypeSystem,
+};
 use rexlang_ast::expr::sym;
 
 fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeError> {

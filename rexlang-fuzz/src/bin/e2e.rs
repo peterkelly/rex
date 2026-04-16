@@ -6,7 +6,7 @@ use rexlang_fuzz::{
     FuzzError, gas_meter_from_env, parser_limits_from_env, read_stdin_bytes, tokenize_fuzz_input,
 };
 use rexlang_parser::Parser;
-use rexlang_typesystem::{TypeSystem, infer_with_gas};
+use rexlang_typesystem::{inference::infer_with_gas, typesystem::TypeSystem};
 
 async fn run_one(input: &[u8]) {
     let mut gas = gas_meter_from_env(300_000);

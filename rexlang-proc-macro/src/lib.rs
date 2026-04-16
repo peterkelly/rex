@@ -4,7 +4,7 @@ use proc_macro::TokenStream;
 
 use proc_macro2::{Span, TokenStream as TokenStream2};
 use quote::{format_ident, quote};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use syn::{
     Attribute, Data, DeriveInput, Error, Fields, GenericArgument, Generics, Ident, LitStr,
     PathArguments, Type, parse_quote, spanned::Spanned,
@@ -217,7 +217,7 @@ fn adt_decl_fn(
     };
 
     let mut param_bindings = Vec::new();
-    let mut param_map: HashMap<String, TokenStream2> = HashMap::new();
+    let mut param_map: BTreeMap<String, TokenStream2> = BTreeMap::new();
     for p in type_params {
         let p_name = p.to_string();
         let p_lit = LitStr::new(&p_name, Span::call_site());
@@ -497,7 +497,7 @@ fn dedupe_token_streams(tokens: Vec<TokenStream2>) -> Vec<TokenStream2> {
 
 fn rex_type_expr(
     ty: &Type,
-    adt_params: &HashMap<String, TokenStream2>,
+    adt_params: &BTreeMap<String, TokenStream2>,
 ) -> Result<TokenStream2, Error> {
     match ty {
         Type::Tuple(tuple) => {

@@ -22,8 +22,11 @@ use rexlang_lexer::{
 };
 use rexlang_parser::{Parser, error::ParserErr};
 use rexlang_typesystem::{
-    BuiltinTypeId, Scheme, Type, TypeError as TsTypeError, TypeKind, TypeSystem, TypedExpr,
-    TypedExprKind, Types, infer, infer_typed, instantiate, unify,
+    error::TypeError as TsTypeError,
+    inference::{infer, infer_typed},
+    types::{BuiltinTypeId, Scheme, Type, TypeKind, TypedExpr, TypedExprKind, Types},
+    typesystem::{PreparedInstanceDecl, TypeSystem, instantiate},
+    unification::unify,
 };
 use rexlang_util::{GasMeter, sha256_hex};
 use serde_json::{Value, json, to_value};
@@ -289,7 +292,6 @@ fn inject_program_decls(
     Ok((instances, prepared_target))
 }
 
-type PreparedInstanceDecl = rexlang_typesystem::PreparedInstanceDecl;
 type PreparedInstance = (usize, PreparedInstanceDecl);
 type InjectedDecls = (Vec<PreparedInstance>, Option<PreparedInstanceDecl>);
 

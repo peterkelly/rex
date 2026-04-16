@@ -1,7 +1,25 @@
-use super::*;
+use crate::{
+    error::TypeError,
+    types::{
+        AdtDecl, AdtVariant, BuiltinTypeId, Predicate, Scheme, Type, TypeConst, TypeEnv, TypeKind,
+        TypeVar, TypeVarId, TypedExpr, TypedExprKind, Types,
+    },
+    typesystem::{
+        TypeSystem, TypeVarSupply, instantiate, is_integral_literal_expr,
+        predicates_from_constraints, reject_ambiguous_scheme, type_from_annotation_expr,
+        type_from_annotation_expr_vars,
+    },
+    unification::{Subst, Unifier, compose_subst, subst_is_empty, unify},
+};
+use rexlang_ast::expr::{Expr, Pattern, Symbol, TypeConstraint, TypeExpr, sym};
+use rexlang_util::gas::GasMeter;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 fn dedup_preds(preds: Vec<Predicate>) -> Vec<Predicate> {
-    let mut seen = HashSet::new();
+    let mut seen = BTreeSet::new();
     let mut out = Vec::with_capacity(preds.len());
     for pred in preds {
         if seen.insert(pred.clone()) {
@@ -67,7 +85,7 @@ struct KnownVariant {
     variant: Symbol,
 }
 
-type KnownVariants = HashMap<Symbol, KnownVariant>;
+type KnownVariants = BTreeMap<Symbol, KnownVariant>;
 
 fn apply_scheme_with_unifier(scheme: &Scheme, unifier: &mut Unifier<'_>) -> Scheme {
     let preds = scheme
@@ -79,7 +97,7 @@ fn apply_scheme_with_unifier(scheme: &Scheme, unifier: &mut Unifier<'_>) -> Sche
     Scheme::new(scheme.vars.clone(), preds, typ)
 }
 
-fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier<'_>) -> HashSet<TypeVarId> {
+fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier<'_>) -> BTreeSet<TypeVarId> {
     let mut ftv = unifier.apply_type(&scheme.typ).ftv();
     for pred in &scheme.preds {
         ftv.extend(unifier.apply_type(&pred.typ).ftv());
@@ -90,8 +108,8 @@ fn scheme_ftv_with_unifier(scheme: &Scheme, unifier: &mut Unifier<'_>) -> HashSe
     ftv
 }
 
-fn env_ftv_with_unifier(env: &TypeEnv, unifier: &mut Unifier<'_>) -> HashSet<TypeVarId> {
-    let mut out = HashSet::new();
+fn env_ftv_with_unifier(env: &TypeEnv, unifier: &mut Unifier<'_>) -> BTreeSet<TypeVarId> {
+    let mut out = BTreeSet::new();
     for (_name, schemes) in env.values.iter() {
         for scheme in schemes {
             out.extend(scheme_ftv_with_unifier(scheme, unifier));
@@ -115,7 +133,7 @@ fn generalize_with_unifier(
         .ftv()
         .union(&preds.ftv())
         .copied()
-        .collect::<HashSet<_>>()
+        .collect::<BTreeSet<_>>()
         .difference(&env_ftv_with_unifier(env, unifier))
         .cloned()
         .map(|id| TypeVar::new(id, None))
@@ -161,7 +179,7 @@ pub fn infer_typed_with_gas(
         &known,
         expr,
     )
-    .map_err(|err| with_span(expr.span(), err))?;
+    .map_err(|err| err.with_span(expr.span()))?;
     let subst = unifier.into_subst();
     let mut typed = typed.apply(&subst);
     let mut preds = dedup_preds(preds.apply(&subst));
@@ -190,7 +208,7 @@ fn infer_typed_inner(
         &known,
         expr,
     )
-    .map_err(|err| with_span(expr.span(), err))?;
+    .map_err(|err| err.with_span(expr.span()))?;
     let subst = unifier.into_subst();
     let mut typed = typed.apply(&subst);
     let mut preds = dedup_preds(preds.apply(&subst));
@@ -227,7 +245,7 @@ pub fn infer_with_gas(
         &known,
         expr,
     )
-    .map_err(|err| with_span(expr.span(), err))?;
+    .map_err(|err| err.with_span(expr.span()))?;
     let subst = unifier.into_subst();
     let preds = dedup_preds(preds.apply(&subst));
     let t = t.apply(&subst);
@@ -249,7 +267,7 @@ fn infer_inner(
         &known,
         expr,
     )
-    .map_err(|err| with_span(expr.span(), err))?;
+    .map_err(|err| err.with_span(expr.span()))?;
     let subst = unifier.into_subst();
     let mut preds = dedup_preds(preds.apply(&subst));
     let mut t = t.apply(&subst);
@@ -388,7 +406,7 @@ fn infer_app_arg_type(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
     arg_hint: Option<Type>,
     arg: &Expr,
@@ -412,9 +430,9 @@ fn infer_app_arg_type(
             let TypeKind::Record(fields) = arg_hint.as_ref() else {
                 unreachable!("guarded by matches!")
             };
-            let expected: HashMap<_, _> =
+            let expected: BTreeMap<_, _> =
                 fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            let mut seen = HashSet::new();
+            let mut seen = BTreeSet::new();
             let mut preds = Vec::new();
             for (k, v) in kvs {
                 let expected_ty = expected
@@ -453,7 +471,7 @@ fn infer_app_arg_typed(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
     arg_hint: Option<Type>,
     arg: &Expr,
@@ -479,7 +497,7 @@ fn infer_app_arg_typed(
             };
             let mut preds = Vec::new();
             let mut typed_kvs = BTreeMap::new();
-            let expected: HashMap<_, _> =
+            let expected: BTreeMap<_, _> =
                 fields.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             for (k, v) in kvs {
                 let expected_ty = expected
@@ -520,7 +538,7 @@ fn infer_record_update_type_with_hint(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
     base: &Expr,
     updates: &BTreeMap<Symbol, Arc<Expr>>,
@@ -539,7 +557,7 @@ fn infer_record_update_type_with_hint(
         known_variant,
         &update_fields,
     )?;
-    let expected: HashMap<_, _> = fields.into_iter().collect();
+    let expected: BTreeMap<_, _> = fields.into_iter().collect();
 
     let mut preds = p_base;
     for (k, v) in updates {
@@ -559,7 +577,7 @@ fn infer_record_update_typed_with_hint(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
     base: &Expr,
     updates: &BTreeMap<Symbol, Arc<Expr>>,
@@ -578,7 +596,7 @@ fn infer_record_update_typed_with_hint(
         known_variant,
         &update_fields,
     )?;
-    let expected: HashMap<_, _> = fields.into_iter().collect();
+    let expected: BTreeMap<_, _> = fields.into_iter().collect();
 
     let mut preds = p_base;
     let mut typed_updates = BTreeMap::new();
@@ -607,7 +625,7 @@ fn infer_expr_type(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
@@ -615,14 +633,14 @@ fn infer_expr_type(
     let res = unifier.with_infer_depth(span, |unifier| {
         infer_expr_type_inner(unifier, supply, env, adts, known, expr)
     });
-    res.map_err(|err| with_span(&span, err))
+    res.map_err(|err| err.with_span(&span))
 }
 
 fn infer_expr_type_inner(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
@@ -671,7 +689,7 @@ fn infer_expr_type_inner(
         }
         Expr::Lam(..) => {
             let (params, constraints, body) = collect_lambda_chain(expr);
-            let mut ann_vars = HashMap::new();
+            let mut ann_vars = BTreeMap::new();
             let mut param_tys = Vec::with_capacity(params.len());
             for (name, ann) in &params {
                 let param_ty = match ann {
@@ -786,7 +804,7 @@ fn infer_expr_type_inner(
                 known_variant,
                 &update_fields,
             )?;
-            let expected: HashMap<_, _> = fields.into_iter().collect();
+            let expected: BTreeMap<_, _> = fields.into_iter().collect();
 
             let mut preds = p_base;
             for (k, v) in updates {
@@ -812,7 +830,7 @@ fn infer_expr_type_inner(
             let mut known_cur = known.clone();
             for (v, ann, d) in bindings {
                 let (p1, t1) = if let Some(ref ann_expr) = ann {
-                    let mut ann_vars = HashMap::new();
+                    let mut ann_vars = BTreeMap::new();
                     let ann_ty =
                         type_from_annotation_expr_vars(adts, ann_expr, &mut ann_vars, supply)?;
                     match d.as_ref() {
@@ -867,7 +885,7 @@ fn infer_expr_type_inner(
         Expr::LetRec(_, bindings, body) => {
             let mut env_seed = env.clone();
             let mut known_seed = known.clone();
-            let mut binding_tys = HashMap::new();
+            let mut binding_tys = BTreeMap::new();
             for (var, _ann, _def) in bindings {
                 let tv = Type::var(supply.fresh(Some(var.name.clone())));
                 env_seed.extend(var.name.clone(), Scheme::new(vec![], vec![], tv.clone()));
@@ -880,7 +898,7 @@ fn infer_expr_type_inner(
                 let (preds, def_ty) =
                     infer_expr_type(unifier, supply, &env_seed, adts, &known_seed, def)?;
                 if let Some(ann) = ann {
-                    let mut ann_vars = HashMap::new();
+                    let mut ann_vars = BTreeMap::new();
                     let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
                     unifier.unify(&def_ty, &ann_ty)?;
                 }
@@ -1049,7 +1067,7 @@ fn infer_expr(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
     env: &TypeEnv,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
     expr: &Expr,
 ) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
@@ -1163,7 +1181,7 @@ fn infer_expr(
                 }
                 Expr::Lam(..) => {
                     let (params, constraints, body) = collect_lambda_chain(expr);
-                    let mut ann_vars = HashMap::new();
+                    let mut ann_vars = BTreeMap::new();
                     let mut param_tys = Vec::with_capacity(params.len());
                     for (name, ann) in &params {
                         let param_ty = match ann {
@@ -1318,7 +1336,7 @@ fn infer_expr(
                         known_variant,
                         &update_fields,
                     )?;
-                    let expected: HashMap<_, _> = fields.into_iter().collect();
+                    let expected: BTreeMap<_, _> = fields.into_iter().collect();
 
                     let mut preds = p_base;
                     let mut typed_updates = BTreeMap::new();
@@ -1356,7 +1374,7 @@ fn infer_expr(
                     let mut typed_defs = Vec::new();
                     for (v, ann, d) in bindings {
                         let (p1, t1, typed_def) = if let Some(ref ann_expr) = ann {
-                            let mut ann_vars = HashMap::new();
+                            let mut ann_vars = BTreeMap::new();
                             let ann_ty = type_from_annotation_expr_vars(
                                 adts,
                                 ann_expr,
@@ -1432,7 +1450,7 @@ fn infer_expr(
                 Expr::LetRec(_, bindings, body) => {
                     let mut env_seed = env.clone();
                     let mut known_seed = known.clone();
-                    let mut binding_tys = HashMap::new();
+                    let mut binding_tys = BTreeMap::new();
                     for (var, _ann, _def) in bindings {
                         let tv = Type::var(supply.fresh(Some(var.name.clone())));
                         env_seed.extend(var.name.clone(), Scheme::new(vec![], vec![], tv.clone()));
@@ -1445,7 +1463,7 @@ fn infer_expr(
                         let (preds, def_ty, typed_def) =
                             infer_expr(unifier, supply, &env_seed, adts, &known_seed, def)?;
                         if let Some(ann) = ann {
-                            let mut ann_vars = HashMap::new();
+                            let mut ann_vars = BTreeMap::new();
                             let ann_ty =
                                 type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
                             unifier.unify(&def_ty, &ann_ty)?;
@@ -1652,11 +1670,11 @@ fn infer_expr(
             }
         })()
     });
-    res.map_err(|err| with_span(&span, err))
+    res.map_err(|err| err.with_span(&span))
 }
 
 fn ctor_lookup<'a>(
-    adts: &'a HashMap<Symbol, AdtDecl>,
+    adts: &'a BTreeMap<Symbol, AdtDecl>,
     name: &Symbol,
 ) -> Option<(&'a AdtDecl, &'a AdtVariant)> {
     let mut found = None;
@@ -1703,7 +1721,7 @@ fn instantiate_variant_fields(
 fn known_variant_from_expr(
     expr: &Expr,
     expr_ty: &Type,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
 ) -> Option<KnownVariant> {
     let mut expr = expr;
     while let Expr::Ann(_, inner, _) = expr {
@@ -1730,7 +1748,7 @@ fn known_variant_from_expr(
 fn known_variant_from_expr_with_known(
     expr: &Expr,
     expr_ty: &Type,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     known: &KnownVariants,
 ) -> Option<KnownVariant> {
     let mut expr = expr;
@@ -1747,7 +1765,7 @@ fn known_variant_from_expr_with_known(
 }
 
 fn select_record_variant<'a, F>(
-    adts: &'a HashMap<Symbol, AdtDecl>,
+    adts: &'a BTreeMap<Symbol, AdtDecl>,
     base_ty: &Type,
     known_variant: Option<KnownVariant>,
     field_for_errors: &Symbol,
@@ -1823,7 +1841,7 @@ where
 fn resolve_record_update(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     base_ty: &Type,
     known_variant: Option<KnownVariant>,
     update_fields: &[Symbol],
@@ -1870,7 +1888,7 @@ fn resolve_record_update(
 fn resolve_projection(
     unifier: &mut Unifier<'_>,
     supply: &mut TypeVarSupply,
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     base_ty: &Type,
     known_variant: Option<KnownVariant>,
     field: &Symbol,
@@ -2101,7 +2119,7 @@ fn infer_pattern(
             }
         }
     })();
-    res.map_err(|err| with_span(&span, err))
+    res.map_err(|err| err.with_span(&span))
 }
 
 fn type_head_name(typ: &Type) -> Option<&Symbol> {
@@ -2115,7 +2133,10 @@ fn type_head_name(typ: &Type) -> Option<&Symbol> {
     }
 }
 
-fn adt_name_from_patterns(adts: &HashMap<Symbol, AdtDecl>, patterns: &[Pattern]) -> Option<Symbol> {
+fn adt_name_from_patterns(
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    patterns: &[Pattern],
+) -> Option<Symbol> {
     let mut candidate: Option<Symbol> = None;
     for pat in patterns {
         let next = match pat {
@@ -2138,7 +2159,7 @@ fn adt_name_from_patterns(adts: &HashMap<Symbol, AdtDecl>, patterns: &[Pattern])
 }
 
 fn check_match_exhaustive(
-    adts: &HashMap<Symbol, AdtDecl>,
+    adts: &BTreeMap<Symbol, AdtDecl>,
     scrutinee_ty: &Type,
     patterns: &[Pattern],
 ) -> Result<(), TypeError> {
@@ -2159,11 +2180,11 @@ fn check_match_exhaustive(
         Some(adt) => adt,
         None => return Ok(()),
     };
-    let ctor_names: HashSet<Symbol> = adt.variants.iter().map(|v| v.name.clone()).collect();
+    let ctor_names: BTreeSet<Symbol> = adt.variants.iter().map(|v| v.name.clone()).collect();
     if ctor_names.is_empty() {
         return Ok(());
     }
-    let mut covered = HashSet::new();
+    let mut covered = BTreeSet::new();
     for pat in patterns {
         match pat {
             Pattern::Named(_, name, _) => {
@@ -2195,7 +2216,12 @@ fn check_match_exhaustive(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rexlang_lexer::Token;
+    use crate::{
+        types::collect_adts_in_types,
+        typesystem::{TypeSystemLimits, entails, generalize},
+        unification::bind,
+    };
+    use rexlang_lexer::{Token, span::Span};
     use rexlang_parser::Parser;
     use rexlang_util::{GasCosts, GasMeter};
 

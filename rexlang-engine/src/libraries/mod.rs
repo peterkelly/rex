@@ -1,6 +1,6 @@
 //! Library system: resolvers, loading, and import rewriting.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ use rexlang_ast::expr::{
 };
 use rexlang_lexer::Token;
 use rexlang_parser::Parser as RexParser;
-use rexlang_typesystem::{Predicate, Type};
+use rexlang_typesystem::types::{Predicate, Type};
 use rexlang_util::{GasMeter, sha256_hex};
 use uuid::Uuid;
 
@@ -93,18 +93,18 @@ fn default_import_decl(library_name: &str) -> ImportDecl {
 
 #[derive(Default)]
 pub(crate) struct ImportBindings {
-    pub(crate) alias_exports: HashMap<Symbol, LibraryExports>,
-    pub(crate) imported_values: HashMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_types: HashMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_classes: HashMap<Symbol, CanonicalSymbol>,
+    pub(crate) alias_exports: BTreeMap<Symbol, LibraryExports>,
+    pub(crate) imported_values: BTreeMap<Symbol, CanonicalSymbol>,
+    pub(crate) imported_types: BTreeMap<Symbol, CanonicalSymbol>,
+    pub(crate) imported_classes: BTreeMap<Symbol, CanonicalSymbol>,
 }
 
 pub(crate) struct ImportBindingPolicy<'a> {
-    pub(crate) forbidden_values: &'a HashSet<Symbol>,
-    pub(crate) forbidden_types: &'a HashSet<Symbol>,
-    pub(crate) existing_imported_values: Option<&'a HashSet<Symbol>>,
-    pub(crate) existing_imported_types: Option<&'a HashSet<Symbol>>,
-    pub(crate) existing_imported_classes: Option<&'a HashSet<Symbol>>,
+    pub(crate) forbidden_values: &'a BTreeSet<Symbol>,
+    pub(crate) forbidden_types: &'a BTreeSet<Symbol>,
+    pub(crate) existing_imported_values: Option<&'a BTreeSet<Symbol>>,
+    pub(crate) existing_imported_types: Option<&'a BTreeSet<Symbol>>,
+    pub(crate) existing_imported_classes: Option<&'a BTreeSet<Symbol>>,
 }
 
 fn add_import_bindings(
@@ -226,13 +226,13 @@ fn collect_local_renames(
     program: &Program,
     prefix: &str,
 ) -> (
-    HashMap<Symbol, Symbol>,
-    HashMap<Symbol, Symbol>,
-    HashMap<Symbol, Symbol>,
+    BTreeMap<Symbol, Symbol>,
+    BTreeMap<Symbol, Symbol>,
+    BTreeMap<Symbol, Symbol>,
 ) {
-    let mut values = HashMap::new();
-    let mut types = HashMap::new();
-    let mut classes = HashMap::new();
+    let mut values = BTreeMap::new();
+    let mut types = BTreeMap::new();
+    let mut classes = BTreeMap::new();
 
     for decl in &program.decls {
         match decl {
@@ -286,8 +286,8 @@ fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
 
 fn rename_type_expr(
     ty: &TypeExpr,
-    type_renames: &HashMap<Symbol, Symbol>,
-    class_renames: &HashMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
 ) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => {
@@ -334,8 +334,8 @@ fn rename_type_expr(
 
 fn rename_constraints(
     cs: &[TypeConstraint],
-    type_renames: &HashMap<Symbol, Symbol>,
-    class_renames: &HashMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
 ) -> Vec<TypeConstraint> {
     cs.iter()
         .map(|c| TypeConstraint {
@@ -352,7 +352,7 @@ fn rename_constraints(
         .collect()
 }
 
-fn rename_pattern(pat: &Pattern, value_renames: &HashMap<Symbol, Symbol>) -> Pattern {
+fn rename_pattern(pat: &Pattern, value_renames: &BTreeMap<Symbol, Symbol>) -> Pattern {
     match pat {
         Pattern::Wildcard(span) => Pattern::Wildcard(*span),
         Pattern::Var(v) => Pattern::Var(v.clone()),
@@ -401,10 +401,10 @@ fn rename_pattern(pat: &Pattern, value_renames: &HashMap<Symbol, Symbol>) -> Pat
 
 fn rename_expr(
     expr: &Expr,
-    bound: &mut HashSet<Symbol>,
-    value_renames: &HashMap<Symbol, Symbol>,
-    type_renames: &HashMap<Symbol, Symbol>,
-    class_renames: &HashMap<Symbol, Symbol>,
+    bound: &mut BTreeSet<Symbol>,
+    value_renames: &BTreeMap<Symbol, Symbol>,
+    type_renames: &BTreeMap<Symbol, Symbol>,
+    class_renames: &BTreeMap<Symbol, Symbol>,
 ) -> Expr {
     match expr {
         Expr::Bool(span, v) => Expr::Bool(*span, *v),
@@ -724,7 +724,7 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
                 let ret = rename_type_expr(&fd.ret, &type_renames, &class_renames);
                 let constraints =
                     rename_constraints(&fd.constraints, &type_renames, &class_renames);
-                let mut bound = HashSet::new();
+                let mut bound = BTreeSet::new();
                 for (v, _) in &params {
                     bound.insert(v.name.clone());
                 }
@@ -808,7 +808,7 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
                 let context = rename_constraints(&id.context, &type_renames, &class_renames);
                 let mut methods = Vec::new();
                 for m in &id.methods {
-                    let mut bound = HashSet::new();
+                    let mut bound = BTreeSet::new();
                     let body = Arc::new(rename_expr(
                         m.body.as_ref(),
                         &mut bound,
@@ -833,7 +833,7 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
         })
         .collect();
 
-    let mut bound = HashSet::new();
+    let mut bound = BTreeSet::new();
     let expr = Arc::new(rename_expr(
         program.expr.as_ref(),
         &mut bound,
@@ -847,8 +847,8 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
 
 fn alias_is_visible(
     name: &Symbol,
-    bound: &HashSet<Symbol>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    bound: &BTreeSet<Symbol>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> bool {
     if bound.contains(name) {
         return false;
@@ -860,20 +860,20 @@ fn alias_is_visible(
 }
 
 struct RewriteScope<'a> {
-    aliases: &'a HashMap<Symbol, LibraryExports>,
-    imported_values: &'a HashMap<Symbol, CanonicalSymbol>,
-    imported_types: &'a HashMap<Symbol, CanonicalSymbol>,
-    imported_classes: &'a HashMap<Symbol, CanonicalSymbol>,
-    shadowed_types: Option<&'a HashSet<Symbol>>,
-    shadowed_values: Option<&'a HashSet<Symbol>>,
+    aliases: &'a BTreeMap<Symbol, LibraryExports>,
+    imported_values: &'a BTreeMap<Symbol, CanonicalSymbol>,
+    imported_types: &'a BTreeMap<Symbol, CanonicalSymbol>,
+    imported_classes: &'a BTreeMap<Symbol, CanonicalSymbol>,
+    shadowed_types: Option<&'a BTreeSet<Symbol>>,
+    shadowed_values: Option<&'a BTreeSet<Symbol>>,
 }
 
 fn rewrite_import_uses_expr(
     expr: &Expr,
-    bound: &mut HashSet<Symbol>,
+    bound: &mut BTreeSet<Symbol>,
     scope: &RewriteScope<'_>,
 ) -> Expr {
-    let rewrite_type = |ty: &TypeExpr, bound: &HashSet<Symbol>| {
+    let rewrite_type = |ty: &TypeExpr, bound: &BTreeSet<Symbol>| {
         rewrite_import_uses_type_expr(
             ty,
             bound,
@@ -1069,7 +1069,7 @@ fn rewrite_import_uses_expr(
 
 fn rewrite_import_uses_pattern(
     pat: &Pattern,
-    imported_values: &HashMap<Symbol, CanonicalSymbol>,
+    imported_values: &BTreeMap<Symbol, CanonicalSymbol>,
 ) -> Pattern {
     match pat {
         Pattern::Wildcard(span) => Pattern::Wildcard(*span),
@@ -1121,11 +1121,11 @@ fn rewrite_import_uses_pattern(
 
 fn rewrite_import_uses_class_name(
     class: &NameRef,
-    bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, LibraryExports>,
-    imported_classes: &HashMap<Symbol, CanonicalSymbol>,
-    shadowed_types: Option<&HashSet<Symbol>>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    bound: &BTreeSet<Symbol>,
+    aliases: &BTreeMap<Symbol, LibraryExports>,
+    imported_classes: &BTreeMap<Symbol, CanonicalSymbol>,
+    shadowed_types: Option<&BTreeSet<Symbol>>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> NameRef {
     if let NameRef::Unqualified(name) = class {
         if shadowed_types.is_some_and(|shadowed| shadowed.contains(name)) {
@@ -1163,11 +1163,11 @@ fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol)> {
 
 fn rewrite_import_uses_type_expr(
     ty: &TypeExpr,
-    bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, LibraryExports>,
-    imported_types: &HashMap<Symbol, CanonicalSymbol>,
-    shadowed_types: Option<&HashSet<Symbol>>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    bound: &BTreeSet<Symbol>,
+    aliases: &BTreeMap<Symbol, LibraryExports>,
+    imported_types: &BTreeMap<Symbol, CanonicalSymbol>,
+    shadowed_types: Option<&BTreeSet<Symbol>>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => match name {
@@ -1278,12 +1278,12 @@ fn rewrite_import_uses_type_expr(
 
 pub(crate) fn rewrite_import_uses(
     program: &Program,
-    aliases: &HashMap<Symbol, LibraryExports>,
-    imported_values: &HashMap<Symbol, CanonicalSymbol>,
-    imported_types: &HashMap<Symbol, CanonicalSymbol>,
-    imported_classes: &HashMap<Symbol, CanonicalSymbol>,
-    shadowed_types: Option<&HashSet<Symbol>>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    aliases: &BTreeMap<Symbol, LibraryExports>,
+    imported_values: &BTreeMap<Symbol, CanonicalSymbol>,
+    imported_types: &BTreeMap<Symbol, CanonicalSymbol>,
+    imported_classes: &BTreeMap<Symbol, CanonicalSymbol>,
+    shadowed_types: Option<&BTreeSet<Symbol>>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Program {
     let scope = RewriteScope {
         aliases,
@@ -1293,13 +1293,13 @@ pub(crate) fn rewrite_import_uses(
         shadowed_types,
         shadowed_values,
     };
-    let decl_bound = HashSet::new();
+    let decl_bound = BTreeSet::new();
     let decls = program
         .decls
         .iter()
         .map(|decl| match decl {
             Decl::Fn(fd) => {
-                let mut bound: HashSet<Symbol> =
+                let mut bound: BTreeSet<Symbol> =
                     fd.params.iter().map(|(v, _)| v.name.clone()).collect();
                 let body = Arc::new(rewrite_import_uses_expr(
                     fd.body.as_ref(),
@@ -1487,7 +1487,7 @@ pub(crate) fn rewrite_import_uses(
                     .methods
                     .iter()
                     .map(|m| {
-                        let mut bound = HashSet::new();
+                        let mut bound = BTreeSet::new();
                         let body = Arc::new(rewrite_import_uses_expr(
                             m.body.as_ref(),
                             &mut bound,
@@ -1548,7 +1548,7 @@ pub(crate) fn rewrite_import_uses(
         })
         .collect();
 
-    let mut bound = HashSet::new();
+    let mut bound = BTreeSet::new();
     let expr = Arc::new(rewrite_import_uses_expr(
         program.expr.as_ref(),
         &mut bound,
@@ -1559,9 +1559,9 @@ pub(crate) fn rewrite_import_uses(
 
 fn validate_import_uses_expr(
     expr: &Expr,
-    bound: &mut HashSet<Symbol>,
-    aliases: &HashMap<Symbol, LibraryExports>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    bound: &mut BTreeSet<Symbol>,
+    aliases: &BTreeMap<Symbol, LibraryExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Result<(), EngineError> {
     match expr {
         Expr::Project(_, base, field) => {
@@ -1685,9 +1685,9 @@ fn validate_import_uses_expr(
 
 fn validate_import_uses_class_name(
     class: &NameRef,
-    bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, LibraryExports>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    bound: &BTreeSet<Symbol>,
+    aliases: &BTreeMap<Symbol, LibraryExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Result<(), EngineError> {
     let Some((alias_sym, member_sym)) = qualified_alias_member(class) else {
         return Ok(());
@@ -1710,9 +1710,9 @@ fn validate_import_uses_class_name(
 
 fn validate_import_uses_type_expr(
     ty: &TypeExpr,
-    bound: &HashSet<Symbol>,
-    aliases: &HashMap<Symbol, LibraryExports>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    bound: &BTreeSet<Symbol>,
+    aliases: &BTreeMap<Symbol, LibraryExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Result<(), EngineError> {
     match ty {
         TypeExpr::Name(_, name) => {
@@ -1760,49 +1760,59 @@ fn validate_import_uses_type_expr(
 
 pub(crate) fn validate_import_uses(
     program: &Program,
-    aliases: &HashMap<Symbol, LibraryExports>,
-    shadowed_values: Option<&HashSet<Symbol>>,
+    aliases: &BTreeMap<Symbol, LibraryExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Result<(), EngineError> {
     for decl in &program.decls {
         match decl {
             Decl::Fn(fd) => {
                 for (_, t) in &fd.params {
-                    validate_import_uses_type_expr(t, &HashSet::new(), aliases, shadowed_values)?;
+                    validate_import_uses_type_expr(t, &BTreeSet::new(), aliases, shadowed_values)?;
                 }
-                validate_import_uses_type_expr(&fd.ret, &HashSet::new(), aliases, shadowed_values)?;
+                validate_import_uses_type_expr(
+                    &fd.ret,
+                    &BTreeSet::new(),
+                    aliases,
+                    shadowed_values,
+                )?;
                 for c in &fd.constraints {
                     validate_import_uses_class_name(
                         &c.class,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
                     validate_import_uses_type_expr(
                         &c.typ,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
                 }
-                let mut bound: HashSet<Symbol> =
+                let mut bound: BTreeSet<Symbol> =
                     fd.params.iter().map(|(v, _)| v.name.clone()).collect();
                 validate_import_uses_expr(fd.body.as_ref(), &mut bound, aliases, shadowed_values)?;
             }
             Decl::DeclareFn(df) => {
                 for (_, t) in &df.params {
-                    validate_import_uses_type_expr(t, &HashSet::new(), aliases, shadowed_values)?;
+                    validate_import_uses_type_expr(t, &BTreeSet::new(), aliases, shadowed_values)?;
                 }
-                validate_import_uses_type_expr(&df.ret, &HashSet::new(), aliases, shadowed_values)?;
+                validate_import_uses_type_expr(
+                    &df.ret,
+                    &BTreeSet::new(),
+                    aliases,
+                    shadowed_values,
+                )?;
                 for c in &df.constraints {
                     validate_import_uses_class_name(
                         &c.class,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
                     validate_import_uses_type_expr(
                         &c.typ,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
@@ -1813,7 +1823,7 @@ pub(crate) fn validate_import_uses(
                     for t in &v.args {
                         validate_import_uses_type_expr(
                             t,
-                            &HashSet::new(),
+                            &BTreeSet::new(),
                             aliases,
                             shadowed_values,
                         )?;
@@ -1824,13 +1834,13 @@ pub(crate) fn validate_import_uses(
                 for c in &cd.supers {
                     validate_import_uses_class_name(
                         &c.class,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
                     validate_import_uses_type_expr(
                         &c.typ,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
@@ -1838,7 +1848,7 @@ pub(crate) fn validate_import_uses(
                 for m in &cd.methods {
                     validate_import_uses_type_expr(
                         &m.typ,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
@@ -1847,32 +1857,32 @@ pub(crate) fn validate_import_uses(
             Decl::Instance(inst) => {
                 validate_import_uses_class_name(
                     &NameRef::from_dotted(inst.class.as_ref()),
-                    &HashSet::new(),
+                    &BTreeSet::new(),
                     aliases,
                     shadowed_values,
                 )?;
                 validate_import_uses_type_expr(
                     &inst.head,
-                    &HashSet::new(),
+                    &BTreeSet::new(),
                     aliases,
                     shadowed_values,
                 )?;
                 for c in &inst.context {
                     validate_import_uses_class_name(
                         &c.class,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
                     validate_import_uses_type_expr(
                         &c.typ,
-                        &HashSet::new(),
+                        &BTreeSet::new(),
                         aliases,
                         shadowed_values,
                     )?;
                 }
                 for m in &inst.methods {
-                    let mut bound = HashSet::new();
+                    let mut bound = BTreeSet::new();
                     validate_import_uses_expr(
                         m.body.as_ref(),
                         &mut bound,
@@ -1884,12 +1894,12 @@ pub(crate) fn validate_import_uses(
             Decl::Import(..) => {}
         }
     }
-    let mut bound = HashSet::new();
+    let mut bound = BTreeSet::new();
     validate_import_uses_expr(program.expr.as_ref(), &mut bound, aliases, shadowed_values)
 }
 
-pub(crate) fn decl_value_names(decls: &[Decl]) -> HashSet<Symbol> {
-    let mut out = HashSet::new();
+pub(crate) fn decl_value_names(decls: &[Decl]) -> BTreeSet<Symbol> {
+    let mut out = BTreeSet::new();
     for decl in decls {
         match decl {
             Decl::Fn(fd) => {
@@ -1909,8 +1919,8 @@ pub(crate) fn decl_value_names(decls: &[Decl]) -> HashSet<Symbol> {
     out
 }
 
-pub(crate) fn decl_type_names(decls: &[Decl]) -> HashSet<Symbol> {
-    let mut out = HashSet::new();
+pub(crate) fn decl_type_names(decls: &[Decl]) -> BTreeSet<Symbol> {
+    let mut out = BTreeSet::new();
     for decl in decls {
         match decl {
             Decl::Type(td) => {
@@ -1967,7 +1977,7 @@ fn graph_imports_for_program(program: &Program, default_imports: &[String]) -> V
 
 fn tarjan_scc_library_ids(
     nodes: &[LibraryId],
-    edges: &HashMap<LibraryId, Vec<LibraryId>>,
+    edges: &BTreeMap<LibraryId, Vec<LibraryId>>,
 ) -> Vec<Vec<LibraryId>> {
     // Tarjan's SCC algorithm (linear in |V| + |E|).
     //
@@ -1982,16 +1992,16 @@ fn tarjan_scc_library_ids(
     #[derive(Default)]
     struct TarjanState {
         index: usize,
-        index_of: HashMap<LibraryId, usize>,
-        lowlink: HashMap<LibraryId, usize>,
+        index_of: BTreeMap<LibraryId, usize>,
+        lowlink: BTreeMap<LibraryId, usize>,
         stack: Vec<LibraryId>,
-        on_stack: HashSet<LibraryId>,
+        on_stack: BTreeSet<LibraryId>,
         components: Vec<Vec<LibraryId>>,
     }
 
     fn strong_connect(
         v: &LibraryId,
-        edges: &HashMap<LibraryId, Vec<LibraryId>>,
+        edges: &BTreeMap<LibraryId, Vec<LibraryId>>,
         st: &mut TarjanState,
     ) {
         st.index_of.insert(v.clone(), st.index);
@@ -2268,8 +2278,8 @@ where
         &mut self,
         root: ResolvedLibrary,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<LibraryId, LibraryExports>,
-        loading: &mut HashSet<LibraryId>,
+        loaded: &mut BTreeMap<LibraryId, LibraryExports>,
+        loading: &mut BTreeSet<LibraryId>,
     ) -> Result<LibraryExports, EngineError> {
         #[derive(Clone)]
         struct PendingModule {
@@ -2284,8 +2294,8 @@ where
             return Ok(exports.clone());
         }
 
-        let mut pending: HashMap<LibraryId, PendingModule> = HashMap::new();
-        let mut edges: HashMap<LibraryId, Vec<LibraryId>> = HashMap::new();
+        let mut pending: BTreeMap<LibraryId, PendingModule> = BTreeMap::new();
+        let mut edges: BTreeMap<LibraryId, Vec<LibraryId>> = BTreeMap::new();
         let mut stack = vec![root.clone()];
 
         while let Some(resolved) = stack.pop() {
@@ -2452,7 +2462,7 @@ where
         policy: &ImportBindingPolicy<'_>,
         gas: &mut GasMeter,
     ) -> Result<(), EngineError> {
-        let existing_value_names: HashSet<Symbol> =
+        let existing_value_names: BTreeSet<Symbol> =
             policy.existing_imported_values.cloned().unwrap_or_default();
         let default_imports = self.default_imports().to_vec();
         for library_name in default_imports {
@@ -2651,8 +2661,8 @@ where
         &mut self,
         resolved: ResolvedLibrary,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<LibraryId, LibraryExports>,
-        loading: &mut HashSet<LibraryId>,
+        loaded: &mut BTreeMap<LibraryId, LibraryExports>,
+        loading: &mut BTreeSet<LibraryId>,
     ) -> Result<LibraryExports, EngineError> {
         if let Some(exports) = loaded.get(&resolved.id) {
             return Ok(exports.clone());
@@ -2671,8 +2681,8 @@ where
         import_decl: &ImportDecl,
         importer: Option<LibraryId>,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<LibraryId, LibraryExports>,
-        loading: &mut HashSet<LibraryId>,
+        loaded: &mut BTreeMap<LibraryId, LibraryExports>,
+        loading: &mut BTreeSet<LibraryId>,
     ) -> Result<LibraryExports, EngineError> {
         let spec = import_specifier(&import_decl.path);
         if let Some(exports) = self.virtual_library_exports(spec_base_name(&spec)) {
@@ -2692,8 +2702,8 @@ where
         importer: Option<LibraryId>,
         prefix: &str,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<LibraryId, LibraryExports>,
-        loading: &mut HashSet<LibraryId>,
+        loaded: &mut BTreeMap<LibraryId, LibraryExports>,
+        loading: &mut BTreeSet<LibraryId>,
     ) -> Result<Program, EngineError> {
         let mut bindings = ImportBindings::default();
         let local_values = decl_value_names(&program.decls);
@@ -2831,8 +2841,8 @@ where
         resolved: ResolvedLibrary,
         gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
-        let mut loading: HashSet<LibraryId> = HashSet::new();
+        let mut loaded: BTreeMap<LibraryId, LibraryExports> = BTreeMap::new();
+        let mut loading: BTreeSet<LibraryId> = BTreeSet::new();
 
         loading.insert(resolved.id.clone());
 
@@ -2888,8 +2898,8 @@ where
 
         let importer = importer_path.map(|p| LibraryId::Local { path: p });
 
-        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
-        let mut loading: HashSet<LibraryId> = HashSet::new();
+        let mut loaded: BTreeMap<LibraryId, LibraryExports> = BTreeMap::new();
+        let mut loading: BTreeSet<LibraryId> = BTreeSet::new();
 
         let prefix = format!("@snippet{}", Uuid::new_v4());
         let rewritten = self.rewrite_program_with_imports(

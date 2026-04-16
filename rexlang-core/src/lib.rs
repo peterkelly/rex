@@ -20,9 +20,14 @@ pub use rexlang_lexer::Token;
 pub use rexlang_parser::{Parser, ParserLimits, error::ParserErr};
 pub use rexlang_proc_macro::Rex;
 pub use rexlang_typesystem::{
-    AdtConflict, AdtDecl, BuiltinTypeId, CollectAdtsError, Instance, Predicate, Scheme, Type,
-    TypeConst, TypeError, TypeKind, TypeSystem, TypeVar, TypeVarSupply, collect_adts_in_types,
-    infer, infer_typed, infer_typed_with_gas, infer_with_gas, prelude_typeclasses_program,
+    error::{AdtConflict, CollectAdtsError, TypeError},
+    inference::{infer, infer_typed, infer_typed_with_gas, infer_with_gas},
+    prelude::prelude_typeclasses_program,
+    types::{
+        AdtDecl, AdtParam, AdtVariant, BuiltinTypeId, Instance, Predicate, Scheme, Type, TypeConst,
+        TypeKind, TypeVar, collect_adts_in_types,
+    },
+    typesystem::{TypeSystem, TypeVarSupply},
 };
 pub use rexlang_util::{GasCosts, GasMeter};
 

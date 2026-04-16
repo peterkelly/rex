@@ -5,7 +5,10 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use rexlang_ast::expr::{Symbol, intern, sym, sym_eq};
-use rexlang_typesystem::{BuiltinTypeId, Scheme, Type, TypeKind, Types, unify};
+use rexlang_typesystem::{
+    types::{BuiltinTypeId, Scheme, Type, TypeKind, Types},
+    unification::unify,
+};
 use uuid::Uuid;
 
 use crate::Engine;

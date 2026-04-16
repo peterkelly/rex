@@ -2,7 +2,8 @@ use futures::FutureExt;
 use rexlang_ast::expr::{Decl, NameRef, TypeDecl, TypeExpr, TypeVariant, intern, sym};
 use rexlang_lexer::span::Span;
 use rexlang_typesystem::{
-    AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeKind, TypeVar, collect_adts_in_types,
+    types::collect_adts_in_types,
+    types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeKind, TypeVar},
 };
 use rexlang_util::GasMeter;
 
@@ -488,7 +489,7 @@ where
     pub fn export_native<F>(
         &mut self,
         name: impl Into<String>,
-        scheme: rexlang_typesystem::Scheme,
+        scheme: Scheme,
         arity: usize,
         handler: F,
     ) -> Result<(), EngineError>
@@ -510,7 +511,7 @@ where
     pub fn export_native_with_gas_cost<F>(
         &mut self,
         name: impl Into<String>,
-        scheme: rexlang_typesystem::Scheme,
+        scheme: Scheme,
         arity: usize,
         gas_cost: u64,
         handler: F,
@@ -560,7 +561,7 @@ where
     pub fn export_native_async<F>(
         &mut self,
         name: impl Into<String>,
-        scheme: rexlang_typesystem::Scheme,
+        scheme: Scheme,
         arity: usize,
         handler: F,
     ) -> Result<(), EngineError>
@@ -578,7 +579,7 @@ where
     pub fn export_native_async_with_gas_cost<F>(
         &mut self,
         name: impl Into<String>,
-        scheme: rexlang_typesystem::Scheme,
+        scheme: Scheme,
         arity: usize,
         gas_cost: u64,
         handler: F,
@@ -598,7 +599,7 @@ where
     pub fn export_native_async_cancellable<F>(
         &mut self,
         name: impl Into<String>,
-        scheme: rexlang_typesystem::Scheme,
+        scheme: Scheme,
         arity: usize,
         handler: F,
     ) -> Result<(), EngineError>
@@ -619,7 +620,7 @@ where
     pub fn export_native_async_cancellable_with_gas_cost<F>(
         &mut self,
         name: impl Into<String>,
-        scheme: rexlang_typesystem::Scheme,
+        scheme: Scheme,
         arity: usize,
         gas_cost: u64,
         handler: F,
@@ -694,7 +695,7 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
         TypeKind::App(fun, arg) => {
             if let TypeKind::App(head, err) = fun.as_ref()
                 && let TypeKind::Con(con) = head.as_ref()
-                && con.builtin_id == Some(rexlang_typesystem::BuiltinTypeId::Result)
+                && con.builtin_id == Some(BuiltinTypeId::Result)
                 && con.arity == 2
             {
                 let result =

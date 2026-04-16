@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use rexlang_ast::expr::{Expr, Program, Symbol};
-use rexlang_typesystem::{TypedExpr, TypedExprKind};
+use rexlang_typesystem::types::{TypedExpr, TypedExprKind};
 use rexlang_util::GasMeter;
 use uuid::Uuid;
 
@@ -60,8 +60,8 @@ where
             Pop(usize),
         }
 
-        let mut natives = HashSet::new();
-        let mut class_methods = HashSet::new();
+        let mut natives = BTreeSet::new();
+        let mut class_methods = BTreeSet::new();
         let mut bound: Vec<Symbol> = Vec::new();
         let mut stack = vec![Frame::Expr(expr)];
         while let Some(frame) = stack.pop() {
@@ -180,8 +180,8 @@ where
             Pop(usize),
         }
 
-        let mut native_requirements = HashSet::new();
-        let mut class_method_requirements = HashSet::new();
+        let mut native_requirements = BTreeSet::new();
+        let mut class_method_requirements = BTreeSet::new();
         let mut bound: Vec<Symbol> = Vec::new();
         let mut stack = vec![Frame::Expr(expr)];
         while let Some(frame) = stack.pop() {
@@ -313,8 +313,8 @@ where
         importer: Option<LibraryId>,
         prefix: &str,
         gas: &mut GasMeter,
-        loaded: &mut HashMap<LibraryId, LibraryExports>,
-        loading: &mut HashSet<LibraryId>,
+        loaded: &mut BTreeMap<LibraryId, LibraryExports>,
+        loading: &mut BTreeSet<LibraryId>,
     ) -> Result<Program, EngineError> {
         let rewritten = self
             .engine
@@ -391,10 +391,10 @@ where
         let mut local_values = state.defined_values.clone();
         local_values.extend(decl_value_names(&program.decls));
         let local_types = decl_type_names(&program.decls);
-        let existing_imported: HashSet<Symbol> = state.imported_values.keys().cloned().collect();
-        let existing_imported_types: HashSet<Symbol> =
+        let existing_imported: BTreeSet<Symbol> = state.imported_values.keys().cloned().collect();
+        let existing_imported_types: BTreeSet<Symbol> =
             state.imported_types.keys().cloned().collect();
-        let existing_imported_classes: HashSet<Symbol> =
+        let existing_imported_classes: BTreeSet<Symbol> =
             state.imported_classes.keys().cloned().collect();
         let import_policy = crate::libraries::ImportBindingPolicy {
             forbidden_values: &local_values,
@@ -443,8 +443,8 @@ where
         resolved: ResolvedLibrary,
         gas: &mut GasMeter,
     ) -> Result<CompiledProgram, EngineError> {
-        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
-        let mut loading: HashSet<LibraryId> = HashSet::new();
+        let mut loaded: BTreeMap<LibraryId, LibraryExports> = BTreeMap::new();
+        let mut loading: BTreeSet<LibraryId> = BTreeSet::new();
 
         loading.insert(resolved.id.clone());
 
@@ -476,8 +476,8 @@ where
 
         let importer = importer_path.map(|p| LibraryId::Local { path: p });
         let prefix = format!("@snippet{}", Uuid::new_v4());
-        let mut loaded: HashMap<LibraryId, LibraryExports> = HashMap::new();
-        let mut loading: HashSet<LibraryId> = HashSet::new();
+        let mut loaded: BTreeMap<LibraryId, LibraryExports> = BTreeMap::new();
+        let mut loading: BTreeSet<LibraryId> = BTreeSet::new();
         let rewritten = self.rewrite_and_inject_program(
             &program,
             importer,
