@@ -8,32 +8,32 @@ When generating Rex code, prefer consulting the LLM guidance and tutorial first,
 
 ## Start Here
 
-- [Documentation Markdown Source (docs/src)](https://github.com/talo/rex/tree/main/docs/src): Raw documentation markdown files used to build the docs site.
-- [Documentation Home](https://talo.github.io/rex/): Entry point for all Rex documentation.
-- [LLM Guidance](https://talo.github.io/rex/LLMS.html): Practical rules for generating valid Rex code quickly.
-- [Tutorial Overview](https://talo.github.io/rex/tutorial/): Guided learning path through language features.
-- [Language Reference](https://talo.github.io/rex/LANGUAGE.html): Compact syntax and feature reference.
+- [Documentation Markdown Source (docs/src)](https://github.com/peterkelly/rex/tree/main/docs/src): Raw documentation markdown files used to build the docs site.
+- [Documentation Home](https://peterkelly.github.io/rex/): Entry point for all Rex documentation.
+- [LLM Guidance](https://peterkelly.github.io/rex/LLMS.html): Practical rules for generating valid Rex code quickly.
+- [Tutorial Overview](https://peterkelly.github.io/rex/tutorial/): Guided learning path through language features.
+- [Language Reference](https://peterkelly.github.io/rex/LANGUAGE.html): Compact syntax and feature reference.
 
 ## Core Reference
 
-- [Specification](https://talo.github.io/rex/SPEC.html): Locked semantics and edge cases.
-- [Architecture](https://talo.github.io/rex/ARCHITECTURE.html): Pipeline and crate responsibilities.
-- [Embedding Rex](https://talo.github.io/rex/EMBEDDING.html): Host integration patterns and safety checklist.
-- [Memory Management](https://talo.github.io/rex/MEMORY_MANAGEMENT.html): Runtime memory model details.
+- [Specification](https://peterkelly.github.io/rex/SPEC.html): Locked semantics and edge cases.
+- [Architecture](https://peterkelly.github.io/rex/ARCHITECTURE.html): Pipeline and crate responsibilities.
+- [Embedding Rex](https://peterkelly.github.io/rex/EMBEDDING.html): Host integration patterns and safety checklist.
+- [Memory Management](https://peterkelly.github.io/rex/MEMORY_MANAGEMENT.html): Runtime memory model details.
 
 ## Tutorial
 
-- [Section 1: Basics](https://talo.github.io/rex/tutorial/section1/): Syntax, expressions, functions, ADTs, records, and prelude usage.
-- [Section 2: Advanced Topics](https://talo.github.io/rex/tutorial/section2/): Inference, polymorphism, type classes, functor/applicative/monad.
-- [Section 3: Worked Examples](https://talo.github.io/rex/tutorial/section3/): End-to-end examples and small projects.
+- [Section 1: Basics](https://peterkelly.github.io/rex/tutorial/section1/): Syntax, expressions, functions, ADTs, records, and prelude usage.
+- [Section 2: Advanced Topics](https://peterkelly.github.io/rex/tutorial/section2/): Inference, polymorphism, type classes, functor/applicative/monad.
+- [Section 3: Worked Examples](https://peterkelly.github.io/rex/tutorial/section3/): End-to-end examples and small projects.
 
 ## Project and Tooling
 
-- [GitHub Repository](https://github.com/talo/rex): Source code for compiler pipeline, runtime, and tooling.
-- [README](https://github.com/talo/rex/blob/main/README.md): Quick project overview and CLI usage.
-- [Contributing](https://talo.github.io/rex/CONTRIBUTING.html): Development workflow and contribution guide.
+- [GitHub Repository](https://github.com/peterkelly/rex): Source code for compiler pipeline, runtime, and tooling.
+- [README](https://github.com/peterkelly/rex/blob/main/README.md): Quick project overview and CLI usage.
+- [Contributing](https://peterkelly.github.io/rex/CONTRIBUTING.html): Development workflow and contribution guide.
 
 ## Optional
 
-- [Demo Index](https://talo.github.io/rex/demos/): Interactive algorithm demos.
-- [VS Code Extension](https://github.com/talo/rex/tree/main/rexlang-vscode): Editor integration for Rex via LSP.
+- [Demo Index](https://peterkelly.github.io/rex/demos/): Interactive algorithm demos.
+- [VS Code Extension](https://github.com/peterkelly/rex/tree/main/rexlang-vscode): Editor integration for Rex via LSP.

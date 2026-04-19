@@ -4,9 +4,9 @@
 [![Docs][docs-badge]][docs-url]
 
 [mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: https://github.com/talo/rex/blob/master/LICENSE
+[mit-url]: https://github.com/peterkelly/rex/blob/master/LICENSE
 [docs-badge]: https://img.shields.io/badge/docs-online-blue
-[docs-url]: https://talo.github.io/rex/
+[docs-url]: https://peterkelly.github.io/rex/
 
 <p align="center">
   <img src="logo.jpg" width="400">
@@ -50,7 +50,7 @@ in
   (values, selected, adjusted, total)
 ```
 
-[Try it yourself in the interactive browser-based playground](https://talo.github.io/rex/)
+[Try it yourself in the interactive browser-based playground](https://peterkelly.github.io/rex/)
 
 ## Rex as a target for LLMs
 
@@ -76,7 +76,7 @@ capabilities.
 
 ## Documentation
 
-[https://talo.github.io/rex/](https://talo.github.io/rex/)
+[https://peterkelly.github.io/rex/](https://peterkelly.github.io/rex/)
 
 ## Crates
 
@@ -135,10 +135,10 @@ The prelude surface definitions and type-class wiring live primarily in:
 - `rexlang-typesystem/src/prelude.rs`
 - `rexlang-engine/src/prelude.rs`
 
-For full details and usage patterns, see the [docs](https://talo.github.io/rex/):
+For full details and usage patterns, see the [docs](https://peterkelly.github.io/rex/):
 
-- [Prelude tour](https://talo.github.io/rex/tutorial/section1/12_prelude_tour.html)
-- [Language reference](https://talo.github.io/rex/LANGUAGE.html)
-- [LLM usage guidelines](https://talo.github.io/rex/LLMS.html)
+- [Prelude tour](https://peterkelly.github.io/rex/tutorial/section1/12_prelude_tour.html)
+- [Language reference](https://peterkelly.github.io/rex/LANGUAGE.html)
+- [LLM usage guidelines](https://peterkelly.github.io/rex/LLMS.html)
 
 Made with ❤️ by [QDX](https://qdx.co/)
