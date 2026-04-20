@@ -2457,7 +2457,7 @@ where
                     .get(&class_name)
                     .cloned()
                     .unwrap_or_default();
-                instances.sort_by(|a, b| a.head.typ.to_string().cmp(&b.head.typ.to_string()));
+                instances.sort_by_key(|a| a.head.typ.to_string());
                 if instances.is_empty() {
                     let _ = writeln!(&mut out, "- Instances: (none)");
                 } else {

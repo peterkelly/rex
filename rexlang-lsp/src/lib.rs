@@ -5138,18 +5138,18 @@ fn hover_type_in_expr(
                 }
                 visit(ts, body.as_ref(), tbody.as_ref(), ctx);
             }
-            (Expr::Var(v), TypedExprKind::Var { overloads, .. }) => {
-                if span_contains_pos(v.span, ctx.pos) {
-                    consider(
-                        ctx.best,
-                        HoverType {
-                            span: v.span,
-                            label: v.name.as_ref().to_string(),
-                            typ: typed.typ.to_string(),
-                            overloads: overloads.iter().map(|t| t.to_string()).collect(),
-                        },
-                    );
-                }
+            (Expr::Var(v), TypedExprKind::Var { overloads, .. })
+                if span_contains_pos(v.span, ctx.pos) =>
+            {
+                consider(
+                    ctx.best,
+                    HoverType {
+                        span: v.span,
+                        label: v.name.as_ref().to_string(),
+                        typ: typed.typ.to_string(),
+                        overloads: overloads.iter().map(|t| t.to_string()).collect(),
+                    },
+                );
             }
             (Expr::Ann(_span, inner, _ann), _) => {
                 visit(ts, inner.as_ref(), typed, ctx);
@@ -6232,10 +6232,7 @@ fn function_defs_from_tokens(tokens: &Tokens) -> HashMap<String, CompletionItemK
 
         // Walk to `=` (skipping whitespace) and then check if the next token is `\` / `λ`.
         i += 1;
-        loop {
-            let Some(j) = next_non_ws(i) else {
-                break;
-            };
+        while let Some(j) = next_non_ws(i) {
             match &items[j] {
                 Token::Assign(..) => {
                     let Some(k) = next_non_ws(j + 1) else {

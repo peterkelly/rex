@@ -1828,7 +1828,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     &acc_ty,
                     &elem_ty,
                     args[1],
-                    option_value(&engine.heap, &args[2])?.into_iter(),
+                    option_value(&engine.heap, &args[2])?,
                 )
                 .await
             }
@@ -2060,7 +2060,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     &acc_ty,
                     &elem_ty,
                     args[1],
-                    option_value(&engine.heap, &args[2])?.into_iter(),
+                    option_value(&engine.heap, &args[2])?,
                 )
                 .await
             }

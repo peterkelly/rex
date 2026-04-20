@@ -2032,10 +2032,7 @@ fn tarjan_scc_library_ids(
         let is_root = st.lowlink.get(v) == st.index_of.get(v);
         if is_root {
             let mut component = Vec::new();
-            loop {
-                let Some(w) = st.stack.pop() else {
-                    break;
-                };
+            while let Some(w) = st.stack.pop() {
                 st.on_stack.remove(&w);
                 component.push(w.clone());
                 if &w == v {
