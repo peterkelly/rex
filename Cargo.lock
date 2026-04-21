@@ -810,7 +810,6 @@ dependencies = [
  "chrono",
  "futures",
  "rexlang-ast",
- "rexlang-core",
  "rexlang-lexer",
  "rexlang-parser",
  "rexlang-typesystem",

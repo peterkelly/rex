@@ -30,6 +30,5 @@ rexlang-util = { path = "../rexlang-util", version = "3.9.10" }
 workspace = true
 
 [dev-dependencies]
-rexlang-core = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
