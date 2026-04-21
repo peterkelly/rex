@@ -745,7 +745,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "rexlang"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "rexlang-core",
  "tokio",
@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-ast"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "async-recursion",
  "async-trait",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-cli"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "clap",
  "rexlang",
@@ -784,7 +784,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-core"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "clap",
  "rexlang-ast",
@@ -804,7 +804,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-engine"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "async-recursion",
  "chrono",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-fuzz"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "rexlang-ast",
  "rexlang-engine",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-lexer"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "regex",
  "serde",
@@ -848,7 +848,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-lsp"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "lsp-types",
  "rexlang-ast",
@@ -865,14 +865,14 @@ dependencies = [
 
 [[package]]
 name = "rexlang-mdbook"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "rexlang-parser"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "regex",
  "rexlang-ast",
@@ -883,7 +883,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-proc-macro"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -892,7 +892,7 @@ dependencies = [
 
 [[package]]
 name = "rexlang-typesystem"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "chrono",
  "rexlang-ast",
@@ -906,14 +906,14 @@ dependencies = [
 
 [[package]]
 name = "rexlang-util"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "rexlang-wasm"
-version = "3.9.10"
+version = "3.9.11"
 dependencies = [
  "futures",
  "rexlang-ast",

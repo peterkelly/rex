@@ -78,6 +78,15 @@ capabilities.
 
 [https://peterkelly.github.io/rex/](https://peterkelly.github.io/rex/)
 
+## Current status
+
+The `main` branch of this repository contains what will soon become Rex v4.
+Currently it is marked as 3.9.x until the API as stabilized, at which point
+the version number will be updated.
+
+The most recent stable (and production-ready) version is available at
+https://github.com/talo/rex.
+
 ## Crates
 
 This repo is a Cargo workspace. The key crates are:
