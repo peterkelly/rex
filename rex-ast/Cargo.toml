@@ -15,7 +15,7 @@ async-recursion = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 regex = { workspace = true }
-rex-lexer = { path = "../rex-lexer", version = "3.9.11" }
+rex-lexer = { path = "../rex-lexer", version = "3.9.12" }
 rpds = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["rc", "derive"] }
 serde_json = { workspace = true }

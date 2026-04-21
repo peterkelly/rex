@@ -12,13 +12,13 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 futures = { workspace = true }
-rex-ast = { path = "../rex-ast", version = "3.9.11" }
-rex-engine = { path = "../rex-engine", version = "3.9.11" }
-rex-lexer = { path = "../rex-lexer", version = "3.9.11" }
-rex-lsp = { path = "../rex-lsp", version = "3.9.11" }
-rex-parser = { path = "../rex-parser", version = "3.9.11" }
-rex-typesystem = { path = "../rex-typesystem", version = "3.9.11" }
-rex-util = { path = "../rex-util", version = "3.9.11" }
+rex-ast = { path = "../rex-ast", version = "3.9.12" }
+rex-engine = { path = "../rex-engine", version = "3.9.12" }
+rex-lexer = { path = "../rex-lexer", version = "3.9.12" }
+rex-lsp = { path = "../rex-lsp", version = "3.9.12" }
+rex-parser = { path = "../rex-parser", version = "3.9.12" }
+rex-typesystem = { path = "../rex-typesystem", version = "3.9.12" }
+rex-util = { path = "../rex-util", version = "3.9.12" }
 serde_json = { workspace = true }
 wasm-bindgen = "0.2"
 

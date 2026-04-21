@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 clap = { workspace = true }
-rex = { path = "../rex", version = "3.9.11" }
+rex = { path = "../rex", version = "3.9.12" }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }
