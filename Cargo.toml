@@ -4,7 +4,6 @@ members = [
     "rex",
     "rex-ast",
     "rex-cli",
-    "rex-core",
     "rex-engine",
     "rex-fuzz",
     "rex-lexer",
@@ -51,7 +50,6 @@ uuid = { version = "1", features = ["v4", "js"] }
 
 # Internal dependencies
 rex-ast = { path = "rex-ast" }
-rex-core = { path = "rex-core" }
 rex-engine = { path = "rex-engine" }
 rex-lexer = { path = "rex-lexer" }
 rex-parser = { path = "rex-parser" }

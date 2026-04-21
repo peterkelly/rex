@@ -1,8 +1,6 @@
 #![allow(clippy::disallowed_names)]
 
-extern crate rex_core as rex;
-
-use rex_core::{Engine, JsonOptions, Library, Type, rex_to_json};
+use rex::{Engine, JsonOptions, Library, Type, rex_to_json};
 use rex_util::GasMeter;
 use serde::{Deserialize, Serialize};
 

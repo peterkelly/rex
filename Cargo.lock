@@ -747,8 +747,20 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 name = "rex"
 version = "3.9.11"
 dependencies = [
- "rex-core",
+ "clap",
+ "rex-ast",
+ "rex-engine",
+ "rex-lexer",
+ "rex-parser",
+ "rex-proc-macro",
+ "rex-typesystem",
+ "rex-util",
+ "serde",
+ "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -774,26 +786,6 @@ version = "3.9.11"
 dependencies = [
  "clap",
  "rex",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
-name = "rex-core"
-version = "3.9.11"
-dependencies = [
- "clap",
- "rex-ast",
- "rex-engine",
- "rex-lexer",
- "rex-parser",
- "rex-proc-macro",
- "rex-typesystem",
- "rex-util",
  "serde",
  "serde_json",
  "tokio",
@@ -851,8 +843,8 @@ name = "rex-lsp"
 version = "3.9.11"
 dependencies = [
  "lsp-types",
+ "rex",
  "rex-ast",
- "rex-core",
  "rex-engine",
  "rex-lexer",
  "rex-parser",
