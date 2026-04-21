@@ -1,0 +1,18 @@
+[package]
+name = "rex-parser"
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+regex = { workspace = true }
+rex-ast = { path = "../rex-ast", version = "3.9.11" }
+rex-lexer = { path = "../rex-lexer", version = "3.9.11" }
+thiserror = { workspace = true }
+rex-util = { path = "../rex-util", version = "3.9.11" }

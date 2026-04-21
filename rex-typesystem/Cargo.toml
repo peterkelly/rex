@@ -1,0 +1,25 @@
+[package]
+name = "rex-typesystem"
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+rex-ast = { path = "../rex-ast", version = "3.9.11" }
+rex-lexer = { path = "../rex-lexer", version = "3.9.11" }
+rex-parser = { path = "../rex-parser", version = "3.9.11" }
+chrono = { workspace = true }
+uuid = { workspace = true }
+rpds = { workspace = true }
+rex-util = { path = "../rex-util", version = "3.9.11" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rex-lexer = { path = "../rex-lexer", version = "3.9.11" }
+rex-parser = { path = "../rex-parser", version = "3.9.11" }

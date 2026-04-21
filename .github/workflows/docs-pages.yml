@@ -43,7 +43,7 @@ jobs:
 
       - name: Verify generated prelude docs are up to date
         run: |
-          cargo run -p rexlang-cli --bin gen_prelude_docs
+          cargo run -p rex-cli --bin gen_prelude_docs
           git diff --exit-code docs/src/PRELUDE.md
 
       - name: Build docs

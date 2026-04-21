@@ -1,0 +1,28 @@
+[package]
+name = "rex-lsp"
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+lsp-types = "0.94"
+serde_json = "1"
+rex-lexer = { path = "../rex-lexer", version = "3.9.11" }
+rex-ast = { path = "../rex-ast", version = "3.9.11" }
+rex-parser = { path = "../rex-parser", version = "3.9.11" }
+rex-typesystem = { path = "../rex-typesystem", version = "3.9.11" }
+rex-util = { path = "../rex-util", version = "3.9.11" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["io-std", "macros", "rt-multi-thread"] }
+tower-lsp = { workspace = true }
+
+[dev-dependencies]
+rex-core = { path = "../rex-core", version = "3.9.11" }
+rex-engine = { path = "../rex-engine", version = "3.9.11" }
+
+[lints]
+workspace = true

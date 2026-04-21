@@ -2,25 +2,25 @@
 
 Rex is implemented as a small set of focused crates that form a pipeline:
 
-1. **Lexing** (`rexlang-lexer`): converts source text into a `Vec<Token>` with spans.
-2. **Parsing** (`rexlang-parser`): converts tokens into a `rex_ast::expr::Program { decls, expr }`.
-3. **Typing** (`rexlang-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rexlang_typesystem::TypedExpr`.
-4. **Evaluation** (`rexlang-engine`): evaluates `TypedExpr` to a runtime `rexlang_engine::Value`.
+1. **Lexing** (`rex-lexer`): converts source text into a `Vec<Token>` with spans.
+2. **Parsing** (`rex-parser`): converts tokens into a `rex_ast::expr::Program { decls, expr }`.
+3. **Typing** (`rex-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_typesystem::TypedExpr`.
+4. **Evaluation** (`rex-engine`): evaluates `TypedExpr` to a runtime `rex_engine::Value`.
 
 The crates are designed so you can use them independently (e.g. parser-only tooling, typechecking-only checks, or embedding the full evaluator).
 
 ## Crates
 
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `TypeExpr`, `Program`, symbols).
-- `rexlang-lexer`: tokenizer + spans (`Span`, `Position`).
-- `rexlang-parser`: recursive-descent parser. Entry point: `rexlang_parser::Parser::parse_program`.
+- `rex-lexer`: tokenizer + spans (`Span`, `Position`).
+- `rex-parser`: recursive-descent parser. Entry point: `rex_parser::Parser::parse_program`.
   - For untrusted code, set `ParserLimits::safe_defaults` before parsing.
-- `rexlang-typesystem`: type system. Entry points:
+- `rex-typesystem`: type system. Entry points:
   - `TypeSystem::new_with_prelude()?` to create a typing environment with standard types/classes.
   - `infer_typed(&mut ts, expr)` / `infer(&mut ts, expr)` for type inference.
-  - The inference implementation itself lives in `rexlang-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
+  - The inference implementation itself lives in `rex-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
   - For untrusted code, set `TypeSystemLimits::safe_defaults` before inference.
-- `rexlang-engine`: runtime evaluator. Entry points:
+- `rex-engine`: runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `Engine::compiler()` to create a preparation view over that environment.
   - `Engine::runtime_env()` / `Engine::evaluator()` to create runtime views over that environment.
@@ -31,13 +31,13 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while pointer-level APIs (`export_native*`) receive `EvaluatorRef<'_, State>`.
   - public phase errors are split as `CompileError`, `EvalError`, and `ExecutionError` (for convenience entry points that do both phases).
   - Host library injection API: `Library` + `Export` + `Engine::inject_library`.
-- `rexlang-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
+- `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
-- `rexlang-lsp` / `rexlang-vscode`: editor tooling.
+- `rex-lsp` / `rex-vscode`: editor tooling.
 
 ## Design Notes
 
-- **Typed preparation**: `rexlang-engine` prepares code into a typed form before execution. The
+- **Typed preparation**: `rex-engine` prepares code into a typed form before execution. The
   current `CompiledProgram` still stores a typed AST plus runtime linkage metadata, but the
   compile/runtime boundary is now explicit in the API.
 - **Current linkage model**: `CompiledProgram` captures the prepared expression and the environment
@@ -58,7 +58,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   state and are not serialization-ready artifacts.
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::new_with_prelude()?`
-  - typeclass method *bodies* (written in Rex) loaded from `rexlang-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
+  - typeclass method *bodies* (written in Rex) loaded from `rex-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
 - **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parser/typechecker limit APIs provide bounded recursion for production/untrusted workloads.
 - **Import-use rewrite/validation**: library processing resolves import aliases across expression
   vars, constructor patterns, type references, and class references; unresolved qualified alias

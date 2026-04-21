@@ -1,0 +1,27 @@
+[package]
+name = "rex-core"
+description.workspace = true
+edition.workspace = true
+homepage.workspace = true
+license.workspace = true
+repository.workspace = true
+version.workspace = true
+
+[dependencies]
+clap = { workspace = true }
+rex-ast = { path = "../rex-ast", version = "3.9.11" }
+rex-lexer = { path = "../rex-lexer", version = "3.9.11" }
+rex-parser = { path = "../rex-parser", version = "3.9.11" }
+rex-proc-macro = { path = "../rex-proc-macro", version = "3.9.11" }
+rex-engine = { path = "../rex-engine", version = "3.9.11" }
+rex-typesystem = { path = "../rex-typesystem", version = "3.9.11" }
+rex-util = { path = "../rex-util", version = "3.9.11" }
+serde_json = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

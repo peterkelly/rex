@@ -5,7 +5,7 @@ These examples are interactive in the docs: edit and run them directly on each p
 > **Tip:** You can also run many examples inline with:
 >
 > ```sh
-> cargo run -p rexlang-cli -- run -c '<paste rex expression here>'
+> cargo run -p rex-cli -- run -c '<paste rex expression here>'
 > ```
 >
 > For larger multi-line experiments, saving to a `.rex` file is often easier.

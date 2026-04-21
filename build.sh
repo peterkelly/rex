@@ -4,7 +4,7 @@ STEPS=11
 
 cleanup_artifacts() {
   cargo clean
-  rm -rf docs/book docs/src/assets/rexlang-wasm docs/_build docs/_static docs/_templates
+  rm -rf docs/book docs/src/assets/rex-wasm docs/_build docs/_static docs/_templates
 }
 
 cleanup_artifacts
@@ -25,8 +25,8 @@ cargo clippy --tests -- -D warnings
 echo build.sh Step 5 of $STEPS: cargo test
 cargo test
 
-echo build.sh Step 6 of $STEPS: cargo run -p rexlang-cli --bin gen_prelude_docs
-cargo run -p rexlang-cli --bin gen_prelude_docs
+echo build.sh Step 6 of $STEPS: cargo run -p rex-cli --bin gen_prelude_docs
+cargo run -p rex-cli --bin gen_prelude_docs
 
 echo build.sh Step 7 of $STEPS: git diff --exit-code docs/src/PRELUDE.md
 git diff --exit-code docs/src/PRELUDE.md

@@ -2,10 +2,10 @@
 
 Rex is designed as a small pipeline you can embed at whatever stage you need:
 
-1. `rexlang-lexer`: source → `Tokens`
-2. `rexlang-parser`: tokens → `Program { decls, expr }`
-3. `rexlang-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
-4. `rexlang-engine`: evaluate a `TypedExpr` → `rexlang_engine::Value`
+1. `rex-lexer`: source → `Tokens`
+2. `rex-parser`: tokens → `Program { decls, expr }`
+3. `rex-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
+4. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Value`
 
 This document focuses on common embedding patterns.
 
@@ -29,7 +29,7 @@ Evaluation API:
 
 ## Compile Then Run
 
-`rexlang-engine` now has an explicit preparation boundary:
+`rex-engine` now has an explicit preparation boundary:
 
 - `Engine` builds the host environment.
 - `Compiler` prepares user code into a `CompiledProgram`.
@@ -39,12 +39,12 @@ The current implementation still keeps engine-backed state internally, but the p
 separates compile-time and runtime phases.
 
 ```rust
-use rexlang::{Engine, GasMeter};
+use rex::{Engine, GasMeter};
 
 let engine = Engine::with_prelude(())?;
-let mut compiler = rexlang::Compiler::new(engine.clone());
-let runtime = rexlang::RuntimeEnv::new(engine.clone());
-let mut evaluator = rexlang::Evaluator::new(runtime.clone());
+let mut compiler = rex::Compiler::new(engine.clone());
+let runtime = rex::RuntimeEnv::new(engine.clone());
+let mut evaluator = rex::Evaluator::new(runtime.clone());
 let mut gas = GasMeter::default();
 
 let program = compiler.compile_snippet("let x = 1 + 2 in x * 3", &mut gas)?;
@@ -91,10 +91,10 @@ the same engine starts a fresh session.
 If you want an explicit preflight before running:
 
 ```rust
-let runtime = rexlang::RuntimeEnv::new(engine.clone());
+let runtime = rex::RuntimeEnv::new(engine.clone());
 runtime.validate(&program)?;
 
-let mut evaluator = rexlang::Evaluator::new(runtime);
+let mut evaluator = rex::Evaluator::new(runtime);
 let value = evaluator.run(&program, &mut gas).await?;
 ```
 
@@ -105,7 +105,7 @@ still sugar, but they no longer use a separate execution path.
 ## Evaluate Rex Code Directly
 
 ```rust
-use rexlang::{Engine, GasMeter, Library, Parser, Token};
+use rex::{Engine, GasMeter, Library, Parser, Token};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
@@ -116,10 +116,10 @@ let mut globals = Library::global();
 globals.add_decls(program.decls.clone());
 engine.inject_library(globals)?;
 let mut gas = GasMeter::default();
-let mut compiler = rexlang::Compiler::new(engine.clone());
+let mut compiler = rex::Compiler::new(engine.clone());
 let program = compiler.compile_expr(program.expr.as_ref())?;
 let mut evaluator =
-    rexlang::Evaluator::new_with_compiler(rexlang::RuntimeEnv::new(engine.clone()), rexlang::Compiler::new(engine.clone()));
+    rex::Evaluator::new_with_compiler(rex::RuntimeEnv::new(engine.clone()), rex::Compiler::new(engine.clone()));
 let value = evaluator.run(&program, &mut gas).await?;
 println!("{value}");
 ```
@@ -141,7 +141,7 @@ exports fail early with library errors.
 If you want full control:
 
 ```rust
-use rexlang::{Engine, EngineOptions, PreludeMode};
+use rex::{Engine, EngineOptions, PreludeMode};
 
 let mut engine = Engine::with_options(
     (),
@@ -154,7 +154,7 @@ let mut engine = Engine::with_options(
 
 ## Inject Libraries (Embedder Patterns)
 
-This is fully supported in `rexlang-engine`. You can compose library loading from:
+This is fully supported in `rex-engine`. You can compose library loading from:
 
 - default resolvers (`std.*`, local filesystem, optional remote feature)
 - include roots
@@ -163,7 +163,7 @@ This is fully supported in `rexlang-engine`. You can compose library loading fro
 ### 1) Use Built-In Resolvers
 
 ```rust
-use rexlang::{Engine, GasMeter};
+use rex::{Engine, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -193,8 +193,8 @@ Notes:
 For host-managed modules, add a resolver that maps `library_name` to source text.
 
 ```rust
-use rexlang_engine::{LibraryId, ResolveRequest, ResolvedLibrary};
-use rexlang::{Engine, GasMeter};
+use rex_engine::{LibraryId, ResolveRequest, ResolvedLibrary};
+use rex::{Engine, GasMeter};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -220,7 +220,7 @@ engine.add_resolver("host-map", {
         };
         Ok(Some(ResolvedLibrary {
             id: LibraryId::Virtual(format!("host:{}", req.library_name)),
-            content: rexlang::ResolvedLibraryContent::Source(source.clone()),
+            content: rex::ResolvedLibraryContent::Source(source.clone()),
         }))
     }
 });
@@ -262,7 +262,7 @@ passes before calling `Engine::inject_library`.
 `Future<Output = Result<T, EngineError>>`.
 
 ```rust
-use rexlang_engine::{Engine, Library};
+use rex_engine::{Engine, Library};
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
@@ -286,7 +286,7 @@ println!("{value}");
 You can declare ADTs directly inside an injected host library:
 
 ```rust
-use rexlang_engine::{Engine, Library};
+use rex_engine::{Engine, Library};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -329,7 +329,7 @@ Rex code calls it through `sample.render_label`.
 Example:
 
 ```rust
-use rexlang::{Engine, EngineError, Library, Rex};
+use rex::{Engine, EngineError, Library, Rex};
 use rex_util::GasMeter;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -399,8 +399,8 @@ These callbacks receive `EvaluatorRef<'_, State>` (not just `&State`), so they c
 
 ```rust
 use futures::FutureExt;
-use rexlang_engine::{Engine, EvaluatorRef, Library, Pointer};
-use rexlang::{BuiltinTypeId, Scheme, Type};
+use rex_engine::{Engine, EvaluatorRef, Library, Pointer};
+use rex::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -460,7 +460,7 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
   they can use heap/runtime internals and read `engine.state`.
 
 ```rust
-use rexlang_engine::Engine;
+use rex_engine::Engine;
 
 #[derive(Clone)]
 struct HostState {
@@ -529,7 +529,7 @@ match (to_list bytes) with
 ## Typecheck Without Evaluating
 
 ```rust
-use rexlang::{Parser, Token, TypeSystem, infer};
+use rex::{Parser, Token, TypeSystem, infer};
 
 let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
@@ -571,7 +571,7 @@ Users can declare new type classes and instances directly in Rex source. As the 
 ### Typecheck: Inject Class/Instance Decls into `TypeSystem`
 
 ```rust
-use rexlang::{Parser, Token, TypeSystem, infer};
+use rex::{Parser, Token, TypeSystem, infer};
 
 let code = r#"
 class Size a
@@ -609,8 +609,8 @@ assert_eq!(ty.to_string(), "i32");
 ### Evaluate: Inject Decls into `Engine`
 
 ```rust
-use rexlang_engine::{Engine, EngineError};
-use rexlang::{Parser, Token};
+use rex_engine::{Engine, EngineError};
+use rex::{Parser, Token};
 use rex_util::{GasCosts, GasMeter};
 
 let code = r#"
@@ -643,13 +643,13 @@ println!("{value}");
 
 ## Inject Native Values and Functions
 
-`rexlang-engine` is the boundary where Rust provides implementations for Rex values.
+`rex-engine` is the boundary where Rust provides implementations for Rex values.
 
 For host-provided *modules*, prefer `Library` + `inject_library` (above). For root-scope values
 or functions, use `Library::global()` and inject that staged library into the engine.
 
 ```rust
-use rexlang_engine::{Engine, Library};
+use rex_engine::{Engine, Library};
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Library::global();
@@ -664,7 +664,7 @@ Integer literals are overloaded (`Integral a`) and can specialize at call sites.
 direct calls, `let` bindings, and lambda wrappers:
 
 ```rust
-use rexlang_engine::{Engine, Library};
+use rex_engine::{Engine, Library};
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
@@ -698,7 +698,7 @@ If your host functions are async, stage them in a library with `export_async` an
 `Engine::eval_with_gas`.
 
 ```rust
-use rexlang_engine::{Engine, Library};
+use rex_engine::{Engine, Library};
 use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
@@ -723,8 +723,8 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 
 ```rust
 use futures::FutureExt;
-use rexlang_engine::{CancellationToken, Engine, EngineError, Library};
-use rexlang::{BuiltinTypeId, Scheme, Type};
+use rex_engine::{CancellationToken, Engine, EngineError, Library};
+use rex::{BuiltinTypeId, Scheme, Type};
 use rex_util::{GasCosts, GasMeter};
 
 let tokens = Token::tokenize("stall")?;
@@ -769,7 +769,7 @@ To defend against untrusted/large programs, you can run the pipeline with a gas 
 For untrusted input, you can cap syntactic nesting depth during parsing:
 
 ```rust
-use rexlang::{Parser, ParserLimits, Token};
+use rex::{Parser, ParserLimits, Token};
 
 let mut parser = Parser::new(Token::tokenize("(((1)))")?);
 parser.set_limits(ParserLimits::safe_defaults());
@@ -794,7 +794,7 @@ field annotation is required. Such leaf types inherit the default no-op family c
 `RexType`, so derived ADTs can contain them without trying to register them as ADTs.
 
 ```rust
-use rexlang::{Engine, FromPointer, IntoPointer, Pointer, Rex, RexType, Type};
+use rex::{Engine, FromPointer, IntoPointer, Pointer, Rex, RexType, Type};
 
 #[derive(Debug, PartialEq)]
 struct AtomRef(i32);
@@ -806,13 +806,13 @@ impl RexType for AtomRef {
 }
 
 impl IntoPointer for AtomRef {
-    fn into_pointer(self, heap: &rexlang::Heap) -> Result<Pointer, rexlang::EngineError> {
+    fn into_pointer(self, heap: &rex::Heap) -> Result<Pointer, rex::EngineError> {
         self.0.into_pointer(heap)
     }
 }
 
 impl FromPointer for AtomRef {
-    fn from_pointer(heap: &rexlang::Heap, pointer: &Pointer) -> Result<Self, rexlang::EngineError> {
+    fn from_pointer(heap: &rex::Heap, pointer: &Pointer) -> Result<Self, rex::EngineError> {
         Ok(Self(i32::from_pointer(heap, pointer)?))
     }
 }
@@ -825,7 +825,7 @@ Fragment::inject_rex(&mut engine)?;
 ```
 
 ```rust
-use rexlang::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
+use rex::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -858,7 +858,7 @@ without `#[derive(Rex)]`.
 several ADTs manually, prefer batching them in one library with `add_adt_family(...)`.
 
 ```rust
-use rexlang::{Engine, Library, RexType, Type, sym};
+use rex::{Engine, Library, RexType, Type, sym};
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Library::global();
@@ -878,7 +878,7 @@ If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(
 `AdtDecl` there. Leaf types can inherit the default no-op implementation.
 
 ```rust
-use rexlang::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, TypeVarSupply, sym};
+use rex::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, TypeVarSupply, sym};
 
 struct PrimitiveEither;
 
@@ -912,5 +912,5 @@ PrimitiveEither::inject_rex(&mut engine)?;
 Some workloads (very deep nesting) can exhaust parser/typechecker recursion depth. Prefer bounded
 limits for untrusted code:
 
-- `rexlang::ParserLimits::safe_defaults`
-- `rexlang_typesystem::TypeSystemLimits::safe_defaults`
+- `rex::ParserLimits::safe_defaults`
+- `rex_typesystem::TypeSystemLimits::safe_defaults`

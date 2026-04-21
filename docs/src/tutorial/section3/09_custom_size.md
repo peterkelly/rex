@@ -1,6 +1,6 @@
 # Example: Custom `Size` type class
 
-This mirrors `rexlang-cli/examples/typeclasses_custom_size.rex`.
+This mirrors `rex-cli/examples/typeclasses_custom_size.rex`.
 
 ## Goal
 

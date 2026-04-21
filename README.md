@@ -81,7 +81,7 @@ capabilities.
 ## Current status
 
 The `main` branch of this repository contains what will soon become Rex v4.
-Currently it is marked as 3.9.x until the API as stabilized, at which point
+Currently it is marked as 3.9.x until the API has stabilized, at which point
 the version number will be updated.
 
 The most recent stable (and production-ready) version is available at
@@ -91,34 +91,34 @@ https://github.com/talo/rex.
 
 This repo is a Cargo workspace. The key crates are:
 
-- `rexlang-lexer`: tokenization (+ spans)
-- `rexlang-parser`: parser producing a `Program { decls, expr }`
-- `rexlang-typesystem`: Hindley–Milner type inference + type classes + ADTs
-- `rexlang-engine`: runtime evaluator + native-function injection, backed by `rexlang-typesystem`
-- `rexlang-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
-- `rexlang-cli`: CLI crate providing the `rex` binary (`cargo run -p rexlang-cli -- ...`)
-- `rexlang-fuzz`: stdin-driven fuzz harness binaries
-- `rexlang-util`: small shared helpers (e.g. library hashing, bundled stdlib sources)
-- `rexlang-lsp` / `rexlang-vscode`: language tooling (LSP + VS Code extension)
+- `rex-lexer`: tokenization (+ spans)
+- `rex-parser`: parser producing a `Program { decls, expr }`
+- `rex-typesystem`: Hindley–Milner type inference + type classes + ADTs
+- `rex-engine`: runtime evaluator + native-function injection, backed by `rex-typesystem`
+- `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
+- `rex-cli`: CLI crate providing the `rex` binary (`cargo run -p rex-cli -- ...`)
+- `rex-fuzz`: stdin-driven fuzz harness binaries
+- `rex-util`: small shared helpers (e.g. library hashing, bundled stdlib sources)
+- `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
 
 ## CLI
 
 Run a file:
 
 ```sh
-cargo run -p rexlang-cli -- run rexlang-cli/examples/record_update.rex
+cargo run -p rex-cli -- run rex-cli/examples/record_update.rex
 ```
 
 Run the advanced library import example:
 
 ```sh
-cargo run -p rexlang-cli -- run rexlang-cli/examples/libraries_advanced/main.rex
+cargo run -p rex-cli -- run rex-cli/examples/libraries_advanced/main.rex
 ```
 
 Run inline code:
 
 ```sh
-cargo run -p rexlang-cli -- run -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli -- run -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 Other useful flags:
@@ -140,9 +140,9 @@ operations, equality/ordering, and container abstractions).
 
 The prelude surface definitions and type-class wiring live primarily in:
 
-- `rexlang-typesystem/src/prelude_typeclasses.rex`
-- `rexlang-typesystem/src/prelude.rs`
-- `rexlang-engine/src/prelude.rs`
+- `rex-typesystem/src/prelude_typeclasses.rex`
+- `rex-typesystem/src/prelude.rs`
+- `rex-engine/src/prelude.rs`
 
 For full details and usage patterns, see the [docs](https://peterkelly.github.io/rex/):
 

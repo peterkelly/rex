@@ -1,6 +1,6 @@
 # Memory Management
 
-`rexlang-engine` uses a pointer-based runtime: evaluated values live in a central heap, and the rest of the runtime passes lightweight pointers to those heap entries.
+`rex-engine` uses a pointer-based runtime: evaluated values live in a central heap, and the rest of the runtime passes lightweight pointers to those heap entries.
 
 This gives the engine a clear separation between identity (`Pointer`) and storage (`Heap`). It also makes behavior at host/native boundaries explicit: values are allocated once, referenced many times, and inspected through heap APIs.
 

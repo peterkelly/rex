@@ -4,11 +4,11 @@
 
 Rex is a Cargo workspace. The most important crates are:
 
-- `rexlang-lexer`: tokenization + spans
-- `rexlang-parser`: parsing into a `Program { decls, expr }`
-- `rexlang-typesystem`: Hindley–Milner inference + type classes + ADTs
-- `rexlang-engine`: typed evaluation + native injection
-- `rexlang-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex types/values
+- `rex-lexer`: tokenization + spans
+- `rex-parser`: parsing into a `Program { decls, expr }`
+- `rex-typesystem`: Hindley–Milner inference + type classes + ADTs
+- `rex-engine`: typed evaluation + native injection
+- `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex types/values
 - `rex`: CLI binary
 
 Architecture overview: [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -31,12 +31,12 @@ REX_FUZZ_ITERS=2000 cargo test -p rex --test fuzz_smoke
 ## Fuzz Harnesses
 
 For end-to-end fuzzing with external fuzzers (AFL++, honggfuzz, custom mutational drivers), the
-workspace includes `rexlang-fuzz`, a set of stdin-driven harness binaries:
+workspace includes `rex-fuzz`, a set of stdin-driven harness binaries:
 
 ```sh
-cargo build -p rexlang-fuzz --bins
-printf '1 + 2' | cargo run -q -p rexlang-fuzz --bin e2e
-printf '(' | cargo run -q -p rexlang-fuzz --bin parse
+cargo build -p rex-fuzz --bins
+printf '1 + 2' | cargo run -q -p rex-fuzz --bin e2e
+printf '(' | cargo run -q -p rex-fuzz --bin parse
 ```
 
 Tuning knobs (environment variables):
@@ -57,7 +57,7 @@ cargo clippy
 This repo commits:
 
 - `Cargo.lock` (workspace lockfile)
-- `rexlang-vscode/package-lock.json` (VS Code extension)
+- `rex-vscode/package-lock.json` (VS Code extension)
 
 Other lock-like files (for example under `target/` or `node_modules/`) are build artifacts and
 should not be committed.

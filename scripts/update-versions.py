@@ -14,7 +14,7 @@ What this script does:
     - Rewrites those dependency lines to include both a local path and an
       explicit version, and updates existing internal dependency versions when
       they do not match the current workspace version, for example:
-          rexlang-core = { path = "../rexlang-core", version = "x.x.x" }
+          rex-ast = { path = "../rex-ast", version = "x.x.x" }
 
 Why this exists:
     Cargo allows path-only workspace dependencies during normal local
