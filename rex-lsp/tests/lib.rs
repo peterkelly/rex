@@ -5,7 +5,7 @@ use lsp_types::{
 use rex::{Engine, GasMeter, Parser, Token};
 use rex_ast::expr::{Decl, Expr, TypeExpr};
 use rex_engine::{ValueDisplayOptions, pointer_display_with};
-use rex_lsp::*;
+use rex_lsp::server::*;
 use serde_json::{Map, Value, json};
 use std::fs;
 use std::path::PathBuf;
