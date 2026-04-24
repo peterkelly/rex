@@ -89,13 +89,34 @@ Install mdBook: `cargo install mdbook`
 - For wasm API/runtime changes, edit `rex-wasm` sources, then regenerate via `mdbook build` or `mdbook serve`.
 - If generated files differ after a docs build, treat that as regeneration output, not as source-of-truth edits.
 
-## Commit messages
+## Commit Rules
 
-- See CONTRIBUTING.md for rules on git usage and commit messages
-- Before making a commit, run `./build.sh` and ensure it completes successfully.
-- Acceptable keywords: feat, fix, docs, style, test, chore. Refactors should use the chore keyword.
-- When making a commit, leave untracked files untouched
-- **IMPORTANT**: Only create commits when explicitly requested by the user. Do not commit automatically after completing tasks.
+Before creating or amending any commit:
+
+1. Read `CONTRIBUTING.md`.
+2. Run `./build.sh` and ensure it completes successfully.
+3. Leave untracked files untouched unless explicitly told otherwise.
+4. Create signed commits.
+5. Follow `CONTRIBUTING.md` commit-message rules exactly.
+
+Commit subject format:
+
+- Use one of: `feat`, `fix`, `docs`, `style`, `test`, `chore`.
+- Format: `<keyword>: <Imperative subject>`
+- Capitalize the first word after the colon.
+- Do not end the subject with a period.
+- Keep the subject around 50 characters.
+- Wrap lines at 72 characters.
+
+Examples:
+
+- `fix: Keep declaration diagnostics local`
+- `test: Add LSP regression for hole spans`
+- `docs: Clarify browser playground workflow`
+
+Never commit with a lowercase subject after the colon, for example:
+
+- Bad: `fix: keep declaration diagnostics local`
 
 ## Semantics Changes
 
