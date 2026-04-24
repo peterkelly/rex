@@ -920,54 +920,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rexlang-ast"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-cli"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-core"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-engine"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-lexer"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-lsp"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-mdbook"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-parser"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-proc-macro"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-typesystem"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-util"
-version = "3.9.12"
-
-[[package]]
-name = "rexlang-wasm"
-version = "3.9.12"
-
-[[package]]
 name = "rpds"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

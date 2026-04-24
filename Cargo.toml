@@ -14,18 +14,6 @@ members = [
     "rex-typesystem",
     "rex-util",
     "rex-wasm",
-    "rexlang-ast",
-    "rexlang-cli",
-    "rexlang-core",
-    "rexlang-engine",
-    "rexlang-lexer",
-    "rexlang-lsp",
-    "rexlang-mdbook",
-    "rexlang-parser",
-    "rexlang-proc-macro",
-    "rexlang-typesystem",
-    "rexlang-util",
-    "rexlang-wasm",
 ]
 
 [workspace.package]
