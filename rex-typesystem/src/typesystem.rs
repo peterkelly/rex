@@ -792,8 +792,14 @@ impl TypeSystem {
                     lam_end = lam_body.span().end;
                 }
 
-                let (typed, preds, inferred) = infer_typed(self, lam_body.as_ref())?;
-                let s = unify(&inferred, &info.expected)?;
+                // Declaration validation happens before top-level `fn`s are lowered into
+                // synthetic `let`s. If one of these errors escapes without a span, later LSP
+                // fallbacks can attach it to the lowered expression, which may span the whole
+                // snippet. Use the original declaration span as the fallback; `with_span`
+                // preserves any more-specific span already produced inside the body.
+                let (typed, preds, inferred) =
+                    infer_typed(self, lam_body.as_ref()).map_err(|err| err.with_span(&span))?;
+                let s = unify(&inferred, &info.expected).map_err(|err| err.with_span(&span))?;
                 let preds = preds.apply(&s);
                 let inferred = inferred.apply(&s);
                 let declared_preds = info.declared_preds.apply(&s);
@@ -806,7 +812,8 @@ impl TypeSystem {
                     .map(|tv| (tv.id, max_head_app_arity_for_var(&expected, tv.id)))
                     .collect();
                 for pred in &declared_preds {
-                    let _ = entails(&self.classes, &[], pred)?;
+                    let _ =
+                        entails(&self.classes, &[], pred).map_err(|err| err.with_span(&span))?;
                     let Some(expected_arities) = self.expected_class_param_arities(&pred.class)
                     else {
                         continue;

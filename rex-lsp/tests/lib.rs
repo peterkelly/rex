@@ -788,6 +788,38 @@ fn parse_ph : string -> Result string f64 = \raw ->
 }
 
 #[test]
+fn diagnostics_for_llms_playground_decl_error_are_not_whole_document() {
+    let text = r#"fn parse_i32 : string -> Result string i32 = \s ->
+  if s == "42" then Ok 42 else Err "bad-int"
+
+fn plus1 : i32 -> i32 = \n -> n + 1
+
+let input = "42" in
+let out : Result string i32 = ? in
+out"#;
+    let uri = in_memory_doc_uri();
+    clear_parse_cache(&uri);
+    let diags = diagnostics_from_text(&uri, text);
+    let full = full_document_range(text);
+    let unification = diags
+        .iter()
+        .find(|d| d.message.contains("types do not unify"))
+        .expect("unification diagnostic");
+    assert_ne!(
+        unification.range, full,
+        "diagnostic unexpectedly spans whole document: {unification:#?}"
+    );
+    assert_eq!(
+        unification.range.start.line, 0,
+        "diagnostic should start on the failing declaration: {unification:#?}"
+    );
+    assert!(
+        unification.range.end.line < 3,
+        "diagnostic should stay on the failing declaration: {unification:#?}"
+    );
+}
+
+#[test]
 fn references_find_all_usages() {
     let text = r#"
 let
