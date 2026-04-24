@@ -1,5 +1,5 @@
 use rex::{
-    Engine, EngineError, GasMeter, Library, Parser, ParserErr, ParserLimits, Program, Token,
+    Engine, EngineError, GasMeter, Module, Parser, ParserErr, ParserLimits, Program, Token,
     TypeError, sym,
 };
 
@@ -23,9 +23,9 @@ async fn compile_err(code: &str) -> EngineError {
     });
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    let mut library = Library::global();
-    library.add_decls(program.decls.clone());
-    if let Err(e) = engine.inject_library(library) {
+    let mut module = Module::global();
+    module.add_decls(program.decls.clone());
+    if let Err(e) = engine.inject_module(module) {
         return e;
     }
     let mut gas = GasMeter::default();

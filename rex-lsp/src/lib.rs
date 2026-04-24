@@ -198,7 +198,7 @@ fn tokenize_and_parse_cached(
 }
 
 #[derive(Clone)]
-struct ImportLibraryInfo {
+struct ImportModuleInfo {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     path: Option<PathBuf>,
     value_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>, // field -> internal name
@@ -250,7 +250,7 @@ fn prelude_completion_values() -> &'static Vec<(String, CompletionItemKind)> {
     })
 }
 
-fn library_prefix(hash: &str) -> String {
+fn module_prefix(hash: &str) -> String {
     let short = if hash.len() >= 16 { &hash[..16] } else { hash };
     format!("@m{short}")
 }
@@ -363,7 +363,7 @@ fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<rex_ast::expr::Symbol>)
 fn rewrite_import_projections_expr(
     expr: &Expr,
     bound: &mut BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Expr {
     match expr {
@@ -380,7 +380,7 @@ fn rewrite_import_projections_expr(
                 }
                 diagnostics.push(diagnostic_for_span(
                     *span,
-                    format!("library `{}` does not export `{}`", v.name, field),
+                    format!("module `{}` does not export `{}`", v.name, field),
                 ));
             }
             Expr::Project(
@@ -654,7 +654,7 @@ fn qualified_alias_member(
 fn rewrite_import_projections_class_name(
     class: &rex_ast::expr::NameRef,
     bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
 ) -> rex_ast::expr::NameRef {
     let Some((alias, member)) = qualified_alias_member(class) else {
         return class.clone();
@@ -674,7 +674,7 @@ fn rewrite_import_projections_class_name(
 fn rewrite_import_projections_type_expr(
     ty: &TypeExpr,
     bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
 ) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => {
@@ -729,7 +729,7 @@ fn rewrite_import_projections_type_expr(
 
 fn rewrite_program_import_projections(
     program: &Program,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Program {
     let decl_bound = BTreeSet::new();
@@ -910,7 +910,7 @@ fn validate_import_projection_class_name(
     class: &rex_ast::expr::NameRef,
     span: Span,
     bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some((alias, member)) = qualified_alias_member(class) else {
@@ -927,14 +927,14 @@ fn validate_import_projection_class_name(
     }
     diagnostics.push(diagnostic_for_span(
         span,
-        format!("library `{alias}` does not export `{member}`"),
+        format!("module `{alias}` does not export `{member}`"),
     ));
 }
 
 fn validate_import_projection_type_expr(
     ty: &TypeExpr,
     bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match ty {
@@ -953,7 +953,7 @@ fn validate_import_projection_type_expr(
             }
             diagnostics.push(diagnostic_for_span(
                 *span,
-                format!("library `{alias}` does not export `{member}`"),
+                format!("module `{alias}` does not export `{member}`"),
             ));
         }
         TypeExpr::App(_, f, x) => {
@@ -980,7 +980,7 @@ fn validate_import_projection_type_expr(
 fn validate_import_projection_expr(
     expr: &Expr,
     bound: &mut BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match expr {
@@ -1092,7 +1092,7 @@ fn validate_import_projection_expr(
 
 fn validate_import_projection_uses(
     program: &Program,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let decl_bound = BTreeSet::new();
@@ -1194,7 +1194,7 @@ fn validate_import_projection_uses(
 type PreparedProgram = (
     Program,
     TypeSystem,
-    HashMap<rex_ast::expr::Symbol, ImportLibraryInfo>,
+    HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
     Vec<Diagnostic>,
 );
 
@@ -1208,7 +1208,7 @@ fn prepare_program_with_imports(
 
     let importer = uri_to_file_path(uri);
 
-    let mut imports: HashMap<rex_ast::expr::Symbol, ImportLibraryInfo> = HashMap::new();
+    let mut imports: HashMap<rex_ast::expr::Symbol, ImportModuleInfo> = HashMap::new();
 
     for decl in &program.decls {
         let Decl::Import(ImportDecl {
@@ -1227,14 +1227,14 @@ fn prepare_program_with_imports(
             }
         };
 
-        let library_name = segments
+        let module_name = segments
             .iter()
             .map(|s| s.as_ref())
             .collect::<Vec<_>>()
             .join(".");
 
-        let (library_path, hash, source, library_label, keep_constraints) =
-            if let Some(source) = rex_util::stdlib_source(&library_name) {
+        let (module_path, hash, source, module_label, keep_constraints) =
+            if let Some(source) = rex_util::stdlib_source(&module_name) {
                 let hash = sha256_hex(source.as_bytes());
                 if let Some(expected) = expected_sha {
                     let expected = expected.to_ascii_lowercase();
@@ -1242,12 +1242,12 @@ fn prepare_program_with_imports(
                         diagnostics.push(diagnostic_for_span(
                         import_span,
                         format!(
-                            "sha mismatch for `{library_name}`: expected #{expected}, got #{hash}",
+                            "sha mismatch for `{module_name}`: expected #{expected}, got #{hash}",
                         ),
                     ));
                     }
                 }
-                (None, hash, source.to_string(), library_name, true)
+                (None, hash, source.to_string(), module_name, true)
             } else {
                 let Some(importer) = importer.as_ref() else {
                     // Without a stable file location we cannot resolve local imports.
@@ -1261,12 +1261,12 @@ fn prepare_program_with_imports(
                     ));
                     continue;
                 };
-                let library_path = match rex_util::resolve_local_import_path(base_dir, segments) {
+                let module_path = match rex_util::resolve_local_import_path(base_dir, segments) {
                     Ok(Some(p)) => p,
                     Ok(None) => {
                         diagnostics.push(diagnostic_for_span(
                             import_span,
-                            format!("library not found for import `{library_name}`"),
+                            format!("module not found for import `{module_name}`"),
                         ));
                         continue;
                     }
@@ -1275,20 +1275,20 @@ fn prepare_program_with_imports(
                         continue;
                     }
                 };
-                let Ok(library_path) = library_path.canonicalize() else {
+                let Ok(module_path) = module_path.canonicalize() else {
                     diagnostics.push(diagnostic_for_span(
                         import_span,
-                        format!("library not found for import `{library_name}`"),
+                        format!("module not found for import `{module_name}`"),
                     ));
                     continue;
                 };
 
-                let bytes = match fs::read(&library_path) {
+                let bytes = match fs::read(&module_path) {
                     Ok(b) => b,
                     Err(e) => {
                         diagnostics.push(diagnostic_for_span(
                             import_span,
-                            format!("failed to read library `{}`: {e}", library_path.display()),
+                            format!("failed to read module `{}`: {e}", module_path.display()),
                         ));
                         continue;
                     }
@@ -1301,7 +1301,7 @@ fn prepare_program_with_imports(
                             import_span,
                             format!(
                                 "sha mismatch for `{}`: expected #{expected}, got #{hash}",
-                                library_path.display()
+                                module_path.display()
                             ),
                         ));
                     }
@@ -1312,27 +1312,27 @@ fn prepare_program_with_imports(
                     Err(e) => {
                         diagnostics.push(diagnostic_for_span(
                             import_span,
-                            format!("library `{}` is not utf-8: {e}", library_path.display()),
+                            format!("module `{}` is not utf-8: {e}", module_path.display()),
                         ));
                         continue;
                     }
                 };
                 (
-                    Some(library_path.clone()),
+                    Some(module_path.clone()),
                     hash,
                     source,
-                    library_path.display().to_string(),
+                    module_path.display().to_string(),
                     false,
                 )
             };
 
-        let (tokens, library_program) = match tokenize_and_parse(&source) {
+        let (tokens, module_program) = match tokenize_and_parse(&source) {
             Ok(v) => v,
             Err(TokenizeOrParseError::Lex(err)) => {
                 let msg = match err {
                     LexicalError::UnexpectedToken(span) => format!(
-                        "lex error in library `{}` at {}:{}",
-                        library_label, span.begin.line, span.begin.column
+                        "lex error in module `{}` at {}:{}",
+                        module_label, span.begin.line, span.begin.column
                     ),
                     LexicalError::InvalidLiteral {
                         kind,
@@ -1340,11 +1340,11 @@ fn prepare_program_with_imports(
                         error,
                         span,
                     } => format!(
-                        "lex error in library `{}` at {}:{}: invalid {kind} literal `{text}`: {error}",
-                        library_label, span.begin.line, span.begin.column
+                        "lex error in module `{}` at {}:{}: invalid {kind} literal `{text}`: {error}",
+                        module_label, span.begin.line, span.begin.column
                     ),
                     LexicalError::Internal(msg) => {
-                        format!("internal lexer error in library `{library_label}`: {msg}")
+                        format!("internal lexer error in module `{module_label}`: {msg}")
                     }
                 };
                 diagnostics.push(diagnostic_for_span(import_span, msg));
@@ -1355,8 +1355,8 @@ fn prepare_program_with_imports(
                     diagnostics.push(diagnostic_for_span(
                         import_span,
                         format!(
-                            "parse error in library `{}` at {}:{}: {}",
-                            library_label, err.span.begin.line, err.span.begin.column, err.message
+                            "parse error in module `{}` at {}:{}: {}",
+                            module_label, err.span.begin.line, err.span.begin.column, err.message
                         ),
                     ));
                     if diagnostics.len() >= MAX_DIAGNOSTICS {
@@ -1367,12 +1367,12 @@ fn prepare_program_with_imports(
             }
         };
 
-        let index = index_decl_spans(&library_program, &tokens);
-        let prefix = library_prefix(&hash);
+        let index = index_decl_spans(&module_program, &tokens);
+        let prefix = module_prefix(&hash);
 
         let mut type_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
         let mut class_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
-        for decl in &library_program.decls {
+        for decl in &module_program.decls {
             match decl {
                 Decl::Type(td) => {
                     type_map.insert(
@@ -1390,8 +1390,8 @@ fn prepare_program_with_imports(
             }
         }
 
-        // Inject library type decls (renamed) so exported signatures can refer to them.
-        for decl in &library_program.decls {
+        // Inject module type decls (renamed) so exported signatures can refer to them.
+        for decl in &module_program.decls {
             let Decl::Type(td) = decl else { continue };
             let name = type_map
                 .get(&td.name)
@@ -1423,7 +1423,7 @@ fn prepare_program_with_imports(
         let mut export_names: BTreeSet<String> = BTreeSet::new();
 
         // Exported functions (pub only)
-        for decl in &library_program.decls {
+        for decl in &module_program.decls {
             match decl {
                 Decl::Fn(fd) if fd.is_pub => {
                     let internal = intern(&format!("{prefix}.{}", fd.name.name.as_ref()));
@@ -1507,8 +1507,8 @@ fn prepare_program_with_imports(
 
         imports.insert(
             alias.clone(),
-            ImportLibraryInfo {
-                path: library_path,
+            ImportModuleInfo {
+                path: module_path,
                 value_map,
                 type_map,
                 class_map,
@@ -1522,7 +1522,7 @@ fn prepare_program_with_imports(
     Ok((rewritten, ts, imports, diagnostics))
 }
 
-fn completion_exports_for_library_alias(
+fn completion_exports_for_module_alias(
     uri: &Url,
     program: &Program,
     alias: &str,
@@ -1543,33 +1543,33 @@ fn completion_exports_for_library_alias(
         return Ok(Vec::new());
     };
 
-    let library_name = segments
+    let module_name = segments
         .iter()
         .map(|s| s.as_ref())
         .collect::<Vec<_>>()
         .join(".");
 
-    let source = if let Some(source) = rex_util::stdlib_source(&library_name) {
+    let source = if let Some(source) = rex_util::stdlib_source(&module_name) {
         source.to_string()
     } else {
         let importer = uri_to_file_path(uri).ok_or_else(|| "not a file uri".to_string())?;
         let Some(base_dir) = importer.parent() else {
             return Ok(Vec::new());
         };
-        let Some(library_path) = rex_util::resolve_local_import_path(base_dir, segments)
+        let Some(module_path) = rex_util::resolve_local_import_path(base_dir, segments)
             .ok()
             .flatten()
             .and_then(|p| p.canonicalize().ok())
         else {
             return Ok(Vec::new());
         };
-        fs::read_to_string(&library_path).map_err(|e| e.to_string())?
+        fs::read_to_string(&module_path).map_err(|e| e.to_string())?
     };
-    let (_tokens, library_program) =
+    let (_tokens, module_program) =
         tokenize_and_parse(&source).map_err(|_| "parse error".to_string())?;
 
     let mut exports = BTreeSet::new();
-    for decl in &library_program.decls {
+    for decl in &module_program.decls {
         match decl {
             Decl::Fn(fd) if fd.is_pub => {
                 exports.insert(fd.name.name.as_ref().to_string());
@@ -2009,7 +2009,7 @@ fn goto_definition_response(
     let (ident, _token_span) = ident_token_at_position(&tokens, position)?;
 
     // If the cursor is on `alias.field` and `alias` is a local import, jump
-    // to the exported declaration in the imported library.
+    // to the exported declaration in the imported module.
     if let Some((alias, field)) = imported_projection
         && let Ok((_rewritten, _ts, imports, _diags)) = prepare_program_with_imports(uri, &program)
     {
@@ -5890,7 +5890,7 @@ fn completion_items_from_program(
 ) -> Vec<CompletionItem> {
     if field_mode {
         if let Some(base_ident) = base_ident
-            && let Ok(exports) = completion_exports_for_library_alias(uri, program, base_ident)
+            && let Ok(exports) = completion_exports_for_module_alias(uri, program, base_ident)
             && !exports.is_empty()
         {
             return exports
@@ -7507,9 +7507,9 @@ mod tests {
             .parse_program(&mut GasMeter::default())
             .expect("parse source");
         let mut engine = Engine::with_prelude(()).expect("build engine");
-        let mut library = rex_engine::Library::global();
-        library.add_decls(program.decls.clone());
-        engine.inject_library(library).expect("inject decls");
+        let mut module = rex_engine::Module::global();
+        module.add_decls(program.decls.clone());
+        engine.inject_module(module).expect("inject decls");
         let (ptr, ty) = rex_engine::Evaluator::new_with_compiler(
             rex_engine::RuntimeEnv::new(engine.clone()),
             rex_engine::Compiler::new(engine.clone()),

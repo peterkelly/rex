@@ -342,9 +342,9 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
         .unwrap();
     let t = adt.param_type(&sym("T")).unwrap();
     adt.add_variant(sym("Wrap"), vec![t]);
-    let mut library = rex::Library::global();
-    library.add_adt_decl(adt).unwrap();
-    engine.inject_library(library).unwrap();
+    let mut module = rex::Module::global();
+    module.add_adt_decl(adt).unwrap();
+    engine.inject_module(module).unwrap();
 
     let tokens = Token::tokenize(
         r#"
@@ -376,9 +376,9 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
         .unwrap();
     let t = adt.param_type(&sym("T")).unwrap();
     adt.add_variant(sym("Boxed"), vec![t]);
-    let mut library = rex::Library::global();
-    library.add_adt_decl(adt).unwrap();
-    engine.inject_library(library).unwrap();
+    let mut module = rex::Module::global();
+    module.add_adt_decl(adt).unwrap();
+    engine.inject_module(module).unwrap();
 
     let tokens = Token::tokenize(
         r#"

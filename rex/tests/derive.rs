@@ -1,6 +1,6 @@
 use rex::{
     BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, JsonOptions,
-    Library, Parser, Pointer, Rex, RexAdt, RexType, Token, Type, Value, assert_pointer_eq,
+    Module, Parser, Pointer, Rex, RexAdt, RexType, Token, Type, Value, assert_pointer_eq,
     rex_to_json,
 };
 use serde::Serialize;
@@ -8,11 +8,11 @@ use std::collections::HashMap;
 
 fn inject_globals(
     engine: &mut Engine<()>,
-    build: impl FnOnce(&mut Library<()>) -> Result<(), EngineError>,
+    build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
-    let mut library = Library::global();
-    build(&mut library)?;
-    engine.inject_library(library)
+    let mut module = Module::global();
+    build(&mut module)?;
+    engine.inject_module(module)
 }
 
 async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
@@ -27,9 +27,9 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     Maybe::<i32>::inject_rex(&mut engine)?;
     Shape::inject_rex(&mut engine)?;
 
-    let mut library = Library::global();
-    library.add_decls(program.decls.clone());
-    engine.inject_library(library)?;
+    let mut module = Module::global();
+    module.add_decls(program.decls.clone());
+    engine.inject_module(module)?;
     let mut gas = GasMeter::default();
     let (pointer, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
@@ -219,9 +219,9 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
     let mut engine = Engine::with_prelude(()).unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
     MyStruct::inject_rex(&mut engine).unwrap();
-    let mut library = Library::global();
-    library.add_decls(program.decls.clone());
-    engine.inject_library(library).unwrap();
+    let mut module = Module::global();
+    module.add_decls(program.decls.clone());
+    engine.inject_module(module).unwrap();
 
     let mut gas = GasMeter::default();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
@@ -290,9 +290,9 @@ async fn derive_generic_worked_example_polymorphic_adt() {
 
     // Inject the ADT once: constructor *schemes* are registered in the type system, and runtime
     // constructor *functions* are registered in the evaluator.
-    let mut library = Library::global();
-    library.add_adt_decl(adt).unwrap();
-    engine.inject_library(library).unwrap();
+    let mut module = Module::global();
+    module.add_adt_decl(adt).unwrap();
+    engine.inject_module(module).unwrap();
 
     // On the Rust side, `RexType` is the nominal head applied to the Rust generic arguments.
     assert_eq!(
@@ -320,9 +320,9 @@ async fn derive_generic_worked_example_polymorphic_adt() {
         .map_err(|errs| format!("parse error: {errs:?}"))
         .unwrap();
 
-    let mut library = Library::global();
-    library.add_decls(program.decls.clone());
-    engine.inject_library(library).unwrap();
+    let mut module = Module::global();
+    module.add_decls(program.decls.clone());
+    engine.inject_module(module).unwrap();
     let mut gas = GasMeter::default();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
@@ -385,8 +385,8 @@ async fn derive_can_be_used_in_injected_native_functions() {
     MyInnerStruct::inject_rex(&mut engine).unwrap();
     MyStruct::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |library| {
-        library.export("bump_y", |_: &(), mut s: MyStruct| {
+    inject_globals(&mut engine, |module| {
+        module.export("bump_y", |_: &(), mut s: MyStruct| {
             s.y += 1;
             Ok(s)
         })
@@ -405,8 +405,8 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let bumped = MyStruct::from_pointer(&engine.heap, &v_ptr).unwrap();
     assert_eq!(bumped.y, 43);
 
-    inject_globals(&mut engine, |library| {
-        library.export_value(
+    inject_globals(&mut engine, |module| {
+        module.export_value(
             "const_struct",
             MyStruct {
                 x: false,
@@ -440,8 +440,8 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Shape::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |library| {
-        library.export_value("shape", Shape::Rectangle(3, 4))
+    inject_globals(&mut engine, |module| {
+        module.export_value("shape", Shape::Rectangle(3, 4))
     })
     .unwrap();
 
@@ -502,8 +502,8 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Maybe::<i32>::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |library| {
-        library.export("unwrap_or_zero", |_: &(), m: Maybe<i32>| {
+    inject_globals(&mut engine, |module| {
+        module.export("unwrap_or_zero", |_: &(), m: Maybe<i32>| {
             Ok(match m {
                 Maybe::Just(v) => v,
                 Maybe::Nothing => 0,

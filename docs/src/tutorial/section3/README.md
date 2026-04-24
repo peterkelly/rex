@@ -22,5 +22,5 @@ These examples are interactive in the docs: edit and run them directly on each p
 8. [Custom Show Printing](08_custom_show.md)
 9. [Custom Size](09_custom_size.md)
 10. [Indexable](10_indexable.md)
-11. [Small Standard Library](11_small_stdlib.md)
+11. [Small Standard Module](11_small_std_module.md)
 12. [Mini Project](12_mini_project.md)

@@ -117,9 +117,9 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
                 H: ::rex::Handler<State, Sig>,
             {
                 <Self as ::rex::RexAdt>::inject_rex(engine)?;
-                let mut library = ::rex::Library::global();
-                library.export(#type_name, constructor)?;
-                engine.inject_library(library)
+                let mut module = ::rex::Module::global();
+                module.export(#type_name, constructor)?;
+                engine.inject_module(module)
             }
         }
     };

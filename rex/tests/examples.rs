@@ -1,4 +1,4 @@
-use rex::{BuiltinTypeId, Engine, GasMeter, Library, Parser, ParserErr, Token, Type, Value};
+use rex::{BuiltinTypeId, Engine, GasMeter, Module, Parser, ParserErr, Token, Type, Value};
 
 fn format_parse_errors(errs: &[ParserErr]) -> String {
     let mut out = String::from("parse error:");
@@ -16,10 +16,10 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
         .unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)));
 
     let mut engine = Engine::with_prelude(()).unwrap();
-    let mut library = Library::global();
-    library.add_decls(program.decls.clone());
+    let mut module = Module::global();
+    module.add_decls(program.decls.clone());
     engine
-        .inject_library(library)
+        .inject_module(module)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
     let mut gas = GasMeter::default();
     let (value, ty) = rex::Evaluator::new_with_compiler(

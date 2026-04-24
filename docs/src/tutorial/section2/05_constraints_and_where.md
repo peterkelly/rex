@@ -24,7 +24,7 @@ Notes:
 - `where ... ->` attaches constraints to the lambda.
 - Multi-parameter classes like `Indexable t a` are written as `Indexable (t, a)` in the `where`
   list (internally they’re represented as tupled predicates).
-- Constraints can use library-qualified class names when imported via alias (for example
+- Constraints can use module-qualified class names when imported via alias (for example
   `where M.ClassName t -> ...`).
 
 ## Constrained top-level functions

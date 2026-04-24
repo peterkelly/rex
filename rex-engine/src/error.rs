@@ -7,25 +7,25 @@ use rex_parser::error::ParserErr;
 use rex_typesystem::error::TypeError;
 use rex_util::OutOfGas;
 
-use crate::libraries::LibraryId;
+use crate::modules::ModuleId;
 
 #[derive(Debug)]
-pub enum LibraryError {
+pub enum ModuleError {
     NotFound {
-        library_name: String,
+        module_name: String,
     },
     NoBaseDirectory,
     ImportEscapesRoot,
-    EmptyLibraryPath,
+    EmptyModulePath,
     StatePoisoned,
     CyclicImport {
-        id: LibraryId,
+        id: ModuleId,
     },
     InvalidIncludeRoot {
         path: PathBuf,
         source: std::io::Error,
     },
-    InvalidLibraryPath {
+    InvalidModulePath {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -43,7 +43,7 @@ pub enum LibraryError {
         source: std::string::FromUtf8Error,
     },
     ShaMismatchStdlib {
-        library: String,
+        module: String,
         expected: String,
         actual: String,
     },
@@ -54,32 +54,32 @@ pub enum LibraryError {
         actual: String,
     },
     MissingExport {
-        library: Symbol,
+        module: Symbol,
         export: Symbol,
     },
     DuplicateImportedName {
         name: Symbol,
     },
     ImportNameConflictsWithLocal {
-        library: Symbol,
+        module: Symbol,
         name: Symbol,
     },
     Lex {
         source: LexicalError,
     },
-    LexInLibrary {
-        library: LibraryId,
+    LexInModule {
+        module: ModuleId,
         source: LexicalError,
     },
     Parse {
         errors: Vec<ParserErr>,
     },
-    ParseInLibrary {
-        library: LibraryId,
+    ParseInModule {
+        module: ModuleId,
         errors: Vec<ParserErr>,
     },
-    TopLevelExprInLibrary {
-        library: LibraryId,
+    TopLevelExprInModule {
+        module: ModuleId,
     },
     InvalidGithubImport {
         url: String,
@@ -96,47 +96,47 @@ pub enum LibraryError {
     },
 }
 
-impl std::fmt::Display for LibraryError {
+impl std::fmt::Display for ModuleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LibraryError::NotFound { library_name } => {
-                write!(f, "library not found: {library_name}")
+            ModuleError::NotFound { module_name } => {
+                write!(f, "module not found: {module_name}")
             }
-            LibraryError::NoBaseDirectory => {
+            ModuleError::NoBaseDirectory => {
                 write!(f, "cannot resolve local import without a base directory")
             }
-            LibraryError::ImportEscapesRoot => write!(f, "import path escapes filesystem root"),
-            LibraryError::EmptyLibraryPath => write!(f, "empty library path"),
-            LibraryError::StatePoisoned => write!(f, "library state poisoned"),
-            LibraryError::CyclicImport { id } => write!(f, "cyclic library import: {id}"),
-            LibraryError::InvalidIncludeRoot { path, source } => {
+            ModuleError::ImportEscapesRoot => write!(f, "import path escapes filesystem root"),
+            ModuleError::EmptyModulePath => write!(f, "empty module path"),
+            ModuleError::StatePoisoned => write!(f, "module state poisoned"),
+            ModuleError::CyclicImport { id } => write!(f, "cyclic module import: {id}"),
+            ModuleError::InvalidIncludeRoot { path, source } => {
                 write!(f, "invalid include root `{}`: {source}", path.display())
             }
-            LibraryError::InvalidLibraryPath { path, source } => {
-                write!(f, "invalid library path `{}`: {source}", path.display())
+            ModuleError::InvalidModulePath { path, source } => {
+                write!(f, "invalid module path `{}`: {source}", path.display())
             }
-            LibraryError::ReadFailed { path, source } => {
-                write!(f, "failed to read library `{}`: {source}", path.display())
+            ModuleError::ReadFailed { path, source } => {
+                write!(f, "failed to read module `{}`: {source}", path.display())
             }
-            LibraryError::NotUtf8 { kind, path, source } => {
+            ModuleError::NotUtf8 { kind, path, source } => {
                 write!(
                     f,
-                    "{kind} library `{}` was not utf-8: {source}",
+                    "{kind} module `{}` was not utf-8: {source}",
                     path.display()
                 )
             }
-            LibraryError::NotUtf8Remote { url, source } => {
-                write!(f, "remote library `{url}` was not utf-8: {source}")
+            ModuleError::NotUtf8Remote { url, source } => {
+                write!(f, "remote module `{url}` was not utf-8: {source}")
             }
-            LibraryError::ShaMismatchStdlib {
-                library,
+            ModuleError::ShaMismatchStdlib {
+                module,
                 expected,
                 actual,
             } => write!(
                 f,
-                "sha mismatch for `{library}`: expected #{expected}, got #{actual}"
+                "sha mismatch for `{module}`: expected #{expected}, got #{actual}"
             ),
-            LibraryError::ShaMismatchPath {
+            ModuleError::ShaMismatchPath {
                 kind,
                 path,
                 expected,
@@ -146,68 +146,68 @@ impl std::fmt::Display for LibraryError {
                 "{kind} import sha mismatch for {}: expected #{expected}, got #{actual}",
                 path.display()
             ),
-            LibraryError::MissingExport { library, export } => {
-                write!(f, "library `{library}` does not export `{export}`")
+            ModuleError::MissingExport { module, export } => {
+                write!(f, "module `{module}` does not export `{export}`")
             }
-            LibraryError::DuplicateImportedName { name } => {
+            ModuleError::DuplicateImportedName { name } => {
                 write!(f, "duplicate imported name `{name}`")
             }
-            LibraryError::ImportNameConflictsWithLocal { library, name } => {
+            ModuleError::ImportNameConflictsWithLocal { module, name } => {
                 write!(
                     f,
-                    "imported name `{name}` from library `{library}` conflicts with local declaration"
+                    "imported name `{name}` from module `{module}` conflicts with local declaration"
                 )
             }
-            LibraryError::Lex { source } => write!(f, "lex error: {source}"),
-            LibraryError::LexInLibrary { library, source } => {
-                write!(f, "lex error in library {library}: {source}")
+            ModuleError::Lex { source } => write!(f, "lex error: {source}"),
+            ModuleError::LexInModule { module, source } => {
+                write!(f, "lex error in module {module}: {source}")
             }
-            LibraryError::Parse { errors } => {
+            ModuleError::Parse { errors } => {
                 write!(f, "parse error:")?;
                 for err in errors {
                     write!(f, "\n  {err}")?;
                 }
                 Ok(())
             }
-            LibraryError::ParseInLibrary { library, errors } => {
-                write!(f, "parse error in library {library}:")?;
+            ModuleError::ParseInModule { module, errors } => {
+                write!(f, "parse error in module {module}:")?;
                 for err in errors {
                     write!(f, "\n  {err}")?;
                 }
                 Ok(())
             }
-            LibraryError::TopLevelExprInLibrary { library } => {
+            ModuleError::TopLevelExprInModule { module } => {
                 write!(
                     f,
-                    "library {library} cannot contain a top-level expression; library files must be declaration-only"
+                    "module {module} cannot contain a top-level expression; module files must be declaration-only"
                 )
             }
-            LibraryError::InvalidGithubImport { url } => write!(
+            ModuleError::InvalidGithubImport { url } => write!(
                 f,
                 "github import must be `https://github.com/<owner>/<repo>/<path>.rex#<sha>` (got {url})"
             ),
-            LibraryError::UnpinnedGithubImport { url } => {
+            ModuleError::UnpinnedGithubImport { url } => {
                 write!(f, "github import must be pinned: add `#<sha>` (got {url})")
             }
-            LibraryError::CurlFailed { source } => write!(f, "failed to run curl: {source}"),
-            LibraryError::CurlNonZeroExit { url, status } => {
+            ModuleError::CurlFailed { source } => write!(f, "failed to run curl: {source}"),
+            ModuleError::CurlNonZeroExit { url, status } => {
                 write!(f, "failed to fetch {url} (curl exit {status})")
             }
         }
     }
 }
 
-impl std::error::Error for LibraryError {
+impl std::error::Error for ModuleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            LibraryError::InvalidIncludeRoot { source, .. } => Some(source),
-            LibraryError::InvalidLibraryPath { source, .. } => Some(source),
-            LibraryError::ReadFailed { source, .. } => Some(source),
-            LibraryError::NotUtf8 { source, .. } => Some(source),
-            LibraryError::NotUtf8Remote { source, .. } => Some(source),
-            LibraryError::Lex { source } => Some(source),
-            LibraryError::LexInLibrary { source, .. } => Some(source),
-            LibraryError::CurlFailed { source } => Some(source),
+            ModuleError::InvalidIncludeRoot { source, .. } => Some(source),
+            ModuleError::InvalidModulePath { source, .. } => Some(source),
+            ModuleError::ReadFailed { source, .. } => Some(source),
+            ModuleError::NotUtf8 { source, .. } => Some(source),
+            ModuleError::NotUtf8Remote { source, .. } => Some(source),
+            ModuleError::Lex { source } => Some(source),
+            ModuleError::LexInModule { source, .. } => Some(source),
+            ModuleError::CurlFailed { source } => Some(source),
             _ => None,
         }
     }
@@ -277,7 +277,7 @@ pub enum EngineError {
     #[error("internal error: {0}")]
     Internal(String),
     #[error(transparent)]
-    Library(#[from] Box<LibraryError>),
+    Module(#[from] Box<ModuleError>),
     #[error("cancelled")]
     Cancelled,
     #[error("{0}")]
@@ -340,9 +340,9 @@ impl ExecutionError {
     }
 }
 
-impl From<LibraryError> for EngineError {
-    fn from(err: LibraryError) -> Self {
-        EngineError::Library(Box::new(err))
+impl From<ModuleError> for EngineError {
+    fn from(err: ModuleError) -> Self {
+        EngineError::Module(Box::new(err))
     }
 }
 

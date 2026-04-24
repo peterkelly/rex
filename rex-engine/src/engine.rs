@@ -27,11 +27,11 @@ use rex_typesystem::{
 };
 use rex_util::GasMeter;
 
-use crate::libraries::{
-    CanonicalSymbol, Library, LibraryExports, LibraryId, LibrarySystem, ResolveRequest,
-    ResolvedLibrary, ResolvedLibraryContent, SymbolKind, VirtualLibraryModule,
-    interface_decls_from_program, library_key_for_library, parse_program_from_source,
-    prefix_for_library, qualify_program, virtual_export_name,
+use crate::modules::{
+    CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleSystem, ResolveRequest, ResolvedModule,
+    ResolvedModuleContent, SymbolKind, VirtualModule, interface_decls_from_program,
+    module_key_for_module, parse_program_from_source, prefix_for_module, qualify_program,
+    virtual_export_name,
 };
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
@@ -67,8 +67,8 @@ where
     fn rex_default(engine: &Engine<State>) -> Result<Pointer, EngineError>;
 }
 
-pub const ROOT_LIBRARY_NAME: &str = "__root__";
-pub const PRELUDE_LIBRARY_NAME: &str = "Prelude";
+pub const ROOT_MODULE_NAME: &str = "__root__";
+pub const PRELUDE_MODULE_NAME: &str = "Prelude";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreludeMode {
@@ -86,7 +86,7 @@ impl Default for EngineOptions {
     fn default() -> Self {
         Self {
             prelude: PreludeMode::Enabled,
-            default_imports: vec![PRELUDE_LIBRARY_NAME.to_string()],
+            default_imports: vec![PRELUDE_MODULE_NAME.to_string()],
         }
     }
 }
@@ -508,7 +508,7 @@ where
             let func: SyncNativeCallable<State> =
                 Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
             let registration = NativeRegistration::sync(scheme.clone(), arity, func, gas_cost);
-            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
     }
@@ -554,7 +554,7 @@ where
                 handler(engine, typ, args)
             });
             let registration = NativeRegistration::r#async(scheme.clone(), arity, func, gas_cost);
-            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
     }
@@ -588,7 +588,7 @@ where
                 Arc::new(move |engine, token, typ, args| handler(engine, token, typ, args));
             let registration =
                 NativeRegistration::async_cancellable(scheme.clone(), arity, func, gas_cost);
-            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
     }
@@ -612,7 +612,7 @@ where
                 });
             let registration =
                 NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func, 0);
-            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
     }
@@ -636,7 +636,7 @@ where
                 });
             let registration =
                 NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func, 0);
-            engine.register_native_registration(ROOT_LIBRARY_NAME, qualified_name, registration)
+            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
     }
@@ -805,7 +805,7 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
     }
 }
 
-fn library_local_type_names_from_declarations(declarations: &[String]) -> BTreeSet<Symbol> {
+fn module_local_type_names_from_declarations(declarations: &[String]) -> BTreeSet<Symbol> {
     let mut out = BTreeSet::new();
     for declaration in declarations {
         let mut s = declaration.trim_start();
@@ -826,7 +826,7 @@ fn library_local_type_names_from_declarations(declarations: &[String]) -> BTreeS
     out
 }
 
-fn library_local_type_names_from_decls(decls: &[Decl]) -> BTreeSet<Symbol> {
+fn module_local_type_names_from_decls(decls: &[Decl]) -> BTreeSet<Symbol> {
     let mut out = BTreeSet::new();
     for decl in decls {
         if let Decl::Type(td) = decl {
@@ -845,7 +845,7 @@ fn render_virtual_module_source(decls: &[Decl]) -> Option<String> {
     (!rendered.is_empty()).then_some(rendered)
 }
 
-fn build_virtual_library_source<State: Clone + Send + Sync + 'static>(
+fn build_virtual_module_source<State: Clone + Send + Sync + 'static>(
     declarations: &[String],
     exports: &[Export<State>],
 ) -> String {
@@ -858,34 +858,31 @@ fn build_virtual_library_source<State: Clone + Send + Sync + 'static>(
     lines.join("\n")
 }
 
-fn qualify_library_type_refs(
+fn qualify_module_type_refs(
     typ: &Type,
-    library_name: &str,
+    module_name: &str,
     local_type_names: &BTreeSet<Symbol>,
 ) -> Type {
     match typ.as_ref() {
         TypeKind::Con(tc) => {
             if local_type_names.contains(&tc.name) {
-                Type::con(
-                    virtual_export_name(library_name, tc.name.as_ref()),
-                    tc.arity,
-                )
+                Type::con(virtual_export_name(module_name, tc.name.as_ref()), tc.arity)
             } else {
                 typ.clone()
             }
         }
         TypeKind::App(f, x) => Type::app(
-            qualify_library_type_refs(f, library_name, local_type_names),
-            qualify_library_type_refs(x, library_name, local_type_names),
+            qualify_module_type_refs(f, module_name, local_type_names),
+            qualify_module_type_refs(x, module_name, local_type_names),
         ),
         TypeKind::Fun(a, b) => Type::fun(
-            qualify_library_type_refs(a, library_name, local_type_names),
-            qualify_library_type_refs(b, library_name, local_type_names),
+            qualify_module_type_refs(a, module_name, local_type_names),
+            qualify_module_type_refs(b, module_name, local_type_names),
         ),
         TypeKind::Tuple(elems) => Type::tuple(
             elems
                 .iter()
-                .map(|t| qualify_library_type_refs(t, library_name, local_type_names))
+                .map(|t| qualify_module_type_refs(t, module_name, local_type_names))
                 .collect(),
         ),
         TypeKind::Record(fields) => Type::new(TypeKind::Record(
@@ -894,7 +891,7 @@ fn qualify_library_type_refs(
                 .map(|(k, v)| {
                     (
                         k.clone(),
-                        qualify_library_type_refs(v, library_name, local_type_names),
+                        qualify_module_type_refs(v, module_name, local_type_names),
                     )
                 })
                 .collect(),
@@ -903,19 +900,19 @@ fn qualify_library_type_refs(
     }
 }
 
-fn qualify_library_scheme_refs(
+fn qualify_module_scheme_refs(
     scheme: &Scheme,
-    library_name: &str,
+    module_name: &str,
     local_type_names: &BTreeSet<Symbol>,
 ) -> Scheme {
-    let typ = qualify_library_type_refs(&scheme.typ, library_name, local_type_names);
+    let typ = qualify_module_type_refs(&scheme.typ, module_name, local_type_names);
     let preds = scheme
         .preds
         .iter()
         .map(|pred| {
             Predicate::new(
                 pred.class.clone(),
-                qualify_library_type_refs(&pred.typ, library_name, local_type_names),
+                qualify_module_type_refs(&pred.typ, module_name, local_type_names),
             )
         })
         .collect();
@@ -1017,7 +1014,7 @@ macro_rules! define_handler_impl {
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
                 let registration = NativeRegistration::sync(scheme, $arity, func, 0);
-                engine.register_native_registration(ROOT_LIBRARY_NAME, export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
 
@@ -1059,7 +1056,7 @@ macro_rules! define_handler_impl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
                 let registration = NativeRegistration::sync(scheme, $arity, func, 0);
-                engine.register_native_registration(ROOT_LIBRARY_NAME, export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
 
@@ -1083,7 +1080,7 @@ where
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
         let registration = NativeRegistration::sync(scheme, arity, func, 0);
-        engine.register_native_registration(ROOT_LIBRARY_NAME, export_name, registration)
+        engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
 
@@ -1128,7 +1125,7 @@ macro_rules! define_async_handler_impl {
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
                 let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
-                engine.register_native_registration(ROOT_LIBRARY_NAME, export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
     };
@@ -1176,7 +1173,7 @@ macro_rules! define_async_handler_impl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
                 let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
-                engine.register_native_registration(ROOT_LIBRARY_NAME, export_name, registration)
+                engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
     };
@@ -1204,7 +1201,7 @@ where
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
         let registration = NativeRegistration::r#async(scheme, arity, func, 0);
-        engine.register_native_registration(ROOT_LIBRARY_NAME, export_name, registration)
+        engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
 
@@ -1717,17 +1714,17 @@ where
     typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
     typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
-    pub(crate) modules: LibrarySystem,
-    injected_libraries: BTreeSet<String>,
-    pub(crate) library_exports_cache: BTreeMap<LibraryId, LibraryExports>,
-    pub(crate) library_interface_cache: BTreeMap<LibraryId, Vec<Decl>>,
-    pub(crate) library_sources: BTreeMap<LibraryId, String>,
-    pub(crate) library_source_fingerprints: BTreeMap<LibraryId, String>,
-    pub(crate) published_cycle_interfaces: BTreeSet<LibraryId>,
+    pub(crate) modules: ModuleSystem,
+    injected_modules: BTreeSet<String>,
+    pub(crate) module_exports_cache: BTreeMap<ModuleId, ModuleExports>,
+    pub(crate) module_interface_cache: BTreeMap<ModuleId, Vec<Decl>>,
+    pub(crate) module_sources: BTreeMap<ModuleId, String>,
+    pub(crate) module_source_fingerprints: BTreeMap<ModuleId, String>,
+    pub(crate) published_cycle_interfaces: BTreeSet<ModuleId>,
     default_imports: Vec<String>,
-    virtual_libraries: BTreeMap<String, VirtualLibraryModule>,
-    library_local_type_names: BTreeMap<String, BTreeSet<Symbol>>,
-    registration_library_context: Option<String>,
+    virtual_modules: BTreeMap<String, VirtualModule>,
+    module_local_type_names: BTreeMap<String, BTreeSet<Symbol>>,
+    registration_module_context: Option<String>,
     cancel: CancellationToken,
     pub heap: Heap,
 }
@@ -1951,16 +1948,16 @@ where
             type_system: self.type_system.clone(),
             typeclass_cache: Arc::clone(&self.typeclass_cache),
             modules: self.modules.clone(),
-            injected_libraries: self.injected_libraries.clone(),
-            library_exports_cache: self.library_exports_cache.clone(),
-            library_interface_cache: self.library_interface_cache.clone(),
-            library_sources: self.library_sources.clone(),
-            library_source_fingerprints: self.library_source_fingerprints.clone(),
+            injected_modules: self.injected_modules.clone(),
+            module_exports_cache: self.module_exports_cache.clone(),
+            module_interface_cache: self.module_interface_cache.clone(),
+            module_sources: self.module_sources.clone(),
+            module_source_fingerprints: self.module_source_fingerprints.clone(),
             published_cycle_interfaces: self.published_cycle_interfaces.clone(),
             default_imports: self.default_imports.clone(),
-            virtual_libraries: self.virtual_libraries.clone(),
-            library_local_type_names: self.library_local_type_names.clone(),
-            registration_library_context: self.registration_library_context.clone(),
+            virtual_modules: self.virtual_modules.clone(),
+            module_local_type_names: self.module_local_type_names.clone(),
+            registration_module_context: self.registration_module_context.clone(),
             cancel: self.cancel.clone(),
             heap: self.heap.clone(),
         }
@@ -2104,17 +2101,17 @@ where
             typeclasses: TypeclassRegistry::default(),
             type_system: TypeSystem::new(),
             typeclass_cache: Arc::new(Mutex::new(BTreeMap::new())),
-            modules: LibrarySystem::default(),
-            injected_libraries: BTreeSet::new(),
-            library_exports_cache: BTreeMap::new(),
-            library_interface_cache: BTreeMap::new(),
-            library_sources: BTreeMap::new(),
-            library_source_fingerprints: BTreeMap::new(),
+            modules: ModuleSystem::default(),
+            injected_modules: BTreeSet::new(),
+            module_exports_cache: BTreeMap::new(),
+            module_interface_cache: BTreeMap::new(),
+            module_sources: BTreeMap::new(),
+            module_source_fingerprints: BTreeMap::new(),
             published_cycle_interfaces: BTreeSet::new(),
             default_imports: Vec::new(),
-            virtual_libraries: BTreeMap::new(),
-            library_local_type_names: BTreeMap::new(),
-            registration_library_context: None,
+            virtual_modules: BTreeMap::new(),
+            module_local_type_names: BTreeMap::new(),
+            registration_module_context: None,
             cancel: CancellationToken::new(),
             heap: Heap::new(),
         }
@@ -2136,17 +2133,17 @@ where
             typeclasses: TypeclassRegistry::default(),
             type_system,
             typeclass_cache: Arc::new(Mutex::new(BTreeMap::new())),
-            modules: LibrarySystem::default(),
-            injected_libraries: BTreeSet::new(),
-            library_exports_cache: BTreeMap::new(),
-            library_interface_cache: BTreeMap::new(),
-            library_sources: BTreeMap::new(),
-            library_source_fingerprints: BTreeMap::new(),
+            modules: ModuleSystem::default(),
+            injected_modules: BTreeSet::new(),
+            module_exports_cache: BTreeMap::new(),
+            module_interface_cache: BTreeMap::new(),
+            module_sources: BTreeMap::new(),
+            module_source_fingerprints: BTreeMap::new(),
             published_cycle_interfaces: BTreeSet::new(),
             default_imports: options.default_imports,
-            virtual_libraries: BTreeMap::new(),
-            library_local_type_names: BTreeMap::new(),
-            registration_library_context: None,
+            virtual_modules: BTreeMap::new(),
+            module_local_type_names: BTreeMap::new(),
+            registration_module_context: None,
             cancel: CancellationToken::new(),
             heap: Heap::new(),
         };
@@ -2178,7 +2175,7 @@ where
     ///
     /// The report includes:
     /// - summary counts
-    /// - libraries and exports
+    /// - modules and exports
     /// - ADTs
     /// - functions/values in the type environment
     /// - type classes, methods, and instances
@@ -2196,8 +2193,8 @@ where
     /// assert!(md.contains("## ADTs"));
     /// ```
     pub fn registry_markdown(&self) -> String {
-        fn library_anchor(id: &LibraryId) -> String {
-            let raw = format!("library-{id}").to_ascii_lowercase();
+        fn module_anchor(id: &ModuleId) -> String {
+            let raw = format!("module-{id}").to_ascii_lowercase();
             let mut out = String::with_capacity(raw.len());
             let mut prev_dash = false;
             for ch in raw.chars() {
@@ -2231,20 +2228,20 @@ where
         let mut out = String::new();
         let _ = writeln!(&mut out, "# Engine Registry");
         let _ = writeln!(&mut out);
-        let mut library_ids: BTreeMap<String, LibraryId> = BTreeMap::new();
-        for id in self.library_exports_cache.keys() {
-            library_ids.insert(id.to_string(), id.clone());
+        let mut module_ids: BTreeMap<String, ModuleId> = BTreeMap::new();
+        for id in self.module_exports_cache.keys() {
+            module_ids.insert(id.to_string(), id.clone());
         }
-        for id in self.library_sources.keys() {
-            library_ids.insert(id.to_string(), id.clone());
+        for id in self.module_sources.keys() {
+            module_ids.insert(id.to_string(), id.clone());
         }
-        for library_name in self.virtual_libraries.keys() {
-            let id = LibraryId::Virtual(library_name.clone());
-            library_ids.insert(id.to_string(), id);
+        for module_name in self.virtual_modules.keys() {
+            let id = ModuleId::Virtual(module_name.clone());
+            module_ids.insert(id.to_string(), id);
         }
-        for library_name in &self.injected_libraries {
-            let id = LibraryId::Virtual(library_name.clone());
-            library_ids.insert(id.to_string(), id);
+        for module_name in &self.injected_modules {
+            let id = ModuleId::Virtual(module_name.clone());
+            module_ids.insert(id.to_string(), id);
         }
 
         let _ = writeln!(&mut out, "## Summary");
@@ -2258,16 +2255,16 @@ where
             .values()
             .map(Vec::len)
             .sum();
-        let _ = writeln!(&mut out, "- Libraries (all kinds): {}", library_ids.len());
+        let _ = writeln!(&mut out, "- Modules (all kinds): {}", module_ids.len());
         let _ = writeln!(
             &mut out,
-            "- Injected libraries: {}",
-            self.injected_libraries.len()
+            "- Injected modules: {}",
+            self.injected_modules.len()
         );
         let _ = writeln!(
             &mut out,
-            "- Virtual libraries: {}",
-            self.virtual_libraries.len()
+            "- Virtual modules: {}",
+            self.virtual_modules.len()
         );
         let _ = writeln!(&mut out, "- ADTs: {}", self.type_system.adts.len());
         let _ = writeln!(
@@ -2279,38 +2276,36 @@ where
         let _ = writeln!(&mut out, "- Native implementations: {native_impl_count}");
         let _ = writeln!(&mut out);
 
-        let _ = writeln!(&mut out, "## Library Index");
-        if library_ids.is_empty() {
-            let _ = writeln!(&mut out, "_No libraries registered._");
+        let _ = writeln!(&mut out, "## Module Index");
+        if module_ids.is_empty() {
+            let _ = writeln!(&mut out, "_No modules registered._");
         } else {
-            for (display, id) in &library_ids {
-                let anchor = library_anchor(id);
+            for (display, id) in &module_ids {
+                let anchor = module_anchor(id);
                 let _ = writeln!(&mut out, "- [`{display}`](#{anchor})");
             }
         }
         let _ = writeln!(&mut out);
 
-        let _ = writeln!(&mut out, "## Libraries");
-        if library_ids.is_empty() {
-            let _ = writeln!(&mut out, "_No libraries registered._");
+        let _ = writeln!(&mut out, "## Modules");
+        if module_ids.is_empty() {
+            let _ = writeln!(&mut out, "_No modules registered._");
             let _ = writeln!(&mut out);
         } else {
-            for (display, id) in library_ids {
-                let anchor = library_anchor(&id);
+            for (display, id) in module_ids {
+                let anchor = module_anchor(&id);
                 let _ = writeln!(&mut out, "<a id=\"{anchor}\"></a>");
                 let _ = writeln!(&mut out, "### `{display}`");
                 let virtual_source = match &id {
-                    LibraryId::Virtual(name) => {
-                        self.virtual_libraries.get(name).and_then(|module| {
-                            module
-                                .source
-                                .clone()
-                                .or_else(|| render_virtual_module_source(&module.decls))
-                        })
-                    }
+                    ModuleId::Virtual(name) => self.virtual_modules.get(name).and_then(|module| {
+                        module
+                            .source
+                            .clone()
+                            .or_else(|| render_virtual_module_source(&module.decls))
+                    }),
                     _ => None,
                 };
-                if let Some(source) = self.library_sources.get(&id).cloned().or(virtual_source) {
+                if let Some(source) = self.module_sources.get(&id).cloned().or(virtual_source) {
                     if source.trim().is_empty() {
                         let _ = writeln!(&mut out, "_Module source is empty._");
                     } else {
@@ -2319,13 +2314,11 @@ where
                         let _ = writeln!(&mut out, "```");
                     }
                 } else {
-                    let _ = writeln!(&mut out, "_No captured source for this library._");
+                    let _ = writeln!(&mut out, "_No captured source for this module._");
                 }
 
-                let exports = self.library_exports_cache.get(&id).or_else(|| match &id {
-                    LibraryId::Virtual(name) => {
-                        self.virtual_libraries.get(name).map(|m| &m.exports)
-                    }
+                let exports = self.module_exports_cache.get(&id).or_else(|| match &id {
+                    ModuleId::Virtual(name) => self.virtual_modules.get(name).map(|m| &m.exports),
                     _ => None,
                 });
                 if let Some(exports) = exports {
@@ -2517,30 +2510,30 @@ where
         self.cancel.cancel();
     }
 
-    pub fn inject_library(&mut self, library: Library<State>) -> Result<(), EngineError> {
-        let library_name = library.name.trim().to_string();
-        if library_name.is_empty() {
-            return Err(EngineError::Internal("library name cannot be empty".into()));
+    pub fn inject_module(&mut self, module: Module<State>) -> Result<(), EngineError> {
+        let module_name = module.name.trim().to_string();
+        if module_name.is_empty() {
+            return Err(EngineError::Internal("module name cannot be empty".into()));
         }
-        let is_global = library_name == ROOT_LIBRARY_NAME;
-        if !is_global && self.injected_libraries.contains(&library_name) {
+        let is_global = module_name == ROOT_MODULE_NAME;
+        if !is_global && self.injected_modules.contains(&module_name) {
             return Err(EngineError::Internal(format!(
-                "library `{library_name}` already injected"
+                "module `{module_name}` already injected"
             )));
         }
 
         if is_global {
-            for adt in &library.staged_adts {
+            for adt in &module.staged_adts {
                 self.inject_adt(adt.clone())?;
             }
 
-            let staged_adt_names: BTreeSet<Symbol> = library
+            let staged_adt_names: BTreeSet<Symbol> = module
                 .staged_adts
                 .iter()
                 .map(|adt| adt.name.clone())
                 .collect();
-            let decls = if library.raw_declarations.is_empty() {
-                library
+            let decls = if module.raw_declarations.is_empty() {
+                module
                     .structured_decls
                     .iter()
                     .filter(|decl| match decl {
@@ -2550,126 +2543,126 @@ where
                     .cloned()
                     .collect()
             } else {
-                let source = library.raw_declarations.join("\n");
-                let context = LibraryId::Virtual(ROOT_LIBRARY_NAME.to_string());
+                let source = module.raw_declarations.join("\n");
+                let context = ModuleId::Virtual(ROOT_MODULE_NAME.to_string());
                 parse_program_from_source(&source, Some(&context), None)?.decls
             };
 
-            for export in library.exports {
-                self.inject_library_export(ROOT_LIBRARY_NAME, export)?;
+            for export in module.exports {
+                self.inject_module_export(ROOT_MODULE_NAME, export)?;
             }
             self.inject_decls(&decls)?;
             return Ok(());
         }
 
-        let library_id = LibraryId::Virtual(library_name.clone());
+        let module_id = ModuleId::Virtual(module_name.clone());
 
-        if library.raw_declarations.is_empty() {
-            let mut decls = library.structured_decls.clone();
+        if module.raw_declarations.is_empty() {
+            let mut decls = module.structured_decls.clone();
             decls.extend(
-                library
+                module
                     .exports
                     .iter()
                     .map(|export| Decl::DeclareFn(export.interface.clone())),
             );
-            let local_type_names = library_local_type_names_from_decls(&decls);
-            self.library_local_type_names
-                .insert(library_name.clone(), local_type_names);
+            let local_type_names = module_local_type_names_from_decls(&decls);
+            self.module_local_type_names
+                .insert(module_name.clone(), local_type_names);
 
             let program = Program {
                 decls,
                 expr: Arc::new(Expr::Tuple(Span::default(), vec![])),
             };
-            let prefix = prefix_for_library(&library_id);
-            let exports = crate::libraries::exports_from_program(&program, &prefix, &library_id);
+            let prefix = prefix_for_module(&module_id);
+            let exports = crate::modules::exports_from_program(&program, &prefix, &module_id);
             let qualified = qualify_program(&program, &prefix);
             let interfaces = interface_decls_from_program(&qualified);
-            self.library_exports_cache
-                .insert(library_id.clone(), exports.clone());
-            self.library_interface_cache
-                .insert(library_id.clone(), interfaces.clone());
-            self.virtual_libraries.insert(
-                library_name.clone(),
-                VirtualLibraryModule {
+            self.module_exports_cache
+                .insert(module_id.clone(), exports.clone());
+            self.module_interface_cache
+                .insert(module_id.clone(), interfaces.clone());
+            self.virtual_modules.insert(
+                module_name.clone(),
+                VirtualModule {
                     exports,
                     decls: program.decls.clone(),
                     source: None,
                 },
             );
 
-            for export in library.exports {
-                self.inject_library_export(&library_name, export)?;
+            for export in module.exports {
+                self.inject_module_export(&module_name, export)?;
             }
 
             self.inject_decls(&qualified.decls)?;
-            let resolver_module_name = library_name.clone();
+            let resolver_module_name = module_name.clone();
             let resolver_program = program;
             self.add_resolver(
-                format!("injected:{library_name}"),
+                format!("injected:{module_name}"),
                 move |req: ResolveRequest| {
                     let requested = req
-                        .library_name
+                        .module_name
                         .split_once('#')
                         .map(|(base, _)| base)
-                        .unwrap_or(req.library_name.as_str());
+                        .unwrap_or(req.module_name.as_str());
                     if requested != resolver_module_name {
                         return Ok(None);
                     }
-                    Ok(Some(ResolvedLibrary {
-                        id: LibraryId::Virtual(resolver_module_name.clone()),
-                        content: ResolvedLibraryContent::Program(resolver_program.clone()),
+                    Ok(Some(ResolvedModule {
+                        id: ModuleId::Virtual(resolver_module_name.clone()),
+                        content: ResolvedModuleContent::Program(resolver_program.clone()),
                     }))
                 },
             );
         } else {
             let full_source =
-                build_virtual_library_source(&library.raw_declarations, &library.exports);
+                build_virtual_module_source(&module.raw_declarations, &module.exports);
             let local_type_names =
-                library_local_type_names_from_declarations(&library.raw_declarations);
-            self.library_local_type_names
-                .insert(library_name.clone(), local_type_names);
-            self.library_sources
-                .insert(library_id.clone(), full_source.clone());
+                module_local_type_names_from_declarations(&module.raw_declarations);
+            self.module_local_type_names
+                .insert(module_name.clone(), local_type_names);
+            self.module_sources
+                .insert(module_id.clone(), full_source.clone());
 
-            for export in library.exports {
-                self.inject_library_export(&library_name, export)?;
+            for export in module.exports {
+                self.inject_module_export(&module_name, export)?;
             }
-            let resolver_module_name = library_name.clone();
+            let resolver_module_name = module_name.clone();
             let resolver_source = full_source;
             self.add_resolver(
-                format!("injected:{library_name}"),
+                format!("injected:{module_name}"),
                 move |req: ResolveRequest| {
                     let requested = req
-                        .library_name
+                        .module_name
                         .split_once('#')
                         .map(|(base, _)| base)
-                        .unwrap_or(req.library_name.as_str());
+                        .unwrap_or(req.module_name.as_str());
                     if requested != resolver_module_name {
                         return Ok(None);
                     }
-                    Ok(Some(ResolvedLibrary {
-                        id: LibraryId::Virtual(resolver_module_name.clone()),
-                        content: ResolvedLibraryContent::Source(resolver_source.clone()),
+                    Ok(Some(ResolvedModule {
+                        id: ModuleId::Virtual(resolver_module_name.clone()),
+                        content: ResolvedModuleContent::Source(resolver_source.clone()),
                     }))
                 },
             );
         }
 
-        self.injected_libraries.insert(library_name);
+        self.injected_modules.insert(module_name);
         Ok(())
     }
 
-    fn library_export_symbol(library_name: &str, export_name: &str) -> String {
-        if library_name == ROOT_LIBRARY_NAME {
+    fn module_export_symbol(module_name: &str, export_name: &str) -> String {
+        if module_name == ROOT_MODULE_NAME {
             normalize_name(export_name).to_string()
         } else {
-            virtual_export_name(library_name, export_name)
+            virtual_export_name(module_name, export_name)
         }
     }
 
-    fn inject_library_export(
+    fn inject_module_export(
         &mut self,
-        library_name: &str,
+        module_name: &str,
         export: Export<State>,
     ) -> Result<(), EngineError> {
         let Export {
@@ -2677,25 +2670,25 @@ where
             interface: _,
             injector,
         } = export;
-        let qualified_name = Self::library_export_symbol(library_name, &name);
-        let previous_context = self.registration_library_context.clone();
-        self.registration_library_context = if library_name == ROOT_LIBRARY_NAME {
+        let qualified_name = Self::module_export_symbol(module_name, &name);
+        let previous_context = self.registration_module_context.clone();
+        self.registration_module_context = if module_name == ROOT_MODULE_NAME {
             None
         } else {
-            Some(library_name.to_string())
+            Some(module_name.to_string())
         };
         let result = injector(self, &qualified_name);
-        self.registration_library_context = previous_context;
+        self.registration_module_context = previous_context;
         result
     }
 
     fn inject_root_export(&mut self, export: Export<State>) -> Result<(), EngineError> {
-        self.inject_library_export(ROOT_LIBRARY_NAME, export)
+        self.inject_module_export(ROOT_MODULE_NAME, export)
     }
 
     fn register_native_registration(
         &mut self,
-        library_name: &str,
+        module_name: &str,
         export_name: &str,
         registration: NativeRegistration<State>,
     ) -> Result<(), EngineError> {
@@ -2705,19 +2698,19 @@ where
             callable,
             gas_cost,
         } = registration;
-        let scheme_module = if library_name == ROOT_LIBRARY_NAME {
-            self.registration_library_context
+        let scheme_module = if module_name == ROOT_MODULE_NAME {
+            self.registration_module_context
                 .as_deref()
-                .unwrap_or(ROOT_LIBRARY_NAME)
+                .unwrap_or(ROOT_MODULE_NAME)
         } else {
-            library_name
+            module_name
         };
-        if scheme_module != ROOT_LIBRARY_NAME
-            && let Some(local_type_names) = self.library_local_type_names.get(scheme_module)
+        if scheme_module != ROOT_MODULE_NAME
+            && let Some(local_type_names) = self.module_local_type_names.get(scheme_module)
         {
-            scheme = qualify_library_scheme_refs(&scheme, scheme_module, local_type_names);
+            scheme = qualify_module_scheme_refs(&scheme, scheme_module, local_type_names);
         }
-        let name = normalize_name(&Self::library_export_symbol(library_name, export_name));
+        let name = normalize_name(&Self::module_export_symbol(module_name, export_name));
         self.register_native(name, scheme, arity, callable, gas_cost)
     }
 
@@ -2844,7 +2837,7 @@ where
             Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func, 0);
-        self.register_native_registration(ROOT_LIBRARY_NAME, name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, name, registration)
     }
 
     pub(crate) fn export_native_with_gas_cost<F>(
@@ -2871,7 +2864,7 @@ where
         let func: SyncNativeCallable<State> =
             Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
         let registration = NativeRegistration::sync(scheme, arity, func, gas_cost);
-        self.register_native_registration(ROOT_LIBRARY_NAME, &name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub(crate) fn export_native_async_with_gas_cost<F>(
@@ -2896,7 +2889,7 @@ where
             handler(engine, typ, args.to_vec())
         });
         let registration = NativeRegistration::r#async(scheme, arity, func, gas_cost);
-        self.register_native_registration(ROOT_LIBRARY_NAME, &name, registration)
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
@@ -3161,13 +3154,12 @@ where
     }
 
     fn inject_prelude_virtual_module(&mut self) -> Result<(), EngineError> {
-        if self.virtual_libraries.contains_key(PRELUDE_LIBRARY_NAME) {
+        if self.virtual_modules.contains_key(PRELUDE_MODULE_NAME) {
             return Ok(());
         }
 
-        let module_key =
-            library_key_for_library(&LibraryId::Virtual(PRELUDE_LIBRARY_NAME.to_string()));
-        let mut exports = LibraryExports::default();
+        let module_key = module_key_for_module(&ModuleId::Virtual(PRELUDE_MODULE_NAME.to_string()));
+        let mut exports = ModuleExports::default();
         for (name, _) in self.type_system.env.values.iter() {
             if !name.as_ref().starts_with("@m") {
                 exports.insert_value(
@@ -3210,9 +3202,9 @@ where
             }
         }
 
-        self.virtual_libraries.insert(
-            PRELUDE_LIBRARY_NAME.to_string(),
-            VirtualLibraryModule {
+        self.virtual_modules.insert(
+            PRELUDE_MODULE_NAME.to_string(),
+            VirtualModule {
                 exports,
                 decls: Vec::new(),
                 source: None,
@@ -3221,9 +3213,9 @@ where
         Ok(())
     }
 
-    pub(crate) fn virtual_library_exports(&self, library_name: &str) -> Option<LibraryExports> {
-        self.virtual_libraries
-            .get(library_name)
+    pub(crate) fn virtual_module_exports(&self, module_name: &str) -> Option<ModuleExports> {
+        self.virtual_modules
+            .get(module_name)
             .map(|module| module.exports.clone())
     }
 

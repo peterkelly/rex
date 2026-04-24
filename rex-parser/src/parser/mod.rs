@@ -2744,7 +2744,7 @@ impl Parser {
                 if segs.is_empty() {
                     return Err(ParserErr::new(
                         *self.current_token().span(),
-                        "relative import must include a library path",
+                        "relative import must include a module path",
                     ));
                 }
                 (
@@ -2763,7 +2763,7 @@ impl Parser {
                     token => {
                         return Err(ParserErr::new(
                             *token.span(),
-                            format!("expected library path segment got {}", token),
+                            format!("expected module path segment got {}", token),
                         ));
                     }
                 };
@@ -2778,7 +2778,7 @@ impl Parser {
                         token => {
                             return Err(ParserErr::new(
                                 *token.span(),
-                                format!("expected library path segment got {}", token),
+                                format!("expected module path segment got {}", token),
                             ));
                         }
                     };
@@ -2823,7 +2823,7 @@ impl Parser {
             token => {
                 return Err(ParserErr::new(
                     *token.span(),
-                    format!("expected library path got {}", token),
+                    format!("expected module path got {}", token),
                 ));
             }
         };
@@ -2986,7 +2986,7 @@ impl Parser {
             token => {
                 return Err(ParserErr::new(
                     *token.span(),
-                    format!("expected library path segment got {}", token),
+                    format!("expected module path segment got {}", token),
                 ));
             }
         };
@@ -3004,7 +3004,7 @@ impl Parser {
                 token => {
                     return Err(ParserErr::new(
                         *token.span(),
-                        format!("expected library path segment got {}", token),
+                        format!("expected module path segment got {}", token),
                     ));
                 }
             };

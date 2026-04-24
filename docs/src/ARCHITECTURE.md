@@ -30,7 +30,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - convenience helpers like `Evaluator::eval_snippet` still exist, but they are just compile-then-run wrappers.
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while pointer-level APIs (`export_native*`) receive `EvaluatorRef<'_, State>`.
   - public phase errors are split as `CompileError`, `EvalError`, and `ExecutionError` (for convenience entry points that do both phases).
-  - Host library injection API: `Library` + `Export` + `Engine::inject_library`.
+  - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
@@ -51,7 +51,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   type-incompatible runtime bindings.
 - **RuntimeEnv split**: internally, `RuntimeEnv` now distinguishes the execution snapshot used by
   `Evaluator` and native dispatch from the engine-backed loader state still used by convenience
-  entry points such as library loading and REPL session syncing. That keeps the public model
+  entry points such as module loading and REPL session syncing. That keeps the public model
   stable while shrinking execution's implicit dependence on the full engine object.
 - **Process-local boundary**: `CompiledProgram::storage_boundary()` and
   `RuntimeEnv::storage_boundary()` make it explicit that both values still contain process-local
@@ -60,14 +60,14 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - ADT/typeclass *heads* injected by `TypeSystem::new_with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rex-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
 - **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parser/typechecker limit APIs provide bounded recursion for production/untrusted workloads.
-- **Import-use rewrite/validation**: library processing resolves import aliases across expression
+- **Import-use rewrite/validation**: module processing resolves import aliases across expression
   vars, constructor patterns, type references, and class references; unresolved qualified alias
-  members are rejected as library errors before runtime.
+  members are rejected as module errors before runtime.
 
 ## Intentional String Boundaries
 
 Rex now prefers structured internal representations (for example `NameRef`, `BuiltinTypeId`,
-`CanonicalSymbol`, and library/type/class maps) across parser, type system, evaluator, and LSP
+`CanonicalSymbol`, and module/type/class maps) across parser, type system, evaluator, and LSP
 rewrite paths. Remaining string usage is intentional in these boundary layers:
 
 - **Source text and parsing**: lexer/parser operate on source strings by definition.
@@ -75,8 +75,8 @@ rewrite paths. Remaining string usage is intentional in these boundary layers:
   output stringify symbols/types for readability.
 - **Protocol/serialization boundaries**: JSON/LSP payloads are string-based and convert structured
   internal symbols/types at the edge.
-- **Filesystem/library specifiers**: import specifiers and path labels are textual before being
-  resolved into structured library identities.
+- **Filesystem/module specifiers**: import specifiers and path labels are textual before being
+  resolved into structured module identities.
 
 Non-goal for this pass:
 

@@ -16,7 +16,7 @@ use crate::engine::{
     CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, check_runtime_cancelled,
     eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
 };
-use crate::libraries::{LibraryId, ReplState, ResolvedLibrary, ResolvedLibraryContent};
+use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
 use crate::value::Value;
 use crate::{
     CompileError, Compiler, EngineError, Env, EvalError, ExecutionError, Pointer, RuntimeEnv,
@@ -123,7 +123,7 @@ where
         self.run_prepared(program, gas).await
     }
 
-    pub async fn eval_library_file(
+    pub async fn eval_module_file(
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
@@ -131,7 +131,7 @@ where
         let (id, bytes) = self
             .runtime
             .loader
-            .read_local_library_bytes(path.as_ref())
+            .read_local_module_bytes(path.as_ref())
             .map_err(CompileError::from)?;
         let source_fingerprint = sha256_hex(&bytes);
         if let Some(inst) = self
@@ -146,21 +146,21 @@ where
             }
             self.runtime
                 .loader
-                .invalidate_library_caches(&id)
+                .invalidate_module_caches(&id)
                 .map_err(EvalError::from)?;
         }
         let source = self
             .runtime
             .loader
-            .decode_local_library_source(&id, bytes)
+            .decode_local_module_source(&id, bytes)
             .map_err(CompileError::from)?;
         let inst = self
             .runtime
             .loader
-            .load_library_from_resolved(
-                ResolvedLibrary {
+            .load_module_from_resolved(
+                ResolvedModule {
                     id,
-                    content: ResolvedLibraryContent::Source(source),
+                    content: ResolvedModuleContent::Source(source),
                 },
                 gas,
             )
@@ -169,14 +169,14 @@ where
         Ok((inst.init_value, inst.init_type))
     }
 
-    pub async fn eval_library_source(
+    pub async fn eval_module_source(
         &mut self,
         source: &str,
         gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         let mut hasher = DefaultHasher::new();
         source.hash(&mut hasher);
-        let id = LibraryId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
+        let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
         if let Some(inst) = self
             .runtime
             .loader
@@ -189,10 +189,10 @@ where
         let inst = self
             .runtime
             .loader
-            .load_library_from_resolved(
-                ResolvedLibrary {
+            .load_module_from_resolved(
+                ResolvedModule {
                     id,
-                    content: ResolvedLibraryContent::Source(source.to_string()),
+                    content: ResolvedModuleContent::Source(source.to_string()),
                 },
                 gas,
             )

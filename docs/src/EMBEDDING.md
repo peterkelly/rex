@@ -59,7 +59,7 @@ What "compiled" means in the current design:
 - `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
 - runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
 - internally, `RuntimeEnv` keeps a runtime snapshot for execution and separate engine-backed loader
-  state for convenience entry points like library loading and REPL-style session sync
+  state for convenience entry points like module loading and REPL-style session sync
 - `CompiledProgram::link_contract()` and `RuntimeEnv::capabilities()` now make the runtime link
   contract explicit, including the current ABI version and the required callable shapes
 - `CompiledProgram::storage_boundary()` and `RuntimeEnv::storage_boundary()` mark both values as
@@ -105,16 +105,16 @@ still sugar, but they no longer use a separate execution path.
 ## Evaluate Rex Code Directly
 
 ```rust
-use rex::{Engine, GasMeter, Library, Parser, Token};
+use rex::{Engine, GasMeter, Module, Parser, Token};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
 let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
-let mut globals = Library::global();
+let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 let mut gas = GasMeter::default();
 let mut compiler = rex::Compiler::new(engine.clone());
 let program = compiler.compile_expr(program.expr.as_ref())?;
@@ -124,10 +124,10 @@ let value = evaluator.run(&program, &mut gas).await?;
 println!("{value}");
 ```
 
-Library sources loaded via resolvers (and library files on disk) must be declaration-only. To run an expression, use snippet/repl entry points.
+Module sources loaded via resolvers (and module files on disk) must be declaration-only. To run an expression, use snippet/repl entry points.
 Qualified alias members used in type/class positions (annotations, `where` constraints, instance
-headers, superclass clauses) are validated against library exports during library processing; missing
-exports fail early with library errors.
+headers, superclass clauses) are validated against module exports during module processing; missing
+exports fail early with module errors.
 
 ## Engine Initialization and Default Imports
 
@@ -152,9 +152,9 @@ let mut engine = Engine::with_options(
 )?;
 ```
 
-## Inject Libraries (Embedder Patterns)
+## Inject Modules (Embedder Patterns)
 
-This is fully supported in `rex-engine`. You can compose library loading from:
+This is fully supported in `rex-engine`. You can compose module loading from:
 
 - default resolvers (`std.*`, local filesystem, optional remote feature)
 - include roots
@@ -171,29 +171,29 @@ engine.add_include_resolver("/opt/my-app/rex-modules")?;
 
 let mut gas = GasMeter::default();
 let value = engine
-    .eval_library_file("workflows/main.rex", &mut gas)
+    .eval_module_file("workflows/main.rex", &mut gas)
     .await?;
 println!("{value}");
 ```
 
 Notes:
 
-- local imports are resolved relative to the importing library path.
+- local imports are resolved relative to the importing module path.
 - include roots are searched after local-relative imports.
-- type-only workflows can use `infer_library_file` with the same resolver setup.
-- compile-only workflows can use `Compiler::compile_library_file` with the same resolver setup.
+- type-only workflows can use `infer_module_file` with the same resolver setup.
+- compile-only workflows can use `Compiler::compile_module_file` with the same resolver setup.
 - import clauses (`(*)` / item lists) import exported names into unqualified scope.
 - unqualified imports are context-sensitive: expression positions use values, type positions use
   types, and class/constraint positions use classes.
-- library aliases (`import x as M`) provide qualified access to exported values, types, and classes.
+- module aliases (`import x as M`) provide qualified access to exported values, types, and classes.
 - importing a name only brings in the facets that actually exist under that name.
 
 ### 2) Inject In-Memory Rex Modules
 
-For host-managed modules, add a resolver that maps `library_name` to source text.
+For host-managed modules, add a resolver that maps `module_name` to source text.
 
 ```rust
-use rex_engine::{LibraryId, ResolveRequest, ResolvedLibrary};
+use rex_engine::{ModuleId, ResolveRequest, ResolvedModule};
 use rex::{Engine, GasMeter};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -215,12 +215,12 @@ let modules = Arc::new(HashMap::from([
 engine.add_resolver("host-map", {
     let modules = modules.clone();
     move |req: ResolveRequest| {
-        let Some(source) = modules.get(&req.library_name) else {
+        let Some(source) = modules.get(&req.module_name) else {
             return Ok(None);
         };
-        Ok(Some(ResolvedLibrary {
-            id: LibraryId::Virtual(format!("host:{}", req.library_name)),
-            content: rex::ResolvedLibraryContent::Source(source.clone()),
+        Ok(Some(ResolvedModule {
+            id: ModuleId::Virtual(format!("host:{}", req.module_name)),
+            content: rex::ResolvedModuleContent::Source(source.clone()),
         }))
     }
 });
@@ -236,9 +236,9 @@ println!("{value}");
 
 This is the common embedder case.
 
-Use `Library` + `Engine::inject_library(...)`:
+Use `Module` + `Engine::inject_module(...)`:
 
-1. Create a `Library`.
+1. Create a `Module`.
 2. Add exports:
    - typed exports with `export` / `export_async`
    - runtime/native exports with `export_native` / `export_native_async`
@@ -246,15 +246,15 @@ Use `Library` + `Engine::inject_library(...)`:
    - optional structured declarations with `add_rex_adt` / `add_adt_decl`
 3. Inject it into the engine.
 
-`Library::add_rex_adt::<T>()` now stages the full acyclic ADT family reachable from `T`.
+`Module::add_rex_adt::<T>()` now stages the full acyclic ADT family reachable from `T`.
 This is driven by `RexType::collect_rex_family(...)`: ADT types contribute declarations there,
 while leaf Rex types inherit a no-op default. For example, if `Label` contains a `Side`, staging
 `Label` is enough; you do not need to stage `Side` separately. Cyclic ADT families are still
 rejected.
 
-`Library` also exposes its staged `raw_declarations`, `structured_decls`, and `exports` vectors
-directly. That is useful if you want to inspect, transform, or assemble a library in multiple
-passes before calling `Engine::inject_library`.
+`Module` also exposes its staged `raw_declarations`, `structured_decls`, and `exports` vectors
+directly. That is useful if you want to inspect, transform, or assemble a module in multiple
+passes before calling `Engine::inject_module`.
 
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
 `Err(...)`, evaluation fails with that engine error.
@@ -262,16 +262,16 @@ passes before calling `Engine::inject_library`.
 `Future<Output = Result<T, EngineError>>`.
 
 ```rust
-use rex_engine::{Engine, Library};
+use rex_engine::{Engine, Module};
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
-let mut math = Library::new("acme.math");
+let mut math = Module::new("acme.math");
 math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
-engine.inject_library(math)?;
+engine.inject_module(math)?;
 
 let mut gas = GasMeter::default();
 let value = engine
@@ -283,20 +283,20 @@ let value = engine
 println!("{value}");
 ```
 
-You can declare ADTs directly inside an injected host library:
+You can declare ADTs directly inside an injected host module:
 
 ```rust
-use rex_engine::{Engine, Library};
+use rex_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
-let mut m = Library::new("acme.status");
+let mut m = Module::new("acme.status");
 m.add_raw_declaration("pub type Status = Ready | Failed string")?;
-engine.inject_library(m)?;
+engine.inject_module(m)?;
 ```
 
-Then Rex code can import and use those names from the library:
+Then Rex code can import and use those names from the module:
 
 ```rex
 import acme.status (Status, Failed)
@@ -310,26 +310,26 @@ match (fail "boom")
 `Status` is used here in type position, while `Failed` is used in expression/pattern positions.
 They are imported through the same name-based mechanism.
 
-Internally this generates library declarations and injects host implementations under qualified
-library export symbols.
+Internally this generates module declarations and injects host implementations under qualified
+module export symbols.
 
-If you need to construct exports separately (for example to build a library from plugin metadata),
+If you need to construct exports separately (for example to build a module from plugin metadata),
 you can use:
 
 - `Export::from_handler` / `Export::from_async_handler` (typed handlers)
 - `Export::from_native` / `Export::from_native_async` (runtime pointer handlers)
 
-Then add them via `Library::add_export`, or push them into `Library::exports` directly if you are
-assembling the library programmatically.
+Then add them via `Module::add_export`, or push them into `Module::exports` directly if you are
+assembling the module programmatically.
 
 This example shows how to use Rust enums and structs as Rex-facing types with ADTs declared inside
-the library itself. The host function accepts a Rust `Label` (containing a Rust `Side` enum), and
+the module itself. The host function accepts a Rust `Label` (containing a Rust `Side` enum), and
 Rex code calls it through `sample.render_label`.
 
 Example:
 
 ```rust
-use rex::{Engine, EngineError, Library, Rex};
+use rex::{Engine, EngineError, Module, Rex};
 use rex_util::GasMeter;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -354,12 +354,12 @@ fn render_label(label: Label) -> String {
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
-let mut m = Library::new("sample");
+let mut m = Module::new("sample");
 m.add_rex_adt::<Label>()?;
 m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
 })?;
-engine.inject_library(m)?;
+engine.inject_module(m)?;
 
 let mut gas = GasMeter::default();
 let value = engine
@@ -385,11 +385,11 @@ In that example:
 
 ### 3a) Runtime-Defined Signatures (`Pointer` APIs)
 
-If your host determines function signatures/behavior at runtime, use the native library export
+If your host determines function signatures/behavior at runtime, use the native module export
 APIs and provide an explicit `Scheme` + arity:
 
-- `Library::export_native`
-- `Library::export_native_async`
+- `Module::export_native`
+- `Module::export_native_async`
 
 These callbacks receive `EvaluatorRef<'_, State>` (not just `&State`), so they can:
 
@@ -399,13 +399,13 @@ These callbacks receive `EvaluatorRef<'_, State>` (not just `&State`), so they c
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{Engine, EvaluatorRef, Library, Pointer};
+use rex_engine::{Engine, EvaluatorRef, Module, Pointer};
 use rex::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
-let mut m = Library::new("acme.dynamic");
+let mut m = Module::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
 m.export_native("id_ptr", scheme.clone(), 1, |_engine: EvaluatorRef<'_, ()>, _typ: &Type, args: &[Pointer]| {
@@ -416,7 +416,7 @@ m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(
     async move { engine.heap.alloc_i32(42) }.boxed_local()
 })?;
 
-engine.inject_library(m)?;
+engine.inject_module(m)?;
 ```
 
 `Scheme` and arity must agree. Registration returns an error if the type does not accept the
@@ -424,16 +424,16 @@ provided number of arguments.
 
 ### 4) Custom Resolver Contract (Advanced)
 
-If you need dynamic/nonstandard library loading behavior, you can still use raw resolvers.
+If you need dynamic/nonstandard module loading behavior, you can still use raw resolvers.
 
 Resolver contract:
 
-- return `Ok(Some(ResolvedLibrary { ... }))` when you can satisfy the library.
+- return `Ok(Some(ResolvedModule { ... }))` when you can satisfy the module.
 - return `Ok(None)` to let the next resolver try.
-- return `Err(...)` for hard failures (invalid library payload, policy violations, etc.).
+- return `Err(...)` for hard failures (invalid module payload, policy violations, etc.).
 
-`ResolvedLibrary` can carry either `ResolvedLibraryContent::Source(...)` for real Rex source or
-`ResolvedLibraryContent::Program(...)` for preconstructed structured modules.
+`ResolvedModule` can carry either `ResolvedModuleContent::Source(...)` for real Rex source or
+`ResolvedModuleContent::Program(...)` for preconstructed structured modules.
 
 ### 5) Snippets That Import Relative Modules
 
@@ -473,11 +473,11 @@ let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
     roles: vec!["admin".into(), "editor".into()],
 })?;
 
-let mut globals = Library::global();
+let mut globals = Module::global();
 globals.export("have_role", |state, role: String| {
     Ok(state.roles.iter().any(|r| r == &role))
 })?;
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 ```
 
 ## Array/List Interop at Host Boundaries
@@ -631,9 +631,9 @@ let mut parser = Parser::new(tokens);
 let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
-let mut globals = Library::global();
+let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 let mut gas = GasMeter::default();
 let value = engine
     .eval_with_gas(program.expr.as_ref(), &mut gas)
@@ -645,17 +645,17 @@ println!("{value}");
 
 `rex-engine` is the boundary where Rust provides implementations for Rex values.
 
-For host-provided *modules*, prefer `Library` + `inject_library` (above). For root-scope values
-or functions, use `Library::global()` and inject that staged library into the engine.
+For host-provided *modules*, prefer `Module` + `inject_module` (above). For root-scope values
+or functions, use `Module::global()` and inject that staged module into the engine.
 
 ```rust
-use rex_engine::{Engine, Library};
+use rex_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
-let mut globals = Library::global();
+let mut globals = Module::global();
 globals.export_value("answer", 42i32)?;
 globals.export("inc", |_state, x: i32| { Ok(x + 1) })?;
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 ```
 
 ### Integer Literal Overloading with Host Natives
@@ -664,14 +664,14 @@ Integer literals are overloaded (`Integral a`) and can specialize at call sites.
 direct calls, `let` bindings, and lambda wrappers:
 
 ```rust
-use rex_engine::{Engine, Library};
+use rex_engine::{Engine, Module};
 use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
-let mut globals = Library::global();
+let mut globals = Module::global();
 globals.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
 globals.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 
 for code in [
     "num_u8 4",
@@ -694,17 +694,17 @@ while `num_u32 (-3)` is a type error.
 
 ### Async Natives
 
-If your host functions are async, stage them in a library with `export_async` and evaluate with
+If your host functions are async, stage them in a module with `export_async` and evaluate with
 `Engine::eval_with_gas`.
 
 ```rust
-use rex_engine::{Engine, Library};
+use rex_engine::{Engine, Module};
 use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
-let mut globals = Library::global();
+let mut globals = Module::global();
 globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 
 let tokens = Token::tokenize("inc 1")?;
 let mut parser = Parser::new(tokens);
@@ -723,7 +723,7 @@ trigger it from another thread/task, and the engine will stop evaluation with `E
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{CancellationToken, Engine, EngineError, Library};
+use rex_engine::{CancellationToken, Engine, EngineError, Module};
 use rex::{BuiltinTypeId, Scheme, Type};
 use rex_util::{GasCosts, GasMeter};
 
@@ -736,7 +736,7 @@ let expr = parser
 
 let mut engine = Engine::with_prelude(())?;
 let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-let mut globals = Library::global();
+let mut globals = Module::global();
 globals.export_native_async_cancellable("stall", scheme, 0, |engine, token: CancellationToken, _, _args| {
         async move {
             token.cancelled().await;
@@ -744,7 +744,7 @@ globals.export_native_async_cancellable("stall", scheme, 0, |engine, token: Canc
         }
         .boxed_local()
     })?;
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 
 let token = engine.cancellation_token();
 std::thread::spawn(move || {
@@ -852,22 +852,22 @@ without `#[derive(Rex)]`.
 
 - Use `Engine::adt_decl_from_type(...)` to seed an ADT declaration from a Rex type head.
 - Add variants with `AdtDecl::add_variant(...)`.
-- Stage it with `Library::add_adt_decl(...)`, then inject that library with `Engine::inject_library(...)`.
+- Stage it with `Module::add_adt_decl(...)`, then inject that module with `Engine::inject_module(...)`.
 
-`Library::add_adt_decl(...)` is the low-level single-ADT staging primitive. If you are building
-several ADTs manually, prefer batching them in one library with `add_adt_family(...)`.
+`Module::add_adt_decl(...)` is the low-level single-ADT staging primitive. If you are building
+several ADTs manually, prefer batching them in one module with `add_adt_family(...)`.
 
 ```rust
-use rex::{Engine, Library, RexType, Type, sym};
+use rex::{Engine, Module, RexType, Type, sym};
 
 let mut engine = Engine::with_prelude(())?;
-let mut globals = Library::global();
+let mut globals = Module::global();
 
 let mut adt = engine.adt_decl_from_type(&Type::con("PrimitiveEither", 0))?;
 adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
 adt.add_variant(sym("Count"), vec![i32::rex_type()]);
 globals.add_adt_decl(adt)?;
-engine.inject_library(globals)?;
+engine.inject_module(globals)?;
 ```
 
 If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls, implement

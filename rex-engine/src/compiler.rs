@@ -10,9 +10,9 @@ use crate::engine::{
     ClassMethodRequirement, CompiledExterns, CompiledProgram, Engine, NativeRequirement,
     RUNTIME_LINK_ABI_VERSION, RuntimeLinkContract, collect_pattern_bindings, type_check_engine,
 };
-use crate::libraries::{
-    LibraryExports, LibraryId, ReplState, ResolvedLibrary, decl_type_names, decl_value_names,
-    exports_from_program, parse_program_from_source, prefix_for_library, rewrite_import_uses,
+use crate::modules::{
+    ModuleExports, ModuleId, ReplState, ResolvedModule, decl_type_names, decl_value_names,
+    exports_from_program, parse_program_from_source, prefix_for_module, rewrite_import_uses,
     validate_import_uses,
 };
 use crate::{CompileError, EngineError, Env};
@@ -310,11 +310,11 @@ where
     fn rewrite_and_inject_program(
         &mut self,
         program: &Program,
-        importer: Option<LibraryId>,
+        importer: Option<ModuleId>,
         prefix: &str,
         gas: &mut GasMeter,
-        loaded: &mut BTreeMap<LibraryId, LibraryExports>,
-        loading: &mut BTreeSet<LibraryId>,
+        loaded: &mut BTreeMap<ModuleId, ModuleExports>,
+        loading: &mut BTreeSet<ModuleId>,
     ) -> Result<Program, EngineError> {
         let rewritten = self
             .engine
@@ -343,23 +343,23 @@ where
             .map_err(CompileError::from)
     }
 
-    pub fn compile_library_file(
+    pub fn compile_module_file(
         &mut self,
         path: impl AsRef<Path>,
         gas: &mut GasMeter,
     ) -> Result<CompiledProgram, CompileError> {
         let (id, bytes) = self
             .engine
-            .read_local_library_bytes(path.as_ref())
+            .read_local_module_bytes(path.as_ref())
             .map_err(CompileError::from)?;
         let source = self
             .engine
-            .decode_local_library_source(&id, bytes)
+            .decode_local_module_source(&id, bytes)
             .map_err(CompileError::from)?;
-        self.compile_library_source(
-            ResolvedLibrary {
+        self.compile_module_source(
+            ResolvedModule {
                 id,
-                content: crate::libraries::ResolvedLibraryContent::Source(source),
+                content: crate::modules::ResolvedModuleContent::Source(source),
             },
             gas,
         )
@@ -386,7 +386,7 @@ where
         let importer = state
             .importer_path
             .as_ref()
-            .map(|p| LibraryId::Local { path: p.clone() });
+            .map(|p| ModuleId::Local { path: p.clone() });
 
         let mut local_values = state.defined_values.clone();
         local_values.extend(decl_value_names(&program.decls));
@@ -396,7 +396,7 @@ where
             state.imported_types.keys().cloned().collect();
         let existing_imported_classes: BTreeSet<Symbol> =
             state.imported_classes.keys().cloned().collect();
-        let import_policy = crate::libraries::ImportBindingPolicy {
+        let import_policy = crate::modules::ImportBindingPolicy {
             forbidden_values: &local_values,
             forbidden_types: &local_types,
             existing_imported_values: Some(&existing_imported),
@@ -438,18 +438,18 @@ where
         self.compile_expr_internal(rewritten.expr.as_ref())
     }
 
-    fn compile_library_source(
+    fn compile_module_source(
         &mut self,
-        resolved: ResolvedLibrary,
+        resolved: ResolvedModule,
         gas: &mut GasMeter,
     ) -> Result<CompiledProgram, EngineError> {
-        let mut loaded: BTreeMap<LibraryId, LibraryExports> = BTreeMap::new();
-        let mut loading: BTreeSet<LibraryId> = BTreeSet::new();
+        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
 
         loading.insert(resolved.id.clone());
 
-        let prefix = prefix_for_library(&resolved.id);
-        let program = crate::libraries::program_from_resolved(&resolved, &mut *gas)?;
+        let prefix = prefix_for_module(&resolved.id);
+        let program = crate::modules::program_from_resolved(&resolved, &mut *gas)?;
         let rewritten = self.rewrite_and_inject_program(
             &program,
             Some(resolved.id.clone()),
@@ -474,10 +474,10 @@ where
     ) -> Result<CompiledProgram, EngineError> {
         let program = parse_program_from_source(source, None, Some(&mut *gas))?;
 
-        let importer = importer_path.map(|p| LibraryId::Local { path: p });
+        let importer = importer_path.map(|p| ModuleId::Local { path: p });
         let prefix = format!("@snippet{}", Uuid::new_v4());
-        let mut loaded: BTreeMap<LibraryId, LibraryExports> = BTreeMap::new();
-        let mut loading: BTreeSet<LibraryId> = BTreeSet::new();
+        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
         let rewritten = self.rewrite_and_inject_program(
             &program,
             importer,

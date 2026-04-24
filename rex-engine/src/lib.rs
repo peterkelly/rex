@@ -9,7 +9,7 @@ mod engine;
 mod env;
 mod error;
 mod evaluator;
-mod libraries;
+mod modules;
 mod prelude;
 mod runtime_env;
 mod stack;
@@ -21,17 +21,17 @@ pub use engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, ClassMethodCapability,
     ClassMethodRequirement, CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine,
     EngineOptions, Export, Handler, NativeCapability, NativeFn, NativeFuture, NativeRequirement,
-    OverloadedFn, PRELUDE_LIBRARY_NAME, PreludeMode, ROOT_LIBRARY_NAME, RexAdt, RexDefault,
+    OverloadedFn, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault,
     RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable,
     collect_adts_error_to_engine,
 };
 pub use env::Env;
-pub use error::{CompileError, EngineError, EvalError, ExecutionError, LibraryError};
+pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
 pub use evaluator::{Evaluator, EvaluatorRef};
-pub use libraries::virtual_export_name;
-pub use libraries::{
-    CanonicalSymbol, Library, LibraryExports, LibraryId, LibraryInstance, LibraryKey, ReplState,
-    ResolveRequest, ResolvedLibrary, ResolvedLibraryContent, SymbolKind,
+pub use modules::virtual_export_name;
+pub use modules::{
+    CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ReplState,
+    ResolveRequest, ResolvedModule, ResolvedModuleContent, SymbolKind,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
 pub use stack::DEFAULT_STACK_SIZE_BYTES;

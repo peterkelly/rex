@@ -4,7 +4,7 @@ use std::sync::Arc;
 use futures::FutureExt;
 use rex_ast::expr::{Expr, Program, sym};
 use rex_engine::{
-    CancellationToken, Engine, EngineError, Library, ReplState, Value, assert_pointer_eq,
+    CancellationToken, Engine, EngineError, Module, ReplState, Value, assert_pointer_eq,
 };
 use rex_lexer::Token;
 use rex_parser::Parser;
@@ -41,11 +41,11 @@ fn unlimited_gas() -> GasMeter {
 
 fn inject_globals(
     engine: &mut Engine,
-    build: impl FnOnce(&mut Library<()>) -> Result<(), EngineError>,
+    build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
 ) {
-    let mut library = Library::<()>::global();
-    build(&mut library).unwrap();
-    engine.inject_library(library).unwrap();
+    let mut module = Module::<()>::global();
+    build(&mut module).unwrap();
+    engine.inject_module(module).unwrap();
 }
 
 #[test]
@@ -54,23 +54,23 @@ fn registry_markdown_lists_core_sections() {
     let doc = engine.registry_markdown();
 
     assert!(doc.contains("# Engine Registry"));
-    assert!(doc.contains("## Library Index"));
-    assert!(doc.contains("## Libraries"));
+    assert!(doc.contains("## Module Index"));
+    assert!(doc.contains("## Modules"));
     assert!(doc.contains("## ADTs"));
     assert!(doc.contains("## Functions and Values"));
     assert!(doc.contains("## Type Classes"));
     assert!(doc.contains("## Native Implementations"));
-    assert!(doc.contains("[`virtual:Prelude`](#library-virtual-prelude)"));
-    assert!(doc.contains("<a id=\"library-virtual-prelude\"></a>"));
+    assert!(doc.contains("[`virtual:Prelude`](#module-virtual-prelude)"));
+    assert!(doc.contains("<a id=\"module-virtual-prelude\"></a>"));
     assert!(doc.contains("### `virtual:Prelude`"));
     assert!(doc.contains("`List`"));
     assert!(doc.contains("`Option`"));
 }
 
 #[test]
-fn library_add_adt_decls_from_types_collects_nested_unique_adts() {
+fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    let mut library = Library::new("acme.types");
+    let mut module = Module::new("acme.types");
     let a = Type::var(TypeVar::new(0, Some(sym("a"))));
     let types = vec![
         Type::fun(
@@ -80,19 +80,17 @@ fn library_add_adt_decls_from_types_collects_nested_unique_adts() {
         Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
     ];
 
-    library
-        .add_adt_decls_from_types(&mut engine, types)
-        .unwrap();
+    module.add_adt_decls_from_types(&mut engine, types).unwrap();
 
-    assert_eq!(library.structured_decls.len(), 2);
+    assert_eq!(module.structured_decls.len(), 2);
     assert!(
-        library
+        module
             .structured_decls
             .iter()
             .any(|d| matches!(d, rex_ast::expr::Decl::Type(td) if td.name == sym("Foo")))
     );
     assert!(
-        library
+        module
             .structured_decls
             .iter()
             .any(|d| matches!(d, rex_ast::expr::Decl::Type(td) if td.name == sym("Bar")))
@@ -100,12 +98,12 @@ fn library_add_adt_decls_from_types_collects_nested_unique_adts() {
 }
 
 #[test]
-fn library_add_adt_decls_from_types_rejects_conflicting_adts() {
+fn module_add_adt_decls_from_types_rejects_conflicting_adts() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    let mut library = Library::new("acme.types");
+    let mut module = Module::new("acme.types");
     let types = vec![Type::user_con("Thing", 1), Type::user_con("Thing", 2)];
 
-    let err = library
+    let err = module
         .add_adt_decls_from_types(&mut engine, types)
         .unwrap_err();
 
@@ -124,8 +122,8 @@ fn inject_adt_family_rejects_cycles() {
     let mut b = engine.adt_decl("B", &[]);
     b.add_variant(sym("B"), vec![Type::con("A", 0)]);
 
-    let mut library = Library::<()>::global();
-    let err = library.add_adt_family(vec![a, b]).unwrap_err();
+    let mut module = Module::<()>::global();
+    let err = module.add_adt_family(vec![a, b]).unwrap_err();
     assert!(matches!(err, EngineError::Custom(_)));
     assert!(err.to_string().contains("cyclic ADT auto-registration"));
 }
@@ -164,8 +162,7 @@ async fn repl_persists_import_aliases() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let examples =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex-cli/examples/libraries_basic");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex-cli/examples/modules_basic");
     engine.add_include_resolver(&examples).unwrap();
 
     let mut state = ReplState::new();
@@ -196,8 +193,7 @@ async fn repl_persists_imported_values() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let examples =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex-cli/examples/libraries_basic");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex-cli/examples/modules_basic");
     engine.add_include_resolver(&examples).unwrap();
 
     let mut state = ReplState::new();
@@ -223,16 +219,16 @@ async fn repl_persists_imported_values() {
 }
 
 #[tokio::test]
-async fn injected_library_can_define_pub_adt_declarations() {
+async fn injected_module_can_define_pub_adt_declarations() {
     let mut gas = unlimited_gas();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("acme.status");
-    library
+    let mut module = Module::new("acme.status");
+    module
         .add_raw_declaration("pub type Status = Ready | Failed string")
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value, _ty) = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
@@ -265,8 +261,8 @@ async fn eval_can_be_cancelled_while_waiting_on_async_native() {
 
     let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |library| {
-        library.export_native_async_cancellable(
+    inject_globals(&mut engine, |module| {
+        module.export_native_async_cancellable(
             "stall",
             scheme,
             0,
@@ -310,8 +306,8 @@ async fn eval_can_be_cancelled_while_waiting_on_non_cancellable_async_native() {
     let mut engine = Engine::with_prelude(()).unwrap();
 
     let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-    inject_globals(&mut engine, |library| {
-        library.export_async("stall", move |_state: &()| {
+    inject_globals(&mut engine, |module| {
+        module.export_async("stall", move |_state: &()| {
             let started_tx = started_tx.clone();
             async move {
                 let _ = started_tx.send(());
@@ -347,8 +343,8 @@ async fn native_per_impl_gas_cost_is_charged() {
     let expr = parse("foo");
     let mut engine = Engine::with_prelude(()).unwrap();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |library| {
-        library.export_native_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
+    inject_globals(&mut engine, |module| {
+        module.export_native_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
             engine.heap.alloc_i32(1)
         })
     });
@@ -379,8 +375,8 @@ async fn native_per_impl_gas_cost_is_charged() {
 async fn export_value_typed_registers_global_value() {
     let expr = parse("answer");
     let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |library| {
-        library.export_value_typed("answer", Type::builtin(BuiltinTypeId::I32), Value::I32(42))
+    inject_globals(&mut engine, |module| {
+        module.export_value_typed("answer", Type::builtin(BuiltinTypeId::I32), Value::I32(42))
     });
 
     let mut gas = unlimited_gas();
@@ -400,8 +396,8 @@ async fn async_native_per_impl_gas_cost_is_charged() {
     let expr = parse("foo");
     let mut engine = Engine::with_prelude(()).unwrap();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |library| {
-        library.export_native_async_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
+    inject_globals(&mut engine, |module| {
+        module.export_native_async_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
             async move { engine.heap.alloc_i32(1) }.boxed()
         })
     });
@@ -433,8 +429,8 @@ async fn cancellable_async_native_per_impl_gas_cost_is_charged() {
     let expr = parse("foo");
     let mut engine = Engine::with_prelude(()).unwrap();
     let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |library| {
-        library.export_native_async_cancellable_with_gas_cost(
+    inject_globals(&mut engine, |module| {
+        module.export_native_async_cancellable_with_gas_cost(
             "foo",
             scheme,
             0,
@@ -479,9 +475,9 @@ async fn record_update_requires_known_variant_for_sum_types() {
         "#,
     );
     let mut engine = engine_with_arith();
-    let mut library = Library::global();
-    library.add_decls(program.decls.clone());
-    engine.inject_library(library).unwrap();
+    let mut module = Module::global();
+    module.add_decls(program.decls.clone());
+    engine.inject_module(module).unwrap();
     let mut gas = unlimited_gas();
     match rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),

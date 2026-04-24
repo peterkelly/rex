@@ -89,7 +89,7 @@ Runtime conversion traits are pointer-centric:
 - `IntoPointer`
 - `FromPointer`
 
-Native injection and prelude paths pass pointers by default, including library runtime exports
+Native injection and prelude paths pass pointers by default, including module runtime exports
 (`export_native` / `export_native_async`). These callbacks receive `EvaluatorRef<'_, State>`, so they can allocate through
 `engine.heap` and inspect host state via `engine.state`. `Value` is used where direct payload
 inspection is required.

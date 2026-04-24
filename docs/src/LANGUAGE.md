@@ -29,8 +29,8 @@ in
 
 ## Modules and Imports
 
-Rex libraries are `.rex` files. Imports are top-level declarations.
-Library files are declaration-only: they do not have a top-level expression result. To evaluate an
+Rex modules are `.rex` files. Imports are top-level declarations.
+Module files are declaration-only: they do not have a top-level expression result. To evaluate an
 expression, use snippet/REPL/program entrypoints.
 
 Supported forms:
@@ -43,7 +43,7 @@ import foo.bar (x, y as z)
 
 Semantics:
 
-- `import foo.bar as Bar` imports a library alias; use qualified access (`Bar.name`).
+- `import foo.bar as Bar` imports a module alias; use qualified access (`Bar.name`).
 - Alias-qualified lookup is namespace-aware:
   - expression/pattern positions use exported values and constructors (`Bar.value`).
   - type positions use exported types (`Bar.Type`).
@@ -55,14 +55,14 @@ Semantics:
   - type positions use the imported type facet
   - class-constraint positions use the imported class facet
 - Importing a name does not invent missing facets. For example, importing a type name does not make
-  it usable as a value unless the library also exports a value with that same spelling.
+  it usable as a value unless the module also exports a value with that same spelling.
 - A single exported name may carry multiple facets at once. ADTs commonly do this: `Boxed` can be
   both a type name and a constructor value.
-- Library alias imports and clause imports are mutually exclusive in one import declaration.
+- Module alias imports and clause imports are mutually exclusive in one import declaration.
 - Only `pub` names are importable.
 - If two imports introduce the same unqualified name (including via `(*)`), resolution fails with
-  a library error.
-- Importing a name that conflicts with a local top-level declaration is a library error.
+  a module error.
+- Importing a name that conflicts with a local top-level declaration is a module error.
 - Lexical bindings (`let`, lambda params, pattern bindings) can shadow imported names.
 - For binder forms with annotations, the annotation is resolved before the new binder name enters
   expression scope.
@@ -92,7 +92,7 @@ named `Status`.
 Path resolution:
 
 - `foo.bar` resolves to `foo/bar.rex`.
-- Local library paths resolve relative to the importing file.
+- Local module paths resolve relative to the importing file.
 - Leading `super` path segments walk up directories (for example `super.core.calc`).
 
 ## Lexical Structure
@@ -233,7 +233,7 @@ Patterns include:
 - wildcards: `_`
 - variables: `x`
 - constructors: `Ok x`, `Cons h t`, `Pair a b`
-- qualified constructors via library alias: `Sample.Right x`
+- qualified constructors via module alias: `Sample.Right x`
 - list patterns: `[]`, `[x]`, `[x, y]`
 - cons patterns: `h::t` (equivalent to `Cons h t`)
 - dict key presence: `{foo, bar}` (keys are identifiers)
@@ -311,7 +311,7 @@ Annotations can mention ADTs and prelude types:
 let xs: List i32 = [1, 2, 3] in xs
 ```
 
-They can also use library-qualified type names:
+They can also use module-qualified type names:
 
 ```rex
 import dep as D
@@ -353,7 +353,7 @@ fn add : i32 -> i32 -> i32 = \x y -> x + y
 ```
 
 Top-level `fn` declarations are mutually recursive, so they can refer to each other in the same
-library:
+module:
 
 ```rex,interactive
 fn even : i32 -> bool = \n ->
@@ -403,7 +403,7 @@ instance Size (List t)
       when Cons _ rest -> 1 + size rest
 ```
 
-The class in an instance header may be library-qualified:
+The class in an instance header may be module-qualified:
 
 ```rex
 import dep as D

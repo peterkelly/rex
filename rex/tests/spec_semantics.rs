@@ -1,5 +1,5 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Library, Parser, Pointer, Token, Type,
+    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Module, Parser, Pointer, Token, Type,
     TypeError, Value,
 };
 
@@ -15,9 +15,9 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program(&mut GasMeter::default()).unwrap();
     let mut engine = Engine::with_prelude(()).unwrap();
-    let mut library = Library::global();
-    library.add_decls(program.decls.clone());
-    engine.inject_library(library)?;
+    let mut module = Module::global();
+    module.add_decls(program.decls.clone());
+    engine.inject_module(module)?;
     let mut gas = GasMeter::default();
     let (pointer, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),

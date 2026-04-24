@@ -8,44 +8,44 @@ use rex_typesystem::types::Type;
 use crate::Pointer;
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum LibraryId {
+pub enum ModuleId {
     Local { path: PathBuf },
     Remote(String),
     Virtual(String),
 }
 
-impl fmt::Display for LibraryId {
+impl fmt::Display for ModuleId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LibraryId::Local { path } => write!(f, "file:{}", path.display()),
-            LibraryId::Remote(url) => write!(f, "{url}"),
-            LibraryId::Virtual(name) => write!(f, "virtual:{name}"),
+            ModuleId::Local { path } => write!(f, "file:{}", path.display()),
+            ModuleId::Remote(url) => write!(f, "{url}"),
+            ModuleId::Virtual(name) => write!(f, "virtual:{name}"),
         }
     }
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ResolveRequest {
-    pub library_name: String,
-    pub importer: Option<LibraryId>,
+    pub module_name: String,
+    pub importer: Option<ModuleId>,
 }
 
 #[derive(Clone, Debug)]
-pub enum ResolvedLibraryContent {
+pub enum ResolvedModuleContent {
     Source(String),
     Program(Program),
 }
 
 #[derive(Clone, Debug)]
-pub struct ResolvedLibrary {
-    pub id: LibraryId,
-    pub content: ResolvedLibraryContent,
+pub struct ResolvedModule {
+    pub id: ModuleId,
+    pub content: ResolvedModuleContent,
 }
 
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub struct LibraryKey(u64);
+pub struct ModuleKey(u64);
 
-impl LibraryKey {
+impl ModuleKey {
     pub fn as_u64(self) -> u64 {
         self.0
     }
@@ -60,35 +60,30 @@ pub enum SymbolKind {
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct CanonicalSymbol {
-    pub library: LibraryKey,
+    pub module: ModuleKey,
     pub kind: SymbolKind,
     pub local: Symbol,
     pub symbol: Symbol,
 }
 
 impl CanonicalSymbol {
-    pub fn new(library: LibraryKey, kind: SymbolKind, local: Symbol) -> Self {
+    pub fn new(module: ModuleKey, kind: SymbolKind, local: Symbol) -> Self {
         let symbol = intern(&format!(
             "{}.{}",
-            prefix_for_library_key(library),
+            prefix_for_module_key(module),
             local.as_ref()
         ));
         Self {
-            library,
+            module,
             kind,
             local,
             symbol,
         }
     }
 
-    pub fn from_symbol(
-        library: LibraryKey,
-        kind: SymbolKind,
-        local: Symbol,
-        symbol: Symbol,
-    ) -> Self {
+    pub fn from_symbol(module: ModuleKey, kind: SymbolKind, local: Symbol, symbol: Symbol) -> Self {
         Self {
-            library,
+            module,
             kind,
             local,
             symbol,
@@ -124,11 +119,11 @@ impl Default for ExportEntry {
 }
 
 #[derive(Clone, Default, Debug, Eq, PartialEq)]
-pub struct LibraryExports {
+pub struct ModuleExports {
     pub entries: BTreeMap<Symbol, ExportEntry>,
 }
 
-impl LibraryExports {
+impl ModuleExports {
     pub fn entry(&self, name: &Symbol) -> Option<&ExportEntry> {
         self.entries.get(name)
     }
@@ -189,15 +184,15 @@ impl LibraryExports {
 }
 
 #[derive(Clone)]
-pub struct VirtualLibraryModule {
-    pub exports: LibraryExports,
+pub struct VirtualModule {
+    pub exports: ModuleExports,
     pub decls: Vec<rex_ast::expr::Decl>,
     pub source: Option<String>,
 }
 
 #[derive(Clone, Default)]
 pub struct ReplState {
-    pub(crate) alias_exports: BTreeMap<Symbol, LibraryExports>,
+    pub(crate) alias_exports: BTreeMap<Symbol, ModuleExports>,
     pub(crate) imported_values: BTreeMap<Symbol, CanonicalSymbol>,
     pub(crate) imported_types: BTreeMap<Symbol, CanonicalSymbol>,
     pub(crate) imported_classes: BTreeMap<Symbol, CanonicalSymbol>,
@@ -219,25 +214,25 @@ impl ReplState {
 }
 
 #[derive(Clone)]
-pub struct LibraryInstance {
-    pub id: LibraryId,
-    pub exports: LibraryExports,
+pub struct ModuleInstance {
+    pub id: ModuleId,
+    pub exports: ModuleExports,
     pub init_value: Pointer,
     pub init_type: Type,
     pub source_fingerprint: Option<String>,
 }
 
-pub(crate) fn library_key_for_library(id: &LibraryId) -> LibraryKey {
+pub(crate) fn module_key_for_module(id: &ModuleId) -> ModuleKey {
     // Use a stable hash over stable identity bytes so canonical internal symbols
     // are deterministic across process runs/toolchains.
     // FNV-1a reference:
     // - Fowler, Noll, Vo hash function (public domain), 64-bit variant.
     let mut hash: u64 = 0xcbf29ce484222325;
-    hash_library_identity(&mut hash, id);
-    LibraryKey(hash)
+    hash_module_identity(&mut hash, id);
+    ModuleKey(hash)
 }
 
-fn hash_library_identity(state: &mut u64, id: &LibraryId) {
+fn hash_module_identity(state: &mut u64, id: &ModuleId) {
     fn hash_bytes(state: &mut u64, bytes: &[u8]) {
         for b in bytes {
             *state ^= u64::from(*b);
@@ -246,36 +241,36 @@ fn hash_library_identity(state: &mut u64, id: &LibraryId) {
     }
 
     match id {
-        LibraryId::Local { path } => {
+        ModuleId::Local { path } => {
             hash_bytes(state, b"local:");
             hash_bytes(state, path.as_os_str().as_encoded_bytes());
         }
-        LibraryId::Remote(url) => {
+        ModuleId::Remote(url) => {
             hash_bytes(state, b"remote:");
             hash_bytes(state, url.as_bytes());
         }
-        LibraryId::Virtual(name) => {
+        ModuleId::Virtual(name) => {
             hash_bytes(state, b"virtual:");
             hash_bytes(state, name.as_bytes());
         }
     }
 }
 
-pub(crate) fn prefix_for_library_key(key: LibraryKey) -> String {
+pub(crate) fn prefix_for_module_key(key: ModuleKey) -> String {
     format!("@m{:016x}", key.as_u64())
 }
 
-pub(crate) fn prefix_for_library(id: &LibraryId) -> String {
-    prefix_for_library_key(library_key_for_library(id))
+pub(crate) fn prefix_for_module(id: &ModuleId) -> String {
+    prefix_for_module_key(module_key_for_module(id))
 }
 
 pub(crate) fn qualify(prefix: &str, name: &Symbol) -> Symbol {
     intern(&format!("{prefix}.{}", name.as_ref()))
 }
 
-pub fn virtual_export_name(library: &str, export: &str) -> String {
-    let id = LibraryId::Virtual(library.to_string());
-    let key = library_key_for_library(&id);
+pub fn virtual_export_name(module: &str, export: &str) -> String {
+    let id = ModuleId::Virtual(module.to_string());
+    let key = module_key_for_module(&id);
     CanonicalSymbol::new(key, SymbolKind::Value, intern(export))
         .symbol()
         .to_string()

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::FutureExt;
 use rex_ast::expr::sym;
 use rex_engine::{
-    Engine, EngineError, EngineOptions, EvaluatorRef, Library, Pointer, PreludeMode, RexAdt,
+    Engine, EngineError, EngineOptions, EvaluatorRef, Module, Pointer, PreludeMode, RexAdt,
     RexType, Value, pointer_display,
 };
 use rex_typesystem::{
@@ -120,7 +120,7 @@ async fn engine_options_can_disable_prelude() {
     assert!(msg.contains("map"), "unexpected error: {msg}");
 }
 
-async fn eval_library_file<State: Clone + Send + Sync + 'static>(
+async fn eval_module_file<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     path: &Path,
 ) -> Result<(Pointer, Type), rex_engine::EngineError> {
@@ -176,13 +176,13 @@ macro_rules! pvals {
 }
 
 #[tokio::test]
-async fn library_import_local_pub() {
-    let dir = temp_dir("library_import_local_pub");
+async fn module_import_local_pub() {
+    let dir = temp_dir("module_import_local_pub");
     let main = dir.join("main.rex");
-    let library = dir.join("foo").join("bar.rex");
+    let module = dir.join("foo").join("bar.rex");
 
     write_file(
-        &library,
+        &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y
         fn hidden x: i32 -> i32 = x + 1
@@ -199,7 +199,7 @@ async fn library_import_local_pub() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
@@ -216,22 +216,22 @@ async fn library_import_local_pub() {
 }
 
 #[tokio::test]
-async fn eval_library_file_reloads_when_local_file_changes() {
-    let dir = temp_dir("eval_library_file_reloads_when_local_file_changes");
-    let library = dir.join("foo.rex");
+async fn eval_module_file_reloads_when_local_file_changes() {
+    let dir = temp_dir("eval_module_file_reloads_when_local_file_changes");
+    let module = dir.join("foo.rex");
     let importer = dir.join("main.rex");
     write_file(&importer, "()");
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    write_file(&library, "pub fn value x: i32 -> i32 = x + 1");
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
     let mut gas = unlimited_gas();
     let _ = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval_library_file(&library, &mut gas)
+    .eval_module_file(&module, &mut gas)
     .await
     .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
@@ -243,15 +243,15 @@ async fn eval_library_file_reloads_when_local_file_changes() {
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 
-    // Edit the same local library path and ensure the engine invalidates path-keyed
-    // library cache entries before reloading.
-    write_file(&library, "pub fn value x: i32 -> i32 = x + 2");
+    // Edit the same local module path and ensure the engine invalidates path-keyed
+    // module cache entries before reloading.
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
     let mut gas = unlimited_gas();
     let _ = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval_library_file(&library, &mut gas)
+    .eval_module_file(&module, &mut gas)
     .await
     .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
@@ -267,11 +267,11 @@ async fn eval_library_file_reloads_when_local_file_changes() {
 #[tokio::test]
 async fn snippet_import_reloads_when_local_module_changes() {
     let dir = temp_dir("snippet_import_reloads_when_local_module_changes");
-    let library = dir.join("foo.rex");
+    let module = dir.join("foo.rex");
     let importer = dir.join("main.rex");
     write_file(&importer, "()");
 
-    write_file(&library, "pub fn value x: i32 -> i32 = x + 1");
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
@@ -284,9 +284,9 @@ async fn snippet_import_reloads_when_local_module_changes() {
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 
-    // Same library path, changed contents: import resolution must observe updated
-    // source and invalidate stale per-library caches.
-    write_file(&library, "pub fn value x: i32 -> i32 = x + 2");
+    // Same module path, changed contents: import resolution must observe updated
+    // source and invalidate stale per-module caches.
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
         .await
         .unwrap();
@@ -387,8 +387,8 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_can_import_class_exports() {
-    let dir = temp_dir("library_import_selected_clause_can_import_class_exports");
+async fn module_import_selected_clause_can_import_class_exports() {
+    let dir = temp_dir("module_import_selected_clause_can_import_class_exports");
     let dep = dir.join("dep.rex");
     let main = dir.join("main.rex");
 
@@ -414,7 +414,7 @@ async fn library_import_selected_clause_can_import_class_exports() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::I32(v) => assert_eq!(*v, 7),
@@ -492,7 +492,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine.heap.get(&value_ptr).unwrap();
     match value.as_ref() {
@@ -506,17 +506,17 @@ async fn module_injected_from_rust_sync_and_async_exports() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("host.math");
-    library
+    let mut module = Module::new("host.math");
+    module
         .export("inc", |_state: &(), x: i32| Ok(x + 1))
         .unwrap();
-    library
+    module
         .export_async(
             "double_async",
             |_state: &(), x: i32| async move { Ok(x * 2) },
         )
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
@@ -547,8 +547,8 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     let mut engine = Engine::with_prelude(true).unwrap();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("host.ptrsync");
-    library
+    let mut module = Module::new("host.ptrsync");
+    module
         .export_native(
             "pick",
             i32_binop_scheme(),
@@ -561,7 +561,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             },
         )
         .unwrap();
-    library
+    module
         .export_native(
             "heap_i32",
             i32_value_scheme(),
@@ -572,7 +572,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
 
     let expected_type = i32_binop_scheme().typ.clone();
     let typed_called = Arc::new(AtomicBool::new(false));
-    library
+    module
         .export_native("pick_typed", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
             move |engine: EvaluatorRef<'_, bool>, typ: &Type, args: &[Pointer]| {
@@ -587,7 +587,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
         })
         .unwrap();
 
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
@@ -634,12 +634,10 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("host.over");
-    library.export("id", |_state: &(), x: i32| Ok(x)).unwrap();
-    library
-        .export("id", |_state: &(), x: String| Ok(x))
-        .unwrap();
-    engine.inject_library(library).unwrap();
+    let mut module = Module::new("host.over");
+    module.export("id", |_state: &(), x: i32| Ok(x)).unwrap();
+    module.export("id", |_state: &(), x: String| Ok(x)).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
@@ -686,13 +684,13 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
 }
 
 #[tokio::test]
-async fn module_injected_from_rust_exposes_library_local_embedder_types() {
+async fn module_injected_from_rust_exposes_module_local_embedder_types() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("host.delay");
-    library.add_rex_adt::<LocalRunSpec>().unwrap();
-    library
+    let mut module = Module::new("host.delay");
+    module.add_rex_adt::<LocalRunSpec>().unwrap();
+    module
         .export_native(
             "make_run_spec",
             Scheme::new(vec![], vec![], LocalRunSpec::rex_type()),
@@ -702,7 +700,7 @@ async fn module_injected_from_rust_exposes_library_local_embedder_types() {
             },
         )
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (_value_ptr, ty) = eval_snippet(
         &mut engine,
@@ -723,8 +721,8 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     let mut engine = Engine::with_prelude(true).unwrap();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("host.ptrasync");
-    library
+    let mut module = Module::new("host.ptrasync");
+    module
         .export_native_async(
             "pick_async",
             i32_binop_scheme(),
@@ -740,7 +738,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             },
         )
         .unwrap();
-    library
+    module
         .export_native_async(
             "heap_i32_async",
             i32_value_scheme(),
@@ -753,7 +751,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
 
     let expected_type = i32_binop_scheme().typ.clone();
     let typed_called = Arc::new(AtomicBool::new(false));
-    library
+    module
         .export_native_async("pick_typed_async", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
             move |engine: EvaluatorRef<'_, bool>, typ: Type, args: Vec<Pointer>| {
@@ -773,7 +771,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
         })
         .unwrap();
 
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
@@ -817,10 +815,10 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
 
 #[test]
 fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
-    let mut library = Library::new("host.invalid");
+    let mut module = Module::new("host.invalid");
     let unary_scheme = Scheme::new(vec![], vec![], Type::fun(i32_type(), i32_type()));
 
-    let err = library
+    let err = module
         .export_native(
             "bad",
             unary_scheme,
@@ -839,10 +837,10 @@ fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
 
 #[test]
 fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
-    let mut library = Library::new("host.invalid.async");
+    let mut module = Module::new("host.invalid.async");
     let unary_scheme = Scheme::new(vec![], vec![], Type::fun(i32_type(), i32_type()));
 
-    let err = library
+    let err = module
         .export_native_async(
             "bad_async",
             unary_scheme,
@@ -864,14 +862,14 @@ async fn module_injected_from_rust_wildcard_import() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("host.ops");
-    library
+    let mut module = Module::new("host.ops");
+    module
         .export("triple", |_state: &(), x: i32| Ok(x * 3))
         .unwrap();
-    library
+    module
         .export("add", |_state: &(), a: i32, b: i32| Ok(a + b))
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
@@ -901,24 +899,24 @@ async fn module_injected_from_rust_wildcard_import() {
 async fn module_injected_from_rust_rejects_duplicate_module_name() {
     let mut engine = engine_with_prelude();
 
-    let mut one = Library::new("host.dupe");
+    let mut one = Module::new("host.dupe");
     one.export("x", |_state: &(), x: i32| Ok(x)).unwrap();
-    engine.inject_library(one).unwrap();
+    engine.inject_module(one).unwrap();
 
-    let mut two = Library::new("host.dupe");
+    let mut two = Module::new("host.dupe");
     two.export("y", |_state: &(), x: i32| Ok(x)).unwrap();
-    let err = engine.inject_library(two).unwrap_err();
+    let err = engine.inject_module(two).unwrap_err();
     assert!(err.to_string().contains("already injected"));
 }
 
 #[tokio::test]
-async fn library_import_rejects_private_access() {
-    let dir = temp_dir("library_import_rejects_private_access");
+async fn module_import_rejects_private_access() {
+    let dir = temp_dir("module_import_rejects_private_access");
     let main = dir.join("main.rex");
-    let library = dir.join("foo").join("bar.rex");
+    let module = dir.join("foo").join("bar.rex");
 
     write_file(
-        &library,
+        &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y
         fn hidden x: i32 -> i32 = x + 1
@@ -935,7 +933,7 @@ async fn library_import_rejects_private_access() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -944,15 +942,15 @@ async fn library_import_rejects_private_access() {
 }
 
 #[tokio::test]
-async fn library_import_include_roots() {
-    let dir = temp_dir("library_import_include_roots");
+async fn module_import_include_roots() {
+    let dir = temp_dir("module_import_include_roots");
     let include_root = dir.join("includes");
     let main_root = dir.join("src");
     let main = main_root.join("main.rex");
 
-    let library = include_root.join("lib").join("math.rex");
+    let module = include_root.join("lib").join("math.rex");
     write_file(
-        &library,
+        &module,
         r#"
         pub fn inc x: i32 -> i32 = x + 1
         ()
@@ -970,7 +968,7 @@ async fn library_import_include_roots() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     engine.add_include_resolver(&include_root).unwrap();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
@@ -989,9 +987,9 @@ async fn library_import_include_roots() {
 #[tokio::test]
 async fn snippet_can_import_with_explicit_base() {
     let dir = temp_dir("snippet_can_import_with_explicit_base");
-    let library = dir.join("foo").join("bar.rex");
+    let module = dir.join("foo").join("bar.rex");
     write_file(
-        &library,
+        &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y
         ()
@@ -1027,13 +1025,13 @@ async fn snippet_can_import_with_explicit_base() {
 }
 
 #[tokio::test]
-async fn library_import_wildcard_clause() {
-    let dir = temp_dir("library_import_wildcard_clause");
+async fn module_import_wildcard_clause() {
+    let dir = temp_dir("module_import_wildcard_clause");
     let main = dir.join("main.rex");
-    let library = dir.join("foo").join("bar.rex");
+    let module = dir.join("foo").join("bar.rex");
 
     write_file(
-        &library,
+        &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y
         pub fn triple x: i32 -> i32 = x * 3
@@ -1051,7 +1049,7 @@ async fn library_import_wildcard_clause() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
@@ -1068,13 +1066,13 @@ async fn library_import_wildcard_clause() {
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_with_alias() {
-    let dir = temp_dir("library_import_selected_clause_with_alias");
+async fn module_import_selected_clause_with_alias() {
+    let dir = temp_dir("module_import_selected_clause_with_alias");
     let main = dir.join("main.rex");
-    let library = dir.join("foo").join("bar.rex");
+    let module = dir.join("foo").join("bar.rex");
 
     write_file(
-        &library,
+        &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y
         pub fn triple x: i32 -> i32 = x * 3
@@ -1091,7 +1089,7 @@ async fn library_import_selected_clause_with_alias() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = engine
         .heap
@@ -1108,13 +1106,13 @@ async fn library_import_selected_clause_with_alias() {
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_missing_export() {
-    let dir = temp_dir("library_import_selected_clause_missing_export");
+async fn module_import_selected_clause_missing_export() {
+    let dir = temp_dir("module_import_selected_clause_missing_export");
     let main = dir.join("main.rex");
-    let library = dir.join("foo").join("bar.rex");
+    let module = dir.join("foo").join("bar.rex");
 
     write_file(
-        &library,
+        &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y
         ()
@@ -1130,7 +1128,7 @@ async fn library_import_selected_clause_missing_export() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1139,8 +1137,8 @@ async fn library_import_selected_clause_missing_export() {
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_can_import_type_exports() {
-    let dir = temp_dir("library_import_selected_clause_can_import_type_exports");
+async fn module_import_selected_clause_can_import_type_exports() {
+    let dir = temp_dir("module_import_selected_clause_can_import_type_exports");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1163,7 +1161,7 @@ async fn library_import_selected_clause_can_import_type_exports() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1174,8 +1172,8 @@ async fn library_import_selected_clause_can_import_type_exports() {
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_single_name_can_bind_type_and_constructor() {
-    let dir = temp_dir("library_import_selected_clause_single_name_can_bind_type_and_constructor");
+async fn module_import_selected_clause_single_name_can_bind_type_and_constructor() {
+    let dir = temp_dir("module_import_selected_clause_single_name_can_bind_type_and_constructor");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1198,7 +1196,7 @@ async fn library_import_selected_clause_single_name_can_bind_type_and_constructo
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1213,8 +1211,8 @@ async fn library_import_selected_clause_single_name_can_bind_type_and_constructo
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_alias_binds_type_and_constructor_facets() {
-    let dir = temp_dir("library_import_selected_clause_alias_binds_type_and_constructor_facets");
+async fn module_import_selected_clause_alias_binds_type_and_constructor_facets() {
+    let dir = temp_dir("module_import_selected_clause_alias_binds_type_and_constructor_facets");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1237,7 +1235,7 @@ async fn library_import_selected_clause_alias_binds_type_and_constructor_facets(
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1252,8 +1250,8 @@ async fn library_import_selected_clause_alias_binds_type_and_constructor_facets(
 }
 
 #[tokio::test]
-async fn library_import_wildcard_clause_imports_type_exports_too() {
-    let dir = temp_dir("library_import_wildcard_clause_imports_type_exports_too");
+async fn module_import_wildcard_clause_imports_type_exports_too() {
+    let dir = temp_dir("module_import_wildcard_clause_imports_type_exports_too");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1276,7 +1274,7 @@ async fn library_import_wildcard_clause_imports_type_exports_too() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1287,8 +1285,8 @@ async fn library_import_wildcard_clause_imports_type_exports_too() {
 }
 
 #[tokio::test]
-async fn library_import_wildcard_clause_imports_class_exports_too() {
-    let dir = temp_dir("library_import_wildcard_clause_imports_class_exports_too");
+async fn module_import_wildcard_clause_imports_class_exports_too() {
+    let dir = temp_dir("module_import_wildcard_clause_imports_class_exports_too");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1314,7 +1312,7 @@ async fn library_import_wildcard_clause_imports_class_exports_too() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::I32(v) => assert_eq!(*v, 11),
@@ -1323,8 +1321,8 @@ async fn library_import_wildcard_clause_imports_class_exports_too() {
 }
 
 #[tokio::test]
-async fn library_import_alias_and_selected_clause_can_coexist_for_same_module() {
-    let dir = temp_dir("library_import_alias_and_selected_clause_can_coexist_for_same_module");
+async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
+    let dir = temp_dir("module_import_alias_and_selected_clause_can_coexist_for_same_module");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1349,7 +1347,7 @@ async fn library_import_alias_and_selected_clause_can_coexist_for_same_module() 
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     let TypeKind::Tuple(items) = ty.as_ref() else {
         panic!("expected tuple type, got {ty}");
     };
@@ -1370,8 +1368,8 @@ async fn library_import_alias_and_selected_clause_can_coexist_for_same_module() 
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_type_name_does_not_create_value_facet() {
-    let dir = temp_dir("library_import_selected_clause_type_name_does_not_create_value_facet");
+async fn module_import_selected_clause_type_name_does_not_create_value_facet() {
+    let dir = temp_dir("module_import_selected_clause_type_name_does_not_create_value_facet");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1392,7 +1390,7 @@ async fn library_import_selected_clause_type_name_does_not_create_value_facet() 
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1401,8 +1399,8 @@ async fn library_import_selected_clause_type_name_does_not_create_value_facet() 
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_class_name_does_not_create_type_facet() {
-    let dir = temp_dir("library_import_selected_clause_class_name_does_not_create_type_facet");
+async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
+    let dir = temp_dir("module_import_selected_clause_class_name_does_not_create_type_facet");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1425,7 +1423,7 @@ async fn library_import_selected_clause_class_name_does_not_create_type_facet() 
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1438,11 +1436,11 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("host.types");
-    library
+    let mut module = Module::new("host.types");
+    module
         .add_adt_decls_from_types(&mut engine, vec![LocalRunSpec::rex_type()])
         .unwrap();
-    library
+    module
         .export_native(
             "pending",
             Scheme::new(vec![], vec![], Type::con("RunSpec", 0)),
@@ -1452,7 +1450,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
             },
         )
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value_ptr, _ty) = eval_snippet(
         &mut engine,
@@ -1474,8 +1472,8 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
 }
 
 #[tokio::test]
-async fn library_import_missing_class_export_in_instance_header() {
-    let dir = temp_dir("library_import_missing_class_export_in_instance_header");
+async fn module_import_missing_class_export_in_instance_header() {
+    let dir = temp_dir("module_import_missing_class_export_in_instance_header");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1501,7 +1499,7 @@ async fn library_import_missing_class_export_in_instance_header() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1511,8 +1509,8 @@ async fn library_import_missing_class_export_in_instance_header() {
 }
 
 #[tokio::test]
-async fn library_import_missing_type_export_in_fn_signature() {
-    let dir = temp_dir("library_import_missing_type_export_in_fn_signature");
+async fn module_import_missing_type_export_in_fn_signature() {
+    let dir = temp_dir("module_import_missing_type_export_in_fn_signature");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1536,7 +1534,7 @@ async fn library_import_missing_type_export_in_fn_signature() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1546,8 +1544,8 @@ async fn library_import_missing_type_export_in_fn_signature() {
 }
 
 #[tokio::test]
-async fn library_import_missing_type_export_in_instance_head() {
-    let dir = temp_dir("library_import_missing_type_export_in_instance_head");
+async fn module_import_missing_type_export_in_instance_head() {
+    let dir = temp_dir("module_import_missing_type_export_in_instance_head");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1573,7 +1571,7 @@ async fn library_import_missing_type_export_in_instance_head() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1583,8 +1581,8 @@ async fn library_import_missing_type_export_in_instance_head() {
 }
 
 #[tokio::test]
-async fn library_import_missing_class_export_in_fn_where_constraint() {
-    let dir = temp_dir("library_import_missing_class_export_in_fn_where_constraint");
+async fn module_import_missing_class_export_in_fn_where_constraint() {
+    let dir = temp_dir("module_import_missing_class_export_in_fn_where_constraint");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1609,7 +1607,7 @@ async fn library_import_missing_class_export_in_fn_where_constraint() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1619,8 +1617,8 @@ async fn library_import_missing_class_export_in_fn_where_constraint() {
 }
 
 #[tokio::test]
-async fn library_import_missing_class_export_in_declare_fn_where_constraint() {
-    let dir = temp_dir("library_import_missing_class_export_in_declare_fn_where_constraint");
+async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
+    let dir = temp_dir("module_import_missing_class_export_in_declare_fn_where_constraint");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1645,7 +1643,7 @@ async fn library_import_missing_class_export_in_declare_fn_where_constraint() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1655,8 +1653,8 @@ async fn library_import_missing_class_export_in_declare_fn_where_constraint() {
 }
 
 #[tokio::test]
-async fn library_import_missing_class_export_in_class_super_constraint() {
-    let dir = temp_dir("library_import_missing_class_export_in_class_super_constraint");
+async fn module_import_missing_class_export_in_class_super_constraint() {
+    let dir = temp_dir("module_import_missing_class_export_in_class_super_constraint");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1682,7 +1680,7 @@ async fn library_import_missing_class_export_in_class_super_constraint() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1692,10 +1690,9 @@ async fn library_import_missing_class_export_in_class_super_constraint() {
 }
 
 #[tokio::test]
-async fn library_import_missing_type_export_in_letrec_annotation_with_alias_named_binding() {
-    let dir = temp_dir(
-        "library_import_missing_type_export_in_letrec_annotation_with_alias_named_binding",
-    );
+async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named_binding() {
+    let dir =
+        temp_dir("module_import_missing_type_export_in_letrec_annotation_with_alias_named_binding");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1718,7 +1715,7 @@ async fn library_import_missing_type_export_in_letrec_annotation_with_alias_name
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1754,7 +1751,7 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::I32(v) => assert_eq!(*v, 0),
@@ -1788,7 +1785,7 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_library_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match engine.heap.get(&value_ptr).unwrap().as_ref() {
         Value::I32(v) => assert_eq!(*v, 0),
@@ -1797,9 +1794,9 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
 }
 
 #[tokio::test]
-async fn library_import_missing_type_export_in_let_annotation_with_alias_named_binding() {
+async fn module_import_missing_type_export_in_let_annotation_with_alias_named_binding() {
     let dir =
-        temp_dir("library_import_missing_type_export_in_let_annotation_with_alias_named_binding");
+        temp_dir("module_import_missing_type_export_in_let_annotation_with_alias_named_binding");
     let main = dir.join("main.rex");
     let dep = dir.join("dep.rex");
 
@@ -1822,7 +1819,7 @@ async fn library_import_missing_type_export_in_let_annotation_with_alias_named_b
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1832,8 +1829,8 @@ async fn library_import_missing_type_export_in_let_annotation_with_alias_named_b
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_duplicate_name() {
-    let dir = temp_dir("library_import_selected_clause_duplicate_name");
+async fn module_import_selected_clause_duplicate_name() {
+    let dir = temp_dir("module_import_selected_clause_duplicate_name");
     let main = dir.join("main.rex");
     let left = dir.join("foo").join("left.rex");
     let right = dir.join("foo").join("right.rex");
@@ -1863,7 +1860,7 @@ async fn library_import_selected_clause_duplicate_name() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1872,13 +1869,13 @@ async fn library_import_selected_clause_duplicate_name() {
 }
 
 #[tokio::test]
-async fn library_import_selected_clause_conflicts_with_local() {
-    let dir = temp_dir("library_import_selected_clause_conflicts_with_local");
+async fn module_import_selected_clause_conflicts_with_local() {
+    let dir = temp_dir("module_import_selected_clause_conflicts_with_local");
     let main = dir.join("main.rex");
-    let library = dir.join("foo").join("bar.rex");
+    let module = dir.join("foo").join("bar.rex");
 
     write_file(
-        &library,
+        &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y
         ()
@@ -1895,7 +1892,7 @@ async fn library_import_selected_clause_conflicts_with_local() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_library_file(&mut engine, &main).await {
+    let err = match eval_module_file(&mut engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };

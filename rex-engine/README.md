@@ -10,7 +10,7 @@ application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 ## Quickstart
 
 ```rust
-use rex_engine::{Engine, Library};
+use rex_engine::{Engine, Module};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_util::{GasCosts, GasMeter};
@@ -18,10 +18,10 @@ use rex_util::{GasCosts, GasMeter};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = Engine::with_prelude(())?;
-    let mut globals = Library::global();
+    let mut globals = Module::global();
     globals.export("(+)", |_state, x: i32, y: i32| { Ok(x + y) })?;
     globals.export_value("answer", 42i32)?;
-    engine.inject_library(globals)?;
+    engine.inject_module(globals)?;
 
     let tokens = Token::tokenize("answer + 1")?;
     let mut parser = Parser::new(tokens);
@@ -48,16 +48,16 @@ Phase-specific errors:
 
 ## Injection API
 
-- Build staged host APIs with `Library`.
-- Use `Library::global()` for root-scope values/functions.
-- Use `Library::new("acme.math")` for importable modules.
+- Build staged host APIs with `Module`.
+- Use `Module::global()` for root-scope values/functions.
+- Use `Module::new("acme.math")` for importable modules.
 - Add typed exports with `export` / `export_async`.
 - Add pointer-level exports with `export_native` / `export_native_async`.
 - Add constant values with `export_value`.
 - Add ADTs with `add_adt_decl` or `add_rex_adt::<T>()`.
-- Materialize the staged library with `Engine::inject_library(...)`.
+- Materialize the staged module with `Engine::inject_module(...)`.
 
-`Library::add_rex_adt::<T>()` collects `T`'s Rex family via `RexType::collect_rex_family` and
+`Module::add_rex_adt::<T>()` collects `T`'s Rex family via `RexType::collect_rex_family` and
 stages the reachable acyclic ADT family automatically. Ordinary leaf types inherit the default
 no-op implementation, so they participate in Rex type mapping without pretending to be ADTs.
 

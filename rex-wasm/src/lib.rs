@@ -150,7 +150,7 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
 
     let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
     engine.type_system.set_limits(TypeSystemLimits::unlimited());
-    // Match CLI semantics by evaluating snippets through library/snippet rewriting.
+    // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
     let (value_ptr, _value_ty) = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),

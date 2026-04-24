@@ -1,4 +1,4 @@
-# Example: Small “stdlib” helpers
+# Example: Small Standard Module Helpers
 
 It’s common to build small helpers with `let` and reuse them.
 

@@ -81,7 +81,7 @@ These are type-class constrained and work for `List`, `Array`, `Option`, and `Re
 - Option: `is_some`, `is_none`
 - Result: `is_ok`, `is_err`
 
-Run the library tests with:
+Run the crate tests with:
 
 ```bash
 cargo test -p rex-typesystem

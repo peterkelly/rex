@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_names)]
 
-use rex::{Engine, JsonOptions, Library, Type, rex_to_json};
+use rex::{Engine, JsonOptions, Module, Type, rex_to_json};
 use rex_util::GasMeter;
 use serde::{Deserialize, Serialize};
 
@@ -41,20 +41,20 @@ struct EchoRecord {
 }
 
 #[tokio::test]
-async fn injected_echo_library_roundtrips_embedder_types_through_json() {
+async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("echo");
-    library.add_rex_adt::<EchoEnum>().unwrap();
-    library.add_rex_adt::<EchoRecord>().unwrap();
-    library
+    let mut module = Module::new("echo");
+    module.add_rex_adt::<EchoEnum>().unwrap();
+    module.add_rex_adt::<EchoRecord>().unwrap();
+    module
         .export(
             "echo",
             |_state: &(), variant: EchoEnum, record: EchoRecord| Ok((variant, record)),
         )
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
         &mut engine,

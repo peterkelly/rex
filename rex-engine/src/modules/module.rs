@@ -11,55 +11,55 @@ use crate::EvaluatorRef;
 use crate::engine::{AsyncHandler, Export, Handler, NativeFuture, apply, order_adt_family};
 use crate::evaluator::EvaluatorRef as RuntimeEvaluatorRef;
 use crate::{
-    CancellationToken, Engine, EngineError, FromPointer, IntoPointer, Pointer, ROOT_LIBRARY_NAME,
+    CancellationToken, Engine, EngineError, FromPointer, IntoPointer, Pointer, ROOT_MODULE_NAME,
     RexType, Value,
 };
 
-/// A staged host library that you build up in Rust and later inject into an [`Engine`].
+/// A staged host module that you build up in Rust and later inject into an [`Engine`].
 ///
-/// `Library` is the host-side representation of a Rex module. It lets embedders collect:
+/// `Module` is the host-side representation of a Rex module. It lets embedders collect:
 ///
 /// - Rex declarations such as `pub type ...`
-/// - typed Rust handlers via [`Library::export`] / [`Library::export_async`]
-/// - pointer-level native handlers via [`Library::export_native`] /
-///   [`Library::export_native_async`]
+/// - typed Rust handlers via [`Module::export`] / [`Module::export_async`]
+/// - pointer-level native handlers via [`Module::export_native`] /
+///   [`Module::export_native_async`]
 ///
-/// Once the library is assembled, pass it to [`Engine::inject_library`] to make it importable
+/// Once the module is assembled, pass it to [`Engine::inject_module`] to make it importable
 /// from Rex code.
 ///
 /// This type is intentionally mutable and staged: you can build it incrementally, inspect its
-/// raw and structured declarations plus [`Library::exports`], transform them, and only inject it
+/// raw and structured declarations plus [`Module::exports`], transform them, and only inject it
 /// once you are satisfied with the final module shape.
 ///
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rex_engine::{Engine, Library};
+/// use rex_engine::{Engine, Module};
 ///
 /// let mut engine = Engine::with_prelude(()).unwrap();
 /// engine.add_default_resolvers();
 ///
-/// let mut math = Library::new("acme.math");
+/// let mut math = Module::new("acme.math");
 /// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
 /// math.add_raw_declaration("pub type Sign = Positive | Negative").unwrap();
 ///
-/// engine.inject_library(math).unwrap();
+/// engine.inject_module(math).unwrap();
 /// ```
-pub struct Library<State: Clone + Send + Sync + 'static> {
+pub struct Module<State: Clone + Send + Sync + 'static> {
     /// The module name Rex code will import.
     ///
-    /// This should be the fully-qualified library path you want users to write in `import`
+    /// This should be the fully-qualified module path you want users to write in `import`
     /// declarations, such as `acme.math` or `sample`.
     ///
-    /// [`Engine::inject_library`] validates and reserves this name when the library is injected.
+    /// [`Engine::inject_module`] validates and reserves this name when the module is injected.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::Library;
+    /// use rex_engine::Module;
     ///
-    /// let library = Library::<()>::new("acme.math");
-    /// assert_eq!(library.name, "acme.math");
+    /// let module = Module::<()>::new("acme.math");
+    /// assert_eq!(module.name, "acme.math");
     /// ```
     pub name: String,
 
@@ -68,57 +68,57 @@ pub struct Library<State: Clone + Send + Sync + 'static> {
     /// This is most commonly used for `pub type ...` declarations, but it can hold any raw Rex
     /// declaration text you want included in the virtual module source.
     ///
-    /// The usual way to append to this field is [`Library::add_raw_declaration`], which validates that
+    /// The usual way to append to this field is [`Module::add_raw_declaration`], which validates that
     /// the added text is non-empty. The field itself is public so callers can inspect or construct
-    /// a library in multiple passes.
+    /// a module in multiple passes.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::Library;
+    /// use rex_engine::Module;
     ///
-    /// let mut library = Library::<()>::new("acme.status");
-    /// library
+    /// let mut module = Module::<()>::new("acme.status");
+    /// module
     ///     .add_raw_declaration("pub type Status = Ready | Failed string")
     ///     .unwrap();
     ///
-    /// assert_eq!(library.raw_declarations.len(), 1);
+    /// assert_eq!(module.raw_declarations.len(), 1);
     /// ```
     pub raw_declarations: Vec<String>,
 
     /// Structured declarations registered from Rust metadata rather than Rex source.
     ///
-    /// APIs such as [`Library::add_adt_decl`] and [`Library::add_rex_adt`] append here instead
+    /// APIs such as [`Module::add_adt_decl`] and [`Module::add_rex_adt`] append here instead
     /// of synthesizing Rex source text.
     pub structured_decls: Vec<Decl>,
 
     pub(crate) staged_adts: Vec<AdtDecl>,
 
-    /// Staged host exports that will become callable Rex values when the library is injected.
+    /// Staged host exports that will become callable Rex values when the module is injected.
     ///
     /// Each [`Export`] bundles a public Rex name, a declaration that is inserted into the virtual
     /// module source, and the runtime injector that registers the implementation with the engine.
     ///
-    /// Most callers populate this with [`Library::export`], [`Library::export_async`],
-    /// [`Library::export_native`], [`Library::export_native_async`], or [`Library::add_export`].
+    /// Most callers populate this with [`Module::export`], [`Module::export_async`],
+    /// [`Module::export_native`], [`Module::export_native_async`], or [`Module::add_export`].
     /// The field is public so advanced embedders can construct exports separately and assemble the
-    /// final library programmatically.
+    /// final module programmatically.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Export, Library};
+    /// use rex_engine::{Export, Module};
     ///
-    /// let mut library = Library::<()>::new("acme.math");
+    /// let mut module = Module::<()>::new("acme.math");
     /// let export = Export::from_handler("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-    /// library.exports.push(export);
+    /// module.exports.push(export);
     ///
-    /// assert_eq!(library.exports.len(), 1);
+    /// assert_eq!(module.exports.len(), 1);
     /// ```
     pub exports: Vec<Export<State>>,
 }
 
-impl<State> Library<State>
+impl<State> Module<State>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -132,28 +132,28 @@ where
         )
     }
 
-    /// Create an empty staged library that targets the engine root namespace.
+    /// Create an empty staged module that targets the engine root namespace.
     ///
-    /// Injecting a global library installs its declarations and exports directly
+    /// Injecting a global module installs its declarations and exports directly
     /// into the engine rather than making them importable as a named module.
     pub fn global() -> Self {
-        Self::new(ROOT_LIBRARY_NAME)
+        Self::new(ROOT_MODULE_NAME)
     }
 
-    /// Create an empty staged library with the given import name.
+    /// Create an empty staged module with the given import name.
     ///
-    /// The returned library contains no declarations and no exports yet. Add those with the
-    /// helper methods on `Library`, then pass it to [`Engine::inject_library`].
+    /// The returned module contains no declarations and no exports yet. Add those with the
+    /// helper methods on `Module`, then pass it to [`Engine::inject_module`].
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::Library;
+    /// use rex_engine::Module;
     ///
-    /// let library = Library::<()>::new("acme.math");
-    /// assert_eq!(library.name, "acme.math");
-    /// assert!(library.raw_declarations.is_empty());
-    /// assert!(library.exports.is_empty());
+    /// let module = Module::<()>::new("acme.math");
+    /// assert_eq!(module.name, "acme.math");
+    /// assert!(module.raw_declarations.is_empty());
+    /// assert!(module.exports.is_empty());
     /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
@@ -165,21 +165,21 @@ where
         }
     }
 
-    /// Append a raw Rex declaration to this staged library.
+    /// Append a raw Rex declaration to this staged module.
     ///
     /// Use this when you already have declaration text in Rex syntax, for example `pub type ...`.
     /// The text is stored exactly as provided and later concatenated into the virtual module source
-    /// that [`Engine::inject_library`] exposes to Rex imports.
+    /// that [`Engine::inject_module`] exposes to Rex imports.
     ///
     /// This rejects empty or whitespace-only strings.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::Library;
+    /// use rex_engine::Module;
     ///
-    /// let mut library = Library::<()>::new("acme.status");
-    /// library
+    /// let mut module = Module::<()>::new("acme.status");
+    /// module
     ///     .add_raw_declaration("pub type Status = Ready | Failed string")
     ///     .unwrap();
     /// ```
@@ -190,44 +190,44 @@ where
         let declaration = declaration.into();
         if declaration.trim().is_empty() {
             return Err(EngineError::Internal(
-                "library declaration cannot be empty".into(),
+                "module declaration cannot be empty".into(),
             ));
         }
         self.raw_declarations.push(declaration);
         Ok(())
     }
 
-    /// Append a structured Rex declaration to this staged library.
+    /// Append a structured Rex declaration to this staged module.
     pub fn add_decl(&mut self, decl: Decl) {
         self.structured_decls.push(decl);
     }
 
-    /// Append multiple structured Rex declarations to this staged library.
+    /// Append multiple structured Rex declarations to this staged module.
     pub fn add_decls(&mut self, decls: impl IntoIterator<Item = Decl>) {
         self.structured_decls.extend(decls);
     }
 
-    /// Convert an [`AdtDecl`] into a structured type declaration and append it to this library.
+    /// Convert an [`AdtDecl`] into a structured type declaration and append it to this module.
     ///
-    /// This is a structured alternative to [`Library::add_raw_declaration`] when you already have
+    /// This is a structured alternative to [`Module::add_raw_declaration`] when you already have
     /// an ADT declaration in typed form.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Engine, Library};
+    /// use rex_engine::{Engine, Module};
     ///
     /// let mut engine = Engine::with_prelude(()).unwrap();
-    /// let mut library = Library::new("acme.types");
+    /// let mut module = Module::new("acme.types");
     /// let adt = engine.adt_decl_from_type(&rex_typesystem::Type::user_con("Thing", 0)).unwrap();
     ///
-    /// library.add_adt_decl(adt).unwrap();
+    /// module.add_adt_decl(adt).unwrap();
     /// ```
     pub fn add_adt_decl(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
         self.add_adt_family(vec![adt])
     }
 
-    /// Append an acyclic family of ADT declarations to this staged library.
+    /// Append an acyclic family of ADT declarations to this staged module.
     ///
     /// Families are ordered before insertion so declarations are staged in
     /// dependency order, and cycles are rejected.
@@ -263,7 +263,7 @@ where
     /// - walks the provided types recursively
     /// - deduplicates repeated ADTs
     /// - asks the engine to materialize each discovered ADT declaration
-    /// - appends the resulting structured declarations to this library
+    /// - appends the resulting structured declarations to this module
     ///
     /// If conflicting ADT definitions are found for the same type constructor name, this returns
     /// an [`EngineError`] that describes the conflict instead of silently picking one.
@@ -271,17 +271,17 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Engine, Library};
+    /// use rex_engine::{Engine, Module};
     /// use rex_typesystem::{BuiltinTypeId, Type};
     ///
     /// let mut engine = Engine::with_prelude(()).unwrap();
-    /// let mut library = Library::new("acme.types");
+    /// let mut module = Module::new("acme.types");
     /// let types = vec![
     ///     Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
     ///     Type::user_con("Bar", 0),
     /// ];
     ///
-    /// library.add_adt_decls_from_types(&mut engine, types).unwrap();
+    /// module.add_adt_decls_from_types(&mut engine, types).unwrap();
     /// ```
     pub fn add_adt_decls_from_types(
         &mut self,
@@ -296,19 +296,19 @@ where
         Ok(())
     }
 
-    /// Derive a Rex ADT declaration from a Rust type and append it to this library.
+    /// Derive a Rex ADT declaration from a Rust type and append it to this module.
     ///
     /// This is the most ergonomic way to expose a Rust enum or struct that implements [`RexType`]
-    /// as a library-local structured Rex type declaration.
+    /// as a module-local structured Rex type declaration.
     ///
     /// Unlike older engine-level registration helpers, this stages the declaration
-    /// inside the library so the caller can choose whether to inject it globally or
+    /// inside the module so the caller can choose whether to inject it globally or
     /// as a named module.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Engine, Library};
+    /// use rex_engine::{Engine, Module};
     ///
     /// #[derive(rex::Rex)]
     /// struct Label {
@@ -316,8 +316,8 @@ where
     /// }
     ///
     /// let mut engine = Engine::with_prelude(()).unwrap();
-    /// let mut library = Library::new("sample");
-    /// library.add_rex_adt::<Label>().unwrap();
+    /// let mut module = Module::new("sample");
+    /// module.add_rex_adt::<Label>().unwrap();
     /// ```
     pub fn add_rex_adt<T>(&mut self) -> Result<(), EngineError>
     where
@@ -328,7 +328,7 @@ where
         self.add_adt_family(family)
     }
 
-    /// Append a preconstructed [`Export`] to this library.
+    /// Append a preconstructed [`Export`] to this module.
     ///
     /// This is useful when exports are assembled elsewhere, such as from plugin metadata or a
     /// higher-level registration layer.
@@ -336,30 +336,30 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Export, Library};
+    /// use rex_engine::{Export, Module};
     ///
-    /// let mut library = Library::<()>::new("acme.math");
+    /// let mut module = Module::<()>::new("acme.math");
     /// let export = Export::from_handler("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-    /// library.add_export(export);
+    /// module.add_export(export);
     /// ```
     pub fn add_export(&mut self, export: Export<State>) {
         self.exports.push(export);
     }
 
-    /// Stage a typed synchronous Rust handler as a library export.
+    /// Stage a typed synchronous Rust handler as a module export.
     ///
     /// This is the most convenient API for exporting ordinary Rust functions or closures into a
-    /// library. The handler's argument and return types drive the Rex signature automatically.
+    /// module. The handler's argument and return types drive the Rex signature automatically.
     ///
-    /// The staged export becomes available to Rex code after [`Engine::inject_library`] is called.
+    /// The staged export becomes available to Rex code after [`Engine::inject_module`] is called.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::Library;
+    /// use rex_engine::Module;
     ///
-    /// let mut library = Library::<()>::new("acme.math");
-    /// library.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
+    /// let mut module = Module::<()>::new("acme.math");
+    /// module.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
     /// ```
     pub fn export<Sig, H>(&mut self, name: impl Into<String>, handler: H) -> Result<(), EngineError>
     where
@@ -369,7 +369,7 @@ where
         Ok(())
     }
 
-    /// Stage a typed asynchronous Rust handler as a library export.
+    /// Stage a typed asynchronous Rust handler as a module export.
     ///
     /// Use this when the host implementation is naturally async, for example when it awaits I/O or
     /// other long-running work.
@@ -377,10 +377,10 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::Library;
+    /// use rex_engine::Module;
     ///
-    /// let mut library = Library::<()>::new("acme.math");
-    /// library
+    /// let mut module = Module::<()>::new("acme.math");
+    /// module
     ///     .export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })
     ///     .unwrap();
     /// ```
@@ -470,17 +470,17 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{EvaluatorRef, Library, Pointer};
+    /// use rex_engine::{EvaluatorRef, Module, Pointer};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
-    /// let mut library = Library::<()>::new("acme.dynamic");
+    /// let mut module = Module::<()>::new("acme.dynamic");
     /// let scheme = Scheme::new(
     ///     vec![],
     ///     vec![],
     ///     Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)),
     /// );
     ///
-    /// library
+    /// module
     ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<'_, ()>, _typ: &Type, args: &[Pointer]| {
     ///         Ok(args[0].clone())
     ///     })
@@ -534,20 +534,20 @@ where
 
     /// Stage a pointer-level asynchronous native export with an explicit Rex type scheme.
     ///
-    /// This is the async counterpart to [`Library::export_native`]. Use it when the export needs
+    /// This is the async counterpart to [`Module::export_native`]. Use it when the export needs
     /// both direct engine access and asynchronous execution.
     ///
     /// # Examples
     ///
     /// ```rust,ignore
     /// use futures::FutureExt;
-    /// use rex_engine::{EvaluatorRef, Library, Pointer};
+    /// use rex_engine::{EvaluatorRef, Module, Pointer};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
-    /// let mut library = Library::<()>::new("acme.dynamic");
+    /// let mut module = Module::<()>::new("acme.dynamic");
     /// let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
     ///
-    /// library
+    /// module
     ///     .export_native_async(
     ///         "answer_async",
     ///         scheme,

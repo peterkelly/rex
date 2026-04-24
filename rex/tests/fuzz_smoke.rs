@@ -1,5 +1,5 @@
 use rex::{
-    Engine, GasCosts, GasMeter, Library, Parser, ParserLimits, Token, TypeSystem, infer_with_gas,
+    Engine, GasCosts, GasMeter, Module, Parser, ParserLimits, Token, TypeSystem, infer_with_gas,
 };
 
 #[derive(Clone)]
@@ -69,9 +69,9 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         let _ = infer_with_gas(&mut ts, program.expr.as_ref(), &mut gas);
 
         let mut engine = Engine::with_prelude(()).unwrap();
-        let mut library = Library::global();
-        library.add_decls(program.decls.clone());
-        let _ = engine.inject_library(library);
+        let mut module = Module::global();
+        module.add_decls(program.decls.clone());
+        let _ = engine.inject_module(module);
         let _ = rex::Evaluator::new_with_compiler(
             rex::RuntimeEnv::new(engine.clone()),
             rex::Compiler::new(engine.clone()),

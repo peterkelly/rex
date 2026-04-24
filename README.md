@@ -98,7 +98,7 @@ This repo is a Cargo workspace. The key crates are:
 - `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
 - `rex-cli`: CLI crate providing the `rex` binary (`cargo run -p rex-cli -- ...`)
 - `rex-fuzz`: stdin-driven fuzz harness binaries
-- `rex-util`: small shared helpers (e.g. library hashing, bundled stdlib sources)
+- `rex-util`: small shared helpers (e.g. module hashing, bundled `std.*` module sources)
 - `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
 
 ## CLI
@@ -109,10 +109,10 @@ Run a file:
 cargo run -p rex-cli -- run rex-cli/examples/record_update.rex
 ```
 
-Run the advanced library import example:
+Run the advanced module import example:
 
 ```sh
-cargo run -p rex-cli -- run rex-cli/examples/libraries_advanced/main.rex
+cargo run -p rex-cli -- run rex-cli/examples/modules_advanced/main.rex
 ```
 
 Run inline code:
@@ -132,7 +132,7 @@ Other useful flags:
 - `--gas`: total gas budget for parse/type/eval
 - `--no-gas`: disable gas metering
 
-## Standard Library (Prelude)
+## Standard Module (Prelude)
 
 Rex ships with a prelude that provides core functions, types, and type classes
 used throughout the language (for example mapping, filtering, folds, numeric

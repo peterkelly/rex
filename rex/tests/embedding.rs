@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rex::virtual_export_name;
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, GasMeter, Heap, IntoPointer, Library,
+    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, GasMeter, Heap, IntoPointer, Module,
     Parser, Pointer, Rex, RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
 };
 use uuid::Uuid;
@@ -34,28 +34,28 @@ fn render_label(label: Label) -> String {
 
 fn inject_globals<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
-    build: impl FnOnce(&mut Library<State>) -> Result<(), EngineError>,
+    build: impl FnOnce(&mut Module<State>) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
-    let mut library = Library::global();
-    build(&mut library)?;
-    engine.inject_library(library)
+    let mut module = Module::global();
+    build(&mut module)?;
+    engine.inject_module(module)
 }
 
 #[tokio::test]
-async fn library_render_label_with_library_scoped_adts_left_and_right() {
+async fn module_render_label_with_module_scoped_adts_left_and_right() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("sample");
-    library.add_rex_adt::<Side>().unwrap();
-    library.add_rex_adt::<Correctness>().unwrap();
-    library.add_rex_adt::<Label>().unwrap();
-    library
+    let mut module = Module::new("sample");
+    module.add_rex_adt::<Side>().unwrap();
+    module.add_rex_adt::<Correctness>().unwrap();
+    module.add_rex_adt::<Label>().unwrap();
+    module
         .export("render_label", |_: &(), label: Label| {
             Ok::<String, EngineError>(render_label(label))
         })
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
@@ -78,7 +78,7 @@ async fn library_render_label_with_library_scoped_adts_left_and_right() {
     .await
     .unwrap();
 
-    // `Side` and `Correctness` both provide a `Right` constructor in the same library.
+    // `Side` and `Correctness` both provide a `Right` constructor in the same module.
     // This ensures Rex keeps them distinct via explicit type ascription (`is Side` vs `is Sample.Correctness`).
     let correctness_ty = Type::con(virtual_export_name("sample", "Correctness"), 0);
     assert_eq!(
@@ -119,18 +119,18 @@ async fn library_render_label_with_library_scoped_adts_left_and_right() {
 }
 
 #[tokio::test]
-async fn library_inject_rex_adt_registers_acyclic_dependency_closure() {
+async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("sample");
-    library.add_rex_adt::<Label>().unwrap();
-    library
+    let mut module = Module::new("sample");
+    module.add_rex_adt::<Label>().unwrap();
+    module
         .export("render_label", |_: &(), label: Label| {
             Ok::<String, EngineError>(render_label(label))
         })
         .unwrap();
-    engine.inject_library(library).unwrap();
+    engine.inject_module(module).unwrap();
 
     let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
@@ -155,18 +155,18 @@ async fn library_inject_rex_adt_registers_acyclic_dependency_closure() {
 }
 
 #[tokio::test]
-async fn match_ascribed_library_type_with_overlapping_constructor_is_ambiguous_regression() {
-    // Regression guard: when two library ADTs expose overlapping constructor names
+async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_regression() {
+    // Regression guard: when two module ADTs expose overlapping constructor names
     // (e.g. both have `Right`), `match` arms that use the bare constructor after an
     // `is Sample.Correctness` ascription currently remain ambiguous. This test ensures
     // we keep surfacing that ambiguity instead of silently picking one constructor.
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
-    let mut library = Library::new("sample");
-    library.add_rex_adt::<Side>().unwrap();
-    library.add_rex_adt::<Correctness>().unwrap();
-    engine.inject_library(library).unwrap();
+    let mut module = Module::new("sample");
+    module.add_rex_adt::<Side>().unwrap();
+    module.add_rex_adt::<Correctness>().unwrap();
+    engine.inject_module(module).unwrap();
 
     let mut gas = unlimited_gas();
     let err = rex::Evaluator::new_with_compiler(
@@ -358,11 +358,11 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    inject_globals(&mut engine, |library| {
-        library.export("current_account_id", current_account_id)?;
-        library.export("current_project_id", current_project_id)?;
-        library.export("is_admin", is_admin)?;
-        library.export("have_role", have_role)?;
+    inject_globals(&mut engine, |module| {
+        module.export("current_account_id", current_account_id)?;
+        module.export("current_project_id", current_project_id)?;
+        module.export("is_admin", is_admin)?;
+        module.export("have_role", have_role)?;
         Ok(())
     })
     .unwrap();
@@ -574,8 +574,8 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    inject_globals(&mut engine, |library| {
-        library.export_async("have_role_async", |state: &HostState, role: String| {
+    inject_globals(&mut engine, |module| {
+        module.export_async("have_role_async", |state: &HostState, role: String| {
             have_role_async(state.clone(), role)
         })
     })
@@ -620,8 +620,8 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
             Type::fun(Type::builtin(BuiltinTypeId::I32), Type::list(t)),
         ),
     );
-    inject_globals(&mut engine, |library| {
-        library.export_native("repeat_value", scheme, 2, |engine, _, args| {
+    inject_globals(&mut engine, |module| {
+        module.export_native("repeat_value", scheme, 2, |engine, _, args| {
             let value = args[0];
             let len = engine.heap.pointer_as_i32(&args[1])?;
             let copies = (0..len.max(0)).map(|_| value).collect();
@@ -684,8 +684,8 @@ async fn generic_export_can_swap_two_values_of_different_types() {
         vec![],
         Type::fun(p.clone(), Type::fun(q.clone(), Type::tuple(vec![q, p]))),
     );
-    inject_globals(&mut engine, |library| {
-        library.export_native("swap_pair", scheme, 2, |engine, _, args| {
+    inject_globals(&mut engine, |module| {
+        module.export_native("swap_pair", scheme, 2, |engine, _, args| {
             engine.heap.alloc_tuple(vec![args[1], args[0]])
         })
     })
@@ -737,21 +737,21 @@ async fn overloaded_exports_types_and_values() {
 
     EmbedRecord::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |library| {
-        library.export("over1", |_state: &(), x: i32| Ok(x + 1))?;
-        library.export("over1", |_state: &(), x: bool| {
+    inject_globals(&mut engine, |module| {
+        module.export("over1", |_state: &(), x: i32| Ok(x + 1))?;
+        module.export("over1", |_state: &(), x: bool| {
             Ok(if x {
                 "bool:true".to_string()
             } else {
                 "bool:false".to_string()
             })
         })?;
-        library.export("over1", |_state: &(), rec: EmbedRecord| Ok(rec.n > 10))?;
-        library.export("over3", |_state: &(), a: i32, b: i32, c: i32| Ok(a + b + c))?;
-        library.export("over3", |_state: &(), a: String, b: String, c: String| {
+        module.export("over1", |_state: &(), rec: EmbedRecord| Ok(rec.n > 10))?;
+        module.export("over3", |_state: &(), a: i32, b: i32, c: i32| Ok(a + b + c))?;
+        module.export("over3", |_state: &(), a: String, b: String, c: String| {
             Ok(a.len() < b.len() + c.len())
         })?;
-        library.export(
+        module.export(
             "over3",
             |_state: &(), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| {
                 Ok(format!("records:{}:{}:{}", a.n, b.n, c.n))
@@ -808,28 +808,28 @@ async fn overloaded_async_exports_types_and_values() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     EmbedRecord::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |library| {
-        library.export_async("a1", |_state: &(), x: i32| async move { Ok(x + 1) })?;
-        library.export_async("a1", |_state: &(), x: bool| async move {
+    inject_globals(&mut engine, |module| {
+        module.export_async("a1", |_state: &(), x: i32| async move { Ok(x + 1) })?;
+        module.export_async("a1", |_state: &(), x: bool| async move {
             Ok(if x {
                 "bool:true".to_string()
             } else {
                 "bool:false".to_string()
             })
         })?;
-        library.export_async("a1", |_state: &(), rec: EmbedRecord| async move {
+        module.export_async("a1", |_state: &(), rec: EmbedRecord| async move {
             Ok(rec.n > 10)
         })?;
-        library.export_async("a3", |_state: &(), a: i32, b: i32, c: i32| async move {
+        module.export_async("a3", |_state: &(), a: i32, b: i32, c: i32| async move {
             Ok(a + b + c)
         })?;
-        library.export_async(
+        module.export_async(
             "a3",
             |_state: &(), a: String, b: String, c: String| async move {
                 Ok(a.len() < b.len() + c.len())
             },
         )?;
-        library.export_async(
+        module.export_async(
             "a3",
             |_state: &(), a: EmbedRecord, b: EmbedRecord, c: EmbedRecord| async move {
                 Ok(format!("records:{}:{}:{}", a.n, b.n, c.n))
