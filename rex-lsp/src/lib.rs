@@ -16,6 +16,7 @@ use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
     Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
 };
+use rex_engine::{Engine, EngineError, ModuleError};
 use rex_lexer::{
     LexicalError, Token, Tokens,
     span::{Position as RexPosition, Span, Spanned},
@@ -23,7 +24,7 @@ use rex_lexer::{
 use rex_parser::{Parser, error::ParserErr};
 use rex_typesystem::{
     error::TypeError as TsTypeError,
-    inference::{infer, infer_typed},
+    inference::infer_typed,
     types::{BuiltinTypeId, Scheme, Type, TypeKind, TypedExpr, TypedExprKind, Types},
     typesystem::{PreparedInstanceDecl, TypeSystem, instantiate},
     unification::unify,
@@ -3362,20 +3363,7 @@ fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
             }
         }
         Err(TokenizeOrParseError::Lex(err)) => {
-            let (span, message) = match err {
-                LexicalError::UnexpectedToken(span) => (span, "Unexpected token".to_string()),
-                LexicalError::InvalidLiteral {
-                    kind,
-                    text,
-                    error,
-                    span,
-                } => (span, format!("invalid {kind} literal `{text}`: {error}")),
-                LexicalError::Internal(msg) => (
-                    Span::new(1, 1, 1, 1),
-                    format!("internal lexer error: {msg}"),
-                ),
-            };
-            diagnostics.push(diagnostic_for_span(span, message));
+            diagnostics.push(diagnostic_for_lexical_error(&err));
         }
         Err(TokenizeOrParseError::Parse(errors)) => {
             for err in errors {
@@ -3388,6 +3376,23 @@ fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
     }
 
     diagnostics
+}
+
+fn diagnostic_for_lexical_error(err: &LexicalError) -> Diagnostic {
+    let (span, message) = match err {
+        LexicalError::UnexpectedToken(span) => (*span, "Unexpected token".to_string()),
+        LexicalError::InvalidLiteral {
+            kind,
+            text,
+            error,
+            span,
+        } => (*span, format!("invalid {kind} literal `{text}`: {error}")),
+        LexicalError::Internal(msg) => (
+            Span::new(1, 1, 1, 1),
+            format!("internal lexer error: {msg}"),
+        ),
+    };
+    diagnostic_for_span(span, message)
 }
 
 struct HoverType {
@@ -5314,79 +5319,76 @@ fn push_type_diagnostics(
         return;
     }
 
-    let (program, mut ts, _imports, import_diags) = match prepare_program_with_imports(uri, program)
-    {
-        Ok(v) => v,
+    let mut engine = match Engine::with_prelude(()) {
+        Ok(engine) => engine,
         Err(err) => {
-            diagnostics.push(diagnostic_for_span(primary_program_span(program), err));
+            push_engine_error(err, diagnostics, program);
             return;
         }
     };
-    diagnostics.extend(import_diags);
-    if diagnostics.len() >= MAX_DIAGNOSTICS {
-        diagnostics.truncate(MAX_DIAGNOSTICS);
+    engine.add_default_resolvers();
+
+    let mut gas = GasMeter::default();
+    let result = if let Some(path) = uri_to_file_path(uri) {
+        engine.infer_snippet_at(text, path, &mut gas)
+    } else {
+        engine.infer_snippet(text, &mut gas)
+    };
+
+    if let Err(err) = result {
+        push_engine_error(err.into_engine_error(), diagnostics, program);
         return;
     }
 
-    let (instances, _prepared_target) = match inject_program_decls(&mut ts, &program, None) {
-        Ok(v) => v,
-        Err(err) => {
-            push_ts_error(
-                err,
-                diagnostics,
-                None,
-                Some(&ts),
-                Some(primary_program_span(&program)),
-            );
-            return;
-        }
-    };
+    push_hole_diagnostics(program, diagnostics);
+}
 
-    // Typecheck instance method bodies too, so errors inside the instance show
-    // up as diagnostics.
-    for (decl_idx, prepared) in instances {
-        if diagnostics.len() >= MAX_DIAGNOSTICS {
-            break;
-        }
-        let Decl::Instance(inst_decl) = &program.decls[decl_idx] else {
-            continue;
-        };
-        for method in &inst_decl.methods {
-            if let Err(err) = ts.typecheck_instance_method(&prepared, method) {
-                push_ts_error(
-                    err,
+fn push_engine_error(err: EngineError, diagnostics: &mut Vec<Diagnostic>, program: &Program) {
+    match err {
+        EngineError::Type(err) => {
+            let expr = program.expr_with_fns();
+            let before = diagnostics.len();
+            push_ts_error(err, diagnostics, Some(expr.as_ref()), None, None);
+            if let Some(primary) = diagnostics.get(before).cloned() {
+                push_additional_default_record_update_ambiguity_diagnostics(
+                    expr.as_ref(),
+                    &primary.message,
                     diagnostics,
-                    Some(method.body.as_ref()),
-                    Some(&ts),
-                    None,
                 );
+            }
+        }
+        EngineError::Module(module_err) => {
+            push_module_error(&module_err, diagnostics, program);
+        }
+        other => {
+            diagnostics.push(diagnostic_for_span(
+                primary_program_span(program),
+                other.to_string(),
+            ));
+        }
+    }
+}
+
+fn push_module_error(err: &ModuleError, diagnostics: &mut Vec<Diagnostic>, program: &Program) {
+    match err {
+        ModuleError::Lex { source } => {
+            diagnostics.push(diagnostic_for_lexical_error(source));
+        }
+        ModuleError::Parse { errors } => {
+            for err in errors {
+                diagnostics.push(diagnostic_for_span(err.span, err.message.clone()));
                 if diagnostics.len() >= MAX_DIAGNOSTICS {
                     break;
                 }
             }
         }
-    }
-
-    if let Err(err) = infer(&mut ts, program.expr.as_ref()) {
-        let before = diagnostics.len();
-        push_ts_error(
-            err,
-            diagnostics,
-            Some(program.expr.as_ref()),
-            Some(&ts),
-            None,
-        );
-        if let Some(primary) = diagnostics.get(before).cloned() {
-            push_additional_default_record_update_ambiguity_diagnostics(
-                program.expr.as_ref(),
-                &primary.message,
-                diagnostics,
-            );
+        _ => {
+            diagnostics.push(diagnostic_for_span(
+                primary_program_span(program),
+                err.to_string(),
+            ));
         }
-        return;
     }
-
-    push_hole_diagnostics(&program, diagnostics);
 }
 
 fn primary_program_span(program: &Program) -> Span {
@@ -5713,8 +5715,8 @@ fn push_ts_error(
         ),
     };
 
-    if let (Some(target), Some(expr), Some(ts)) = (unknown_target, expr, ts)
-        && ts.env.lookup(&target).is_none()
+    if let (Some(target), Some(expr)) = (unknown_target, expr)
+        && ts.is_none_or(|ts| ts.env.lookup(&target).is_none())
     {
         let mut spans = Vec::new();
         collect_unbound_var_spans(expr, &target, &mut Vec::new(), &mut spans);
@@ -8028,6 +8030,32 @@ in
                 .contains("typed hole `?` must be filled before evaluation")),
             "diagnostics: {diags:#?}"
         );
+    }
+
+    #[test]
+    fn diagnostics_use_compiler_path_for_local_constructor_names() {
+        let text = r#"
+type Tree = Empty | Node { key: i32, left: Tree, right: Tree }
+
+fn insert : i32 -> Tree -> Tree = \k t ->
+  match t
+    when Empty -> Node { key = k, left = Empty, right = Empty }
+    when Node {key, left, right} ->
+      if k < key then
+        Node { key = key, left = insert k left, right = right }
+      else if k > key then
+        Node { key = key, left = left, right = insert k right }
+      else
+        t
+
+insert 1 Empty
+"#;
+        let diags = diagnostics_for_source(text);
+        let errors: Vec<&Diagnostic> = diags
+            .iter()
+            .filter(|d| d.severity == Some(DiagnosticSeverity::ERROR))
+            .collect();
+        assert!(errors.is_empty(), "diagnostics: {diags:#?}");
     }
 
     #[test]
