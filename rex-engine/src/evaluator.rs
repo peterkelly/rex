@@ -15,8 +15,8 @@ use rex_util::{GasMeter, sha256_hex};
 
 use crate::engine::{
     CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, apply_with_context,
-    check_runtime_cancelled, eval_typed_expr, eval_typed_expr_loop, eval_typed_expr_loop_child,
-    impl_matches_type, is_function_type, type_head_is_var,
+    check_runtime_cancelled, eval_typed_expr, eval_typed_expr_child, impl_matches_type,
+    is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
 use crate::value::Value;
@@ -43,52 +43,19 @@ where
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum EvalBackend {
-    Recursive,
-    Loop,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EvalContext {
-    backend: EvalBackend,
-    loop_parent: Option<Pointer>,
+    parent: Option<Pointer>,
 }
 
 impl EvalContext {
-    pub(crate) fn recursive() -> Self {
+    pub(crate) fn child(parent: Pointer) -> Self {
         Self {
-            backend: EvalBackend::Recursive,
-            loop_parent: None,
+            parent: Some(parent),
         }
     }
 
-    pub(crate) fn loop_root() -> Self {
-        Self {
-            backend: EvalBackend::Loop,
-            loop_parent: None,
-        }
-    }
-
-    pub(crate) fn loop_child(parent: Pointer) -> Self {
-        Self {
-            backend: EvalBackend::Loop,
-            loop_parent: Some(parent),
-        }
-    }
-
-    pub(crate) fn from_backend(backend: EvalBackend) -> Self {
-        match backend {
-            EvalBackend::Recursive => Self::recursive(),
-            EvalBackend::Loop => Self::loop_root(),
-        }
-    }
-
-    pub(crate) fn backend(self) -> EvalBackend {
-        self.backend
-    }
-
-    pub(crate) fn loop_parent(self) -> Option<Pointer> {
-        self.loop_parent
+    pub(crate) fn parent(self) -> Option<Pointer> {
+        self.parent
     }
 }
 
@@ -133,7 +100,7 @@ where
     ) -> Result<Pointer, EngineError> {
         check_runtime_cancelled(&self.runtime.runtime)?;
         self.runtime.validate_internal(program)?;
-        eval_typed_expr_loop(
+        eval_typed_expr(
             &self.runtime.runtime,
             &program.env,
             program.expr.as_ref(),
@@ -295,13 +262,6 @@ impl<'a, State> EvaluatorRef<'a, State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(runtime: &'a RuntimeSnapshot<State>) -> Self {
-        Self {
-            runtime,
-            context: EvalContext::recursive(),
-        }
-    }
-
     pub(crate) fn new_with_context(
         runtime: &'a RuntimeSnapshot<State>,
         context: EvalContext,
@@ -309,21 +269,13 @@ where
         Self { runtime, context }
     }
 
-    pub(crate) fn new_with_loop_parent(
-        runtime: &'a RuntimeSnapshot<State>,
-        parent: Pointer,
-    ) -> Self {
-        Self::new_with_context(runtime, EvalContext::loop_child(parent))
+    pub(crate) fn new_with_parent(runtime: &'a RuntimeSnapshot<State>, parent: Pointer) -> Self {
+        Self::new_with_context(runtime, EvalContext::child(parent))
     }
 
     #[cfg(test)]
-    pub(crate) fn backend(&self) -> EvalBackend {
-        self.context.backend()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn loop_parent(&self) -> Option<Pointer> {
-        self.context.loop_parent()
+    pub(crate) fn parent_frame(&self) -> Option<Pointer> {
+        self.context.parent()
     }
 
     #[async_recursion]
@@ -333,14 +285,9 @@ where
         expr: &TypedExpr,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
-        match self.context.backend() {
-            EvalBackend::Recursive => eval_typed_expr(self.runtime, env, expr, gas).await,
-            EvalBackend::Loop => match self.context.loop_parent() {
-                Some(parent) => {
-                    eval_typed_expr_loop_child(self.runtime, parent, env, expr, gas).await
-                }
-                None => eval_typed_expr_loop(self.runtime, env, expr, gas).await,
-            },
+        match self.context.parent() {
+            Some(parent) => eval_typed_expr_child(self.runtime, parent, env, expr, gas).await,
+            None => eval_typed_expr(self.runtime, env, expr, gas).await,
         }
     }
 

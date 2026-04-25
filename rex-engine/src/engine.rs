@@ -47,7 +47,7 @@ use crate::stack::{
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{
     CancellationToken, EngineError, Environment, FromPointer, IntoPointer, RexType,
-    evaluator::{EvalBackend, EvalContext, EvaluatorRef},
+    evaluator::{EvalContext, EvaluatorRef},
 };
 
 fn runtime_ctor_symbol(name: &Symbol) -> Symbol {
@@ -1359,15 +1359,6 @@ impl NativeFn {
         self.arity == 0 && self.applied.is_empty()
     }
 
-    pub(crate) async fn call_zero<State: Clone + Send + Sync + 'static>(
-        &self,
-        runtime: &RuntimeSnapshot<State>,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        self.call_zero_with_context(runtime, gas, EvalContext::recursive())
-            .await
-    }
-
     pub(crate) async fn call_zero_with_context<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeSnapshot<State>,
@@ -1391,35 +1382,6 @@ impl NativeFn {
             .native_callable(self.native_id)?
             .call_with_context(runtime, self.typ.clone(), &[], context)
             .await
-    }
-
-    async fn apply<State: Clone + Send + Sync + 'static>(
-        self,
-        runtime: &RuntimeSnapshot<State>,
-        arg: Pointer,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        self.apply_with_backend(runtime, arg, arg_type, gas, EvalBackend::Recursive)
-            .await
-    }
-
-    async fn apply_with_backend<State: Clone + Send + Sync + 'static>(
-        self,
-        runtime: &RuntimeSnapshot<State>,
-        arg: Pointer,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-        backend: EvalBackend,
-    ) -> Result<Pointer, EngineError> {
-        self.apply_with_context(
-            runtime,
-            arg,
-            arg_type,
-            gas,
-            EvalContext::from_backend(backend),
-        )
-        .await
     }
 
     async fn apply_with_context<State: Clone + Send + Sync + 'static>(
@@ -1530,49 +1492,6 @@ impl OverloadedFn {
 
     pub(crate) fn into_parts(self) -> (Symbol, Type, Vec<Pointer>, Vec<Type>) {
         (self.name, self.typ, self.applied, self.applied_types)
-    }
-
-    async fn apply<State: Clone + Send + Sync + 'static>(
-        self,
-        runtime: &RuntimeSnapshot<State>,
-        arg: Pointer,
-        func_type: Option<&Type>,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        self.apply_with_backend(
-            runtime,
-            arg,
-            func_type,
-            arg_type,
-            gas,
-            EvalBackend::Recursive,
-        )
-        .await
-    }
-
-    #[async_recursion]
-    async fn apply_with_backend<State>(
-        self,
-        runtime: &RuntimeSnapshot<State>,
-        arg: Pointer,
-        func_type: Option<&Type>,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-        backend: EvalBackend,
-    ) -> Result<Pointer, EngineError>
-    where
-        State: Clone + Send + Sync + 'static,
-    {
-        self.apply_with_context(
-            runtime,
-            arg,
-            func_type,
-            arg_type,
-            gas,
-            EvalContext::from_backend(backend),
-        )
-        .await
     }
 
     #[async_recursion]
@@ -4375,224 +4294,7 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
     }
 }
 
-#[async_recursion]
-pub(crate) async fn eval_typed_expr<State>(
-    runtime: &RuntimeSnapshot<State>,
-    env: &Environment,
-    expr: &TypedExpr,
-    gas: &mut GasMeter,
-) -> Result<Pointer, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    check_runtime_cancelled(runtime)?;
-    let mut env = env.clone();
-    let mut cur = expr;
-    loop {
-        check_runtime_cancelled(runtime)?;
-        match cur.kind.as_ref() {
-            TypedExprKind::Let { name, def, body } => {
-                gas.charge(gas.costs.eval_node)?;
-                let ptr = eval_typed_expr(runtime, &env, def, gas).await?;
-                env = env.extend(name.clone(), ptr);
-                cur = body;
-            }
-            _ => break,
-        }
-    }
-
-    gas.charge(gas.costs.eval_node)?;
-    match cur.kind.as_ref() {
-        TypedExprKind::Bool(v) => runtime.heap.alloc_bool(*v),
-        TypedExprKind::Uint(v) => alloc_uint_literal_as(runtime, *v, &cur.typ),
-        TypedExprKind::Int(v) => alloc_int_literal_as(runtime, *v, &cur.typ),
-        TypedExprKind::Float(v) => runtime.heap.alloc_f32(*v as f32),
-        TypedExprKind::String(v) => runtime.heap.alloc_string(v.clone()),
-        TypedExprKind::Uuid(v) => runtime.heap.alloc_uuid(*v),
-        TypedExprKind::DateTime(v) => runtime.heap.alloc_datetime(*v),
-        TypedExprKind::Hole => Err(EngineError::UnsupportedExpr),
-        TypedExprKind::Tuple(elems) => {
-            let mut values = Vec::with_capacity(elems.len());
-            for elem in elems {
-                check_runtime_cancelled(runtime)?;
-                values.push(eval_typed_expr(runtime, &env, elem, gas).await?);
-            }
-            runtime.heap.alloc_tuple(values)
-        }
-        TypedExprKind::List(elems) => {
-            let mut values = Vec::with_capacity(elems.len());
-            for elem in elems {
-                check_runtime_cancelled(runtime)?;
-                values.push(eval_typed_expr(runtime, &env, elem, gas).await?);
-            }
-            let mut list = runtime.heap.alloc_adt(sym("Empty"), vec![])?;
-            for value in values.into_iter().rev() {
-                list = runtime.heap.alloc_adt(sym("Cons"), vec![value, list])?;
-            }
-            Ok(list)
-        }
-        TypedExprKind::Dict(kvs) => {
-            let mut out = BTreeMap::new();
-            for (k, v) in kvs {
-                check_runtime_cancelled(runtime)?;
-                out.insert(k.clone(), eval_typed_expr(runtime, &env, v, gas).await?);
-            }
-            runtime.heap.alloc_dict(out)
-        }
-        TypedExprKind::RecordUpdate { base, updates } => {
-            let base_ptr = eval_typed_expr(runtime, &env, base, gas).await?;
-            let mut update_vals = BTreeMap::new();
-            for (k, v) in updates {
-                check_runtime_cancelled(runtime)?;
-                update_vals.insert(k.clone(), eval_typed_expr(runtime, &env, v, gas).await?);
-            }
-
-            let base_val = runtime.heap.get(&base_ptr)?;
-            match base_val.as_ref() {
-                Value::Dict(map) => {
-                    let mut map = map.clone();
-                    for (k, v) in update_vals {
-                        gas.charge(gas.costs.eval_record_update_field)?;
-                        map.insert(k, v);
-                    }
-                    runtime.heap.alloc_dict(map)
-                }
-                Value::Adt(tag, args) if args.len() == 1 => {
-                    let inner = runtime.heap.get(&args[0])?;
-                    match inner.as_ref() {
-                        Value::Dict(map) => {
-                            let mut out = map.clone();
-                            for (k, v) in update_vals {
-                                gas.charge(gas.costs.eval_record_update_field)?;
-                                out.insert(k, v);
-                            }
-                            let dict = runtime.heap.alloc_dict(out)?;
-                            runtime.heap.alloc_adt(tag.clone(), vec![dict])
-                        }
-                        _ => Err(EngineError::UnsupportedExpr),
-                    }
-                }
-                _ => Err(EngineError::UnsupportedExpr),
-            }
-        }
-        TypedExprKind::Var { name, .. } => {
-            if let Some(ptr) = env.get(name) {
-                let value = runtime.heap.get(&ptr)?;
-                match value.as_ref() {
-                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero(runtime, gas).await
-                    }
-                    _ => Ok(ptr),
-                }
-            } else if runtime.type_system.class_methods.contains_key(name) {
-                EvaluatorRef::new(runtime)
-                    .resolve_class_method(name, &cur.typ, gas)
-                    .await
-            } else {
-                let value =
-                    EvaluatorRef::new(runtime).resolve_native(name.as_ref(), &cur.typ, gas)?;
-                match runtime.heap.get(&value)?.as_ref() {
-                    Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                        native.call_zero(runtime, gas).await
-                    }
-                    _ => Ok(value),
-                }
-            }
-        }
-        TypedExprKind::App(..) => {
-            let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
-            let mut head = cur;
-            while let TypedExprKind::App(f, x) = head.kind.as_ref() {
-                check_runtime_cancelled(runtime)?;
-                spine.push((f.typ.clone(), x.as_ref()));
-                head = f.as_ref();
-            }
-            spine.reverse();
-
-            let mut func = eval_typed_expr(runtime, &env, head, gas).await?;
-            for (func_type, arg_expr) in spine {
-                check_runtime_cancelled(runtime)?;
-                gas.charge(gas.costs.eval_app_step)?;
-                let arg = eval_typed_expr(runtime, &env, arg_expr, gas).await?;
-                func = apply(
-                    runtime,
-                    func,
-                    arg,
-                    Some(&func_type),
-                    Some(&arg_expr.typ),
-                    gas,
-                )
-                .await?;
-            }
-            Ok(func)
-        }
-        TypedExprKind::Project { expr, field } => {
-            let value = eval_typed_expr(runtime, &env, expr, gas).await?;
-            project_pointer(&runtime.heap, field, &value)
-        }
-        TypedExprKind::Lam { param, body } => {
-            let param_ty = split_fun(&expr.typ)
-                .map(|(arg, _)| arg)
-                .ok_or_else(|| EngineError::NotCallable(expr.typ.to_string()))?;
-            runtime.heap.alloc_closure(
-                env.clone(),
-                param.clone(),
-                param_ty,
-                expr.typ.clone(),
-                Arc::new(body.as_ref().clone()),
-            )
-        }
-        TypedExprKind::LetRec { bindings, body } => {
-            let mut env_rec = env.clone();
-            let mut slots = Vec::with_capacity(bindings.len());
-            for (name, _) in bindings {
-                let placeholder = runtime.heap.alloc_uninitialized(name.clone())?;
-                env_rec = env_rec.extend(name.clone(), placeholder);
-                slots.push(placeholder);
-            }
-
-            for ((_, def), slot) in bindings.iter().zip(slots.iter()) {
-                check_runtime_cancelled(runtime)?;
-                gas.charge(gas.costs.eval_node)?;
-                let def_ptr = eval_typed_expr(runtime, &env_rec, def, gas).await?;
-                let def_value = runtime.heap.get(&def_ptr)?;
-                runtime.heap.overwrite(slot, def_value.as_ref().clone())?;
-            }
-
-            eval_typed_expr(runtime, &env_rec, body, gas).await
-        }
-        TypedExprKind::Ite {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            let cond_ptr = eval_typed_expr(runtime, &env, cond, gas).await?;
-            match runtime.heap.pointer_as_bool(&cond_ptr) {
-                Ok(true) => eval_typed_expr(runtime, &env, then_expr, gas).await,
-                Ok(false) => eval_typed_expr(runtime, &env, else_expr, gas).await,
-                Err(EngineError::NativeType { got, .. }) => Err(EngineError::ExpectedBool(got)),
-                Err(err) => Err(err),
-            }
-        }
-        TypedExprKind::Match { scrutinee, arms } => {
-            let value = eval_typed_expr(runtime, &env, scrutinee, gas).await?;
-            for (pat, expr) in arms {
-                check_runtime_cancelled(runtime)?;
-                gas.charge(gas.costs.eval_match_arm)?;
-                if let Some(bindings) = match_pattern_ptr(&runtime.heap, pat, &value) {
-                    let env = env.extend_many(bindings);
-                    return eval_typed_expr(runtime, &env, expr, gas).await;
-                }
-            }
-            Err(EngineError::MatchFailure)
-        }
-        TypedExprKind::Let { .. } => {
-            unreachable!("let chain handled in eval_typed_expr loop")
-        }
-    }
-}
-
-enum EvalLoopControl {
+enum EvalControl {
     Push {
         expr: Arc<TypedExpr>,
         env: Environment,
@@ -4600,7 +4302,7 @@ enum EvalLoopControl {
     Return(Pointer),
 }
 
-enum EvalLoopApplyResult {
+enum EvalApplyResult {
     Value(Pointer),
     Push {
         expr: Arc<TypedExpr>,
@@ -4608,12 +4310,12 @@ enum EvalLoopApplyResult {
     },
 }
 
-struct EvalLoopWorkItem {
+struct EvalWorkItem {
     frame: Pointer,
     returned: Option<Pointer>,
 }
 
-impl EvalLoopWorkItem {
+impl EvalWorkItem {
     fn enter(frame: Pointer) -> Self {
         Self {
             frame,
@@ -4629,27 +4331,27 @@ impl EvalLoopWorkItem {
     }
 }
 
-struct EvalLoopScheduler {
-    ready: VecDeque<EvalLoopWorkItem>,
+struct EvalScheduler {
+    ready: VecDeque<EvalWorkItem>,
 }
 
-impl EvalLoopScheduler {
+impl EvalScheduler {
     fn new(root: Pointer) -> Self {
         let mut ready = VecDeque::new();
-        ready.push_front(EvalLoopWorkItem::enter(root));
+        ready.push_front(EvalWorkItem::enter(root));
         Self { ready }
     }
 
-    fn schedule_next(&mut self, item: EvalLoopWorkItem) {
+    fn schedule_next(&mut self, item: EvalWorkItem) {
         self.ready.push_front(item);
     }
 
-    fn pop_next(&mut self) -> Option<EvalLoopWorkItem> {
+    fn pop_next(&mut self) -> Option<EvalWorkItem> {
         self.ready.pop_front()
     }
 }
 
-pub(crate) async fn eval_typed_expr_loop<State>(
+pub(crate) async fn eval_typed_expr<State>(
     runtime: &RuntimeSnapshot<State>,
     env: &Environment,
     expr: &TypedExpr,
@@ -4660,18 +4362,10 @@ where
 {
     check_runtime_cancelled(runtime)?;
     let root_parent = runtime.heap.alloc_root_frame_parent()?;
-    eval_typed_expr_loop_from_parent(
-        runtime,
-        root_parent,
-        EvalLoopStop::RootSentinel,
-        env,
-        expr,
-        gas,
-    )
-    .await
+    eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr, gas).await
 }
 
-pub(crate) async fn eval_typed_expr_loop_child<State>(
+pub(crate) async fn eval_typed_expr_child<State>(
     runtime: &RuntimeSnapshot<State>,
     parent: Pointer,
     env: &Environment,
@@ -4682,27 +4376,19 @@ where
     State: Clone + Send + Sync + 'static,
 {
     check_runtime_cancelled(runtime)?;
-    eval_typed_expr_loop_from_parent(
-        runtime,
-        parent,
-        EvalLoopStop::Parent(parent),
-        env,
-        expr,
-        gas,
-    )
-    .await
+    eval_typed_expr_from_parent(runtime, parent, EvalStop::Parent(parent), env, expr, gas).await
 }
 
 #[derive(Clone, Copy)]
-enum EvalLoopStop {
+enum EvalStop {
     RootSentinel,
     Parent(Pointer),
 }
 
-async fn eval_typed_expr_loop_from_parent<State>(
+async fn eval_typed_expr_from_parent<State>(
     runtime: &RuntimeSnapshot<State>,
     initial_parent: Pointer,
-    stop: EvalLoopStop,
+    stop: EvalStop,
     env: &Environment,
     expr: &TypedExpr,
     gas: &mut GasMeter,
@@ -4715,49 +4401,49 @@ where
         runtime
             .heap
             .alloc_frame(frame_for_expr(initial_parent, root_expr, env.clone()))?;
-    let mut scheduler = EvalLoopScheduler::new(root_frame);
+    let mut scheduler = EvalScheduler::new(root_frame);
 
     loop {
         check_runtime_cancelled(runtime)?;
         let item = scheduler
             .pop_next()
-            .ok_or_else(|| EngineError::Internal("loop scheduler ran out of ready work".into()))?;
+            .ok_or_else(|| EngineError::Internal("eval scheduler ran out of ready work".into()))?;
         let frame = runtime.heap.pointer_as_frame(&item.frame)?;
         let control = match item.returned {
-            Some(value) => eval_loop_receive(runtime, item.frame, frame, value, gas).await?,
-            None => eval_loop_enter(runtime, item.frame, frame, gas).await?,
+            Some(value) => eval_receive(runtime, item.frame, frame, value, gas).await?,
+            None => eval_enter(runtime, item.frame, frame, gas).await?,
         };
 
         match control {
-            EvalLoopControl::Push { expr, env } => {
+            EvalControl::Push { expr, env } => {
                 let child = runtime
                     .heap
                     .alloc_frame(frame_for_expr(item.frame, expr, env))?;
-                scheduler.schedule_next(EvalLoopWorkItem::enter(child));
+                scheduler.schedule_next(EvalWorkItem::enter(child));
             }
-            EvalLoopControl::Return(value) => {
+            EvalControl::Return(value) => {
                 let mut frame = runtime.heap.pointer_as_frame(&item.frame)?;
                 let parent = *frame.parent();
                 mark_frame_complete(&mut frame, value);
                 runtime.heap.replace_frame(&item.frame, frame)?;
                 match stop {
-                    EvalLoopStop::RootSentinel => {
+                    EvalStop::RootSentinel => {
                         if is_root_frame_parent(&runtime.heap, &parent)? {
                             return Ok(value);
                         }
                     }
-                    EvalLoopStop::Parent(stop_parent) => {
+                    EvalStop::Parent(stop_parent) => {
                         if parent == stop_parent {
                             return Ok(value);
                         }
                         if is_root_frame_parent(&runtime.heap, &parent)? {
                             return Err(EngineError::Internal(
-                                "loop child reached root before parent frame".into(),
+                                "child evaluation reached root before parent frame".into(),
                             ));
                         }
                     }
                 }
-                scheduler.schedule_next(EvalLoopWorkItem::receive(parent, value));
+                scheduler.schedule_next(EvalWorkItem::receive(parent, value));
             }
         }
     }
@@ -4933,12 +4619,12 @@ fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Fr
     }
 }
 
-async fn eval_loop_enter<State>(
+async fn eval_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     frame: Frame,
     gas: &mut GasMeter,
-) -> Result<EvalLoopControl, EngineError>
+) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -4947,7 +4633,7 @@ where
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
                 TypedExprKind::Bool(value) => {
-                    Ok(EvalLoopControl::Return(runtime.heap.alloc_bool(*value)?))
+                    Ok(EvalControl::Return(runtime.heap.alloc_bool(*value)?))
                 }
                 _ => frame_kind_error("bool"),
             }
@@ -4955,7 +4641,7 @@ where
         Frame::Uint(frame) => {
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
-                TypedExprKind::Uint(value) => Ok(EvalLoopControl::Return(alloc_uint_literal_as(
+                TypedExprKind::Uint(value) => Ok(EvalControl::Return(alloc_uint_literal_as(
                     runtime,
                     *value,
                     &frame.expr.typ,
@@ -4966,7 +4652,7 @@ where
         Frame::Int(frame) => {
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
-                TypedExprKind::Int(value) => Ok(EvalLoopControl::Return(alloc_int_literal_as(
+                TypedExprKind::Int(value) => Ok(EvalControl::Return(alloc_int_literal_as(
                     runtime,
                     *value,
                     &frame.expr.typ,
@@ -4977,16 +4663,16 @@ where
         Frame::Float(frame) => {
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
-                TypedExprKind::Float(value) => Ok(EvalLoopControl::Return(
-                    runtime.heap.alloc_f32(*value as f32)?,
-                )),
+                TypedExprKind::Float(value) => {
+                    Ok(EvalControl::Return(runtime.heap.alloc_f32(*value as f32)?))
+                }
                 _ => frame_kind_error("float"),
             }
         }
         Frame::String(frame) => {
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
-                TypedExprKind::String(value) => Ok(EvalLoopControl::Return(
+                TypedExprKind::String(value) => Ok(EvalControl::Return(
                     runtime.heap.alloc_string(value.clone())?,
                 )),
                 _ => frame_kind_error("string"),
@@ -4996,7 +4682,7 @@ where
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
                 TypedExprKind::Uuid(value) => {
-                    Ok(EvalLoopControl::Return(runtime.heap.alloc_uuid(*value)?))
+                    Ok(EvalControl::Return(runtime.heap.alloc_uuid(*value)?))
                 }
                 _ => frame_kind_error("uuid"),
             }
@@ -5004,9 +4690,9 @@ where
         Frame::DateTime(frame) => {
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
-                TypedExprKind::DateTime(value) => Ok(EvalLoopControl::Return(
-                    runtime.heap.alloc_datetime(*value)?,
-                )),
+                TypedExprKind::DateTime(value) => {
+                    Ok(EvalControl::Return(runtime.heap.alloc_datetime(*value)?))
+                }
                 _ => frame_kind_error("datetime"),
             }
         }
@@ -5018,7 +4704,7 @@ where
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
                 TypedExprKind::Tuple(elems) if elems.is_empty() => {
-                    Ok(EvalLoopControl::Return(runtime.heap.alloc_tuple(vec![])?))
+                    Ok(EvalControl::Return(runtime.heap.alloc_tuple(vec![])?))
                 }
                 TypedExprKind::Tuple(elems) => {
                     frame.state = FrSequenceState::EvalItem;
@@ -5028,7 +4714,7 @@ where
                     runtime
                         .heap
                         .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
-                    Ok(EvalLoopControl::Push { expr, env })
+                    Ok(EvalControl::Push { expr, env })
                 }
                 _ => frame_kind_error("tuple"),
             }
@@ -5036,7 +4722,7 @@ where
         Frame::List(mut frame) => {
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
-                TypedExprKind::List(elems) if elems.is_empty() => Ok(EvalLoopControl::Return(
+                TypedExprKind::List(elems) if elems.is_empty() => Ok(EvalControl::Return(
                     runtime.heap.alloc_adt(sym("Empty"), vec![])?,
                 )),
                 TypedExprKind::List(elems) => {
@@ -5045,7 +4731,7 @@ where
                     let expr = Arc::clone(&elems[0]);
                     let env = frame.env.clone();
                     runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
-                    Ok(EvalLoopControl::Push { expr, env })
+                    Ok(EvalControl::Push { expr, env })
                 }
                 _ => frame_kind_error("list"),
             }
@@ -5053,7 +4739,7 @@ where
         Frame::Dict(mut frame) => {
             gas.charge(gas.costs.eval_node)?;
             if frame.keys.is_empty() {
-                return Ok(EvalLoopControl::Return(
+                return Ok(EvalControl::Return(
                     runtime.heap.alloc_dict(BTreeMap::new())?,
                 ));
             }
@@ -5068,7 +4754,7 @@ where
             frame.state = FrSequenceState::EvalItem;
             let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
-            Ok(EvalLoopControl::Push { expr, env })
+            Ok(EvalControl::Push { expr, env })
         }
         Frame::RecordUpdate(mut frame) => {
             gas.charge(gas.costs.eval_node)?;
@@ -5081,13 +4767,13 @@ where
             runtime
                 .heap
                 .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
-            Ok(EvalLoopControl::Push { expr: base, env })
+            Ok(EvalControl::Push { expr: base, env })
         }
         Frame::Var(frame) => {
             gas.charge(gas.costs.eval_node)?;
             match frame.expr.kind.as_ref() {
                 TypedExprKind::Var { name, .. } => {
-                    let value = eval_loop_resolve_var(
+                    let value = eval_resolve_var(
                         runtime,
                         frame_ptr,
                         &frame.env,
@@ -5096,7 +4782,7 @@ where
                         gas,
                     )
                     .await?;
-                    Ok(EvalLoopControl::Return(value))
+                    Ok(EvalControl::Return(value))
                 }
                 _ => frame_kind_error("var"),
             }
@@ -5119,7 +4805,7 @@ where
             frame.spine = spine;
             let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-            Ok(EvalLoopControl::Push { expr: head, env })
+            Ok(EvalControl::Push { expr: head, env })
         }
         Frame::Project(mut frame) => {
             gas.charge(gas.costs.eval_node)?;
@@ -5132,7 +4818,7 @@ where
             runtime
                 .heap
                 .replace_frame(&frame_ptr, Frame::Project(frame))?;
-            Ok(EvalLoopControl::Push { expr, env })
+            Ok(EvalControl::Push { expr, env })
         }
         Frame::Lam(frame) => {
             gas.charge(gas.costs.eval_node)?;
@@ -5148,7 +4834,7 @@ where
                         frame.expr.typ.clone(),
                         Arc::clone(body),
                     )?;
-                    Ok(EvalLoopControl::Return(value))
+                    Ok(EvalControl::Return(value))
                 }
                 _ => frame_kind_error("lambda"),
             }
@@ -5162,7 +4848,7 @@ where
             frame.state = FrLetState::EvalDef;
             let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::Let(frame))?;
-            Ok(EvalLoopControl::Push { expr: def, env })
+            Ok(EvalControl::Push { expr: def, env })
         }
         Frame::LetRec(mut frame) => {
             gas.charge(gas.costs.eval_node)?;
@@ -5184,7 +4870,7 @@ where
                 runtime
                     .heap
                     .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
-                return Ok(EvalLoopControl::Push {
+                return Ok(EvalControl::Push {
                     expr: body,
                     env: recursive_env,
                 });
@@ -5195,7 +4881,7 @@ where
             runtime
                 .heap
                 .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
-            Ok(EvalLoopControl::Push {
+            Ok(EvalControl::Push {
                 expr: def,
                 env: recursive_env,
             })
@@ -5209,7 +4895,7 @@ where
             frame.state = FrBranchState::EvalCondition;
             let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::Ite(frame))?;
-            Ok(EvalLoopControl::Push { expr: cond, env })
+            Ok(EvalControl::Push { expr: cond, env })
         }
         Frame::Match(mut frame) => {
             gas.charge(gas.costs.eval_node)?;
@@ -5222,7 +4908,7 @@ where
             runtime
                 .heap
                 .replace_frame(&frame_ptr, Frame::Match(frame))?;
-            Ok(EvalLoopControl::Push {
+            Ok(EvalControl::Push {
                 expr: scrutinee,
                 env,
             })
@@ -5230,13 +4916,13 @@ where
     }
 }
 
-async fn eval_loop_receive<State>(
+async fn eval_receive<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     frame: Frame,
     value: Pointer,
     gas: &mut GasMeter,
-) -> Result<EvalLoopControl, EngineError>
+) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5252,7 +4938,7 @@ where
             frame.values.push(value);
             frame.next_index += 1;
             if frame.next_index == elems.len() {
-                return Ok(EvalLoopControl::Return(
+                return Ok(EvalControl::Return(
                     runtime.heap.alloc_tuple(frame.values.clone())?,
                 ));
             }
@@ -5261,7 +4947,7 @@ where
             runtime
                 .heap
                 .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
-            Ok(EvalLoopControl::Push { expr, env })
+            Ok(EvalControl::Push { expr, env })
         }
         Frame::List(mut frame) => {
             if frame.state != FrSequenceState::EvalItem {
@@ -5278,12 +4964,12 @@ where
                 for value in frame.values.clone().into_iter().rev() {
                     list = runtime.heap.alloc_adt(sym("Cons"), vec![value, list])?;
                 }
-                return Ok(EvalLoopControl::Return(list));
+                return Ok(EvalControl::Return(list));
             }
             let expr = Arc::clone(&elems[frame.next_index]);
             let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
-            Ok(EvalLoopControl::Push { expr, env })
+            Ok(EvalControl::Push { expr, env })
         }
         Frame::Dict(mut frame) => {
             if frame.state != FrSequenceState::EvalItem {
@@ -5296,7 +4982,7 @@ where
             frame.values.insert(key, value);
             frame.next_index += 1;
             if frame.next_index == frame.keys.len() {
-                return Ok(EvalLoopControl::Return(
+                return Ok(EvalControl::Return(
                     runtime.heap.alloc_dict(frame.values.clone())?,
                 ));
             }
@@ -5310,7 +4996,7 @@ where
             };
             let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
-            Ok(EvalLoopControl::Push { expr, env })
+            Ok(EvalControl::Push { expr, env })
         }
         Frame::RecordUpdate(mut frame) => match frame.state {
             FrRecordUpdateState::EvalBase => {
@@ -5322,7 +5008,7 @@ where
                         frame.update_values.clone(),
                         gas,
                     )?;
-                    return Ok(EvalLoopControl::Return(result));
+                    return Ok(EvalControl::Return(result));
                 }
                 frame.state = FrRecordUpdateState::EvalUpdate;
                 let expr = record_update_expr_at(&frame, frame.next_update_index)?;
@@ -5330,7 +5016,7 @@ where
                 runtime
                     .heap
                     .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
-                Ok(EvalLoopControl::Push { expr, env })
+                Ok(EvalControl::Push { expr, env })
             }
             FrRecordUpdateState::EvalUpdate => {
                 let key = frame
@@ -5348,14 +5034,14 @@ where
                     })?;
                     let result =
                         apply_record_update_values(runtime, base, frame.update_values, gas)?;
-                    return Ok(EvalLoopControl::Return(result));
+                    return Ok(EvalControl::Return(result));
                 }
                 let expr = record_update_expr_at(&frame, frame.next_update_index)?;
                 let env = frame.env.clone();
                 runtime
                     .heap
                     .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
-                Ok(EvalLoopControl::Push { expr, env })
+                Ok(EvalControl::Push { expr, env })
             }
             _ => unexpected_child_result("record update"),
         },
@@ -5363,7 +5049,7 @@ where
             FrAppState::EvalHead => {
                 frame.func = Some(value);
                 if frame.spine.is_empty() {
-                    return Ok(EvalLoopControl::Return(value));
+                    return Ok(EvalControl::Return(value));
                 }
                 gas.charge(gas.costs.eval_app_step)?;
                 frame.state = FrAppState::EvalArg;
@@ -5371,7 +5057,7 @@ where
                 let expr = Arc::clone(&frame.spine[0].expr);
                 let env = frame.env.clone();
                 runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-                Ok(EvalLoopControl::Push { expr, env })
+                Ok(EvalControl::Push { expr, env })
             }
             FrAppState::EvalArg => {
                 let idx = frame.next_arg_index;
@@ -5381,7 +5067,7 @@ where
                 let func = frame.func.ok_or_else(|| {
                     EngineError::Internal("application frame missing function".into())
                 })?;
-                match eval_loop_apply_arg(
+                match eval_apply_arg(
                     runtime,
                     frame_ptr,
                     func,
@@ -5392,28 +5078,28 @@ where
                 )
                 .await?
                 {
-                    EvalLoopApplyResult::Value(applied) => {
+                    EvalApplyResult::Value(applied) => {
                         continue_app_after_apply(runtime, frame_ptr, frame, applied, gas)
                     }
-                    EvalLoopApplyResult::Push { expr, env } => {
+                    EvalApplyResult::Push { expr, env } => {
                         frame.arg = Some(value);
                         frame.state = FrAppState::ApplyArg;
                         runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-                        Ok(EvalLoopControl::Push { expr, env })
+                        Ok(EvalControl::Push { expr, env })
                     }
                 }
             }
             FrAppState::ApplyArg => continue_app_after_apply(runtime, frame_ptr, frame, value, gas),
             _ => unexpected_child_result("application"),
         },
-        Frame::Project(frame) => {
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Project { field, .. } => Ok(EvalLoopControl::Return(
-                    project_pointer(&runtime.heap, field, &value)?,
-                )),
-                _ => frame_kind_error("project"),
-            }
-        }
+        Frame::Project(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Project { field, .. } => Ok(EvalControl::Return(project_pointer(
+                &runtime.heap,
+                field,
+                &value,
+            )?)),
+            _ => frame_kind_error("project"),
+        },
         Frame::Let(mut frame) => match frame.state {
             FrLetState::EvalDef => {
                 let TypedExprKind::Let { name, body, .. } = frame.expr.kind.as_ref() else {
@@ -5424,9 +5110,9 @@ where
                 let env = frame.env.extend(name.clone(), value);
                 let body = Arc::clone(body);
                 runtime.heap.replace_frame(&frame_ptr, Frame::Let(frame))?;
-                Ok(EvalLoopControl::Push { expr: body, env })
+                Ok(EvalControl::Push { expr: body, env })
             }
-            FrLetState::EvalBody => Ok(EvalLoopControl::Return(value)),
+            FrLetState::EvalBody => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("let"),
         },
         Frame::LetRec(mut frame) => match frame.state {
@@ -5451,7 +5137,7 @@ where
                     runtime
                         .heap
                         .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
-                    return Ok(EvalLoopControl::Push {
+                    return Ok(EvalControl::Push {
                         expr: body,
                         env: recursive_env,
                     });
@@ -5461,12 +5147,12 @@ where
                 runtime
                     .heap
                     .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
-                Ok(EvalLoopControl::Push {
+                Ok(EvalControl::Push {
                     expr: def,
                     env: recursive_env,
                 })
             }
-            FrLetRecState::EvalBody => Ok(EvalLoopControl::Return(value)),
+            FrLetRecState::EvalBody => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("let rec"),
         },
         Frame::Ite(mut frame) => match frame.state {
@@ -5492,12 +5178,12 @@ where
                 frame.state = FrBranchState::EvalSelected;
                 let env = frame.env.clone();
                 runtime.heap.replace_frame(&frame_ptr, Frame::Ite(frame))?;
-                Ok(EvalLoopControl::Push {
+                Ok(EvalControl::Push {
                     expr: selected,
                     env,
                 })
             }
-            FrBranchState::EvalSelected => Ok(EvalLoopControl::Return(value)),
+            FrBranchState::EvalSelected => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("if"),
         },
         Frame::Match(mut frame) => match frame.state {
@@ -5516,19 +5202,19 @@ where
                         runtime
                             .heap
                             .replace_frame(&frame_ptr, Frame::Match(frame))?;
-                        return Ok(EvalLoopControl::Push { expr, env });
+                        return Ok(EvalControl::Push { expr, env });
                     }
                 }
                 Err(EngineError::MatchFailure)
             }
-            FrMatchState::EvalArm => Ok(EvalLoopControl::Return(value)),
+            FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
         },
         _ => unexpected_child_result("value"),
     }
 }
 
-async fn eval_loop_apply_arg<State>(
+async fn eval_apply_arg<State>(
     runtime: &RuntimeSnapshot<State>,
     parent: Pointer,
     func: Pointer,
@@ -5536,7 +5222,7 @@ async fn eval_loop_apply_arg<State>(
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
     gas: &mut GasMeter,
-) -> Result<EvalLoopApplyResult, EngineError>
+) -> Result<EvalApplyResult, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5564,24 +5250,24 @@ where
                 got: actual_ty.to_string(),
             })?;
             subst = compose_subst(s_arg, subst);
-            Ok(EvalLoopApplyResult::Push {
+            Ok(EvalApplyResult::Push {
                 expr: Arc::new(body.apply(&subst)),
                 env: env.extend(param, arg),
             })
         }
-        Value::Native(native) => Ok(EvalLoopApplyResult::Value(
+        Value::Native(native) => Ok(EvalApplyResult::Value(
             native
-                .apply_with_context(runtime, arg, arg_type, gas, EvalContext::loop_child(parent))
+                .apply_with_context(runtime, arg, arg_type, gas, EvalContext::child(parent))
                 .await?,
         )),
-        Value::Overloaded(over) => Ok(EvalLoopApplyResult::Value(
+        Value::Overloaded(over) => Ok(EvalApplyResult::Value(
             over.apply_with_context(
                 runtime,
                 arg,
                 func_type,
                 arg_type,
                 gas,
-                EvalContext::loop_child(parent),
+                EvalContext::child(parent),
             )
             .await?,
         )),
@@ -5597,7 +5283,7 @@ fn continue_app_after_apply<State>(
     mut frame: FrApp,
     applied: Pointer,
     gas: &mut GasMeter,
-) -> Result<EvalLoopControl, EngineError>
+) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5610,17 +5296,17 @@ where
         ));
     }
     if frame.next_arg_index == frame.spine.len() {
-        return Ok(EvalLoopControl::Return(applied));
+        return Ok(EvalControl::Return(applied));
     }
     gas.charge(gas.costs.eval_app_step)?;
     frame.state = FrAppState::EvalArg;
     let expr = Arc::clone(&frame.spine[frame.next_arg_index].expr);
     let env = frame.env.clone();
     runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-    Ok(EvalLoopControl::Push { expr, env })
+    Ok(EvalControl::Push { expr, env })
 }
 
-async fn eval_loop_resolve_var<State>(
+async fn eval_resolve_var<State>(
     runtime: &RuntimeSnapshot<State>,
     parent: Pointer,
     env: &Environment,
@@ -5636,17 +5322,17 @@ where
         match value.as_ref() {
             Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                 native
-                    .call_zero_with_context(runtime, gas, EvalContext::loop_child(parent))
+                    .call_zero_with_context(runtime, gas, EvalContext::child(parent))
                     .await
             }
             _ => Ok(ptr),
         }
     } else if runtime.type_system.class_methods.contains_key(name) {
-        EvaluatorRef::new_with_loop_parent(runtime, parent)
+        EvaluatorRef::new_with_parent(runtime, parent)
             .resolve_class_method(name, typ, gas)
             .await
     } else {
-        let value = EvaluatorRef::new_with_loop_parent(runtime, parent).resolve_native(
+        let value = EvaluatorRef::new_with_parent(runtime, parent).resolve_native(
             name.as_ref(),
             typ,
             gas,
@@ -5654,7 +5340,7 @@ where
         match runtime.heap.get(&value)?.as_ref() {
             Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                 native
-                    .call_zero_with_context(runtime, gas, EvalContext::loop_child(parent))
+                    .call_zero_with_context(runtime, gas, EvalContext::child(parent))
                     .await
             }
             _ => Ok(value),
@@ -5812,72 +5498,6 @@ pub(crate) async fn apply_with_context<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    match context.backend() {
-        EvalBackend::Recursive => apply(runtime, func, arg, func_type, arg_type, gas).await,
-        EvalBackend::Loop => {
-            let func_value = runtime.heap.get(&func)?.as_ref().clone();
-            match func_value {
-                Value::Closure(Closure {
-                    env,
-                    param,
-                    param_ty,
-                    typ,
-                    body,
-                }) => {
-                    let mut subst = Subst::new_sync();
-                    if let Some(expected) = func_type {
-                        let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
-                            expected: typ.to_string(),
-                            got: expected.to_string(),
-                        })?;
-                        subst = compose_subst(s_fun, subst);
-                    }
-                    let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
-                    let param_ty = param_ty.apply(&subst);
-                    let s_arg =
-                        unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
-                            expected: param_ty.to_string(),
-                            got: actual_ty.to_string(),
-                        })?;
-                    subst = compose_subst(s_arg, subst);
-                    let env = env.extend(param, arg);
-                    let body = body.apply(&subst);
-                    match context.loop_parent() {
-                        Some(parent) => {
-                            eval_typed_expr_loop_child(runtime, parent, &env, &body, gas).await
-                        }
-                        None => eval_typed_expr_loop(runtime, &env, &body, gas).await,
-                    }
-                }
-                Value::Native(native) => {
-                    native
-                        .apply_with_context(runtime, arg, arg_type, gas, context)
-                        .await
-                }
-                Value::Overloaded(over) => {
-                    over.apply_with_context(runtime, arg, func_type, arg_type, gas, context)
-                        .await
-                }
-                _ => Err(EngineError::NotCallable(
-                    runtime.heap.type_name(&func)?.into(),
-                )),
-            }
-        }
-    }
-}
-
-#[async_recursion]
-pub(crate) async fn apply<State>(
-    runtime: &RuntimeSnapshot<State>,
-    func: Pointer,
-    arg: Pointer,
-    func_type: Option<&Type>,
-    arg_type: Option<&Type>,
-    gas: &mut GasMeter,
-) -> Result<Pointer, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
     let func_value = runtime.heap.get(&func)?.as_ref().clone();
     match func_value {
         Value::Closure(Closure {
@@ -5904,10 +5524,20 @@ where
             subst = compose_subst(s_arg, subst);
             let env = env.extend(param, arg);
             let body = body.apply(&subst);
-            eval_typed_expr(runtime, &env, &body, gas).await
+            match context.parent() {
+                Some(parent) => eval_typed_expr_child(runtime, parent, &env, &body, gas).await,
+                None => eval_typed_expr(runtime, &env, &body, gas).await,
+            }
         }
-        Value::Native(native) => native.apply(runtime, arg, arg_type, gas).await,
-        Value::Overloaded(over) => over.apply(runtime, arg, func_type, arg_type, gas).await,
+        Value::Native(native) => {
+            native
+                .apply_with_context(runtime, arg, arg_type, gas, context)
+                .await
+        }
+        Value::Overloaded(over) => {
+            over.apply_with_context(runtime, arg, func_type, arg_type, gas, context)
+                .await
+        }
         _ => Err(EngineError::NotCallable(
             runtime.heap.type_name(&func)?.into(),
         )),
@@ -5998,14 +5628,13 @@ fn match_patterns(
 }
 
 #[cfg(test)]
-mod eval_loop_tests {
+mod eval_tests {
     use super::*;
     use crate::compiler::Compiler;
     use crate::evaluator::Evaluator;
     use crate::runtime_env::RuntimeEnv;
-    use crate::value::{pointer_display, pointer_eq};
 
-    fn compile_loop_test(
+    fn compile_eval_test(
         source: &str,
         engine: Engine<()>,
     ) -> (RuntimeSnapshot<()>, CompiledProgram) {
@@ -6016,18 +5645,18 @@ mod eval_loop_tests {
     }
 
     #[test]
-    fn loop_scheduler_pops_newest_ready_work_first() {
+    fn eval_scheduler_pops_newest_ready_work_first() {
         let heap = Heap::new();
         let root = heap.alloc_i32(0).unwrap();
         let first = heap.alloc_i32(1).unwrap();
         let second = heap.alloc_i32(2).unwrap();
         let returned = heap.alloc_i32(3).unwrap();
-        let mut scheduler = EvalLoopScheduler::new(root);
+        let mut scheduler = EvalScheduler::new(root);
 
         assert_eq!(scheduler.pop_next().unwrap().frame, root);
 
-        scheduler.schedule_next(EvalLoopWorkItem::enter(first));
-        scheduler.schedule_next(EvalLoopWorkItem::receive(second, returned));
+        scheduler.schedule_next(EvalWorkItem::enter(first));
+        scheduler.schedule_next(EvalWorkItem::receive(second, returned));
 
         let next = scheduler.pop_next().unwrap();
         assert_eq!(next.frame, second);
@@ -6036,38 +5665,19 @@ mod eval_loop_tests {
         assert!(scheduler.pop_next().is_none());
     }
 
-    async fn assert_loop_matches_recursive(source: &str) {
-        let (runtime, program) = compile_loop_test(source, Engine::with_prelude(()).unwrap());
-
-        let mut recursive_gas = GasMeter::default();
-        let recursive = eval_typed_expr(
-            &runtime,
-            &program.env,
-            program.expr.as_ref(),
-            &mut recursive_gas,
-        )
-        .await
-        .unwrap();
-
-        let mut loop_gas = GasMeter::default();
-        let looped =
-            eval_typed_expr_loop(&runtime, &program.env, program.expr.as_ref(), &mut loop_gas)
-                .await
-                .unwrap();
-
-        if !pointer_eq(&runtime.heap, &recursive, &looped).unwrap() {
-            let recursive_display = pointer_display(&runtime.heap, &recursive).unwrap();
-            let loop_display = pointer_display(&runtime.heap, &looped).unwrap();
-            panic!(
-                "loop evaluator disagreed with recursive evaluator\nsource:\n{source}\nrecursive: {recursive_display}\nloop: {loop_display}",
-            );
-        }
+    async fn eval_i32(source: &str, engine: Engine<()>) -> i32 {
+        let (runtime, program) = compile_eval_test(source, engine);
+        let mut gas = GasMeter::default();
+        let value = eval_typed_expr(&runtime, &program.env, program.expr.as_ref(), &mut gas)
+            .await
+            .unwrap();
+        i32::from_pointer(&runtime.heap, &value).unwrap()
     }
 
-    async fn eval_loop_bool(source: &str, engine: Engine<()>) -> bool {
-        let (runtime, program) = compile_loop_test(source, engine);
+    async fn eval_bool(source: &str, engine: Engine<()>) -> bool {
+        let (runtime, program) = compile_eval_test(source, engine);
         let mut gas = GasMeter::default();
-        let value = eval_typed_expr_loop(&runtime, &program.env, program.expr.as_ref(), &mut gas)
+        let value = eval_typed_expr(&runtime, &program.env, program.expr.as_ref(), &mut gas)
             .await
             .unwrap();
         runtime.heap.pointer_as_bool(&value).unwrap()
@@ -6111,32 +5721,24 @@ mod eval_loop_tests {
         outer_parent: Arc<Mutex<Option<Pointer>>>,
     }
 
-    fn engine_with_backend_marker() -> Engine<()> {
+    fn engine_with_context_marker() -> Engine<()> {
         let mut engine = Engine::with_prelude(()).unwrap();
         let bool_ty = Type::builtin(BuiltinTypeId::Bool);
         let i32_ty = Type::builtin(BuiltinTypeId::I32);
         engine
             .export_native(
-                "backend_marker0",
+                "context_marker0",
                 Scheme::new(vec![], vec![], bool_ty.clone()),
                 0,
-                |engine, _, _| {
-                    engine
-                        .heap
-                        .alloc_bool(engine.backend() == EvalBackend::Loop)
-                },
+                |engine, _, _| engine.heap.alloc_bool(engine.parent_frame().is_some()),
             )
             .unwrap();
         engine
             .export_native(
-                "backend_marker",
+                "context_marker",
                 Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), bool_ty.clone())),
                 1,
-                |engine, _, _| {
-                    engine
-                        .heap
-                        .alloc_bool(engine.backend() == EvalBackend::Loop)
-                },
+                |engine, _, _| engine.heap.alloc_bool(engine.parent_frame().is_some()),
             )
             .unwrap();
 
@@ -6169,8 +5771,8 @@ mod eval_loop_tests {
         engine
     }
 
-    fn engine_with_backend_marker_and_log_module() -> Engine<()> {
-        let mut engine = engine_with_backend_marker();
+    fn engine_with_context_marker_and_log_module() -> Engine<()> {
+        let mut engine = engine_with_context_marker();
         engine.add_default_resolvers();
         let mut module = Module::new("host.log");
         module
@@ -6201,7 +5803,7 @@ mod eval_loop_tests {
                         async move {
                             {
                                 let mut outer_parent = engine.state.outer_parent.lock().unwrap();
-                                *outer_parent = engine.loop_parent();
+                                *outer_parent = engine.parent_frame();
                             }
 
                             let mut gas = GasMeter::default();
@@ -6228,7 +5830,7 @@ mod eval_loop_tests {
                 0,
                 |engine: EvaluatorRef<'_, ParentProbeState>, _, _| {
                     let outer_parent = *engine.state.outer_parent.lock().unwrap();
-                    let mut current = engine.loop_parent();
+                    let mut current = engine.parent_frame();
                     let mut found = false;
 
                     while let Some(ptr) = current {
@@ -6260,29 +5862,33 @@ mod eval_loop_tests {
     }
 
     #[tokio::test]
-    async fn loop_matches_recursive_for_literals_sequences_and_records() {
-        assert_loop_matches_recursive(
+    async fn evaluator_handles_literals_sequences_and_records() {
+        let result = eval_i32(
             r#"
             type Foo = Bar { x: i32, y: i32, z: i32 }
             type Sum = A { x: i32 } | B { x: i32 }
 
             let
                 foo: Foo = Bar { x = 1, y = 2, z = 3 },
+                tuple = (1, 2, 3),
+                list = [1, 2, 3],
                 foo2 = { foo with { x = 6 } },
                 sum: Sum = A { x = 1 },
                 sum2 = match sum
                     when A {x} -> { sum with { x = x + 1 } }
                     when B {x} -> { sum with { x = x + 2 } }
             in
-                (true, 7, "ok", [1, 2, 3], foo2.x, match sum2 when A {x} -> x when B {x} -> x)
+                foo2.x + (match sum2 when A {x} -> x when B {x} -> x)
             "#,
+            Engine::with_prelude(()).unwrap(),
         )
         .await;
+        assert_eq!(result, 8);
     }
 
     #[tokio::test]
-    async fn loop_matches_recursive_for_control_flow_and_typeclasses() {
-        assert_loop_matches_recursive(
+    async fn evaluator_handles_control_flow_and_typeclasses() {
+        let result = eval_i32(
             r#"
             class Pick a where
                 pick : a -> a
@@ -6297,13 +5903,15 @@ mod eval_loop_tests {
                     when Some x -> fact x
                     when None -> 0
             "#,
+            Engine::with_prelude(()).unwrap(),
         )
         .await;
+        assert_eq!(result, 24);
     }
 
     #[tokio::test]
-    async fn loop_matches_recursive_for_prelude_collection_callbacks() {
-        assert_loop_matches_recursive(
+    async fn evaluator_handles_prelude_collection_callbacks() {
+        let result = eval_i32(
             r#"
             let
                 xs = [1, 2, 3],
@@ -6311,43 +5919,45 @@ mod eval_loop_tests {
                 zs = filter (\x -> x == 2) xs,
                 total = foldl (\acc x -> acc + x) 0 ys
             in
-                (ys, zs, total)
+                total
             "#,
+            Engine::with_prelude(()).unwrap(),
         )
         .await;
+        assert_eq!(result, 9);
     }
 
     #[tokio::test]
-    async fn loop_native_callbacks_keep_loop_backend() {
-        assert!(eval_loop_bool("call_once backend_marker 1", engine_with_backend_marker()).await);
+    async fn native_callbacks_receive_cactus_context() {
+        assert!(eval_bool("call_once context_marker 1", engine_with_context_marker()).await);
     }
 
     #[tokio::test]
-    async fn public_evaluator_uses_loop_backend() {
-        assert!(eval_public_bool("backend_marker0", engine_with_backend_marker()).await);
+    async fn public_evaluator_uses_cactus_context() {
+        assert!(eval_public_bool("context_marker0", engine_with_context_marker()).await);
     }
 
     #[tokio::test]
-    async fn module_log_callback_keeps_loop_backend() {
+    async fn module_log_callback_receives_cactus_context() {
         let rendered = eval_public_string(
             r#"
             import host.log (debug)
 
-            type Backend = Backend { value: i32 }
+            type Context = Context { value: i32 }
 
-            instance Show Backend where
+            instance Show Context where
                 show =
-                    if backend_marker0
-                    then (\_ -> "loop")
-                    else (\_ -> "recursive")
+                    if context_marker0
+                    then (\_ -> "context")
+                    else (\_ -> "missing")
 
-            debug (Backend { value = 1 })
+            debug (Context { value = 1 })
             "#,
-            engine_with_backend_marker_and_log_module(),
+            engine_with_context_marker_and_log_module(),
         )
         .await;
 
-        assert_eq!(rendered, "loop");
+        assert_eq!(rendered, "context");
     }
 
     #[tokio::test]
@@ -6362,30 +5972,30 @@ mod eval_loop_tests {
     }
 
     #[tokio::test]
-    async fn loop_class_method_resolution_uses_loop_backend() {
+    async fn class_method_resolution_receives_cactus_context() {
         assert!(
-            eval_loop_bool(
+            eval_bool(
                 r#"
-                class Backend a where
+                class Context a where
                     marker : a -> bool
 
-                instance Backend i32 where
+                instance Context i32 where
                     marker =
-                        if backend_marker0
+                        if context_marker0
                         then (\x -> true)
                         else (\x -> false)
 
                 marker 1
                 "#,
-                engine_with_backend_marker(),
+                engine_with_context_marker(),
             )
             .await
         );
     }
 
     #[tokio::test]
-    async fn loop_matches_recursive_for_higher_order_closures() {
-        assert_loop_matches_recursive(
+    async fn evaluator_handles_higher_order_closures() {
+        let result = eval_i32(
             r#"
             let
                 apply_twice = \f x -> f (f x),
@@ -6393,15 +6003,17 @@ mod eval_loop_tests {
                 a = apply_twice (\n -> n + 1) 1,
                 b = compose (\n -> n + 1) (\n -> n * 2) 3
             in
-                (a, b)
+                a + b
             "#,
+            Engine::with_prelude(()).unwrap(),
         )
         .await;
+        assert_eq!(result, 10);
     }
 
     #[tokio::test]
-    async fn loop_matches_recursive_for_partial_and_multi_arg_closures() {
-        assert_loop_matches_recursive(
+    async fn evaluator_handles_partial_and_multi_arg_closures() {
+        let result = eval_i32(
             r#"
             let
                 add = \x y -> x + y,
@@ -6409,9 +6021,11 @@ mod eval_loop_tests {
                 inc = add 1,
                 picked = choose false (inc 10) (add 20 22)
             in
-                (inc 41, picked)
+                (inc 41) + picked
             "#,
+            Engine::with_prelude(()).unwrap(),
         )
         .await;
+        assert_eq!(result, 84);
     }
 }
