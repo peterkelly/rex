@@ -8,8 +8,7 @@ use rex_typesystem::{
 use rex_util::GasMeter;
 
 use crate::EvaluatorRef;
-use crate::engine::{AsyncHandler, Export, Handler, NativeFuture, apply, order_adt_family};
-use crate::evaluator::EvaluatorRef as RuntimeEvaluatorRef;
+use crate::engine::{AsyncHandler, Export, Handler, NativeFuture, order_adt_family};
 use crate::{
     CancellationToken, Engine, EngineError, FromPointer, IntoPointer, Pointer, ROOT_MODULE_NAME,
     RexType, Value,
@@ -427,18 +426,12 @@ where
                     };
                     let show_ty = Type::fun(arg_ty.clone(), Type::builtin(BuiltinTypeId::String));
                     let mut gas = GasMeter::default();
-                    let show_ptr = RuntimeEvaluatorRef::new(&engine)
+                    let show_ptr = engine
                         .resolve_class_method(&sym("show"), &show_ty, &mut gas)
                         .await?;
-                    let rendered_ptr = apply(
-                        &engine,
-                        show_ptr,
-                        args[0],
-                        Some(&show_ty),
-                        Some(&arg_ty),
-                        &mut gas,
-                    )
-                    .await?;
+                    let rendered_ptr = engine
+                        .apply_pointer(show_ptr, args[0], Some(&show_ty), Some(&arg_ty), &mut gas)
+                        .await?;
                     let rendered = String::from_pointer(&engine.heap, &rendered_ptr)?;
                     log(&rendered);
                     engine.heap.alloc_string(rendered)

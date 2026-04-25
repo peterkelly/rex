@@ -1604,7 +1604,8 @@ impl OverloadedFn {
             return Ok(func);
         }
 
-        let imp = EvaluatorRef::new(runtime).resolve_native_impl(self.name.as_ref(), &full_ty)?;
+        let imp = EvaluatorRef::new_with_backend(runtime, backend)
+            .resolve_native_impl(self.name.as_ref(), &full_ty)?;
         let amount = gas
             .costs
             .native_call_base
@@ -5480,7 +5481,11 @@ where
             .resolve_class_method(name, typ, gas)
             .await
     } else {
-        let value = EvaluatorRef::new(runtime).resolve_native(name.as_ref(), typ, gas)?;
+        let value = EvaluatorRef::new_with_backend(runtime, EvalBackend::Loop).resolve_native(
+            name.as_ref(),
+            typ,
+            gas,
+        )?;
         match runtime.heap.get(&value)?.as_ref() {
             Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                 native
@@ -5826,6 +5831,8 @@ fn match_patterns(
 mod eval_loop_tests {
     use super::*;
     use crate::compiler::Compiler;
+    use crate::evaluator::Evaluator;
+    use crate::runtime_env::RuntimeEnv;
     use crate::value::{pointer_display, pointer_eq};
 
     fn compile_loop_test(
@@ -5874,6 +5881,33 @@ mod eval_loop_tests {
             .unwrap();
         runtime.heap.pointer_as_bool(&value).unwrap()
     }
+
+    async fn eval_public_bool(source: &str, engine: Engine<()>) -> bool {
+        let runtime = RuntimeEnv::new(engine.clone());
+        let compiler = Compiler::new(engine);
+        let mut evaluator = Evaluator::new_with_compiler(runtime, compiler);
+        let mut gas = GasMeter::default();
+        let (value, typ) = evaluator.eval_snippet(source, &mut gas).await.unwrap();
+        assert_eq!(typ, Type::builtin(BuiltinTypeId::Bool));
+        evaluator
+            .runtime
+            .runtime
+            .heap
+            .pointer_as_bool(&value)
+            .unwrap()
+    }
+
+    async fn eval_public_string(source: &str, engine: Engine<()>) -> String {
+        let runtime = RuntimeEnv::new(engine.clone());
+        let compiler = Compiler::new(engine);
+        let mut evaluator = Evaluator::new_with_compiler(runtime, compiler);
+        let mut gas = GasMeter::default();
+        let (value, typ) = evaluator.eval_snippet(source, &mut gas).await.unwrap();
+        assert_eq!(typ, Type::builtin(BuiltinTypeId::String));
+        String::from_pointer(&evaluator.runtime.runtime.heap, &value).unwrap()
+    }
+
+    fn ignore_log(_: &str) {}
 
     fn engine_with_backend_marker() -> Engine<()> {
         let mut engine = Engine::with_prelude(()).unwrap();
@@ -5930,6 +5964,17 @@ mod eval_loop_tests {
                 },
             )
             .unwrap();
+        engine
+    }
+
+    fn engine_with_backend_marker_and_log_module() -> Engine<()> {
+        let mut engine = engine_with_backend_marker();
+        engine.add_default_resolvers();
+        let mut module = Module::new("host.log");
+        module
+            .export_tracing_log_function("debug", ignore_log)
+            .unwrap();
+        engine.inject_module(module).unwrap();
         engine
     }
 
@@ -5994,6 +6039,34 @@ mod eval_loop_tests {
     #[tokio::test]
     async fn loop_native_callbacks_keep_loop_backend() {
         assert!(eval_loop_bool("call_once backend_marker 1", engine_with_backend_marker()).await);
+    }
+
+    #[tokio::test]
+    async fn public_evaluator_uses_loop_backend() {
+        assert!(eval_public_bool("backend_marker0", engine_with_backend_marker()).await);
+    }
+
+    #[tokio::test]
+    async fn module_log_callback_keeps_loop_backend() {
+        let rendered = eval_public_string(
+            r#"
+            import host.log (debug)
+
+            type Backend = Backend { value: i32 }
+
+            instance Show Backend where
+                show =
+                    if backend_marker0
+                    then (\_ -> "loop")
+                    else (\_ -> "recursive")
+
+            debug (Backend { value = 1 })
+            "#,
+            engine_with_backend_marker_and_log_module(),
+        )
+        .await;
+
+        assert_eq!(rendered, "loop");
     }
 
     #[tokio::test]

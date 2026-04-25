@@ -89,7 +89,7 @@ where
     ) -> Result<Pointer, EngineError> {
         check_runtime_cancelled(&self.runtime.runtime)?;
         self.runtime.validate_internal(program)?;
-        eval_typed_expr(
+        eval_typed_expr_loop(
             &self.runtime.runtime,
             &program.env,
             program.expr.as_ref(),
