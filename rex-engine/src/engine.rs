@@ -40,8 +40,12 @@ use crate::prelude::{
 use crate::stack::{
     FrApp, FrAppArg, FrAppState, FrBool, FrBranchState, FrDateTime, FrDict, FrFloat, FrHole, FrInt,
     FrIte, FrLam, FrLet, FrLetRec, FrLetRecState, FrLetState, FrList, FrMatch, FrMatchArm,
-    FrMatchState, FrProject, FrRecordUpdate, FrRecordUpdateState, FrSequenceState, FrString,
-    FrTuple, FrUint, FrUuid, FrValueState, FrVar, Frame,
+    FrMatchState, FrNativeCall, FrNativeCallState, FrProject, FrRecordUpdate, FrRecordUpdateState,
+    FrSequenceState, FrString, FrTuple, FrUint, FrUuid, FrValueState, FrVar, Frame, NativeArrayEq,
+    NativeArrayEqState, NativeDictMap, NativeDictTraverseResult, NativeFold, NativeFoldOrder,
+    NativeFoldState, NativeLogShow, NativeMean, NativeMeanState, NativeSequenceFilter,
+    NativeSequenceFilterMap, NativeSequenceFlatMap, NativeSequenceMap, NativeSequenceShape,
+    NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFlatMap, NativeUnaryMap, NativeUnaryShape,
 };
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{
@@ -318,8 +322,23 @@ fn sanitize_type_name_for_symbol(typ: &Type) -> String {
 pub type NativeFuture<'a> = BoxFuture<'a, Result<Pointer, EngineError>>;
 type NativeId = u64;
 pub(crate) const RUNTIME_LINK_ABI_VERSION: u32 = 1;
+pub(crate) enum SchedulerNativeResult {
+    Ready(Pointer),
+    Task(NativeTask),
+}
+
 pub type SyncNativeCallable<State> = Arc<
     dyn for<'a> Fn(EvaluatorRef<'a, State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        + Send
+        + Sync
+        + 'static,
+>;
+pub(crate) type SchedulerNativeCallable<State> = Arc<
+    dyn for<'a> Fn(
+            EvaluatorRef<'a, State>,
+            Type,
+            &'a [Pointer],
+        ) -> Result<SchedulerNativeResult, EngineError>
         + Send
         + Sync
         + 'static,
@@ -358,6 +377,20 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
             scheme,
             arity,
             callable: NativeCallable::Sync(func),
+            gas_cost,
+        }
+    }
+
+    fn scheduler(
+        scheme: Scheme,
+        arity: usize,
+        func: SchedulerNativeCallable<State>,
+        gas_cost: u64,
+    ) -> Self {
+        Self {
+            scheme,
+            arity,
+            callable: NativeCallable::Scheduler(func),
             gas_cost,
         }
     }
@@ -514,6 +547,60 @@ where
             let func: SyncNativeCallable<State> =
                 Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
             let registration = NativeRegistration::sync(scheme.clone(), arity, func, gas_cost);
+            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
+        });
+        Self::from_injector(name, interface, injector)
+    }
+
+    pub(crate) fn from_native_scheduler<F>(
+        name: impl Into<String>,
+        scheme: Scheme,
+        arity: usize,
+        handler: F,
+    ) -> Result<Self, EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                Type,
+                Vec<Pointer>,
+            ) -> Result<SchedulerNativeResult, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self::from_native_scheduler_with_gas_cost(name, scheme, arity, 0, handler)
+    }
+
+    pub(crate) fn from_native_scheduler_with_gas_cost<F>(
+        name: impl Into<String>,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<Self, EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                Type,
+                Vec<Pointer>,
+            ) -> Result<SchedulerNativeResult, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
+        let normalized = normalize_name(&name).to_string();
+        let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
+        let handler = Arc::new(handler);
+        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
+            let handler = Arc::clone(&handler);
+            let func: SchedulerNativeCallable<State> = Arc::new(move |engine, typ, args| {
+                let args = args.to_vec();
+                let handler = Arc::clone(&handler);
+                handler(engine, typ, args)
+            });
+            let registration = NativeRegistration::scheduler(scheme.clone(), arity, func, gas_cost);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
@@ -1214,6 +1301,7 @@ where
 #[derive(Clone)]
 pub(crate) enum NativeCallable<State: Clone + Send + Sync + 'static> {
     Sync(SyncNativeCallable<State>),
+    Scheduler(SchedulerNativeCallable<State>),
     Async(AsyncNativeCallable<State>),
     AsyncCancellable(AsyncNativeCallableCancellable<State>),
 }
@@ -1228,6 +1316,7 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         match self {
             NativeCallable::Sync(_) => write!(f, "Sync"),
+            NativeCallable::Scheduler(_) => write!(f, "Scheduler"),
             NativeCallable::Async(_) => write!(f, "Async"),
             NativeCallable::AsyncCancellable(_) => write!(f, "AsyncCancellable"),
         }
@@ -1251,6 +1340,9 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
             NativeCallable::Sync(f) => {
                 (f)(EvaluatorRef::new_with_context(runtime, context), &typ, args)
             }
+            NativeCallable::Scheduler(_) => Err(EngineError::Internal(
+                "scheduler native called through pointer-returning native ABI".into(),
+            )),
             NativeCallable::Async(f) => {
                 let call_fut =
                     (f)(EvaluatorRef::new_with_context(runtime, context), typ, args).fuse();
@@ -1301,6 +1393,11 @@ pub struct NativeFn {
     gas_cost: u64,
     applied: Vec<Pointer>,
     applied_types: Vec<Type>,
+}
+
+enum NativeApplyResult {
+    Value(Pointer),
+    Task(NativeTask),
 }
 
 impl NativeFn {
@@ -1354,10 +1451,6 @@ impl NativeFn {
         &self.name
     }
 
-    pub(crate) fn is_zero_unapplied(&self) -> bool {
-        self.arity == 0 && self.applied.is_empty()
-    }
-
     pub(crate) async fn call_zero_with_context<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeSnapshot<State>,
@@ -1390,7 +1483,7 @@ impl NativeFn {
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
         context: EvalContext,
-    ) -> Result<Pointer, EngineError> {
+    ) -> Result<NativeApplyResult, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
         // accumulate partial-application state and never mutate shared values.
         if self.arity == 0 {
@@ -1420,15 +1513,18 @@ impl NativeFn {
                 applied,
                 applied_types,
             } = self;
-            return runtime.heap.alloc_native(
-                native_id,
-                name,
-                arity,
-                typ,
-                gas_cost,
-                applied,
-                applied_types,
-            );
+            return runtime
+                .heap
+                .alloc_native(
+                    native_id,
+                    name,
+                    arity,
+                    typ,
+                    gas_cost,
+                    applied,
+                    applied_types,
+                )
+                .map(NativeApplyResult::Value);
         }
 
         let mut full_ty = self.typ.clone();
@@ -1446,10 +1542,22 @@ impl NativeFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        runtime
-            .native_callable(self.native_id)?
-            .call_with_context(runtime, full_ty, &self.applied, context)
-            .await
+        match runtime.native_callable(self.native_id)? {
+            NativeCallable::Scheduler(f) => {
+                match f(
+                    EvaluatorRef::new_with_context(runtime, context),
+                    full_ty,
+                    &self.applied,
+                )? {
+                    SchedulerNativeResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
+                    SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),
+                }
+            }
+            callable => callable
+                .call_with_context(runtime, full_ty, &self.applied, context)
+                .await
+                .map(NativeApplyResult::Value),
+        }
     }
 }
 
@@ -1874,7 +1982,6 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub state: Arc<State>,
-    pub(crate) env: Environment,
     pub(crate) natives: NativeRegistry<State>,
     pub(crate) typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
@@ -1985,7 +2092,6 @@ where
     pub(crate) fn runtime_snapshot(&self) -> RuntimeSnapshot<State> {
         RuntimeSnapshot {
             state: Arc::clone(&self.state),
-            env: self.env.clone(),
             natives: self.natives.clone(),
             typeclasses: self.typeclasses.clone(),
             type_system: self.type_system.clone(),
@@ -2758,6 +2864,7 @@ where
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn export_native_async<F>(
         &mut self,
         name: impl Into<String>,
@@ -2772,6 +2879,26 @@ where
             + 'static,
     {
         self.export_native_async_with_gas_cost(name, scheme, arity, 0, handler)
+    }
+
+    pub(crate) fn export_native_scheduler<F>(
+        &mut self,
+        name: impl Into<String>,
+        scheme: Scheme,
+        arity: usize,
+        handler: F,
+    ) -> Result<(), EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                Type,
+                Vec<Pointer>,
+            ) -> Result<SchedulerNativeResult, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.export_native_scheduler_with_gas_cost(name, scheme, arity, 0, handler)
     }
 
     pub(crate) fn export_value<V: IntoPointer + RexType>(
@@ -2815,6 +2942,7 @@ where
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
+    #[cfg(test)]
     pub(crate) fn export_native_async_with_gas_cost<F>(
         &mut self,
         name: impl Into<String>,
@@ -2837,6 +2965,35 @@ where
             handler(engine, typ, args.to_vec())
         });
         let registration = NativeRegistration::r#async(scheme, arity, func, gas_cost);
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
+    }
+
+    pub(crate) fn export_native_scheduler_with_gas_cost<F>(
+        &mut self,
+        name: impl Into<String>,
+        scheme: Scheme,
+        arity: usize,
+        gas_cost: u64,
+        handler: F,
+    ) -> Result<(), EngineError>
+    where
+        F: for<'a> Fn(
+                EvaluatorRef<'a, State>,
+                Type,
+                Vec<Pointer>,
+            ) -> Result<SchedulerNativeResult, EngineError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
+        let handler = Arc::new(handler);
+        let func: SchedulerNativeCallable<State> = Arc::new(move |engine, typ, args| {
+            let handler = Arc::clone(&handler);
+            handler(engine, typ, args.to_vec())
+        });
+        let registration = NativeRegistration::scheduler(scheme, arity, func, gas_cost);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
@@ -4149,6 +4306,7 @@ fn resolve_arg_type(
     }
 }
 
+#[cfg(test)]
 fn callable_pointer_type<State: Clone + Send + Sync + 'static>(
     runtime: &RuntimeSnapshot<State>,
     func: &Pointer,
@@ -4240,6 +4398,7 @@ fn synthetic_application_expr_from_head(
     Ok((env, expr))
 }
 
+#[cfg(test)]
 async fn eval_synthetic_application<State: Clone + Send + Sync + 'static>(
     runtime: &RuntimeSnapshot<State>,
     func: Pointer,
@@ -4316,6 +4475,7 @@ enum EvalControl {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
+    PushFrame(Frame),
     Return(Pointer),
 }
 
@@ -4325,6 +4485,7 @@ enum EvalApplyResult {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
+    PushNative(NativeTask),
 }
 
 enum EvalVarResult {
@@ -4390,6 +4551,7 @@ where
     eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr, gas).await
 }
 
+#[cfg(test)]
 pub(crate) async fn eval_typed_expr_child<State>(
     runtime: &RuntimeSnapshot<State>,
     parent: Pointer,
@@ -4407,6 +4569,7 @@ where
 #[derive(Clone, Copy)]
 enum EvalStop {
     RootSentinel,
+    #[cfg(test)]
     Parent(Pointer),
 }
 
@@ -4446,6 +4609,10 @@ where
                     .alloc_frame(frame_for_expr(item.frame, expr, env))?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
+            EvalControl::PushFrame(frame) => {
+                let child = runtime.heap.alloc_frame(frame)?;
+                scheduler.schedule_next(EvalWorkItem::enter(child));
+            }
             EvalControl::Return(value) => {
                 let mut frame = runtime.heap.pointer_as_frame(&item.frame)?;
                 let parent = *frame.parent();
@@ -4457,6 +4624,7 @@ where
                             return Ok(value);
                         }
                     }
+                    #[cfg(test)]
                     EvalStop::Parent(stop_parent) => {
                         if parent == stop_parent {
                             return Ok(value);
@@ -4945,6 +5113,7 @@ where
                 env,
             })
         }
+        Frame::NativeCall(frame) => eval_native_enter(runtime, frame_ptr, frame, gas),
     }
 }
 
@@ -5120,6 +5289,16 @@ where
                         runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
                         Ok(EvalControl::Push { expr, env })
                     }
+                    EvalApplyResult::PushNative(task) => {
+                        frame.arg = Some(value);
+                        frame.state = FrAppState::ApplyArg;
+                        runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+                        Ok(EvalControl::PushFrame(Frame::NativeCall(FrNativeCall {
+                            parent: frame_ptr,
+                            state: FrNativeCallState::Enter,
+                            task,
+                        })))
+                    }
                 }
             }
             FrAppState::ApplyArg => continue_app_after_apply(runtime, frame_ptr, frame, value, gas),
@@ -5243,8 +5422,1066 @@ where
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
         },
+        Frame::NativeCall(frame) => eval_native_receive(runtime, frame_ptr, frame, value, gas),
         _ => unexpected_child_result("value"),
     }
+}
+
+enum NativeStep {
+    Push {
+        expr: Arc<TypedExpr>,
+        env: Environment,
+    },
+    Return(Pointer),
+}
+
+fn eval_native_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrNativeCall,
+    gas: &mut GasMeter,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if frame.state != FrNativeCallState::Enter {
+        return unexpected_child_result("native call");
+    }
+    let step = native_task_enter(runtime, &mut frame.task, gas)?;
+    native_step_to_control(runtime, frame_ptr, frame, step)
+}
+
+fn eval_native_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrNativeCall,
+    value: Pointer,
+    gas: &mut GasMeter,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if frame.state != FrNativeCallState::Waiting {
+        return unexpected_child_result("native call");
+    }
+    let step = native_task_receive(runtime, &mut frame.task, value, gas)?;
+    native_step_to_control(runtime, frame_ptr, frame, step)
+}
+
+fn native_step_to_control<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrNativeCall,
+    step: NativeStep,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match step {
+        NativeStep::Return(value) => Ok(EvalControl::Return(value)),
+        NativeStep::Push { expr, env } => {
+            frame.state = FrNativeCallState::Waiting;
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::NativeCall(frame))?;
+            Ok(EvalControl::Push { expr, env })
+        }
+    }
+}
+
+fn native_task_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeTask,
+    gas: &mut GasMeter,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    gas.charge(gas.costs.eval_node)?;
+    match task {
+        NativeTask::EvalExpr(task) => Ok(NativeStep::Push {
+            expr: Arc::clone(&task.expr),
+            env: task.env.clone(),
+        }),
+        NativeTask::ApplyUnary(task) => native_apply_step(
+            task.func,
+            task.func_type.clone(),
+            task.arg,
+            task.arg_type.clone(),
+        ),
+        NativeTask::SequenceMap(task) => native_sequence_map_enter(runtime, task),
+        NativeTask::SequenceFilter(task) => native_sequence_filter_enter(runtime, task),
+        NativeTask::SequenceFilterMap(task) => native_sequence_filter_map_enter(runtime, task),
+        NativeTask::SequenceFlatMap(task) => native_sequence_flat_map_enter(runtime, task),
+        NativeTask::UnaryMap(task) => native_apply_step(
+            task.func,
+            task.func_type.clone(),
+            task.value,
+            task.elem_type.clone(),
+        ),
+        NativeTask::UnaryFilter(task) => native_apply_step(
+            task.func,
+            task.func_type.clone(),
+            task.value,
+            task.elem_type.clone(),
+        ),
+        NativeTask::UnaryFilterMap(task) => native_apply_step(
+            task.func,
+            task.func_type.clone(),
+            task.value,
+            task.elem_type.clone(),
+        ),
+        NativeTask::UnaryFlatMap(task) => native_apply_step(
+            task.func,
+            task.func_type.clone(),
+            task.value,
+            task.elem_type.clone(),
+        ),
+        NativeTask::Fold(task) => native_fold_enter(runtime, task),
+        NativeTask::DictMap(task) => native_dict_map_enter(runtime, task),
+        NativeTask::DictTraverseResult(task) => native_dict_traverse_enter(runtime, task),
+        NativeTask::ArrayEq(task) => native_array_eq_enter(runtime, task),
+        NativeTask::Sum(task) => native_sum_enter(runtime, task),
+        NativeTask::Mean(task) => native_mean_enter(runtime, task),
+        NativeTask::LogShow(task) => native_log_show_enter(runtime, task),
+    }
+}
+
+fn native_task_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeTask,
+    value: Pointer,
+    gas: &mut GasMeter,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    gas.charge(gas.costs.eval_app_step)?;
+    match task {
+        NativeTask::EvalExpr(_) | NativeTask::ApplyUnary(_) => Ok(NativeStep::Return(value)),
+        NativeTask::SequenceMap(task) => native_sequence_map_receive(runtime, task, value),
+        NativeTask::SequenceFilter(task) => native_sequence_filter_receive(runtime, task, value),
+        NativeTask::SequenceFilterMap(task) => {
+            native_sequence_filter_map_receive(runtime, task, value)
+        }
+        NativeTask::SequenceFlatMap(task) => native_sequence_flat_map_receive(runtime, task, value),
+        NativeTask::UnaryMap(task) => native_unary_map_receive(runtime, task, value),
+        NativeTask::UnaryFilter(task) => native_unary_filter_receive(runtime, task, value),
+        NativeTask::UnaryFilterMap(_) => Ok(NativeStep::Return(value)),
+        NativeTask::UnaryFlatMap(task) => native_unary_flat_map_receive(runtime, task, value),
+        NativeTask::Fold(task) => native_fold_receive(runtime, task, value),
+        NativeTask::DictMap(task) => native_dict_map_receive(runtime, task, value),
+        NativeTask::DictTraverseResult(task) => native_dict_traverse_receive(runtime, task, value),
+        NativeTask::ArrayEq(task) => native_array_eq_receive(runtime, task, value),
+        NativeTask::Sum(task) => native_sum_receive(runtime, task, value),
+        NativeTask::Mean(task) => native_mean_receive(runtime, task, value),
+        NativeTask::LogShow(task) => native_log_show_receive(runtime, task, value),
+    }
+}
+
+fn native_apply_step(
+    func: Pointer,
+    func_type: Type,
+    arg: Pointer,
+    arg_type: Type,
+) -> Result<NativeStep, EngineError> {
+    let (env, expr) = synthetic_application_expr(func, func_type, &[(arg, arg_type)])?;
+    Ok(NativeStep::Push {
+        expr: Arc::new(expr),
+        env,
+    })
+}
+
+fn native_eval_var_step(name: Symbol, typ: Type) -> NativeStep {
+    NativeStep::Push {
+        expr: Arc::new(TypedExpr::new(
+            typ,
+            TypedExprKind::Var {
+                name,
+                overloads: Vec::new(),
+            },
+        )),
+        env: Environment::new(),
+    }
+}
+
+fn alloc_native_sequence<State>(
+    runtime: &RuntimeSnapshot<State>,
+    shape: &NativeSequenceShape,
+    values: Vec<Pointer>,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match shape {
+        NativeSequenceShape::List => {
+            let mut list = runtime.heap.alloc_adt(sym("Empty"), vec![])?;
+            for value in values.into_iter().rev() {
+                list = runtime.heap.alloc_adt(sym("Cons"), vec![value, list])?;
+            }
+            Ok(list)
+        }
+        NativeSequenceShape::Array => runtime.heap.alloc_array(values),
+    }
+}
+
+fn option_from_native_pointer<State>(
+    runtime: &RuntimeSnapshot<State>,
+    value: Option<Pointer>,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match value {
+        Some(value) => runtime.heap.alloc_adt(sym("Some"), vec![value]),
+        None => runtime.heap.alloc_adt(sym("None"), vec![]),
+    }
+}
+
+fn result_from_native_pointer<State>(
+    runtime: &RuntimeSnapshot<State>,
+    value: Result<Pointer, Pointer>,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match value {
+        Ok(value) => runtime.heap.alloc_adt(sym("Ok"), vec![value]),
+        Err(value) => runtime.heap.alloc_adt(sym("Err"), vec![value]),
+    }
+}
+
+fn option_value_ptr<State>(
+    runtime: &RuntimeSnapshot<State>,
+    pointer: Pointer,
+) -> Result<Option<Pointer>, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let (tag, args) = runtime.heap.pointer_as_adt(&pointer)?;
+    if sym_eq(&tag, "Some") && args.len() == 1 {
+        Ok(Some(args[0]))
+    } else if sym_eq(&tag, "None") && args.is_empty() {
+        Ok(None)
+    } else {
+        Err(EngineError::NativeType {
+            expected: "Option".into(),
+            got: runtime.heap.type_name(&pointer)?.into(),
+        })
+    }
+}
+
+fn result_value_ptr<State>(
+    runtime: &RuntimeSnapshot<State>,
+    pointer: Pointer,
+) -> Result<Result<Pointer, Pointer>, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let (tag, args) = runtime.heap.pointer_as_adt(&pointer)?;
+    if sym_eq(&tag, "Ok") && args.len() == 1 {
+        Ok(Ok(args[0]))
+    } else if sym_eq(&tag, "Err") && args.len() == 1 {
+        Ok(Err(args[0]))
+    } else {
+        Err(EngineError::NativeType {
+            expected: "Result".into(),
+            got: runtime.heap.type_name(&pointer)?.into(),
+        })
+    }
+}
+
+fn native_flatten_sequence<State>(
+    runtime: &RuntimeSnapshot<State>,
+    shape: &NativeSequenceShape,
+    pointer: Pointer,
+) -> Result<Vec<Pointer>, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match shape {
+        NativeSequenceShape::List => {
+            let value = runtime.heap.get(&pointer)?;
+            list_to_vec(&runtime.heap, value.as_ref())
+        }
+        NativeSequenceShape::Array => runtime.heap.pointer_as_array(&pointer),
+    }
+}
+
+fn overloaded_pointer<State>(
+    runtime: &RuntimeSnapshot<State>,
+    name: &str,
+    typ: Type,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let (name, typ, applied, applied_types) = OverloadedFn::new(sym(name), typ).into_parts();
+    runtime
+        .heap
+        .alloc_overloaded(name, typ, applied, applied_types)
+}
+
+fn binary_same_type(typ: &Type) -> Type {
+    Type::fun(typ.clone(), Type::fun(typ.clone(), typ.clone()))
+}
+
+fn len_value_for_native_type<State>(
+    runtime: &RuntimeSnapshot<State>,
+    elem_ty: &Type,
+    len: usize,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match elem_ty.as_ref() {
+        TypeKind::Con(c) if sym_eq(&c.name, "f32") => runtime.heap.alloc_f32(len as f32),
+        TypeKind::Con(c) if sym_eq(&c.name, "f64") => runtime.heap.alloc_f64(len as f64),
+        _ => Err(EngineError::NativeType {
+            expected: "f32 or f64".into(),
+            got: elem_ty.to_string(),
+        }),
+    }
+}
+
+fn native_sequence_map_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceMap,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.values.is_empty() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            Vec::new(),
+        )?));
+    }
+    task.next_index = 0;
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[0],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_sequence_map_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceMap,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    task.output.push(value);
+    task.next_index += 1;
+    if task.next_index == task.values.len() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            task.output.clone(),
+        )?));
+    }
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[task.next_index],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_sequence_filter_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceFilter,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.values.is_empty() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            Vec::new(),
+        )?));
+    }
+    task.next_index = 0;
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[0],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_sequence_filter_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceFilter,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if runtime.heap.pointer_as_bool(&value)? {
+        task.output.push(task.values[task.next_index]);
+    }
+    task.next_index += 1;
+    if task.next_index == task.values.len() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            task.output.clone(),
+        )?));
+    }
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[task.next_index],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_sequence_filter_map_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceFilterMap,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.values.is_empty() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            Vec::new(),
+        )?));
+    }
+    task.next_index = 0;
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[0],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_sequence_filter_map_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceFilterMap,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if let Some(value) = option_value_ptr(runtime, value)? {
+        task.output.push(value);
+    }
+    task.next_index += 1;
+    if task.next_index == task.values.len() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            task.output.clone(),
+        )?));
+    }
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[task.next_index],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_sequence_flat_map_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceFlatMap,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.values.is_empty() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            Vec::new(),
+        )?));
+    }
+    task.next_index = 0;
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[0],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_sequence_flat_map_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSequenceFlatMap,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    task.output
+        .extend(native_flatten_sequence(runtime, &task.shape, value)?);
+    task.next_index += 1;
+    if task.next_index == task.values.len() {
+        return Ok(NativeStep::Return(alloc_native_sequence(
+            runtime,
+            &task.shape,
+            task.output.clone(),
+        )?));
+    }
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        task.values[task.next_index],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_unary_map_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeUnaryMap,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let value = match &task.shape {
+        NativeUnaryShape::Option => option_from_native_pointer(runtime, Some(value))?,
+        NativeUnaryShape::Result => result_from_native_pointer(runtime, Ok(value))?,
+    };
+    Ok(NativeStep::Return(value))
+}
+
+fn native_unary_filter_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeUnaryFilter,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let value = if runtime.heap.pointer_as_bool(&value)? {
+        task.original
+    } else {
+        option_from_native_pointer(runtime, None)?
+    };
+    Ok(NativeStep::Return(value))
+}
+
+fn native_unary_flat_map_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeUnaryFlatMap,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if matches!(task.shape, NativeUnaryShape::Result) {
+        let _ = result_value_ptr(runtime, value)?;
+    }
+    Ok(NativeStep::Return(value))
+}
+
+fn native_fold_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeFold,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.values.is_empty() {
+        return Ok(NativeStep::Return(task.acc));
+    }
+    task.state = NativeFoldState::ApplyFirst;
+    task.next_index = 0;
+    native_fold_apply_first(runtime, task)
+}
+
+fn native_fold_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeFold,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match task.state {
+        NativeFoldState::ApplyFirst => {
+            task.step = Some(value);
+            task.state = NativeFoldState::ApplySecond;
+            native_fold_apply_second(task)
+        }
+        NativeFoldState::ApplySecond => {
+            task.acc = value;
+            task.step = None;
+            task.next_index += 1;
+            if task.next_index == task.values.len() {
+                return Ok(NativeStep::Return(task.acc));
+            }
+            task.state = NativeFoldState::ApplyFirst;
+            native_fold_apply_first(runtime, task)
+        }
+        _ => unexpected_child_result("native fold"),
+    }
+}
+
+fn native_fold_apply_first<State>(
+    _runtime: &RuntimeSnapshot<State>,
+    task: &NativeFold,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let arg = match task.order {
+        NativeFoldOrder::Left => task.acc,
+        NativeFoldOrder::Right => task.values[task.next_index],
+    };
+    let arg_type = match task.order {
+        NativeFoldOrder::Left => task.acc_type.clone(),
+        NativeFoldOrder::Right => task.elem_type.clone(),
+    };
+    native_apply_step(task.func, task.func_type.clone(), arg, arg_type)
+}
+
+fn native_fold_apply_second(task: &NativeFold) -> Result<NativeStep, EngineError> {
+    let step = task
+        .step
+        .ok_or_else(|| EngineError::Internal("native fold missing step function".into()))?;
+    let arg = match task.order {
+        NativeFoldOrder::Left => task.values[task.next_index],
+        NativeFoldOrder::Right => task.acc,
+    };
+    let arg_type = match task.order {
+        NativeFoldOrder::Left => task.elem_type.clone(),
+        NativeFoldOrder::Right => task.acc_type.clone(),
+    };
+    let step_type = Type::fun(arg_type.clone(), task.acc_type.clone());
+    native_apply_step(step, step_type, arg, arg_type)
+}
+
+fn native_dict_map_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeDictMap,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.entries.is_empty() {
+        return Ok(NativeStep::Return(
+            runtime.heap.alloc_dict(BTreeMap::new())?,
+        ));
+    }
+    task.next_index = 0;
+    let (_, value) = task.entries[0].clone();
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        value,
+        task.elem_type.clone(),
+    )
+}
+
+fn native_dict_map_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeDictMap,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let (key, _) = task.entries[task.next_index].clone();
+    task.output.insert(key, value);
+    task.next_index += 1;
+    if task.next_index == task.entries.len() {
+        return Ok(NativeStep::Return(
+            runtime.heap.alloc_dict(task.output.clone())?,
+        ));
+    }
+    let (_, value) = task.entries[task.next_index].clone();
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        value,
+        task.elem_type.clone(),
+    )
+}
+
+fn native_dict_traverse_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeDictTraverseResult,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.entries.is_empty() {
+        let dict = runtime.heap.alloc_dict(BTreeMap::new())?;
+        return Ok(NativeStep::Return(result_from_native_pointer(
+            runtime,
+            Ok(dict),
+        )?));
+    }
+    task.next_index = 0;
+    let (_, value) = task.entries[0].clone();
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        value,
+        task.elem_type.clone(),
+    )
+}
+
+fn native_dict_traverse_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeDictTraverseResult,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match result_value_ptr(runtime, value)? {
+        Ok(value) => {
+            let (key, _) = task.entries[task.next_index].clone();
+            task.output.insert(key, value);
+        }
+        Err(err) => {
+            return Ok(NativeStep::Return(result_from_native_pointer(
+                runtime,
+                Err(err),
+            )?));
+        }
+    }
+    task.next_index += 1;
+    if task.next_index == task.entries.len() {
+        let dict = runtime.heap.alloc_dict(task.output.clone())?;
+        return Ok(NativeStep::Return(result_from_native_pointer(
+            runtime,
+            Ok(dict),
+        )?));
+    }
+    let (_, value) = task.entries[task.next_index].clone();
+    native_apply_step(
+        task.func,
+        task.func_type.clone(),
+        value,
+        task.elem_type.clone(),
+    )
+}
+
+fn native_array_eq_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeArrayEq,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.xs.len() != task.ys.len() {
+        return native_array_eq_result(runtime, task, false);
+    }
+    if task.xs.is_empty() {
+        return native_array_eq_result(runtime, task, true);
+    }
+    task.state = NativeArrayEqState::ApplyFirst;
+    task.next_index = 0;
+    native_array_eq_apply_first(runtime, task)
+}
+
+fn native_array_eq_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeArrayEq,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match task.state {
+        NativeArrayEqState::ApplyFirst => {
+            task.step = Some(value);
+            task.state = NativeArrayEqState::ApplySecond;
+            native_array_eq_apply_second(task)
+        }
+        NativeArrayEqState::ApplySecond => {
+            if !runtime.heap.pointer_as_bool(&value)? {
+                return native_array_eq_result(runtime, task, false);
+            }
+            task.step = None;
+            task.next_index += 1;
+            if task.next_index == task.xs.len() {
+                return native_array_eq_result(runtime, task, true);
+            }
+            task.state = NativeArrayEqState::ApplyFirst;
+            native_array_eq_apply_first(runtime, task)
+        }
+        _ => unexpected_child_result("native array equality"),
+    }
+}
+
+fn native_array_eq_apply_first<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &NativeArrayEq,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
+    let eq_ty = Type::fun(
+        task.elem_type.clone(),
+        Type::fun(task.elem_type.clone(), bool_ty),
+    );
+    let eq = overloaded_pointer(runtime, "==", eq_ty.clone())?;
+    native_apply_step(eq, eq_ty, task.xs[task.next_index], task.elem_type.clone())
+}
+
+fn native_array_eq_apply_second(task: &NativeArrayEq) -> Result<NativeStep, EngineError> {
+    let step = task
+        .step
+        .ok_or_else(|| EngineError::Internal("native array equality missing step".into()))?;
+    let bool_ty = Type::builtin(BuiltinTypeId::Bool);
+    let step_ty = Type::fun(task.elem_type.clone(), bool_ty);
+    native_apply_step(
+        step,
+        step_ty,
+        task.ys[task.next_index],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_array_eq_result<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &NativeArrayEq,
+    equal: bool,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    Ok(NativeStep::Return(
+        runtime
+            .heap
+            .alloc_bool(if task.negate { !equal } else { equal })?,
+    ))
+}
+
+fn native_sum_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSum,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.values.is_empty() {
+        return Ok(native_eval_var_step(sym("zero"), task.elem_type.clone()));
+    }
+    task.acc = Some(task.values[0]);
+    task.next_index = 1;
+    if task.next_index == task.values.len() {
+        return Ok(NativeStep::Return(task.values[0]));
+    }
+    task.state = NativeFoldState::ApplyFirst;
+    native_sum_apply_first(runtime, task)
+}
+
+fn native_sum_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeSum,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match task.state {
+        NativeFoldState::Enter => Ok(NativeStep::Return(value)),
+        NativeFoldState::ApplyFirst => {
+            task.step = Some(value);
+            task.state = NativeFoldState::ApplySecond;
+            native_sum_apply_second(task)
+        }
+        NativeFoldState::ApplySecond => {
+            task.acc = Some(value);
+            task.step = None;
+            task.next_index += 1;
+            if task.next_index == task.values.len() {
+                return Ok(NativeStep::Return(value));
+            }
+            task.state = NativeFoldState::ApplyFirst;
+            native_sum_apply_first(runtime, task)
+        }
+    }
+}
+
+fn native_sum_apply_first<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &NativeSum,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let plus_ty = binary_same_type(&task.elem_type);
+    let plus = overloaded_pointer(runtime, "+", plus_ty.clone())?;
+    let acc = task
+        .acc
+        .ok_or_else(|| EngineError::Internal("native sum missing accumulator".into()))?;
+    native_apply_step(plus, plus_ty, acc, task.elem_type.clone())
+}
+
+fn native_sum_apply_second(task: &NativeSum) -> Result<NativeStep, EngineError> {
+    let step = task
+        .step
+        .ok_or_else(|| EngineError::Internal("native sum missing step".into()))?;
+    let step_ty = Type::fun(task.elem_type.clone(), task.elem_type.clone());
+    native_apply_step(
+        step,
+        step_ty,
+        task.values[task.next_index],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_mean_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeMean,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if task.values.is_empty() {
+        return Err(EngineError::EmptySequence);
+    }
+    task.acc = Some(task.values[0]);
+    task.next_index = 1;
+    if task.next_index == task.values.len() {
+        task.state = NativeMeanState::ApplyDivFirst;
+        return native_mean_apply_div_first(runtime, task);
+    }
+    task.state = NativeMeanState::ApplyPlusFirst;
+    native_mean_apply_plus_first(runtime, task)
+}
+
+fn native_mean_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeMean,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match task.state {
+        NativeMeanState::ApplyPlusFirst => {
+            task.step = Some(value);
+            task.state = NativeMeanState::ApplyPlusSecond;
+            native_mean_apply_plus_second(task)
+        }
+        NativeMeanState::ApplyPlusSecond => {
+            task.acc = Some(value);
+            task.step = None;
+            task.next_index += 1;
+            if task.next_index == task.values.len() {
+                task.state = NativeMeanState::ApplyDivFirst;
+                return native_mean_apply_div_first(runtime, task);
+            }
+            task.state = NativeMeanState::ApplyPlusFirst;
+            native_mean_apply_plus_first(runtime, task)
+        }
+        NativeMeanState::ApplyDivFirst => {
+            task.step = Some(value);
+            task.state = NativeMeanState::ApplyDivSecond;
+            native_mean_apply_div_second(task)
+        }
+        NativeMeanState::ApplyDivSecond => Ok(NativeStep::Return(value)),
+        NativeMeanState::Enter => unexpected_child_result("native mean"),
+    }
+}
+
+fn native_mean_apply_plus_first<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &NativeMean,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let plus_ty = binary_same_type(&task.elem_type);
+    let plus = overloaded_pointer(runtime, "+", plus_ty.clone())?;
+    let acc = task
+        .acc
+        .ok_or_else(|| EngineError::Internal("native mean missing accumulator".into()))?;
+    native_apply_step(plus, plus_ty, acc, task.elem_type.clone())
+}
+
+fn native_mean_apply_plus_second(task: &NativeMean) -> Result<NativeStep, EngineError> {
+    let step = task
+        .step
+        .ok_or_else(|| EngineError::Internal("native mean missing addition step".into()))?;
+    let step_ty = Type::fun(task.elem_type.clone(), task.elem_type.clone());
+    native_apply_step(
+        step,
+        step_ty,
+        task.values[task.next_index],
+        task.elem_type.clone(),
+    )
+}
+
+fn native_mean_apply_div_first<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &mut NativeMean,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let div_ty = binary_same_type(&task.elem_type);
+    let div = overloaded_pointer(runtime, "/", div_ty.clone())?;
+    let acc = task
+        .acc
+        .ok_or_else(|| EngineError::Internal("native mean missing accumulator".into()))?;
+    if task.len_value.is_none() {
+        task.len_value = Some(len_value_for_native_type(
+            runtime,
+            &task.elem_type,
+            task.len,
+        )?);
+    }
+    native_apply_step(div, div_ty, acc, task.elem_type.clone())
+}
+
+fn native_mean_apply_div_second(task: &NativeMean) -> Result<NativeStep, EngineError> {
+    let step = task
+        .step
+        .ok_or_else(|| EngineError::Internal("native mean missing division step".into()))?;
+    let len_value = task
+        .len_value
+        .ok_or_else(|| EngineError::Internal("native mean missing length value".into()))?;
+    let step_ty = Type::fun(task.elem_type.clone(), task.elem_type.clone());
+    native_apply_step(step, step_ty, len_value, task.elem_type.clone())
+}
+
+fn native_log_show_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &NativeLogShow,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let show = overloaded_pointer(runtime, "show", task.show_type.clone())?;
+    native_apply_step(
+        show,
+        task.show_type.clone(),
+        task.arg,
+        task.arg_type.clone(),
+    )
+}
+
+fn native_log_show_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    task: &NativeLogShow,
+    value: Pointer,
+) -> Result<NativeStep, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let rendered = String::from_pointer(&runtime.heap, &value)?;
+    (task.log)(&rendered);
+    Ok(NativeStep::Return(runtime.heap.alloc_string(rendered)?))
 }
 
 async fn eval_apply_overloaded_arg<State>(
@@ -5370,11 +6607,13 @@ where
                 env: env.extend(param, arg),
             })
         }
-        Value::Native(native) => Ok(EvalApplyResult::Value(
-            native
-                .apply_with_context(runtime, arg, arg_type, gas, EvalContext::child(parent))
-                .await?,
-        )),
+        Value::Native(native) => match native
+            .apply_with_context(runtime, arg, arg_type, gas, EvalContext::child(parent))
+            .await?
+        {
+            NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
+            NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
+        },
         Value::Overloaded(over) => {
             eval_apply_overloaded_arg(runtime, parent, over, arg, func_type, arg_type, gas).await
         }
@@ -5575,6 +6814,7 @@ fn mark_frame_complete(frame: &mut Frame, value: Pointer) {
         Frame::LetRec(frame) => frame.state = FrLetRecState::Complete,
         Frame::Ite(frame) => frame.state = FrBranchState::Complete,
         Frame::Match(frame) => frame.state = FrMatchState::Complete,
+        Frame::NativeCall(frame) => frame.state = FrNativeCallState::Complete,
     }
 }
 
@@ -5602,6 +6842,7 @@ fn unexpected_child_result<T>(frame: &'static str) -> Result<T, EngineError> {
     )))
 }
 
+#[cfg(test)]
 pub(crate) async fn apply_with_context<State>(
     runtime: &RuntimeSnapshot<State>,
     func: Pointer,

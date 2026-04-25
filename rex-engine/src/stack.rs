@@ -31,6 +31,7 @@ pub enum Frame {
     LetRec(FrLetRec),
     Ite(FrIte),
     Match(FrMatch),
+    NativeCall(FrNativeCall),
 }
 
 impl Frame {
@@ -56,6 +57,7 @@ impl Frame {
             Frame::LetRec(frame) => &frame.parent,
             Frame::Ite(frame) => &frame.parent,
             Frame::Match(frame) => &frame.parent,
+            Frame::NativeCall(frame) => &frame.parent,
         }
     }
 
@@ -81,6 +83,7 @@ impl Frame {
             Frame::LetRec(frame) => &frame.expr,
             Frame::Ite(frame) => &frame.expr,
             Frame::Match(frame) => &frame.expr,
+            Frame::NativeCall(_) => panic!("native call frames do not carry typed expressions"),
         }
     }
 
@@ -106,6 +109,7 @@ impl Frame {
             Frame::LetRec(frame) => &frame.env,
             Frame::Ite(frame) => &frame.env,
             Frame::Match(frame) => &frame.env,
+            Frame::NativeCall(_) => panic!("native call frames do not carry environments"),
         }
     }
 }
@@ -171,6 +175,251 @@ pub enum FrMatchState {
     EvalScrutinee,
     EvalArm,
     Complete,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FrNativeCallState {
+    Enter,
+    Waiting,
+    Complete,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeSequenceShape {
+    List,
+    Array,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeUnaryShape {
+    Option,
+    Result,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeFoldOrder {
+    Left,
+    Right,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeFoldState {
+    Enter,
+    ApplyFirst,
+    ApplySecond,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeMeanState {
+    Enter,
+    ApplyPlusFirst,
+    ApplyPlusSecond,
+    ApplyDivFirst,
+    ApplyDivSecond,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeArrayEqState {
+    Enter,
+    ApplyFirst,
+    ApplySecond,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum NativeTask {
+    EvalExpr(NativeEvalExpr),
+    ApplyUnary(NativeApplyUnary),
+    SequenceMap(NativeSequenceMap),
+    SequenceFilter(NativeSequenceFilter),
+    SequenceFilterMap(NativeSequenceFilterMap),
+    SequenceFlatMap(NativeSequenceFlatMap),
+    UnaryMap(NativeUnaryMap),
+    UnaryFilter(NativeUnaryFilter),
+    UnaryFilterMap(NativeUnaryFilterMap),
+    UnaryFlatMap(NativeUnaryFlatMap),
+    Fold(NativeFold),
+    DictMap(NativeDictMap),
+    DictTraverseResult(NativeDictTraverseResult),
+    ArrayEq(NativeArrayEq),
+    Sum(NativeSum),
+    Mean(NativeMean),
+    LogShow(NativeLogShow),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeEvalExpr {
+    pub expr: Arc<TypedExpr>,
+    pub env: Environment,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeApplyUnary {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub arg: Pointer,
+    pub arg_type: Type,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeSequenceMap {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub values: Vec<Pointer>,
+    pub shape: NativeSequenceShape,
+    pub next_index: usize,
+    pub output: Vec<Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeSequenceFilter {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub values: Vec<Pointer>,
+    pub shape: NativeSequenceShape,
+    pub next_index: usize,
+    pub output: Vec<Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeSequenceFilterMap {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub values: Vec<Pointer>,
+    pub shape: NativeSequenceShape,
+    pub next_index: usize,
+    pub output: Vec<Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeSequenceFlatMap {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub values: Vec<Pointer>,
+    pub shape: NativeSequenceShape,
+    pub next_index: usize,
+    pub output: Vec<Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeUnaryMap {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub value: Pointer,
+    pub shape: NativeUnaryShape,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeUnaryFilter {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub value: Pointer,
+    pub original: Pointer,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeUnaryFilterMap {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub value: Pointer,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeUnaryFlatMap {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub value: Pointer,
+    pub shape: NativeUnaryShape,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeFold {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub acc_type: Type,
+    pub elem_type: Type,
+    pub values: Vec<Pointer>,
+    pub acc: Pointer,
+    pub order: NativeFoldOrder,
+    pub state: NativeFoldState,
+    pub next_index: usize,
+    pub step: Option<Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeDictMap {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub entries: Vec<(Symbol, Pointer)>,
+    pub next_index: usize,
+    pub output: BTreeMap<Symbol, Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeDictTraverseResult {
+    pub func: Pointer,
+    pub func_type: Type,
+    pub elem_type: Type,
+    pub entries: Vec<(Symbol, Pointer)>,
+    pub next_index: usize,
+    pub output: BTreeMap<Symbol, Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeArrayEq {
+    pub elem_type: Type,
+    pub xs: Vec<Pointer>,
+    pub ys: Vec<Pointer>,
+    pub state: NativeArrayEqState,
+    pub next_index: usize,
+    pub step: Option<Pointer>,
+    pub negate: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeSum {
+    pub elem_type: Type,
+    pub values: Vec<Pointer>,
+    pub acc: Option<Pointer>,
+    pub state: NativeFoldState,
+    pub next_index: usize,
+    pub step: Option<Pointer>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeMean {
+    pub elem_type: Type,
+    pub values: Vec<Pointer>,
+    pub len: usize,
+    pub acc: Option<Pointer>,
+    pub state: NativeMeanState,
+    pub next_index: usize,
+    pub step: Option<Pointer>,
+    pub len_value: Option<Pointer>,
+}
+
+#[derive(Clone, Debug)]
+pub struct NativeLogShow {
+    pub show_type: Type,
+    pub arg_type: Type,
+    pub arg: Pointer,
+    pub log: fn(&str),
+}
+
+impl PartialEq for NativeLogShow {
+    fn eq(&self, other: &Self) -> bool {
+        self.show_type == other.show_type
+            && self.arg_type == other.arg_type
+            && self.arg == other.arg
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -307,4 +556,11 @@ pub struct FrMatch {
     pub arms: Vec<FrMatchArm>,
     pub next_arm_index: usize,
     pub matched_env: Option<Environment>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrNativeCall {
+    pub parent: Pointer,
+    pub state: FrNativeCallState,
+    pub task: NativeTask,
 }

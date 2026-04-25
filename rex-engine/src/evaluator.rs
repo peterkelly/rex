@@ -12,13 +12,13 @@ use rex_typesystem::{
 };
 use rex_util::{GasMeter, sha256_hex};
 
+#[cfg(test)]
+use crate::engine::apply_with_context;
 use crate::engine::{
-    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, apply_with_context,
-    check_runtime_cancelled, eval_typed_expr, eval_typed_expr_child, impl_matches_type,
-    is_function_type, type_head_is_var,
+    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, check_runtime_cancelled,
+    eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
-use crate::value::Value;
 use crate::{
     CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, Pointer,
     RuntimeEnv,
@@ -38,6 +38,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     runtime: &'a RuntimeSnapshot<State>,
+    #[allow(dead_code)]
     context: EvalContext,
 }
 
@@ -53,6 +54,7 @@ impl EvalContext {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn parent(self) -> Option<Pointer> {
         self.parent
     }
@@ -277,18 +279,7 @@ where
         self.context.parent()
     }
 
-    async fn eval_typed_expr(
-        &self,
-        env: &Environment,
-        expr: &TypedExpr,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        match self.context.parent() {
-            Some(parent) => eval_typed_expr_child(self.runtime, parent, env, expr, gas).await,
-            None => eval_typed_expr(self.runtime, env, expr, gas).await,
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) async fn apply_pointer(
         &self,
         func: Pointer,
@@ -348,14 +339,6 @@ where
         cache.get(&(name.clone(), typ.clone())).cloned()
     }
 
-    fn insert_cached_class_method(&self, name: &Symbol, typ: &Type, pointer: &Pointer) {
-        if typ.ftv().is_empty()
-            && let Ok(mut cache) = self.runtime.typeclass_cache.lock()
-        {
-            cache.insert((name.clone(), typ.clone()), *pointer);
-        }
-    }
-
     pub(crate) fn resolve_class_method_plan(
         &self,
         name: &Symbol,
@@ -376,27 +359,6 @@ where
         };
         let specialized = typed.as_ref().apply(&s);
         Ok(Ok((def_env, specialized)))
-    }
-
-    pub(crate) async fn resolve_class_method(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(pointer) = self.cached_class_method(name, typ) {
-            return Ok(pointer);
-        }
-
-        let pointer = match self.resolve_class_method_plan(name, typ)? {
-            Ok((def_env, specialized)) => self.eval_typed_expr(&def_env, &specialized, gas).await?,
-            Err(pointer) => pointer,
-        };
-
-        if typ.ftv().is_empty() {
-            self.insert_cached_class_method(name, typ, &pointer);
-        }
-        Ok(pointer)
     }
 
     pub(crate) fn resolve_native_impl(
@@ -481,53 +443,6 @@ where
                 }
             }
         }
-    }
-
-    pub(crate) async fn resolve_global(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(ptr) = self.runtime.env.get(name) {
-            let value = self.runtime.heap.get(&ptr)?;
-            match value.as_ref() {
-                Value::Native(native) if native.is_zero_unapplied() => {
-                    let mut gas = GasMeter::default();
-                    native
-                        .call_zero_with_context(self.runtime, &mut gas, self.context)
-                        .await
-                }
-                _ => Ok(ptr),
-            }
-        } else if self.runtime.type_system.class_methods.contains_key(name) {
-            let mut gas = GasMeter::default();
-            self.resolve_class_method(name, typ, &mut gas).await
-        } else {
-            let mut gas = GasMeter::default();
-            let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
-            let value = self.runtime.heap.get(&pointer)?;
-            match value.as_ref() {
-                Value::Native(native) if native.is_zero_unapplied() => {
-                    let mut gas = GasMeter::default();
-                    native
-                        .call_zero_with_context(self.runtime, &mut gas, self.context)
-                        .await
-                }
-                _ => Ok(pointer),
-            }
-        }
-    }
-
-    pub(crate) async fn call_native_impl(
-        &self,
-        name: &str,
-        typ: &Type,
-        args: &[Pointer],
-    ) -> Result<Pointer, EngineError> {
-        let imp = self.resolve_native_impl(name, typ)?;
-        imp.func
-            .call_with_context(self.runtime, typ.clone(), args, self.context)
-            .await
     }
 }
 

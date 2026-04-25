@@ -200,7 +200,7 @@ async fn prelude_map_callbacks_are_currently_sequential() {
 }
 
 #[tokio::test]
-async fn prelude_map_callbacks_currently_use_fresh_inner_gas_meter() {
+async fn prelude_map_callbacks_share_outer_gas_meter() {
     let calls = Arc::new(AtomicUsize::new(0));
     let mut engine = Engine::with_prelude(()).unwrap();
     let scheme = Scheme::new(
@@ -236,13 +236,16 @@ async fn prelude_map_callbacks_currently_use_fresh_inner_gas_meter() {
             ..GasCosts::sensible_defaults()
         },
     );
-    let value =
+    let err =
         run_compiled_snippet_with_eval_gas(&mut engine, "map expensive [1, 2]", &mut eval_gas)
             .await
-            .unwrap();
+            .unwrap_err();
 
-    assert_eq!(pointer_display(&engine.heap, &value).unwrap(), "[1, 2]");
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(
+        matches!(err, EngineError::OutOfGas(_)),
+        "expected callback gas to be charged to the outer meter, got {err:?}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
