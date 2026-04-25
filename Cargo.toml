@@ -28,7 +28,6 @@ version = "3.9.12"
 [workspace.dependencies]
 # External dependencies
 anyhow = "1"
-async-recursion = "1"
 async-trait = "0.1"
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }

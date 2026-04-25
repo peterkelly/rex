@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use async_recursion::async_recursion;
+use futures::future::BoxFuture;
 use rex_ast::expr::{
     Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl, ImportPath, InstanceDecl, NameRef,
     Pattern, Program, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
@@ -2424,28 +2424,29 @@ where
         self.publish_runtime_decl_interfaces(&signatures)
     }
 
-    #[async_recursion]
-    async fn resolve_module_exports_from_import_decl_async(
-        &mut self,
-        import_decl: &ImportDecl,
+    fn resolve_module_exports_from_import_decl_async<'a>(
+        &'a mut self,
+        import_decl: &'a ImportDecl,
         importer: Option<ModuleId>,
-        gas: &mut GasMeter,
-    ) -> Result<ModuleExports, EngineError> {
-        let spec = import_specifier(&import_decl.path);
-        if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
-            return Ok(exports);
-        }
-        let imported = self.modules.resolve(ResolveRequest {
-            module_name: spec,
-            importer,
-        })?;
-        self.refresh_if_stale(&imported)?;
-        if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
-            self.ensure_cycle_interfaces_published(&imported.id)?;
-            return Ok(exports);
-        }
-        let inst = self.load_module_from_resolved(imported, gas).await?;
-        Ok(inst.exports)
+        gas: &'a mut GasMeter,
+    ) -> BoxFuture<'a, Result<ModuleExports, EngineError>> {
+        Box::pin(async move {
+            let spec = import_specifier(&import_decl.path);
+            if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
+                return Ok(exports);
+            }
+            let imported = self.modules.resolve(ResolveRequest {
+                module_name: spec,
+                importer,
+            })?;
+            self.refresh_if_stale(&imported)?;
+            if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
+                self.ensure_cycle_interfaces_published(&imported.id)?;
+                return Ok(exports);
+            }
+            let inst = self.load_module_from_resolved(imported, gas).await?;
+            Ok(inst.exports)
+        })
     }
 
     async fn add_default_import_bindings(
@@ -2551,104 +2552,110 @@ where
         Err(EngineError::UnsupportedExpr)
     }
 
-    #[async_recursion]
-    pub(crate) async fn import_bindings_for_decls(
-        &mut self,
-        decls: &[Decl],
+    pub(crate) fn import_bindings_for_decls<'a>(
+        &'a mut self,
+        decls: &'a [Decl],
         importer: Option<ModuleId>,
-        policy: &ImportBindingPolicy<'_>,
-        gas: &mut GasMeter,
-    ) -> Result<ImportBindings, EngineError> {
-        let mut bindings = ImportBindings::default();
-        for decl in decls {
-            let Decl::Import(import_decl) = decl else {
-                continue;
-            };
-            let exports = self
-                .resolve_module_exports_from_import_decl_async(import_decl, importer.clone(), gas)
+        policy: &'a ImportBindingPolicy<'_>,
+        gas: &'a mut GasMeter,
+    ) -> BoxFuture<'a, Result<ImportBindings, EngineError>> {
+        Box::pin(async move {
+            let mut bindings = ImportBindings::default();
+            for decl in decls {
+                let Decl::Import(import_decl) = decl else {
+                    continue;
+                };
+                let exports = self
+                    .resolve_module_exports_from_import_decl_async(
+                        import_decl,
+                        importer.clone(),
+                        gas,
+                    )
+                    .await?;
+                add_import_bindings(&mut bindings, import_decl, &exports, policy)?;
+            }
+            self.add_default_import_bindings(&mut bindings, decls, importer, policy, gas)
                 .await?;
-            add_import_bindings(&mut bindings, import_decl, &exports, policy)?;
-        }
-        self.add_default_import_bindings(&mut bindings, decls, importer, policy, gas)
-            .await?;
-        Ok(bindings)
+            Ok(bindings)
+        })
     }
 
-    #[async_recursion]
-    pub(crate) async fn load_module_from_resolved(
-        &mut self,
+    pub(crate) fn load_module_from_resolved<'a>(
+        &'a mut self,
         resolved: ResolvedModule,
-        gas: &mut GasMeter,
-    ) -> Result<ModuleInstance, EngineError> {
-        let source_fingerprint = self.refresh_if_stale(&resolved)?;
-        if let Some(inst) = self.modules.cached(&resolved.id)? {
-            return Ok(inst);
-        }
+        gas: &'a mut GasMeter,
+    ) -> BoxFuture<'a, Result<ModuleInstance, EngineError>> {
+        Box::pin(async move {
+            let source_fingerprint = self.refresh_if_stale(&resolved)?;
+            if let Some(inst) = self.modules.cached(&resolved.id)? {
+                return Ok(inst);
+            }
 
-        self.modules.mark_loading(&resolved.id)?;
+            self.modules.mark_loading(&resolved.id)?;
 
-        let prefix = prefix_for_module(&resolved.id);
-        let program = program_from_resolved(&resolved, gas)?;
-        if let ResolvedModuleContent::Source(source) = &resolved.content {
-            self.module_sources
-                .insert(resolved.id.clone(), source.clone());
-        }
-        let exports = exports_from_program(&program, &prefix, &resolved.id);
-        self.module_exports_cache
-            .insert(resolved.id.clone(), exports.clone());
-        let qualified = qualify_program(&program, &prefix);
-        let interfaces = interface_decls_from_program(&qualified);
-        self.module_interface_cache
-            .insert(resolved.id.clone(), interfaces);
+            let prefix = prefix_for_module(&resolved.id);
+            let program = program_from_resolved(&resolved, gas)?;
+            if let ResolvedModuleContent::Source(source) = &resolved.content {
+                self.module_sources
+                    .insert(resolved.id.clone(), source.clone());
+            }
+            let exports = exports_from_program(&program, &prefix, &resolved.id);
+            self.module_exports_cache
+                .insert(resolved.id.clone(), exports.clone());
+            let qualified = qualify_program(&program, &prefix);
+            let interfaces = interface_decls_from_program(&qualified);
+            self.module_interface_cache
+                .insert(resolved.id.clone(), interfaces);
 
-        // Resolve imports first so qualified names exist in the environment.
-        let local_values = decl_value_names(&program.decls);
-        let local_types = decl_type_names(&program.decls);
-        let import_policy = ImportBindingPolicy {
-            forbidden_values: &local_values,
-            forbidden_types: &local_types,
-            existing_imported_values: None,
-            existing_imported_types: None,
-            existing_imported_classes: None,
-        };
-        let import_bindings = self
-            .import_bindings_for_decls(
-                &program.decls,
-                Some(resolved.id.clone()),
-                &import_policy,
-                gas,
-            )
-            .await?;
+            // Resolve imports first so qualified names exist in the environment.
+            let local_values = decl_value_names(&program.decls);
+            let local_types = decl_type_names(&program.decls);
+            let import_policy = ImportBindingPolicy {
+                forbidden_values: &local_values,
+                forbidden_types: &local_types,
+                existing_imported_values: None,
+                existing_imported_types: None,
+                existing_imported_classes: None,
+            };
+            let import_bindings = self
+                .import_bindings_for_decls(
+                    &program.decls,
+                    Some(resolved.id.clone()),
+                    &import_policy,
+                    gas,
+                )
+                .await?;
 
-        // Qualify local names, then rewrite `alias.foo` uses into internal symbols.
-        validate_import_uses(&qualified, &import_bindings.alias_exports, None)?;
-        let rewritten = rewrite_import_uses(
-            &qualified,
-            &import_bindings.alias_exports,
-            &import_bindings.imported_values,
-            &import_bindings.imported_types,
-            &import_bindings.imported_classes,
-            Some(&local_types),
-            None,
-        );
+            // Qualify local names, then rewrite `alias.foo` uses into internal symbols.
+            validate_import_uses(&qualified, &import_bindings.alias_exports, None)?;
+            let rewritten = rewrite_import_uses(
+                &qualified,
+                &import_bindings.alias_exports,
+                &import_bindings.imported_values,
+                &import_bindings.imported_types,
+                &import_bindings.imported_classes,
+                Some(&local_types),
+                None,
+            );
 
-        self.inject_decls(&rewritten.decls)?;
-        let init_value = self.heap.alloc_tuple(vec![])?;
-        let init_type = Type::tuple(vec![]);
+            self.inject_decls(&rewritten.decls)?;
+            let init_value = self.heap.alloc_tuple(vec![])?;
+            let init_type = Type::tuple(vec![]);
 
-        let inst = ModuleInstance {
-            id: resolved.id.clone(),
-            exports,
-            init_value,
-            init_type,
-            source_fingerprint: source_fingerprint.clone(),
-        };
-        self.modules.store_loaded(inst.clone())?;
-        if let Some(source_fingerprint) = source_fingerprint {
-            self.module_source_fingerprints
-                .insert(resolved.id.clone(), source_fingerprint);
-        }
-        Ok(inst)
+            let inst = ModuleInstance {
+                id: resolved.id.clone(),
+                exports,
+                init_value,
+                init_type,
+                source_fingerprint: source_fingerprint.clone(),
+            };
+            self.modules.store_loaded(inst.clone())?;
+            if let Some(source_fingerprint) = source_fingerprint {
+                self.module_source_fingerprints
+                    .insert(resolved.id.clone(), source_fingerprint);
+            }
+            Ok(inst)
+        })
     }
 
     fn load_module_types_from_resolved(

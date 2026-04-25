@@ -80,17 +80,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-recursion"
-version = "1.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b43422f69d8ff38f95f1b2bb76517c91589a924d1559a0e935d7c8ce0274c11"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -767,7 +756,6 @@ dependencies = [
 name = "rex-ast"
 version = "3.9.12"
 dependencies = [
- "async-recursion",
  "async-trait",
  "chrono",
  "regex",
@@ -798,7 +786,6 @@ dependencies = [
 name = "rex-engine"
 version = "3.9.12"
 dependencies = [
- "async-recursion",
  "chrono",
  "futures",
  "rex-ast",

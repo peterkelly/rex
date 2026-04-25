@@ -4,7 +4,6 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 
-use async_recursion::async_recursion;
 use rex_ast::expr::{Expr, Program, Symbol, sym};
 use rex_typesystem::{
     error::TypeError,
@@ -278,7 +277,6 @@ where
         self.context.parent()
     }
 
-    #[async_recursion]
     async fn eval_typed_expr(
         &self,
         env: &Environment,
@@ -342,7 +340,7 @@ where
             .resolve(&info.class, name, &param_type)
     }
 
-    fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
+    pub(crate) fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
         if !typ.ftv().is_empty() {
             return None;
         }
@@ -358,7 +356,7 @@ where
         }
     }
 
-    fn resolve_class_method_plan(
+    pub(crate) fn resolve_class_method_plan(
         &self,
         name: &Symbol,
         typ: &Type,
@@ -380,7 +378,6 @@ where
         Ok(Ok((def_env, specialized)))
     }
 
-    #[async_recursion]
     pub(crate) async fn resolve_class_method(
         &self,
         name: &Symbol,
