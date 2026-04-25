@@ -17,19 +17,6 @@ If you are used to clicking GitHub’s merge buttons, stop and read this.
 These rules keep `main` linear and preserve commit signatures.
 They are enforced.
 
-## Workflow
-
-1. Branch from `main`.
-2. Make signed commits.
-3. Open a Pull Request.
-4. Ensure CI passes and reviews are approved.
-5. Rebase locally if your branch is behind `main`.
-6. A maintainer merges via:
-
-   `/fast-forward`
-
-Do not use GitHub’s merge buttons.
-
 ## Commit Message Style
 
 We follow the guidelines from:
