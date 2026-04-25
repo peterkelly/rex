@@ -3064,7 +3064,7 @@ where
                 let typed = self.type_check_expr(lam_body.as_ref())?;
                 let (param_ty, _ret_ty) = split_fun(&typed.typ)
                     .ok_or_else(|| EngineError::NotCallable(typed.typ.to_string()))?;
-                let TypedExprKind::Lam { param, body } = &typed.kind else {
+                let TypedExprKind::Lam { param, body } = typed.kind.as_ref() else {
                     return Err(EngineError::Internal(
                         "fn declaration did not lower to lambda".into(),
                     ));
@@ -3412,7 +3412,7 @@ where
     let mut stack = vec![ScopeWalkStep::Expr(expr)];
     while let Some(frame) = stack.pop() {
         match frame {
-            ScopeWalkStep::Expr(expr) => match &expr.kind {
+            ScopeWalkStep::Expr(expr) => match expr.kind.as_ref() {
                 TypedExprKind::Var { name, overloads } => {
                     if bound.iter().any(|n| n == name) {
                         continue;
@@ -3712,7 +3712,7 @@ fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
             push_unique_type(out, expr.typ.clone());
         }
 
-        match &expr.kind {
+        match expr.kind.as_ref() {
             TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
                 for elem in elems.iter().rev() {
                     stack.push(elem);
@@ -4273,7 +4273,7 @@ where
     let mut cur = expr;
     loop {
         check_runtime_cancelled(runtime)?;
-        match &cur.kind {
+        match cur.kind.as_ref() {
             TypedExprKind::Let { name, def, body } => {
                 gas.charge(gas.costs.eval_node)?;
                 let ptr = eval_typed_expr(runtime, &env, def, gas).await?;
@@ -4285,7 +4285,7 @@ where
     }
 
     gas.charge(gas.costs.eval_node)?;
-    match &cur.kind {
+    match cur.kind.as_ref() {
         TypedExprKind::Bool(v) => runtime.heap.alloc_bool(*v),
         TypedExprKind::Uint(v) => alloc_uint_literal_as(runtime, *v, &cur.typ),
         TypedExprKind::Int(v) => alloc_int_literal_as(runtime, *v, &cur.typ),
@@ -4385,7 +4385,7 @@ where
         TypedExprKind::App(..) => {
             let mut spine: Vec<(Type, &TypedExpr)> = Vec::new();
             let mut head = cur;
-            while let TypedExprKind::App(f, x) = &head.kind {
+            while let TypedExprKind::App(f, x) = head.kind.as_ref() {
                 check_runtime_cancelled(runtime)?;
                 spine.push((f.typ.clone(), x.as_ref()));
                 head = f.as_ref();

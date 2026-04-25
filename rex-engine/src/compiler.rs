@@ -66,7 +66,7 @@ where
         let mut stack = vec![ScopeWalkStep::Expr(expr)];
         while let Some(frame) = stack.pop() {
             match frame {
-                ScopeWalkStep::Expr(expr) => match &expr.kind {
+                ScopeWalkStep::Expr(expr) => match expr.kind.as_ref() {
                     TypedExprKind::Var { name, .. } => {
                         if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
                             continue;
@@ -186,7 +186,7 @@ where
         let mut stack = vec![ScopeWalkStep::Expr(expr)];
         while let Some(frame) = stack.pop() {
             match frame {
-                ScopeWalkStep::Expr(expr) => match &expr.kind {
+                ScopeWalkStep::Expr(expr) => match expr.kind.as_ref() {
                     TypedExprKind::Var { name, .. } => {
                         if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
                             continue;

@@ -510,7 +510,7 @@ fn infer_app_arg_typed(
                 let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
                 unifier.unify(&t1, &expected_ty)?;
                 preds.extend(p1);
-                typed_kvs.insert(k.clone(), typed_v);
+                typed_kvs.insert(k.clone(), Arc::new(typed_v));
             }
             for key in expected.keys() {
                 if !typed_kvs.contains_key(key.as_ref()) {
@@ -608,13 +608,13 @@ fn infer_record_update_typed_with_hint(
         let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
         unifier.unify(&t1, expected_ty)?;
         preds.extend(p1);
-        typed_updates.insert(k.clone(), typed_v);
+        typed_updates.insert(k.clone(), Arc::new(typed_v));
     }
 
     let typed = TypedExpr::new(
         result_ty.clone(),
         TypedExprKind::RecordUpdate {
-            base: Box::new(typed_base),
+            base: Arc::new(typed_base),
             updates: typed_updates,
         },
     );
@@ -1214,7 +1214,7 @@ fn infer_expr(
                             fun_ty.clone(),
                             TypedExprKind::Lam {
                                 param: name.clone(),
-                                body: Box::new(typed),
+                                body: Arc::new(typed),
                             },
                         );
                     }
@@ -1226,7 +1226,7 @@ fn infer_expr(
                     let (mut preds, mut func_ty, mut typed) =
                         infer_expr(unifier, supply, env, adts, known, head)?;
                     let mut overload_name = None;
-                    let mut overload_candidates = match &typed.kind {
+                    let mut overload_candidates = match typed.kind.as_ref() {
                         TypedExprKind::Var { name, overloads } if !overloads.is_empty() => {
                             overload_name = Some(name.clone());
                             Some(overloads.clone())
@@ -1267,7 +1267,7 @@ fn infer_expr(
                                 );
                                 typed_arg = TypedExpr::new(
                                     array_ty.clone(),
-                                    TypedExprKind::App(Box::new(coercion_fn), Box::new(typed_arg)),
+                                    TypedExprKind::App(Arc::new(coercion_fn), Arc::new(typed_arg)),
                                 );
                                 arg_ty = array_ty;
                             }
@@ -1299,7 +1299,7 @@ fn infer_expr(
                         preds.extend(p_arg);
                         typed = TypedExpr::new(
                             result_ty.clone(),
-                            TypedExprKind::App(Box::new(typed), Box::new(typed_arg)),
+                            TypedExprKind::App(Arc::new(typed), Arc::new(typed_arg)),
                         );
                         func_ty = result_ty;
                     }
@@ -1315,7 +1315,7 @@ fn infer_expr(
                     let typed = TypedExpr::new(
                         field_ty.clone(),
                         TypedExprKind::Project {
-                            expr: Box::new(typed_base),
+                            expr: Arc::new(typed_base),
                             field: field.clone(),
                         },
                     );
@@ -1350,12 +1350,12 @@ fn infer_expr(
                             infer_expr(unifier, supply, env, adts, known, v.as_ref())?;
                         unifier.unify(&t1, expected_ty)?;
                         preds.extend(p1);
-                        typed_updates.insert(k.clone(), typed_v);
+                        typed_updates.insert(k.clone(), Arc::new(typed_v));
                     }
                     let typed = TypedExpr::new(
                         result_ty.clone(),
                         TypedExprKind::RecordUpdate {
-                            base: Box::new(typed_base),
+                            base: Arc::new(typed_base),
                             updates: typed_updates,
                         },
                     );
@@ -1440,8 +1440,8 @@ fn infer_expr(
                             t_body.clone(),
                             TypedExprKind::Let {
                                 name,
-                                def: Box::new(def),
-                                body: Box::new(typed),
+                                def: Arc::new(def),
+                                body: Arc::new(typed),
                             },
                         );
                     }
@@ -1497,7 +1497,7 @@ fn infer_expr(
                         let scheme = generalize_with_unifier(&env_body, preds, def_ty, unifier);
                         reject_ambiguous_scheme(&scheme)?;
                         env_body.extend(name.clone(), scheme);
-                        typed_bindings.push((name, typed_def));
+                        typed_bindings.push((name, Arc::new(typed_def)));
                     }
 
                     let (p_body, t_body, typed_body) =
@@ -1506,7 +1506,7 @@ fn infer_expr(
                         t_body.clone(),
                         TypedExprKind::LetRec {
                             bindings: typed_bindings,
-                            body: Box::new(typed_body),
+                            body: Arc::new(typed_body),
                         },
                     );
                     Ok((p_body, t_body, typed))
@@ -1526,9 +1526,9 @@ fn infer_expr(
                     let typed = TypedExpr::new(
                         out_ty.clone(),
                         TypedExprKind::Ite {
-                            cond: Box::new(typed_cond),
-                            then_expr: Box::new(typed_then),
-                            else_expr: Box::new(typed_else),
+                            cond: Arc::new(typed_cond),
+                            then_expr: Arc::new(typed_then),
+                            else_expr: Arc::new(typed_else),
                         },
                     );
                     Ok((preds, out_ty, typed))
@@ -1542,7 +1542,7 @@ fn infer_expr(
                             infer_expr(unifier, supply, env, adts, known, elem)?;
                         preds.extend(p1);
                         types.push(unifier.apply_type(&t1));
-                        typed_elems.push(typed_elem);
+                        typed_elems.push(Arc::new(typed_elem));
                     }
                     let tuple_ty = Type::tuple(types);
                     let typed = TypedExpr::new(tuple_ty.clone(), TypedExprKind::Tuple(typed_elems));
@@ -1557,7 +1557,7 @@ fn infer_expr(
                             infer_expr(unifier, supply, env, adts, known, elem)?;
                         unifier.unify(&t1, &elem_tv)?;
                         preds.extend(p1);
-                        typed_elems.push(typed_elem);
+                        typed_elems.push(Arc::new(typed_elem));
                     }
                     let list_ty = Type::app(
                         Type::builtin(BuiltinTypeId::List),
@@ -1574,7 +1574,7 @@ fn infer_expr(
                         let (p1, t1, typed_v) = infer_expr(unifier, supply, env, adts, known, v)?;
                         unifier.unify(&t1, &elem_tv)?;
                         preds.extend(p1);
-                        typed_kvs.insert(k.clone(), typed_v);
+                        typed_kvs.insert(k.clone(), Arc::new(typed_v));
                     }
                     let dict_ty = Type::app(
                         Type::builtin(BuiltinTypeId::Dict),
@@ -1628,7 +1628,7 @@ fn infer_expr(
                             infer_expr(unifier, supply, &env_arm, adts, &known_arm, expr)?;
                         unifier.unify(&res_ty, &t_expr)?;
                         preds.extend(p_expr);
-                        typed_arms.push((pat.clone(), typed_expr));
+                        typed_arms.push((pat.clone(), Arc::new(typed_expr)));
                     }
 
                     let scrutinee_ty = unifier.apply_type(&t1);
@@ -1637,7 +1637,7 @@ fn infer_expr(
                     let typed = TypedExpr::new(
                         out_ty.clone(),
                         TypedExprKind::Match {
-                            scrutinee: Box::new(typed_scrutinee),
+                            scrutinee: Arc::new(typed_scrutinee),
                             arms: typed_arms,
                         },
                     );

@@ -2474,7 +2474,7 @@ fn in_scope_value_types_at_position(
         }
         *best = Some(scope.clone());
 
-        match (expr, &typed.kind) {
+        match (expr, typed.kind.as_ref()) {
             (
                 Expr::Let(_span, var, _ann, def, body),
                 TypedExprKind::Let {
@@ -3219,7 +3219,7 @@ fn expected_type_in_expr(expr: &Expr, typed: &TypedExpr, pos: RexPosition) -> Op
             consider(best, *expr.span(), expected);
         }
 
-        match (expr, &typed.kind) {
+        match (expr, typed.kind.as_ref()) {
             (
                 Expr::Let(_span, _name, _ann, def, body),
                 TypedExprKind::Let {
@@ -3406,7 +3406,7 @@ fn inferred_type_in_expr(expr: &Expr, typed: &TypedExpr, pos: RexPosition) -> Op
             *best = Some((span, typed.typ.clone()));
         }
 
-        match (expr, &typed.kind) {
+        match (expr, typed.kind.as_ref()) {
             (
                 Expr::Let(_, _, _, def, body),
                 TypedExprKind::Let {
@@ -4624,7 +4624,7 @@ fn hover_type_in_expr(
                     scrutinee,
                     arms: typed_arms,
                 },
-            ) = (&expr, &typed.kind)
+            ) = (&expr, typed.kind.as_ref())
             && span_contains_span(*expr.span(), ctx.name_span)
         {
             for ((_pat, _arm_body), (typed_pat, _typed_arm_body)) in
@@ -4652,7 +4652,7 @@ fn hover_type_in_expr(
         }
 
         // 2) Binding sites: `let x = ...` and lambda params.
-        match (expr, &typed.kind) {
+        match (expr, typed.kind.as_ref()) {
             (
                 Expr::Let(_span, binding, _ann, def, body),
                 TypedExprKind::Let {
