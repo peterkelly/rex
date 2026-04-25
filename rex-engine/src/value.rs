@@ -196,6 +196,10 @@ impl Heap {
         self.get(pointer)?.as_ref().value_as_overloaded()
     }
 
+    pub fn pointer_as_frame(&self, pointer: &Pointer) -> Result<Frame, EngineError> {
+        self.get(pointer)?.as_ref().value_as_frame()
+    }
+
     pub fn alloc_bool(&self, value: bool) -> Result<Pointer, EngineError> {
         self.alloc_slot(Value::Bool(value))
     }
@@ -262,6 +266,26 @@ impl Heap {
 
     pub fn alloc_frame(&self, frame: Frame) -> Result<Pointer, EngineError> {
         self.alloc_slot(Value::Frame(frame))
+    }
+
+    pub fn alloc_root_frame_parent(&self) -> Result<Pointer, EngineError> {
+        self.alloc_u64(0)
+    }
+
+    pub fn replace_frame(&self, pointer: &Pointer, frame: Frame) -> Result<(), EngineError> {
+        self.pointer_as_frame(pointer)?;
+        self.overwrite(pointer, Value::Frame(frame))
+    }
+
+    pub fn update_frame<R>(
+        &self,
+        pointer: &Pointer,
+        update: impl FnOnce(&mut Frame) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        let mut frame = self.pointer_as_frame(pointer)?;
+        let result = update(&mut frame)?;
+        self.replace_frame(pointer, frame)?;
+        Ok(result)
     }
 
     pub fn alloc_tuple(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
@@ -646,7 +670,7 @@ impl Value {
 
     pub fn value_as_frame(&self) -> Result<Frame, EngineError> {
         match self {
-            Value::Frame(frame) => Ok(*frame),
+            Value::Frame(frame) => Ok(frame.clone()),
             _ => Err(self.value_type_error("frame")),
         }
     }

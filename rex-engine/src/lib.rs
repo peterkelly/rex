@@ -34,7 +34,7 @@ pub use modules::{
     ResolveRequest, ResolvedModule, ResolvedModuleContent, SymbolKind,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
-pub use stack::{DEFAULT_STACK_SIZE_BYTES, Frame};
+pub use stack::*;
 pub use value::{
     Closure, FromPointer, Heap, IntoPointer, Pointer, RexType, Value, ValueDisplayOptions,
     ValueRef, closure_debug, closure_eq, pointer_display, pointer_display_with, pointer_eq,
