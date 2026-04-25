@@ -53,7 +53,7 @@ where
     }
 
     fn collect_externs(&self, expr: &TypedExpr, env: &Env) -> CompiledExterns {
-        enum Frame<'b> {
+        enum ScopeWalkStep<'b> {
             Expr(&'b TypedExpr),
             Push(Symbol),
             PushMany(Vec<Symbol>),
@@ -63,10 +63,10 @@ where
         let mut natives = BTreeSet::new();
         let mut class_methods = BTreeSet::new();
         let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![Frame::Expr(expr)];
+        let mut stack = vec![ScopeWalkStep::Expr(expr)];
         while let Some(frame) = stack.pop() {
             match frame {
-                Frame::Expr(expr) => match &expr.kind {
+                ScopeWalkStep::Expr(expr) => match &expr.kind {
                     TypedExprKind::Var { name, .. } => {
                         if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
                             continue;
@@ -79,48 +79,48 @@ where
                     }
                     TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
                         for elem in elems.iter().rev() {
-                            stack.push(Frame::Expr(elem));
+                            stack.push(ScopeWalkStep::Expr(elem));
                         }
                     }
                     TypedExprKind::Dict(kvs) => {
                         for v in kvs.values().rev() {
-                            stack.push(Frame::Expr(v));
+                            stack.push(ScopeWalkStep::Expr(v));
                         }
                     }
                     TypedExprKind::RecordUpdate { base, updates } => {
                         for v in updates.values().rev() {
-                            stack.push(Frame::Expr(v));
+                            stack.push(ScopeWalkStep::Expr(v));
                         }
-                        stack.push(Frame::Expr(base));
+                        stack.push(ScopeWalkStep::Expr(base));
                     }
                     TypedExprKind::App(f, x) => {
-                        stack.push(Frame::Expr(x));
-                        stack.push(Frame::Expr(f));
+                        stack.push(ScopeWalkStep::Expr(x));
+                        stack.push(ScopeWalkStep::Expr(f));
                     }
-                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
+                    TypedExprKind::Project { expr, .. } => stack.push(ScopeWalkStep::Expr(expr)),
                     TypedExprKind::Lam { param, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(param.clone()));
+                        stack.push(ScopeWalkStep::Pop(1));
+                        stack.push(ScopeWalkStep::Expr(body));
+                        stack.push(ScopeWalkStep::Push(param.clone()));
                     }
                     TypedExprKind::Let { name, def, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(name.clone()));
-                        stack.push(Frame::Expr(def));
+                        stack.push(ScopeWalkStep::Pop(1));
+                        stack.push(ScopeWalkStep::Expr(body));
+                        stack.push(ScopeWalkStep::Push(name.clone()));
+                        stack.push(ScopeWalkStep::Expr(def));
                     }
                     TypedExprKind::LetRec { bindings, body } => {
                         if !bindings.is_empty() {
-                            stack.push(Frame::Pop(bindings.len()));
-                            stack.push(Frame::Expr(body));
+                            stack.push(ScopeWalkStep::Pop(bindings.len()));
+                            stack.push(ScopeWalkStep::Expr(body));
                             for (_, def) in bindings.iter().rev() {
-                                stack.push(Frame::Expr(def));
+                                stack.push(ScopeWalkStep::Expr(def));
                             }
-                            stack.push(Frame::PushMany(
+                            stack.push(ScopeWalkStep::PushMany(
                                 bindings.iter().map(|(name, _)| name.clone()).collect(),
                             ));
                         } else {
-                            stack.push(Frame::Expr(body));
+                            stack.push(ScopeWalkStep::Expr(body));
                         }
                     }
                     TypedExprKind::Ite {
@@ -128,9 +128,9 @@ where
                         then_expr,
                         else_expr,
                     } => {
-                        stack.push(Frame::Expr(else_expr));
-                        stack.push(Frame::Expr(then_expr));
-                        stack.push(Frame::Expr(cond));
+                        stack.push(ScopeWalkStep::Expr(else_expr));
+                        stack.push(ScopeWalkStep::Expr(then_expr));
+                        stack.push(ScopeWalkStep::Expr(cond));
                     }
                     TypedExprKind::Match { scrutinee, arms } => {
                         for (pat, arm_expr) in arms.iter().rev() {
@@ -138,14 +138,14 @@ where
                             collect_pattern_bindings(pat, &mut bindings);
                             let count = bindings.len();
                             if count != 0 {
-                                stack.push(Frame::Pop(count));
-                                stack.push(Frame::Expr(arm_expr));
-                                stack.push(Frame::PushMany(bindings));
+                                stack.push(ScopeWalkStep::Pop(count));
+                                stack.push(ScopeWalkStep::Expr(arm_expr));
+                                stack.push(ScopeWalkStep::PushMany(bindings));
                             } else {
-                                stack.push(Frame::Expr(arm_expr));
+                                stack.push(ScopeWalkStep::Expr(arm_expr));
                             }
                         }
-                        stack.push(Frame::Expr(scrutinee));
+                        stack.push(ScopeWalkStep::Expr(scrutinee));
                     }
                     TypedExprKind::Bool(..)
                     | TypedExprKind::Uint(..)
@@ -156,9 +156,9 @@ where
                     | TypedExprKind::DateTime(..)
                     | TypedExprKind::Hole => {}
                 },
-                Frame::Push(sym) => bound.push(sym),
-                Frame::PushMany(syms) => bound.extend(syms),
-                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
+                ScopeWalkStep::Push(sym) => bound.push(sym),
+                ScopeWalkStep::PushMany(syms) => bound.extend(syms),
+                ScopeWalkStep::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
             }
         }
 
@@ -173,7 +173,7 @@ where
     }
 
     fn link_contract(&self, expr: &TypedExpr, env: &Env) -> RuntimeLinkContract {
-        enum Frame<'b> {
+        enum ScopeWalkStep<'b> {
             Expr(&'b TypedExpr),
             Push(Symbol),
             PushMany(Vec<Symbol>),
@@ -183,10 +183,10 @@ where
         let mut native_requirements = BTreeSet::new();
         let mut class_method_requirements = BTreeSet::new();
         let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![Frame::Expr(expr)];
+        let mut stack = vec![ScopeWalkStep::Expr(expr)];
         while let Some(frame) = stack.pop() {
             match frame {
-                Frame::Expr(expr) => match &expr.kind {
+                ScopeWalkStep::Expr(expr) => match &expr.kind {
                     TypedExprKind::Var { name, .. } => {
                         if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
                             continue;
@@ -205,48 +205,48 @@ where
                     }
                     TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
                         for elem in elems.iter().rev() {
-                            stack.push(Frame::Expr(elem));
+                            stack.push(ScopeWalkStep::Expr(elem));
                         }
                     }
                     TypedExprKind::Dict(kvs) => {
                         for v in kvs.values().rev() {
-                            stack.push(Frame::Expr(v));
+                            stack.push(ScopeWalkStep::Expr(v));
                         }
                     }
                     TypedExprKind::RecordUpdate { base, updates } => {
                         for v in updates.values().rev() {
-                            stack.push(Frame::Expr(v));
+                            stack.push(ScopeWalkStep::Expr(v));
                         }
-                        stack.push(Frame::Expr(base));
+                        stack.push(ScopeWalkStep::Expr(base));
                     }
                     TypedExprKind::App(f, x) => {
-                        stack.push(Frame::Expr(x));
-                        stack.push(Frame::Expr(f));
+                        stack.push(ScopeWalkStep::Expr(x));
+                        stack.push(ScopeWalkStep::Expr(f));
                     }
-                    TypedExprKind::Project { expr, .. } => stack.push(Frame::Expr(expr)),
+                    TypedExprKind::Project { expr, .. } => stack.push(ScopeWalkStep::Expr(expr)),
                     TypedExprKind::Lam { param, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(param.clone()));
+                        stack.push(ScopeWalkStep::Pop(1));
+                        stack.push(ScopeWalkStep::Expr(body));
+                        stack.push(ScopeWalkStep::Push(param.clone()));
                     }
                     TypedExprKind::Let { name, def, body } => {
-                        stack.push(Frame::Pop(1));
-                        stack.push(Frame::Expr(body));
-                        stack.push(Frame::Push(name.clone()));
-                        stack.push(Frame::Expr(def));
+                        stack.push(ScopeWalkStep::Pop(1));
+                        stack.push(ScopeWalkStep::Expr(body));
+                        stack.push(ScopeWalkStep::Push(name.clone()));
+                        stack.push(ScopeWalkStep::Expr(def));
                     }
                     TypedExprKind::LetRec { bindings, body } => {
                         if !bindings.is_empty() {
-                            stack.push(Frame::Pop(bindings.len()));
-                            stack.push(Frame::Expr(body));
+                            stack.push(ScopeWalkStep::Pop(bindings.len()));
+                            stack.push(ScopeWalkStep::Expr(body));
                             for (_, def) in bindings.iter().rev() {
-                                stack.push(Frame::Expr(def));
+                                stack.push(ScopeWalkStep::Expr(def));
                             }
-                            stack.push(Frame::PushMany(
+                            stack.push(ScopeWalkStep::PushMany(
                                 bindings.iter().map(|(name, _)| name.clone()).collect(),
                             ));
                         } else {
-                            stack.push(Frame::Expr(body));
+                            stack.push(ScopeWalkStep::Expr(body));
                         }
                     }
                     TypedExprKind::Ite {
@@ -254,9 +254,9 @@ where
                         then_expr,
                         else_expr,
                     } => {
-                        stack.push(Frame::Expr(else_expr));
-                        stack.push(Frame::Expr(then_expr));
-                        stack.push(Frame::Expr(cond));
+                        stack.push(ScopeWalkStep::Expr(else_expr));
+                        stack.push(ScopeWalkStep::Expr(then_expr));
+                        stack.push(ScopeWalkStep::Expr(cond));
                     }
                     TypedExprKind::Match { scrutinee, arms } => {
                         for (pat, arm_expr) in arms.iter().rev() {
@@ -264,14 +264,14 @@ where
                             collect_pattern_bindings(pat, &mut bindings);
                             let count = bindings.len();
                             if count != 0 {
-                                stack.push(Frame::Pop(count));
-                                stack.push(Frame::Expr(arm_expr));
-                                stack.push(Frame::PushMany(bindings));
+                                stack.push(ScopeWalkStep::Pop(count));
+                                stack.push(ScopeWalkStep::Expr(arm_expr));
+                                stack.push(ScopeWalkStep::PushMany(bindings));
                             } else {
-                                stack.push(Frame::Expr(arm_expr));
+                                stack.push(ScopeWalkStep::Expr(arm_expr));
                             }
                         }
-                        stack.push(Frame::Expr(scrutinee));
+                        stack.push(ScopeWalkStep::Expr(scrutinee));
                     }
                     TypedExprKind::Bool(..)
                     | TypedExprKind::Uint(..)
@@ -282,9 +282,9 @@ where
                     | TypedExprKind::DateTime(..)
                     | TypedExprKind::Hole => {}
                 },
-                Frame::Push(sym) => bound.push(sym),
-                Frame::PushMany(syms) => bound.extend(syms),
-                Frame::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
+                ScopeWalkStep::Push(sym) => bound.push(sym),
+                ScopeWalkStep::PushMany(syms) => bound.extend(syms),
+                ScopeWalkStep::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
             }
         }
 
