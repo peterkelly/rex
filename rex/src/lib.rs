@@ -8,7 +8,7 @@ pub use rex_engine::{
     AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, ClassMethodCapability,
     ClassMethodRequirement, CompileError, CompiledExterns, CompiledProgram,
     CompiledProgramBoundary, Compiler, Engine, EngineError, EngineOptions, EvalError, Evaluator,
-    EvaluatorRef, ExecutionError, Export, FromPointer, Handler, Heap, IntoPointer, Module,
+    EvaluatorRef, ExecutionError, Export, Frame, FromPointer, Handler, Heap, IntoPointer, Module,
     NativeCapability, NativeFuture, NativeRequirement, PRELUDE_MODULE_NAME, Pointer, PreludeMode,
     ROOT_MODULE_NAME, ReplState, ResolveRequest, ResolvedModule, ResolvedModuleContent, RexAdt,
     RexDefault, RexType, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary,

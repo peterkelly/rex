@@ -4173,6 +4173,7 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
         }
         Value::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
         Value::Uninitialized(..) => Err(EngineError::UnknownType(sym("uninitialized"))),
+        Value::Frame(..) => Err(EngineError::UnknownType(sym("frame"))),
         Value::Closure(..) => Err(EngineError::UnknownType(sym("closure"))),
         Value::Native(..) => Err(EngineError::UnknownType(sym("native"))),
         Value::Overloaded(..) => Err(EngineError::UnknownType(sym("overloaded"))),

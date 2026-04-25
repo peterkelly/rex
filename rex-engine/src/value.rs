@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::EngineError;
 use crate::Environment;
 use crate::engine::{NativeFn, OverloadedFn};
+use crate::stack::Frame;
 
 #[derive(Default)]
 struct HeapState {
@@ -259,6 +260,10 @@ impl Heap {
         self.alloc_slot(Value::Uninitialized(name))
     }
 
+    pub fn alloc_frame(&self, frame: Frame) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Value::Frame(frame))
+    }
+
     pub fn alloc_tuple(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
         self.alloc_slot(Value::Tuple(values))
     }
@@ -463,6 +468,7 @@ pub enum Value {
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
+    Frame(Frame),
     Closure(Closure),
     Native(NativeFn),
     Overloaded(OverloadedFn),
@@ -491,6 +497,7 @@ impl Value {
             Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
             Value::Adt(..) => "adt",
             Value::Uninitialized(..) => "uninitialized",
+            Value::Frame(..) => "frame",
             Value::Closure(..) => "closure",
             Value::Native(..) => "native",
             Value::Overloaded(..) => "overloaded",
@@ -634,6 +641,13 @@ impl Value {
         match self {
             Value::Uninitialized(name) => Ok(name.clone()),
             _ => Err(self.value_type_error("uninitialized")),
+        }
+    }
+
+    pub fn value_as_frame(&self) -> Result<Frame, EngineError> {
+        match self {
+            Value::Frame(frame) => Ok(*frame),
+            _ => Err(self.value_type_error("frame")),
         }
     }
 
@@ -846,6 +860,7 @@ fn value_debug_inner(
             }
         }
         Value::Uninitialized(name) => format!("<uninitialized:{name}>"),
+        Value::Frame(frame) => format!("<frame:{frame:?}>"),
         Value::Closure(closure) => closure_debug_inner(heap, closure, active)?,
         Value::Native(native) => format!("<native:{}>", native.name()),
         Value::Overloaded(over) => format!("<overloaded:{}>", over.name()),
@@ -978,6 +993,7 @@ fn value_display_inner(
             }
         }
         Value::Uninitialized(name) => format!("<uninitialized:{name}>"),
+        Value::Frame(frame) => format!("<frame:{frame:?}>"),
         Value::Closure(..) => "<closure>".to_string(),
         Value::Native(native) => format!("<native:{}>", native.name()),
         Value::Overloaded(over) => format!("<overloaded:{}>", over.name()),
@@ -1125,6 +1141,7 @@ fn value_eq_inner(
             Ok(true)
         }
         (Value::Uninitialized(lhs), Value::Uninitialized(rhs)) => Ok(lhs == rhs),
+        (Value::Frame(lhs), Value::Frame(rhs)) => Ok(lhs == rhs),
         (Value::Closure(lhs), Value::Closure(rhs)) => closure_eq_inner(heap, lhs, rhs, seen),
         (Value::Native(lhs), Value::Native(rhs)) => Ok(lhs == rhs),
         (Value::Overloaded(lhs), Value::Overloaded(rhs)) => Ok(lhs == rhs),
