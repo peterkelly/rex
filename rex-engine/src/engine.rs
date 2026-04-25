@@ -1,6 +1,6 @@
 //! Core engine implementation for Rex.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -4608,6 +4608,47 @@ enum EvalLoopApplyResult {
     },
 }
 
+struct EvalLoopWorkItem {
+    frame: Pointer,
+    returned: Option<Pointer>,
+}
+
+impl EvalLoopWorkItem {
+    fn enter(frame: Pointer) -> Self {
+        Self {
+            frame,
+            returned: None,
+        }
+    }
+
+    fn receive(frame: Pointer, value: Pointer) -> Self {
+        Self {
+            frame,
+            returned: Some(value),
+        }
+    }
+}
+
+struct EvalLoopScheduler {
+    ready: VecDeque<EvalLoopWorkItem>,
+}
+
+impl EvalLoopScheduler {
+    fn new(root: Pointer) -> Self {
+        let mut ready = VecDeque::new();
+        ready.push_front(EvalLoopWorkItem::enter(root));
+        Self { ready }
+    }
+
+    fn schedule_next(&mut self, item: EvalLoopWorkItem) {
+        self.ready.push_front(item);
+    }
+
+    fn pop_next(&mut self) -> Option<EvalLoopWorkItem> {
+        self.ready.pop_front()
+    }
+}
+
 pub(crate) async fn eval_typed_expr_loop<State>(
     runtime: &RuntimeSnapshot<State>,
     env: &Environment,
@@ -4670,31 +4711,35 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let root_expr = Arc::new(expr.clone());
-    let mut current =
+    let root_frame =
         runtime
             .heap
             .alloc_frame(frame_for_expr(initial_parent, root_expr, env.clone()))?;
-    let mut returned: Option<Pointer> = None;
+    let mut scheduler = EvalLoopScheduler::new(root_frame);
 
     loop {
         check_runtime_cancelled(runtime)?;
-        let frame = runtime.heap.pointer_as_frame(&current)?;
-        let control = match returned.take() {
-            Some(value) => eval_loop_receive(runtime, current, frame, value, gas).await?,
-            None => eval_loop_enter(runtime, current, frame, gas).await?,
+        let item = scheduler
+            .pop_next()
+            .ok_or_else(|| EngineError::Internal("loop scheduler ran out of ready work".into()))?;
+        let frame = runtime.heap.pointer_as_frame(&item.frame)?;
+        let control = match item.returned {
+            Some(value) => eval_loop_receive(runtime, item.frame, frame, value, gas).await?,
+            None => eval_loop_enter(runtime, item.frame, frame, gas).await?,
         };
 
         match control {
             EvalLoopControl::Push { expr, env } => {
-                current = runtime
+                let child = runtime
                     .heap
-                    .alloc_frame(frame_for_expr(current, expr, env))?;
+                    .alloc_frame(frame_for_expr(item.frame, expr, env))?;
+                scheduler.schedule_next(EvalLoopWorkItem::enter(child));
             }
             EvalLoopControl::Return(value) => {
-                let mut frame = runtime.heap.pointer_as_frame(&current)?;
+                let mut frame = runtime.heap.pointer_as_frame(&item.frame)?;
                 let parent = *frame.parent();
                 mark_frame_complete(&mut frame, value);
-                runtime.heap.replace_frame(&current, frame)?;
+                runtime.heap.replace_frame(&item.frame, frame)?;
                 match stop {
                     EvalLoopStop::RootSentinel => {
                         if is_root_frame_parent(&runtime.heap, &parent)? {
@@ -4712,8 +4757,7 @@ where
                         }
                     }
                 }
-                current = parent;
-                returned = Some(value);
+                scheduler.schedule_next(EvalLoopWorkItem::receive(parent, value));
             }
         }
     }
@@ -5969,6 +6013,27 @@ mod eval_loop_tests {
         let mut compile_gas = GasMeter::default();
         let program = compiler.compile_snippet(source, &mut compile_gas).unwrap();
         (compiler.engine.runtime_snapshot(), program)
+    }
+
+    #[test]
+    fn loop_scheduler_pops_newest_ready_work_first() {
+        let heap = Heap::new();
+        let root = heap.alloc_i32(0).unwrap();
+        let first = heap.alloc_i32(1).unwrap();
+        let second = heap.alloc_i32(2).unwrap();
+        let returned = heap.alloc_i32(3).unwrap();
+        let mut scheduler = EvalLoopScheduler::new(root);
+
+        assert_eq!(scheduler.pop_next().unwrap().frame, root);
+
+        scheduler.schedule_next(EvalLoopWorkItem::enter(first));
+        scheduler.schedule_next(EvalLoopWorkItem::receive(second, returned));
+
+        let next = scheduler.pop_next().unwrap();
+        assert_eq!(next.frame, second);
+        assert_eq!(next.returned, Some(returned));
+        assert_eq!(scheduler.pop_next().unwrap().frame, first);
+        assert!(scheduler.pop_next().is_none());
     }
 
     async fn assert_loop_matches_recursive(source: &str) {
