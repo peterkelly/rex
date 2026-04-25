@@ -11,7 +11,7 @@ use rex_typesystem::types::{AdtDecl, BuiltinTypeId, Type, TypedExpr};
 use uuid::Uuid;
 
 use crate::EngineError;
-use crate::Env;
+use crate::Environment;
 use crate::engine::{NativeFn, OverloadedFn};
 
 #[derive(Default)]
@@ -277,7 +277,7 @@ impl Heap {
 
     pub fn alloc_closure(
         &self,
-        env: Env,
+        env: Environment,
         param: Symbol,
         param_ty: Type,
         typ: Type,
@@ -428,7 +428,7 @@ impl Deref for ValueRef {
 
 #[derive(Clone)]
 pub struct Closure {
-    pub env: Env,
+    pub env: Environment,
     pub param: Symbol,
     pub param_ty: Type,
     pub typ: Type,
@@ -741,7 +741,7 @@ fn pointer_display_inner(
 
 fn env_debug_inner(
     heap: &Heap,
-    env: &Env,
+    env: &Environment,
     active: &mut HashSet<PointerKey>,
 ) -> Result<String, EngineError> {
     let mut bindings = env.bindings().iter().collect::<Vec<_>>();
@@ -1029,8 +1029,8 @@ fn pointer_eq_inner(
 
 fn env_eq_inner(
     heap: &Heap,
-    lhs: &Env,
-    rhs: &Env,
+    lhs: &Environment,
+    rhs: &Environment,
     seen: &mut HashSet<PointerPairKey>,
 ) -> Result<bool, EngineError> {
     if lhs.bindings().len() != rhs.bindings().len() {

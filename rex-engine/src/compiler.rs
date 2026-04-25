@@ -15,7 +15,7 @@ use crate::modules::{
     exports_from_program, parse_program_from_source, prefix_for_module, rewrite_import_uses,
     validate_import_uses,
 };
-use crate::{CompileError, EngineError, Env};
+use crate::{CompileError, EngineError, Environment};
 
 #[derive(Clone)]
 pub struct Compiler<State = ()>
@@ -52,7 +52,7 @@ where
         type_check_engine(&mut self.engine, expr)
     }
 
-    fn collect_externs(&self, expr: &TypedExpr, env: &Env) -> CompiledExterns {
+    fn collect_externs(&self, expr: &TypedExpr, env: &Environment) -> CompiledExterns {
         enum ScopeWalkStep<'b> {
             Expr(&'b TypedExpr),
             Push(Symbol),
@@ -172,7 +172,7 @@ where
         }
     }
 
-    fn link_contract(&self, expr: &TypedExpr, env: &Env) -> RuntimeLinkContract {
+    fn link_contract(&self, expr: &TypedExpr, env: &Environment) -> RuntimeLinkContract {
         enum ScopeWalkStep<'b> {
             Expr(&'b TypedExpr),
             Push(Symbol),

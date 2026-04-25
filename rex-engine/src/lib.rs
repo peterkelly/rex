@@ -25,7 +25,7 @@ pub use engine::{
     RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable,
     collect_adts_error_to_engine,
 };
-pub use env::Env;
+pub use env::Environment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
 pub use evaluator::{Evaluator, EvaluatorRef};
 pub use modules::virtual_export_name;

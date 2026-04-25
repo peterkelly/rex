@@ -40,7 +40,8 @@ use crate::prelude::{
 };
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{
-    CancellationToken, EngineError, Env, FromPointer, IntoPointer, RexType, evaluator::EvaluatorRef,
+    CancellationToken, EngineError, Environment, FromPointer, IntoPointer, RexType,
+    evaluator::EvaluatorRef,
 };
 
 fn runtime_ctor_symbol(name: &Symbol) -> Symbol {
@@ -1626,7 +1627,7 @@ impl<State: Clone + Send + Sync + 'static> Default for NativeRegistry<State> {
 #[derive(Clone)]
 pub(crate) struct TypeclassInstance {
     head: Type,
-    def_env: Env,
+    def_env: Environment,
     methods: BTreeMap<Symbol, Arc<TypedExpr>>,
 }
 
@@ -1640,7 +1641,7 @@ impl TypeclassRegistry {
         &mut self,
         class: Symbol,
         head: Type,
-        def_env: Env,
+        def_env: Environment,
         methods: BTreeMap<Symbol, Arc<TypedExpr>>,
     ) -> Result<(), EngineError> {
         let entry = self.entries.entry(class.clone()).or_default();
@@ -1665,7 +1666,7 @@ impl TypeclassRegistry {
         class: &Symbol,
         method: &Symbol,
         param_type: &Type,
-    ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
+    ) -> Result<(Environment, Arc<TypedExpr>, Subst), EngineError> {
         let instances =
             self.entries
                 .get(class)
@@ -1709,7 +1710,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub state: Arc<State>,
-    env: Env,
+    env: Environment,
     natives: NativeRegistry<State>,
     typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
@@ -1733,7 +1734,7 @@ where
 pub struct CompiledProgram {
     pub externs: CompiledExterns,
     link_contract: RuntimeLinkContract,
-    pub(crate) env: Env,
+    pub(crate) env: Environment,
     pub(crate) expr: Arc<TypedExpr>,
 }
 
@@ -1741,7 +1742,7 @@ impl CompiledProgram {
     pub(crate) fn new(
         externs: CompiledExterns,
         link_contract: RuntimeLinkContract,
-        env: Env,
+        env: Environment,
         expr: TypedExpr,
     ) -> Self {
         Self {
@@ -1926,7 +1927,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub state: Arc<State>,
-    pub(crate) env: Env,
+    pub(crate) env: Environment,
     pub(crate) natives: NativeRegistry<State>,
     pub(crate) typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
@@ -2026,7 +2027,7 @@ impl<State> Engine<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn env_snapshot(&self) -> Env {
+    pub(crate) fn env_snapshot(&self) -> Environment {
         self.env.clone()
     }
 
@@ -2096,7 +2097,7 @@ where
     pub fn new(state: State) -> Self {
         Self {
             state: Arc::new(state),
-            env: Env::new(),
+            env: Environment::new(),
             natives: NativeRegistry::<State>::default(),
             typeclasses: TypeclassRegistry::default(),
             type_system: TypeSystem::new(),
@@ -2128,7 +2129,7 @@ where
         };
         let mut engine = Engine {
             state: Arc::new(state),
-            env: Env::new(),
+            env: Environment::new(),
             natives: NativeRegistry::<State>::default(),
             typeclasses: TypeclassRegistry::default(),
             type_system,
@@ -4259,7 +4260,7 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
 #[async_recursion]
 pub(crate) async fn eval_typed_expr<State>(
     runtime: &RuntimeSnapshot<State>,
-    env: &Env,
+    env: &Environment,
     expr: &TypedExpr,
     gas: &mut GasMeter,
 ) -> Result<Pointer, EngineError>

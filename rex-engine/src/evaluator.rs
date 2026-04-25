@@ -19,7 +19,8 @@ use crate::engine::{
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
 use crate::value::Value;
 use crate::{
-    CompileError, Compiler, EngineError, Env, EvalError, ExecutionError, Pointer, RuntimeEnv,
+    CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, Pointer,
+    RuntimeEnv,
 };
 
 pub struct Evaluator<State = ()>
@@ -249,7 +250,7 @@ where
         &self,
         name: &Symbol,
         call_type: &Type,
-    ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
+    ) -> Result<(Environment, Arc<TypedExpr>, Subst), EngineError> {
         let info = self
             .runtime
             .type_system
@@ -296,7 +297,7 @@ where
         &self,
         name: &Symbol,
         typ: &Type,
-    ) -> Result<Result<(Env, TypedExpr), Pointer>, EngineError> {
+    ) -> Result<Result<(Environment, TypedExpr), Pointer>, EngineError> {
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
