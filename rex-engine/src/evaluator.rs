@@ -14,9 +14,9 @@ use rex_typesystem::{
 use rex_util::{GasMeter, sha256_hex};
 
 use crate::engine::{
-    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, apply_with_backend,
-    check_runtime_cancelled, eval_typed_expr, eval_typed_expr_loop, impl_matches_type,
-    is_function_type, type_head_is_var,
+    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, apply_with_context,
+    check_runtime_cancelled, eval_typed_expr, eval_typed_expr_loop, eval_typed_expr_loop_child,
+    impl_matches_type, is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
 use crate::value::Value;
@@ -39,13 +39,57 @@ where
     State: Clone + Send + Sync + 'static,
 {
     runtime: &'a RuntimeSnapshot<State>,
-    backend: EvalBackend,
+    context: EvalContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EvalBackend {
     Recursive,
     Loop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct EvalContext {
+    backend: EvalBackend,
+    loop_parent: Option<Pointer>,
+}
+
+impl EvalContext {
+    pub(crate) fn recursive() -> Self {
+        Self {
+            backend: EvalBackend::Recursive,
+            loop_parent: None,
+        }
+    }
+
+    pub(crate) fn loop_root() -> Self {
+        Self {
+            backend: EvalBackend::Loop,
+            loop_parent: None,
+        }
+    }
+
+    pub(crate) fn loop_child(parent: Pointer) -> Self {
+        Self {
+            backend: EvalBackend::Loop,
+            loop_parent: Some(parent),
+        }
+    }
+
+    pub(crate) fn from_backend(backend: EvalBackend) -> Self {
+        match backend {
+            EvalBackend::Recursive => Self::recursive(),
+            EvalBackend::Loop => Self::loop_root(),
+        }
+    }
+
+    pub(crate) fn backend(self) -> EvalBackend {
+        self.backend
+    }
+
+    pub(crate) fn loop_parent(self) -> Option<Pointer> {
+        self.loop_parent
+    }
 }
 
 impl<State> Evaluator<State>
@@ -254,20 +298,32 @@ where
     pub(crate) fn new(runtime: &'a RuntimeSnapshot<State>) -> Self {
         Self {
             runtime,
-            backend: EvalBackend::Recursive,
+            context: EvalContext::recursive(),
         }
     }
 
-    pub(crate) fn new_with_backend(
+    pub(crate) fn new_with_context(
         runtime: &'a RuntimeSnapshot<State>,
-        backend: EvalBackend,
+        context: EvalContext,
     ) -> Self {
-        Self { runtime, backend }
+        Self { runtime, context }
+    }
+
+    pub(crate) fn new_with_loop_parent(
+        runtime: &'a RuntimeSnapshot<State>,
+        parent: Pointer,
+    ) -> Self {
+        Self::new_with_context(runtime, EvalContext::loop_child(parent))
     }
 
     #[cfg(test)]
     pub(crate) fn backend(&self) -> EvalBackend {
-        self.backend
+        self.context.backend()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn loop_parent(&self) -> Option<Pointer> {
+        self.context.loop_parent()
     }
 
     #[async_recursion]
@@ -277,9 +333,14 @@ where
         expr: &TypedExpr,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
-        match self.backend {
+        match self.context.backend() {
             EvalBackend::Recursive => eval_typed_expr(self.runtime, env, expr, gas).await,
-            EvalBackend::Loop => eval_typed_expr_loop(self.runtime, env, expr, gas).await,
+            EvalBackend::Loop => match self.context.loop_parent() {
+                Some(parent) => {
+                    eval_typed_expr_loop_child(self.runtime, parent, env, expr, gas).await
+                }
+                None => eval_typed_expr_loop(self.runtime, env, expr, gas).await,
+            },
         }
     }
 
@@ -291,14 +352,14 @@ where
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
-        apply_with_backend(
+        apply_with_context(
             self.runtime,
             func,
             arg,
             func_type,
             arg_type,
             gas,
-            self.backend,
+            self.context,
         )
         .await
     }
@@ -489,7 +550,7 @@ where
                 Value::Native(native) if native.is_zero_unapplied() => {
                     let mut gas = GasMeter::default();
                     native
-                        .call_zero_with_backend(self.runtime, &mut gas, self.backend)
+                        .call_zero_with_context(self.runtime, &mut gas, self.context)
                         .await
                 }
                 _ => Ok(ptr),
@@ -505,7 +566,7 @@ where
                 Value::Native(native) if native.is_zero_unapplied() => {
                     let mut gas = GasMeter::default();
                     native
-                        .call_zero_with_backend(self.runtime, &mut gas, self.backend)
+                        .call_zero_with_context(self.runtime, &mut gas, self.context)
                         .await
                 }
                 _ => Ok(pointer),
@@ -521,7 +582,7 @@ where
     ) -> Result<Pointer, EngineError> {
         let imp = self.resolve_native_impl(name, typ)?;
         imp.func
-            .call_with_backend(self.runtime, typ.clone(), args, self.backend)
+            .call_with_context(self.runtime, typ.clone(), args, self.context)
             .await
     }
 }
