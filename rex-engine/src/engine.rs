@@ -4489,6 +4489,14 @@ enum EvalLoopControl {
     Return(Pointer),
 }
 
+enum EvalLoopApplyResult {
+    Value(Pointer),
+    Push {
+        expr: Arc<TypedExpr>,
+        env: Environment,
+    },
+}
+
 #[allow(dead_code)]
 pub(crate) async fn eval_typed_expr_loop<State>(
     runtime: &RuntimeSnapshot<State>,
@@ -5149,7 +5157,7 @@ where
                 let func = frame.func.ok_or_else(|| {
                     EngineError::Internal("application frame missing function".into())
                 })?;
-                let applied = apply(
+                match eval_loop_apply_arg(
                     runtime,
                     func,
                     value,
@@ -5157,19 +5165,20 @@ where
                     Some(&arg_info.expr.typ),
                     gas,
                 )
-                .await?;
-                frame.arg = Some(value);
-                frame.func = Some(applied);
-                frame.next_arg_index += 1;
-                if frame.next_arg_index == frame.spine.len() {
-                    return Ok(EvalLoopControl::Return(applied));
+                .await?
+                {
+                    EvalLoopApplyResult::Value(applied) => {
+                        continue_app_after_apply(runtime, frame_ptr, frame, applied, gas)
+                    }
+                    EvalLoopApplyResult::Push { expr, env } => {
+                        frame.arg = Some(value);
+                        frame.state = FrAppState::ApplyArg;
+                        runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+                        Ok(EvalLoopControl::Push { expr, env })
+                    }
                 }
-                gas.charge(gas.costs.eval_app_step)?;
-                let expr = Arc::clone(&frame.spine[frame.next_arg_index].expr);
-                let env = frame.env.clone();
-                runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-                Ok(EvalLoopControl::Push { expr, env })
             }
+            FrAppState::ApplyArg => continue_app_after_apply(runtime, frame_ptr, frame, value, gas),
             _ => unexpected_child_result("application"),
         },
         Frame::Project(frame) => {
@@ -5292,6 +5301,87 @@ where
         },
         _ => unexpected_child_result("value"),
     }
+}
+
+async fn eval_loop_apply_arg<State>(
+    runtime: &RuntimeSnapshot<State>,
+    func: Pointer,
+    arg: Pointer,
+    func_type: Option<&Type>,
+    arg_type: Option<&Type>,
+    gas: &mut GasMeter,
+) -> Result<EvalLoopApplyResult, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let func_value = runtime.heap.get(&func)?.as_ref().clone();
+    match func_value {
+        Value::Closure(Closure {
+            env,
+            param,
+            param_ty,
+            typ,
+            body,
+        }) => {
+            let mut subst = Subst::new_sync();
+            if let Some(expected) = func_type {
+                let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
+                    expected: typ.to_string(),
+                    got: expected.to_string(),
+                })?;
+                subst = compose_subst(s_fun, subst);
+            }
+            let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
+            let param_ty = param_ty.apply(&subst);
+            let s_arg = unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+                expected: param_ty.to_string(),
+                got: actual_ty.to_string(),
+            })?;
+            subst = compose_subst(s_arg, subst);
+            Ok(EvalLoopApplyResult::Push {
+                expr: Arc::new(body.apply(&subst)),
+                env: env.extend(param, arg),
+            })
+        }
+        Value::Native(native) => Ok(EvalLoopApplyResult::Value(
+            native.apply(runtime, arg, arg_type, gas).await?,
+        )),
+        Value::Overloaded(over) => Ok(EvalLoopApplyResult::Value(
+            over.apply(runtime, arg, func_type, arg_type, gas).await?,
+        )),
+        _ => Err(EngineError::NotCallable(
+            runtime.heap.type_name(&func)?.into(),
+        )),
+    }
+}
+
+fn continue_app_after_apply<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrApp,
+    applied: Pointer,
+    gas: &mut GasMeter,
+) -> Result<EvalLoopControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    frame.arg = None;
+    frame.func = Some(applied);
+    frame.next_arg_index += 1;
+    if frame.next_arg_index > frame.spine.len() {
+        return Err(EngineError::Internal(
+            "application frame advanced past final argument".into(),
+        ));
+    }
+    if frame.next_arg_index == frame.spine.len() {
+        return Ok(EvalLoopControl::Return(applied));
+    }
+    gas.charge(gas.costs.eval_app_step)?;
+    frame.state = FrAppState::EvalArg;
+    let expr = Arc::clone(&frame.spine[frame.next_arg_index].expr);
+    let env = frame.env.clone();
+    runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+    Ok(EvalLoopControl::Push { expr, env })
 }
 
 async fn eval_loop_resolve_var<State>(
@@ -5685,6 +5775,38 @@ mod eval_loop_tests {
                 total = foldl (\acc x -> acc + x) 0 ys
             in
                 (ys, zs, total)
+            "#,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn loop_matches_recursive_for_higher_order_closures() {
+        assert_loop_matches_recursive(
+            r#"
+            let
+                apply_twice = \f x -> f (f x),
+                compose = \f g x -> f (g x),
+                a = apply_twice (\n -> n + 1) 1,
+                b = compose (\n -> n + 1) (\n -> n * 2) 3
+            in
+                (a, b)
+            "#,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn loop_matches_recursive_for_partial_and_multi_arg_closures() {
+        assert_loop_matches_recursive(
+            r#"
+            let
+                add = \x y -> x + y,
+                choose = \flag left right -> if flag then left else right,
+                inc = add 1,
+                picked = choose false (inc 10) (add 20 22)
+            in
+                (inc 41, picked)
             "#,
         )
         .await;
