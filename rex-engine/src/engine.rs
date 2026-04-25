@@ -38,6 +38,12 @@ use crate::prelude::{
     inject_numeric_ops, inject_option_result_builtins, inject_order_ops, inject_prelude_adts,
     inject_show_ops,
 };
+use crate::stack::{
+    FrApp, FrAppArg, FrAppState, FrBool, FrBranchState, FrDateTime, FrDict, FrFloat, FrHole, FrInt,
+    FrIte, FrLam, FrLet, FrLetRec, FrLetRecState, FrLetState, FrList, FrMatch, FrMatchArm,
+    FrMatchState, FrProject, FrRecordUpdate, FrRecordUpdateState, FrSequenceState, FrString,
+    FrTuple, FrUint, FrUuid, FrValueState, FrVar, Frame,
+};
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{
     CancellationToken, EngineError, Environment, FromPointer, IntoPointer, RexType,
@@ -4475,6 +4481,989 @@ where
     }
 }
 
+enum EvalLoopControl {
+    Push {
+        expr: Arc<TypedExpr>,
+        env: Environment,
+    },
+    Return(Pointer),
+}
+
+#[allow(dead_code)]
+pub(crate) async fn eval_typed_expr_loop<State>(
+    runtime: &RuntimeSnapshot<State>,
+    env: &Environment,
+    expr: &TypedExpr,
+    gas: &mut GasMeter,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    check_runtime_cancelled(runtime)?;
+    let root_parent = runtime.heap.alloc_root_frame_parent()?;
+    let root_expr = Arc::new(expr.clone());
+    let mut current =
+        runtime
+            .heap
+            .alloc_frame(frame_for_expr(root_parent, root_expr, env.clone()))?;
+    let mut returned: Option<Pointer> = None;
+
+    loop {
+        check_runtime_cancelled(runtime)?;
+        let frame = runtime.heap.pointer_as_frame(&current)?;
+        let control = match returned.take() {
+            Some(value) => eval_loop_receive(runtime, current, frame, value, gas).await?,
+            None => eval_loop_enter(runtime, current, frame, gas).await?,
+        };
+
+        match control {
+            EvalLoopControl::Push { expr, env } => {
+                current = runtime
+                    .heap
+                    .alloc_frame(frame_for_expr(current, expr, env))?;
+            }
+            EvalLoopControl::Return(value) => {
+                let mut frame = runtime.heap.pointer_as_frame(&current)?;
+                let parent = *frame.parent();
+                mark_frame_complete(&mut frame, value);
+                runtime.heap.replace_frame(&current, frame)?;
+                if is_root_frame_parent(&runtime.heap, &parent)? {
+                    return Ok(value);
+                }
+                current = parent;
+                returned = Some(value);
+            }
+        }
+    }
+}
+
+fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Frame {
+    let kind = Arc::clone(&expr.kind);
+    match kind.as_ref() {
+        TypedExprKind::Bool(_) => Frame::Bool(FrBool {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Uint(_) => Frame::Uint(FrUint {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Int(_) => Frame::Int(FrInt {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Float(_) => Frame::Float(FrFloat {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::String(_) => Frame::String(FrString {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Uuid(_) => Frame::Uuid(FrUuid {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::DateTime(_) => Frame::DateTime(FrDateTime {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Hole => Frame::Hole(FrHole {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Tuple(_) => Frame::Tuple(FrTuple {
+            parent,
+            expr,
+            env,
+            state: FrSequenceState::Enter,
+            next_index: 0,
+            values: Vec::new(),
+        }),
+        TypedExprKind::List(_) => Frame::List(FrList {
+            parent,
+            expr,
+            env,
+            state: FrSequenceState::Enter,
+            next_index: 0,
+            values: Vec::new(),
+        }),
+        TypedExprKind::Dict(kvs) => Frame::Dict(FrDict {
+            parent,
+            expr,
+            env,
+            state: FrSequenceState::Enter,
+            keys: kvs.keys().cloned().collect(),
+            next_index: 0,
+            values: BTreeMap::new(),
+        }),
+        TypedExprKind::RecordUpdate { updates, .. } => Frame::RecordUpdate(FrRecordUpdate {
+            parent,
+            expr,
+            env,
+            state: FrRecordUpdateState::Enter,
+            base_value: None,
+            update_keys: updates.keys().cloned().collect(),
+            next_update_index: 0,
+            update_values: BTreeMap::new(),
+        }),
+        TypedExprKind::Var { .. } => Frame::Var(FrVar {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::App(..) => Frame::App(FrApp {
+            parent,
+            expr,
+            env,
+            state: FrAppState::Enter,
+            head: None,
+            spine: Vec::new(),
+            next_arg_index: 0,
+            func: None,
+            arg: None,
+        }),
+        TypedExprKind::Project { .. } => Frame::Project(FrProject {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Lam { .. } => Frame::Lam(FrLam {
+            parent,
+            expr,
+            env,
+            state: FrValueState::Enter,
+            value: None,
+        }),
+        TypedExprKind::Let { .. } => Frame::Let(FrLet {
+            parent,
+            expr,
+            env,
+            state: FrLetState::Enter,
+            def_value: None,
+        }),
+        TypedExprKind::LetRec { .. } => Frame::LetRec(FrLetRec {
+            parent,
+            expr,
+            env,
+            state: FrLetRecState::Enter,
+            recursive_env: None,
+            slots: Vec::new(),
+            next_binding_index: 0,
+            binding_value: None,
+        }),
+        TypedExprKind::Ite { .. } => Frame::Ite(FrIte {
+            parent,
+            expr,
+            env,
+            state: FrBranchState::Enter,
+            cond_value: None,
+            selected: None,
+        }),
+        TypedExprKind::Match { arms, .. } => Frame::Match(FrMatch {
+            parent,
+            expr,
+            env,
+            state: FrMatchState::Enter,
+            scrutinee_value: None,
+            arms: arms
+                .iter()
+                .map(|(pattern, expr)| FrMatchArm {
+                    pattern: pattern.clone(),
+                    expr: Arc::clone(expr),
+                })
+                .collect(),
+            next_arm_index: 0,
+            matched_env: None,
+        }),
+    }
+}
+
+async fn eval_loop_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    frame: Frame,
+    gas: &mut GasMeter,
+) -> Result<EvalLoopControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match frame {
+        Frame::Bool(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Bool(value) => {
+                    Ok(EvalLoopControl::Return(runtime.heap.alloc_bool(*value)?))
+                }
+                _ => frame_kind_error("bool"),
+            }
+        }
+        Frame::Uint(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Uint(value) => Ok(EvalLoopControl::Return(alloc_uint_literal_as(
+                    runtime,
+                    *value,
+                    &frame.expr.typ,
+                )?)),
+                _ => frame_kind_error("uint"),
+            }
+        }
+        Frame::Int(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Int(value) => Ok(EvalLoopControl::Return(alloc_int_literal_as(
+                    runtime,
+                    *value,
+                    &frame.expr.typ,
+                )?)),
+                _ => frame_kind_error("int"),
+            }
+        }
+        Frame::Float(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Float(value) => Ok(EvalLoopControl::Return(
+                    runtime.heap.alloc_f32(*value as f32)?,
+                )),
+                _ => frame_kind_error("float"),
+            }
+        }
+        Frame::String(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::String(value) => Ok(EvalLoopControl::Return(
+                    runtime.heap.alloc_string(value.clone())?,
+                )),
+                _ => frame_kind_error("string"),
+            }
+        }
+        Frame::Uuid(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Uuid(value) => {
+                    Ok(EvalLoopControl::Return(runtime.heap.alloc_uuid(*value)?))
+                }
+                _ => frame_kind_error("uuid"),
+            }
+        }
+        Frame::DateTime(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::DateTime(value) => Ok(EvalLoopControl::Return(
+                    runtime.heap.alloc_datetime(*value)?,
+                )),
+                _ => frame_kind_error("datetime"),
+            }
+        }
+        Frame::Hole(_) => {
+            gas.charge(gas.costs.eval_node)?;
+            Err(EngineError::UnsupportedExpr)
+        }
+        Frame::Tuple(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Tuple(elems) if elems.is_empty() => {
+                    Ok(EvalLoopControl::Return(runtime.heap.alloc_tuple(vec![])?))
+                }
+                TypedExprKind::Tuple(elems) => {
+                    frame.state = FrSequenceState::EvalItem;
+                    frame.values = Vec::with_capacity(elems.len());
+                    let expr = Arc::clone(&elems[0]);
+                    let env = frame.env.clone();
+                    runtime
+                        .heap
+                        .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
+                    Ok(EvalLoopControl::Push { expr, env })
+                }
+                _ => frame_kind_error("tuple"),
+            }
+        }
+        Frame::List(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::List(elems) if elems.is_empty() => Ok(EvalLoopControl::Return(
+                    runtime.heap.alloc_adt(sym("Empty"), vec![])?,
+                )),
+                TypedExprKind::List(elems) => {
+                    frame.state = FrSequenceState::EvalItem;
+                    frame.values = Vec::with_capacity(elems.len());
+                    let expr = Arc::clone(&elems[0]);
+                    let env = frame.env.clone();
+                    runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
+                    Ok(EvalLoopControl::Push { expr, env })
+                }
+                _ => frame_kind_error("list"),
+            }
+        }
+        Frame::Dict(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            if frame.keys.is_empty() {
+                return Ok(EvalLoopControl::Return(
+                    runtime.heap.alloc_dict(BTreeMap::new())?,
+                ));
+            }
+            let key = frame.keys[0].clone();
+            let expr = match frame.expr.kind.as_ref() {
+                TypedExprKind::Dict(kvs) => kvs
+                    .get(&key)
+                    .cloned()
+                    .ok_or_else(|| EngineError::Internal("dict frame key missing".into()))?,
+                _ => return frame_kind_error("dict"),
+            };
+            frame.state = FrSequenceState::EvalItem;
+            let env = frame.env.clone();
+            runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
+            Ok(EvalLoopControl::Push { expr, env })
+        }
+        Frame::RecordUpdate(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            let base = match frame.expr.kind.as_ref() {
+                TypedExprKind::RecordUpdate { base, .. } => Arc::clone(base),
+                _ => return frame_kind_error("record update"),
+            };
+            frame.state = FrRecordUpdateState::EvalBase;
+            let env = frame.env.clone();
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
+            Ok(EvalLoopControl::Push { expr: base, env })
+        }
+        Frame::Var(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Var { name, .. } => {
+                    let value =
+                        eval_loop_resolve_var(runtime, &frame.env, name, &frame.expr.typ, gas)
+                            .await?;
+                    Ok(EvalLoopControl::Return(value))
+                }
+                _ => frame_kind_error("var"),
+            }
+        }
+        Frame::App(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            let mut spine = Vec::new();
+            let mut head = Arc::clone(&frame.expr);
+            while let TypedExprKind::App(func, arg) = head.kind.as_ref() {
+                check_runtime_cancelled(runtime)?;
+                spine.push(FrAppArg {
+                    func_type: func.typ.clone(),
+                    expr: Arc::clone(arg),
+                });
+                head = Arc::clone(func);
+            }
+            spine.reverse();
+            frame.state = FrAppState::EvalHead;
+            frame.head = Some(Arc::clone(&head));
+            frame.spine = spine;
+            let env = frame.env.clone();
+            runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+            Ok(EvalLoopControl::Push { expr: head, env })
+        }
+        Frame::Project(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            let expr = match frame.expr.kind.as_ref() {
+                TypedExprKind::Project { expr, .. } => Arc::clone(expr),
+                _ => return frame_kind_error("project"),
+            };
+            frame.state = FrValueState::Enter;
+            let env = frame.env.clone();
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::Project(frame))?;
+            Ok(EvalLoopControl::Push { expr, env })
+        }
+        Frame::Lam(frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Lam { param, body } => {
+                    let param_ty = split_fun(&frame.expr.typ)
+                        .map(|(arg, _)| arg)
+                        .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
+                    let value = runtime.heap.alloc_closure(
+                        frame.env.clone(),
+                        param.clone(),
+                        param_ty,
+                        frame.expr.typ.clone(),
+                        Arc::clone(body),
+                    )?;
+                    Ok(EvalLoopControl::Return(value))
+                }
+                _ => frame_kind_error("lambda"),
+            }
+        }
+        Frame::Let(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            let def = match frame.expr.kind.as_ref() {
+                TypedExprKind::Let { def, .. } => Arc::clone(def),
+                _ => return frame_kind_error("let"),
+            };
+            frame.state = FrLetState::EvalDef;
+            let env = frame.env.clone();
+            runtime.heap.replace_frame(&frame_ptr, Frame::Let(frame))?;
+            Ok(EvalLoopControl::Push { expr: def, env })
+        }
+        Frame::LetRec(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            let TypedExprKind::LetRec { bindings, body } = frame.expr.kind.as_ref() else {
+                return frame_kind_error("let rec");
+            };
+            let mut recursive_env = frame.env.clone();
+            let mut slots = Vec::with_capacity(bindings.len());
+            for (name, _) in bindings {
+                let placeholder = runtime.heap.alloc_uninitialized(name.clone())?;
+                recursive_env = recursive_env.extend(name.clone(), placeholder);
+                slots.push(placeholder);
+            }
+            frame.recursive_env = Some(recursive_env.clone());
+            frame.slots = slots;
+            if bindings.is_empty() {
+                frame.state = FrLetRecState::EvalBody;
+                let body = Arc::clone(body);
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+                return Ok(EvalLoopControl::Push {
+                    expr: body,
+                    env: recursive_env,
+                });
+            }
+            gas.charge(gas.costs.eval_node)?;
+            frame.state = FrLetRecState::EvalBinding;
+            let def = Arc::clone(&bindings[0].1);
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+            Ok(EvalLoopControl::Push {
+                expr: def,
+                env: recursive_env,
+            })
+        }
+        Frame::Ite(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            let cond = match frame.expr.kind.as_ref() {
+                TypedExprKind::Ite { cond, .. } => Arc::clone(cond),
+                _ => return frame_kind_error("if"),
+            };
+            frame.state = FrBranchState::EvalCondition;
+            let env = frame.env.clone();
+            runtime.heap.replace_frame(&frame_ptr, Frame::Ite(frame))?;
+            Ok(EvalLoopControl::Push { expr: cond, env })
+        }
+        Frame::Match(mut frame) => {
+            gas.charge(gas.costs.eval_node)?;
+            let scrutinee = match frame.expr.kind.as_ref() {
+                TypedExprKind::Match { scrutinee, .. } => Arc::clone(scrutinee),
+                _ => return frame_kind_error("match"),
+            };
+            frame.state = FrMatchState::EvalScrutinee;
+            let env = frame.env.clone();
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::Match(frame))?;
+            Ok(EvalLoopControl::Push {
+                expr: scrutinee,
+                env,
+            })
+        }
+    }
+}
+
+async fn eval_loop_receive<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    frame: Frame,
+    value: Pointer,
+    gas: &mut GasMeter,
+) -> Result<EvalLoopControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match frame {
+        Frame::Tuple(mut frame) => {
+            if frame.state != FrSequenceState::EvalItem {
+                return unexpected_child_result("tuple");
+            }
+            let elems = match frame.expr.kind.as_ref() {
+                TypedExprKind::Tuple(elems) => elems,
+                _ => return frame_kind_error("tuple"),
+            };
+            frame.values.push(value);
+            frame.next_index += 1;
+            if frame.next_index == elems.len() {
+                return Ok(EvalLoopControl::Return(
+                    runtime.heap.alloc_tuple(frame.values.clone())?,
+                ));
+            }
+            let expr = Arc::clone(&elems[frame.next_index]);
+            let env = frame.env.clone();
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
+            Ok(EvalLoopControl::Push { expr, env })
+        }
+        Frame::List(mut frame) => {
+            if frame.state != FrSequenceState::EvalItem {
+                return unexpected_child_result("list");
+            }
+            let elems = match frame.expr.kind.as_ref() {
+                TypedExprKind::List(elems) => elems,
+                _ => return frame_kind_error("list"),
+            };
+            frame.values.push(value);
+            frame.next_index += 1;
+            if frame.next_index == elems.len() {
+                let mut list = runtime.heap.alloc_adt(sym("Empty"), vec![])?;
+                for value in frame.values.clone().into_iter().rev() {
+                    list = runtime.heap.alloc_adt(sym("Cons"), vec![value, list])?;
+                }
+                return Ok(EvalLoopControl::Return(list));
+            }
+            let expr = Arc::clone(&elems[frame.next_index]);
+            let env = frame.env.clone();
+            runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
+            Ok(EvalLoopControl::Push { expr, env })
+        }
+        Frame::Dict(mut frame) => {
+            if frame.state != FrSequenceState::EvalItem {
+                return unexpected_child_result("dict");
+            }
+            let key =
+                frame.keys.get(frame.next_index).cloned().ok_or_else(|| {
+                    EngineError::Internal("dict frame index out of bounds".into())
+                })?;
+            frame.values.insert(key, value);
+            frame.next_index += 1;
+            if frame.next_index == frame.keys.len() {
+                return Ok(EvalLoopControl::Return(
+                    runtime.heap.alloc_dict(frame.values.clone())?,
+                ));
+            }
+            let next_key = frame.keys[frame.next_index].clone();
+            let expr = match frame.expr.kind.as_ref() {
+                TypedExprKind::Dict(kvs) => kvs
+                    .get(&next_key)
+                    .cloned()
+                    .ok_or_else(|| EngineError::Internal("dict frame key missing".into()))?,
+                _ => return frame_kind_error("dict"),
+            };
+            let env = frame.env.clone();
+            runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
+            Ok(EvalLoopControl::Push { expr, env })
+        }
+        Frame::RecordUpdate(mut frame) => match frame.state {
+            FrRecordUpdateState::EvalBase => {
+                frame.base_value = Some(value);
+                if frame.update_keys.is_empty() {
+                    let result = apply_record_update_values(
+                        runtime,
+                        value,
+                        frame.update_values.clone(),
+                        gas,
+                    )?;
+                    return Ok(EvalLoopControl::Return(result));
+                }
+                frame.state = FrRecordUpdateState::EvalUpdate;
+                let expr = record_update_expr_at(&frame, frame.next_update_index)?;
+                let env = frame.env.clone();
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
+                Ok(EvalLoopControl::Push { expr, env })
+            }
+            FrRecordUpdateState::EvalUpdate => {
+                let key = frame
+                    .update_keys
+                    .get(frame.next_update_index)
+                    .cloned()
+                    .ok_or_else(|| {
+                        EngineError::Internal("record update frame index out of bounds".into())
+                    })?;
+                frame.update_values.insert(key, value);
+                frame.next_update_index += 1;
+                if frame.next_update_index == frame.update_keys.len() {
+                    let base = frame.base_value.ok_or_else(|| {
+                        EngineError::Internal("record update frame missing base".into())
+                    })?;
+                    let result =
+                        apply_record_update_values(runtime, base, frame.update_values, gas)?;
+                    return Ok(EvalLoopControl::Return(result));
+                }
+                let expr = record_update_expr_at(&frame, frame.next_update_index)?;
+                let env = frame.env.clone();
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
+                Ok(EvalLoopControl::Push { expr, env })
+            }
+            _ => unexpected_child_result("record update"),
+        },
+        Frame::App(mut frame) => match frame.state {
+            FrAppState::EvalHead => {
+                frame.func = Some(value);
+                if frame.spine.is_empty() {
+                    return Ok(EvalLoopControl::Return(value));
+                }
+                gas.charge(gas.costs.eval_app_step)?;
+                frame.state = FrAppState::EvalArg;
+                frame.next_arg_index = 0;
+                let expr = Arc::clone(&frame.spine[0].expr);
+                let env = frame.env.clone();
+                runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+                Ok(EvalLoopControl::Push { expr, env })
+            }
+            FrAppState::EvalArg => {
+                let idx = frame.next_arg_index;
+                let arg_info = frame.spine.get(idx).cloned().ok_or_else(|| {
+                    EngineError::Internal("application frame index out of bounds".into())
+                })?;
+                let func = frame.func.ok_or_else(|| {
+                    EngineError::Internal("application frame missing function".into())
+                })?;
+                let applied = apply(
+                    runtime,
+                    func,
+                    value,
+                    Some(&arg_info.func_type),
+                    Some(&arg_info.expr.typ),
+                    gas,
+                )
+                .await?;
+                frame.arg = Some(value);
+                frame.func = Some(applied);
+                frame.next_arg_index += 1;
+                if frame.next_arg_index == frame.spine.len() {
+                    return Ok(EvalLoopControl::Return(applied));
+                }
+                gas.charge(gas.costs.eval_app_step)?;
+                let expr = Arc::clone(&frame.spine[frame.next_arg_index].expr);
+                let env = frame.env.clone();
+                runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+                Ok(EvalLoopControl::Push { expr, env })
+            }
+            _ => unexpected_child_result("application"),
+        },
+        Frame::Project(frame) => {
+            match frame.expr.kind.as_ref() {
+                TypedExprKind::Project { field, .. } => Ok(EvalLoopControl::Return(
+                    project_pointer(&runtime.heap, field, &value)?,
+                )),
+                _ => frame_kind_error("project"),
+            }
+        }
+        Frame::Let(mut frame) => match frame.state {
+            FrLetState::EvalDef => {
+                let TypedExprKind::Let { name, body, .. } = frame.expr.kind.as_ref() else {
+                    return frame_kind_error("let");
+                };
+                frame.def_value = Some(value);
+                frame.state = FrLetState::EvalBody;
+                let env = frame.env.extend(name.clone(), value);
+                let body = Arc::clone(body);
+                runtime.heap.replace_frame(&frame_ptr, Frame::Let(frame))?;
+                Ok(EvalLoopControl::Push { expr: body, env })
+            }
+            FrLetState::EvalBody => Ok(EvalLoopControl::Return(value)),
+            _ => unexpected_child_result("let"),
+        },
+        Frame::LetRec(mut frame) => match frame.state {
+            FrLetRecState::EvalBinding => {
+                let TypedExprKind::LetRec { bindings, body } = frame.expr.kind.as_ref() else {
+                    return frame_kind_error("let rec");
+                };
+                let idx = frame.next_binding_index;
+                let slot = *frame.slots.get(idx).ok_or_else(|| {
+                    EngineError::Internal("let rec frame slot index out of bounds".into())
+                })?;
+                let value_ref = runtime.heap.get(&value)?;
+                runtime.heap.overwrite(&slot, value_ref.as_ref().clone())?;
+                frame.binding_value = Some(value);
+                frame.next_binding_index += 1;
+                let recursive_env = frame.recursive_env.clone().ok_or_else(|| {
+                    EngineError::Internal("let rec frame missing recursive environment".into())
+                })?;
+                if frame.next_binding_index == bindings.len() {
+                    frame.state = FrLetRecState::EvalBody;
+                    let body = Arc::clone(body);
+                    runtime
+                        .heap
+                        .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+                    return Ok(EvalLoopControl::Push {
+                        expr: body,
+                        env: recursive_env,
+                    });
+                }
+                gas.charge(gas.costs.eval_node)?;
+                let def = Arc::clone(&bindings[frame.next_binding_index].1);
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
+                Ok(EvalLoopControl::Push {
+                    expr: def,
+                    env: recursive_env,
+                })
+            }
+            FrLetRecState::EvalBody => Ok(EvalLoopControl::Return(value)),
+            _ => unexpected_child_result("let rec"),
+        },
+        Frame::Ite(mut frame) => match frame.state {
+            FrBranchState::EvalCondition => {
+                let TypedExprKind::Ite {
+                    then_expr,
+                    else_expr,
+                    ..
+                } = frame.expr.kind.as_ref()
+                else {
+                    return frame_kind_error("if");
+                };
+                let selected = match runtime.heap.pointer_as_bool(&value) {
+                    Ok(true) => Arc::clone(then_expr),
+                    Ok(false) => Arc::clone(else_expr),
+                    Err(EngineError::NativeType { got, .. }) => {
+                        return Err(EngineError::ExpectedBool(got));
+                    }
+                    Err(err) => return Err(err),
+                };
+                frame.cond_value = Some(value);
+                frame.selected = Some(Arc::clone(&selected));
+                frame.state = FrBranchState::EvalSelected;
+                let env = frame.env.clone();
+                runtime.heap.replace_frame(&frame_ptr, Frame::Ite(frame))?;
+                Ok(EvalLoopControl::Push {
+                    expr: selected,
+                    env,
+                })
+            }
+            FrBranchState::EvalSelected => Ok(EvalLoopControl::Return(value)),
+            _ => unexpected_child_result("if"),
+        },
+        Frame::Match(mut frame) => match frame.state {
+            FrMatchState::EvalScrutinee => {
+                frame.scrutinee_value = Some(value);
+                for idx in frame.next_arm_index..frame.arms.len() {
+                    check_runtime_cancelled(runtime)?;
+                    gas.charge(gas.costs.eval_match_arm)?;
+                    let arm = &frame.arms[idx];
+                    if let Some(bindings) = match_pattern_ptr(&runtime.heap, &arm.pattern, &value) {
+                        let env = frame.env.extend_many(bindings);
+                        let expr = Arc::clone(&arm.expr);
+                        frame.next_arm_index = idx;
+                        frame.matched_env = Some(env.clone());
+                        frame.state = FrMatchState::EvalArm;
+                        runtime
+                            .heap
+                            .replace_frame(&frame_ptr, Frame::Match(frame))?;
+                        return Ok(EvalLoopControl::Push { expr, env });
+                    }
+                }
+                Err(EngineError::MatchFailure)
+            }
+            FrMatchState::EvalArm => Ok(EvalLoopControl::Return(value)),
+            _ => unexpected_child_result("match"),
+        },
+        _ => unexpected_child_result("value"),
+    }
+}
+
+async fn eval_loop_resolve_var<State>(
+    runtime: &RuntimeSnapshot<State>,
+    env: &Environment,
+    name: &Symbol,
+    typ: &Type,
+    gas: &mut GasMeter,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if let Some(ptr) = env.get(name) {
+        let value = runtime.heap.get(&ptr)?;
+        match value.as_ref() {
+            Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                native.call_zero(runtime, gas).await
+            }
+            _ => Ok(ptr),
+        }
+    } else if runtime.type_system.class_methods.contains_key(name) {
+        EvaluatorRef::new(runtime)
+            .resolve_class_method(name, typ, gas)
+            .await
+    } else {
+        let value = EvaluatorRef::new(runtime).resolve_native(name.as_ref(), typ, gas)?;
+        match runtime.heap.get(&value)?.as_ref() {
+            Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+                native.call_zero(runtime, gas).await
+            }
+            _ => Ok(value),
+        }
+    }
+}
+
+fn record_update_expr_at(
+    frame: &FrRecordUpdate,
+    index: usize,
+) -> Result<Arc<TypedExpr>, EngineError> {
+    let key = frame
+        .update_keys
+        .get(index)
+        .ok_or_else(|| EngineError::Internal("record update frame index out of bounds".into()))?;
+    match frame.expr.kind.as_ref() {
+        TypedExprKind::RecordUpdate { updates, .. } => updates
+            .get(key)
+            .cloned()
+            .ok_or_else(|| EngineError::Internal("record update frame key missing".into())),
+        _ => frame_kind_error("record update"),
+    }
+}
+
+fn apply_record_update_values<State>(
+    runtime: &RuntimeSnapshot<State>,
+    base_ptr: Pointer,
+    update_vals: BTreeMap<Symbol, Pointer>,
+    gas: &mut GasMeter,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let base_val = runtime.heap.get(&base_ptr)?;
+    match base_val.as_ref() {
+        Value::Dict(map) => {
+            let mut map = map.clone();
+            for (key, value) in update_vals {
+                gas.charge(gas.costs.eval_record_update_field)?;
+                map.insert(key, value);
+            }
+            runtime.heap.alloc_dict(map)
+        }
+        Value::Adt(tag, args) if args.len() == 1 => {
+            let inner = runtime.heap.get(&args[0])?;
+            match inner.as_ref() {
+                Value::Dict(map) => {
+                    let mut out = map.clone();
+                    for (key, value) in update_vals {
+                        gas.charge(gas.costs.eval_record_update_field)?;
+                        out.insert(key, value);
+                    }
+                    let dict = runtime.heap.alloc_dict(out)?;
+                    runtime.heap.alloc_adt(tag.clone(), vec![dict])
+                }
+                _ => Err(EngineError::UnsupportedExpr),
+            }
+        }
+        _ => Err(EngineError::UnsupportedExpr),
+    }
+}
+
+fn mark_frame_complete(frame: &mut Frame, value: Pointer) {
+    match frame {
+        Frame::Bool(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Uint(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Int(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Float(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::String(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Uuid(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::DateTime(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Hole(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Tuple(frame) => frame.state = FrSequenceState::Complete,
+        Frame::List(frame) => frame.state = FrSequenceState::Complete,
+        Frame::Dict(frame) => frame.state = FrSequenceState::Complete,
+        Frame::RecordUpdate(frame) => frame.state = FrRecordUpdateState::Complete,
+        Frame::Var(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::App(frame) => frame.state = FrAppState::Complete,
+        Frame::Project(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Lam(frame) => {
+            frame.state = FrValueState::Complete;
+            frame.value = Some(value);
+        }
+        Frame::Let(frame) => frame.state = FrLetState::Complete,
+        Frame::LetRec(frame) => frame.state = FrLetRecState::Complete,
+        Frame::Ite(frame) => frame.state = FrBranchState::Complete,
+        Frame::Match(frame) => frame.state = FrMatchState::Complete,
+    }
+}
+
+fn is_root_frame_parent(heap: &Heap, pointer: &Pointer) -> Result<bool, EngineError> {
+    let value = heap.get(pointer)?;
+    match value.as_ref() {
+        Value::U64(0) => Ok(true),
+        Value::Frame(_) => Ok(false),
+        other => Err(EngineError::Internal(format!(
+            "unexpected frame parent value {}",
+            other.value_type_name()
+        ))),
+    }
+}
+
+fn frame_kind_error<T>(expected: &'static str) -> Result<T, EngineError> {
+    Err(EngineError::Internal(format!(
+        "frame does not match typed expression kind `{expected}`"
+    )))
+}
+
+fn unexpected_child_result<T>(frame: &'static str) -> Result<T, EngineError> {
+    Err(EngineError::Internal(format!(
+        "{frame} frame received an unexpected child result"
+    )))
+}
+
 #[async_recursion]
 pub(crate) async fn apply<State>(
     runtime: &RuntimeSnapshot<State>,
@@ -4604,4 +5593,100 @@ fn match_patterns(
         bindings.extend(sub);
     }
     Some(bindings)
+}
+
+#[cfg(test)]
+mod eval_loop_tests {
+    use super::*;
+    use crate::compiler::Compiler;
+    use crate::value::{pointer_display, pointer_eq};
+
+    async fn assert_loop_matches_recursive(source: &str) {
+        let mut compiler = Compiler::new(Engine::with_prelude(()).unwrap());
+        let mut compile_gas = GasMeter::default();
+        let program = compiler.compile_snippet(source, &mut compile_gas).unwrap();
+        let runtime = compiler.engine.runtime_snapshot();
+
+        let mut recursive_gas = GasMeter::default();
+        let recursive = eval_typed_expr(
+            &runtime,
+            &program.env,
+            program.expr.as_ref(),
+            &mut recursive_gas,
+        )
+        .await
+        .unwrap();
+
+        let mut loop_gas = GasMeter::default();
+        let looped =
+            eval_typed_expr_loop(&runtime, &program.env, program.expr.as_ref(), &mut loop_gas)
+                .await
+                .unwrap();
+
+        if !pointer_eq(&runtime.heap, &recursive, &looped).unwrap() {
+            let recursive_display = pointer_display(&runtime.heap, &recursive).unwrap();
+            let loop_display = pointer_display(&runtime.heap, &looped).unwrap();
+            panic!(
+                "loop evaluator disagreed with recursive evaluator\nsource:\n{source}\nrecursive: {recursive_display}\nloop: {loop_display}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn loop_matches_recursive_for_literals_sequences_and_records() {
+        assert_loop_matches_recursive(
+            r#"
+            type Foo = Bar { x: i32, y: i32, z: i32 }
+            type Sum = A { x: i32 } | B { x: i32 }
+
+            let
+                foo: Foo = Bar { x = 1, y = 2, z = 3 },
+                foo2 = { foo with { x = 6 } },
+                sum: Sum = A { x = 1 },
+                sum2 = match sum
+                    when A {x} -> { sum with { x = x + 1 } }
+                    when B {x} -> { sum with { x = x + 2 } }
+            in
+                (true, 7, "ok", [1, 2, 3], foo2.x, match sum2 when A {x} -> x when B {x} -> x)
+            "#,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn loop_matches_recursive_for_control_flow_and_typeclasses() {
+        assert_loop_matches_recursive(
+            r#"
+            class Pick a where
+                pick : a -> a
+
+            instance Pick i32 where
+                pick = \x -> x
+
+            let rec fact = \n ->
+                if n == 0 then 1 else n * fact (n - 1)
+            in
+                match (Some (pick 4))
+                    when Some x -> fact x
+                    when None -> 0
+            "#,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn loop_matches_recursive_for_prelude_collection_callbacks() {
+        assert_loop_matches_recursive(
+            r#"
+            let
+                xs = [1, 2, 3],
+                ys = map (\x -> x + 1) xs,
+                zs = filter (\x -> x == 2) xs,
+                total = foldl (\acc x -> acc + x) 0 ys
+            in
+                (ys, zs, total)
+            "#,
+        )
+        .await;
+    }
 }
