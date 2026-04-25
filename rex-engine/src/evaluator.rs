@@ -4,6 +4,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 
+use async_recursion::async_recursion;
 use rex_ast::expr::{Expr, Program, Symbol, sym};
 use rex_typesystem::{
     error::TypeError,
@@ -13,8 +14,9 @@ use rex_typesystem::{
 use rex_util::{GasMeter, sha256_hex};
 
 use crate::engine::{
-    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, check_runtime_cancelled,
-    eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
+    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, apply_with_backend,
+    check_runtime_cancelled, eval_typed_expr, eval_typed_expr_loop, impl_matches_type,
+    is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
 use crate::value::Value;
@@ -37,6 +39,13 @@ where
     State: Clone + Send + Sync + 'static,
 {
     runtime: &'a RuntimeSnapshot<State>,
+    backend: EvalBackend,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EvalBackend {
+    Recursive,
+    Loop,
 }
 
 impl<State> Evaluator<State>
@@ -243,7 +252,55 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(runtime: &'a RuntimeSnapshot<State>) -> Self {
-        Self { runtime }
+        Self {
+            runtime,
+            backend: EvalBackend::Recursive,
+        }
+    }
+
+    pub(crate) fn new_with_backend(
+        runtime: &'a RuntimeSnapshot<State>,
+        backend: EvalBackend,
+    ) -> Self {
+        Self { runtime, backend }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn backend(&self) -> EvalBackend {
+        self.backend
+    }
+
+    #[async_recursion]
+    async fn eval_typed_expr(
+        &self,
+        env: &Environment,
+        expr: &TypedExpr,
+        gas: &mut GasMeter,
+    ) -> Result<Pointer, EngineError> {
+        match self.backend {
+            EvalBackend::Recursive => eval_typed_expr(self.runtime, env, expr, gas).await,
+            EvalBackend::Loop => eval_typed_expr_loop(self.runtime, env, expr, gas).await,
+        }
+    }
+
+    pub(crate) async fn apply_pointer(
+        &self,
+        func: Pointer,
+        arg: Pointer,
+        func_type: Option<&Type>,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+    ) -> Result<Pointer, EngineError> {
+        apply_with_backend(
+            self.runtime,
+            func,
+            arg,
+            func_type,
+            arg_type,
+            gas,
+            self.backend,
+        )
+        .await
     }
 
     fn resolve_typeclass_method_impl(
@@ -315,6 +372,7 @@ where
         Ok(Ok((def_env, specialized)))
     }
 
+    #[async_recursion]
     pub(crate) async fn resolve_class_method(
         &self,
         name: &Symbol,
@@ -326,9 +384,7 @@ where
         }
 
         let pointer = match self.resolve_class_method_plan(name, typ)? {
-            Ok((def_env, specialized)) => {
-                eval_typed_expr(self.runtime, &def_env, &specialized, gas).await?
-            }
+            Ok((def_env, specialized)) => self.eval_typed_expr(&def_env, &specialized, gas).await?,
             Err(pointer) => pointer,
         };
 
@@ -432,7 +488,9 @@ where
             match value.as_ref() {
                 Value::Native(native) if native.is_zero_unapplied() => {
                     let mut gas = GasMeter::default();
-                    native.call_zero(self.runtime, &mut gas).await
+                    native
+                        .call_zero_with_backend(self.runtime, &mut gas, self.backend)
+                        .await
                 }
                 _ => Ok(ptr),
             }
@@ -446,7 +504,9 @@ where
             match value.as_ref() {
                 Value::Native(native) if native.is_zero_unapplied() => {
                     let mut gas = GasMeter::default();
-                    native.call_zero(self.runtime, &mut gas).await
+                    native
+                        .call_zero_with_backend(self.runtime, &mut gas, self.backend)
+                        .await
                 }
                 _ => Ok(pointer),
             }
@@ -460,7 +520,9 @@ where
         args: &[Pointer],
     ) -> Result<Pointer, EngineError> {
         let imp = self.resolve_native_impl(name, typ)?;
-        imp.func.call(self.runtime, typ.clone(), args).await
+        imp.func
+            .call_with_backend(self.runtime, typ.clone(), args, self.backend)
+            .await
     }
 }
 

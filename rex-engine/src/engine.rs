@@ -47,7 +47,7 @@ use crate::stack::{
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{
     CancellationToken, EngineError, Environment, FromPointer, IntoPointer, RexType,
-    evaluator::EvaluatorRef,
+    evaluator::{EvalBackend, EvaluatorRef},
 };
 
 fn runtime_ctor_symbol(name: &Symbol) -> Symbol {
@@ -1236,11 +1236,12 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
-    pub(crate) async fn call(
+    pub(crate) async fn call_with_backend(
         &self,
         runtime: &RuntimeSnapshot<State>,
         typ: Type,
         args: &[Pointer],
+        backend: EvalBackend,
     ) -> Result<Pointer, EngineError> {
         let token = runtime.cancel.clone();
         if token.is_cancelled() {
@@ -1248,9 +1249,12 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
         }
 
         match self {
-            NativeCallable::Sync(f) => (f)(EvaluatorRef::new(runtime), &typ, args),
+            NativeCallable::Sync(f) => {
+                (f)(EvaluatorRef::new_with_backend(runtime, backend), &typ, args)
+            }
             NativeCallable::Async(f) => {
-                let call_fut = (f)(EvaluatorRef::new(runtime), typ, args).fuse();
+                let call_fut =
+                    (f)(EvaluatorRef::new_with_backend(runtime, backend), typ, args).fuse();
                 let cancel_fut = token.cancelled().fuse();
                 pin_mut!(call_fut, cancel_fut);
                 futures::select! {
@@ -1265,7 +1269,13 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
                 }
             }
             NativeCallable::AsyncCancellable(f) => {
-                let call_fut = (f)(EvaluatorRef::new(runtime), token.clone(), typ, args).fuse();
+                let call_fut = (f)(
+                    EvaluatorRef::new_with_backend(runtime, backend),
+                    token.clone(),
+                    typ,
+                    args,
+                )
+                .fuse();
                 let cancel_fut = token.cancelled().fuse();
                 pin_mut!(call_fut, cancel_fut);
                 futures::select! {
@@ -1354,6 +1364,16 @@ impl NativeFn {
         runtime: &RuntimeSnapshot<State>,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
+        self.call_zero_with_backend(runtime, gas, EvalBackend::Recursive)
+            .await
+    }
+
+    pub(crate) async fn call_zero_with_backend<State: Clone + Send + Sync + 'static>(
+        &self,
+        runtime: &RuntimeSnapshot<State>,
+        gas: &mut GasMeter,
+        backend: EvalBackend,
+    ) -> Result<Pointer, EngineError> {
         let amount = gas
             .costs
             .native_call_base
@@ -1369,16 +1389,28 @@ impl NativeFn {
         }
         runtime
             .native_callable(self.native_id)?
-            .call(runtime, self.typ.clone(), &[])
+            .call_with_backend(runtime, self.typ.clone(), &[], backend)
             .await
     }
 
     async fn apply<State: Clone + Send + Sync + 'static>(
+        self,
+        runtime: &RuntimeSnapshot<State>,
+        arg: Pointer,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+    ) -> Result<Pointer, EngineError> {
+        self.apply_with_backend(runtime, arg, arg_type, gas, EvalBackend::Recursive)
+            .await
+    }
+
+    async fn apply_with_backend<State: Clone + Send + Sync + 'static>(
         mut self,
         runtime: &RuntimeSnapshot<State>,
         arg: Pointer,
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
+        backend: EvalBackend,
     ) -> Result<Pointer, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
         // accumulate partial-application state and never mutate shared values.
@@ -1437,7 +1469,7 @@ impl NativeFn {
         gas.charge(amount)?;
         runtime
             .native_callable(self.native_id)?
-            .call(runtime, full_ty, &self.applied)
+            .call_with_backend(runtime, full_ty, &self.applied, backend)
             .await
     }
 }
@@ -1483,13 +1515,37 @@ impl OverloadedFn {
     }
 
     async fn apply<State: Clone + Send + Sync + 'static>(
-        mut self,
+        self,
         runtime: &RuntimeSnapshot<State>,
         arg: Pointer,
         func_type: Option<&Type>,
         arg_type: Option<&Type>,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
+        self.apply_with_backend(
+            runtime,
+            arg,
+            func_type,
+            arg_type,
+            gas,
+            EvalBackend::Recursive,
+        )
+        .await
+    }
+
+    #[async_recursion]
+    async fn apply_with_backend<State>(
+        mut self,
+        runtime: &RuntimeSnapshot<State>,
+        arg: Pointer,
+        func_type: Option<&Type>,
+        arg_type: Option<&Type>,
+        gas: &mut GasMeter,
+        backend: EvalBackend,
+    ) -> Result<Pointer, EngineError>
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         if let Some(expected) = func_type {
             let subst = unify(&self.typ, expected).map_err(|_| EngineError::NativeType {
                 expected: self.typ.to_string(),
@@ -1520,7 +1576,8 @@ impl OverloadedFn {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
         if runtime.type_system.class_methods.contains_key(&self.name) {
-            let mut func = EvaluatorRef::new(runtime)
+            let evaluator = EvaluatorRef::new_with_backend(runtime, backend);
+            let mut func = evaluator
                 .resolve_class_method(&self.name, &full_ty, gas)
                 .await?;
             let mut cur_ty = full_ty;
@@ -1532,7 +1589,16 @@ impl OverloadedFn {
                     got: applied_ty.to_string(),
                 })?;
                 let rest_ty = rest_ty.apply(&subst);
-                func = apply(runtime, func, applied, Some(&cur_ty), Some(applied_ty), gas).await?;
+                func = apply_with_backend(
+                    runtime,
+                    func,
+                    applied,
+                    Some(&cur_ty),
+                    Some(applied_ty),
+                    gas,
+                    backend,
+                )
+                .await?;
                 cur_ty = rest_ty;
             }
             return Ok(func);
@@ -1549,7 +1615,9 @@ impl OverloadedFn {
                     .saturating_mul(self.applied.len() as u64),
             );
         gas.charge(amount)?;
-        imp.func.call(runtime, full_ty, &self.applied).await
+        imp.func
+            .call_with_backend(runtime, full_ty, &self.applied, backend)
+            .await
     }
 }
 
@@ -5344,10 +5412,13 @@ where
             })
         }
         Value::Native(native) => Ok(EvalLoopApplyResult::Value(
-            native.apply(runtime, arg, arg_type, gas).await?,
+            native
+                .apply_with_backend(runtime, arg, arg_type, gas, EvalBackend::Loop)
+                .await?,
         )),
         Value::Overloaded(over) => Ok(EvalLoopApplyResult::Value(
-            over.apply(runtime, arg, func_type, arg_type, gas).await?,
+            over.apply_with_backend(runtime, arg, func_type, arg_type, gas, EvalBackend::Loop)
+                .await?,
         )),
         _ => Err(EngineError::NotCallable(
             runtime.heap.type_name(&func)?.into(),
@@ -5398,19 +5469,23 @@ where
         let value = runtime.heap.get(&ptr)?;
         match value.as_ref() {
             Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                native.call_zero(runtime, gas).await
+                native
+                    .call_zero_with_backend(runtime, gas, EvalBackend::Loop)
+                    .await
             }
             _ => Ok(ptr),
         }
     } else if runtime.type_system.class_methods.contains_key(name) {
-        EvaluatorRef::new(runtime)
+        EvaluatorRef::new_with_backend(runtime, EvalBackend::Loop)
             .resolve_class_method(name, typ, gas)
             .await
     } else {
         let value = EvaluatorRef::new(runtime).resolve_native(name.as_ref(), typ, gas)?;
         match runtime.heap.get(&value)?.as_ref() {
             Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                native.call_zero(runtime, gas).await
+                native
+                    .call_zero_with_backend(runtime, gas, EvalBackend::Loop)
+                    .await
             }
             _ => Ok(value),
         }
@@ -5555,6 +5630,68 @@ fn unexpected_child_result<T>(frame: &'static str) -> Result<T, EngineError> {
 }
 
 #[async_recursion]
+pub(crate) async fn apply_with_backend<State>(
+    runtime: &RuntimeSnapshot<State>,
+    func: Pointer,
+    arg: Pointer,
+    func_type: Option<&Type>,
+    arg_type: Option<&Type>,
+    gas: &mut GasMeter,
+    backend: EvalBackend,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    match backend {
+        EvalBackend::Recursive => apply(runtime, func, arg, func_type, arg_type, gas).await,
+        EvalBackend::Loop => {
+            let func_value = runtime.heap.get(&func)?.as_ref().clone();
+            match func_value {
+                Value::Closure(Closure {
+                    env,
+                    param,
+                    param_ty,
+                    typ,
+                    body,
+                }) => {
+                    let mut subst = Subst::new_sync();
+                    if let Some(expected) = func_type {
+                        let s_fun = unify(&typ, expected).map_err(|_| EngineError::NativeType {
+                            expected: typ.to_string(),
+                            got: expected.to_string(),
+                        })?;
+                        subst = compose_subst(s_fun, subst);
+                    }
+                    let actual_ty = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
+                    let param_ty = param_ty.apply(&subst);
+                    let s_arg =
+                        unify(&param_ty, &actual_ty).map_err(|_| EngineError::NativeType {
+                            expected: param_ty.to_string(),
+                            got: actual_ty.to_string(),
+                        })?;
+                    subst = compose_subst(s_arg, subst);
+                    let env = env.extend(param, arg);
+                    let body = body.apply(&subst);
+                    eval_typed_expr_loop(runtime, &env, &body, gas).await
+                }
+                Value::Native(native) => {
+                    native
+                        .apply_with_backend(runtime, arg, arg_type, gas, backend)
+                        .await
+                }
+                Value::Overloaded(over) => {
+                    over.apply_with_backend(runtime, arg, func_type, arg_type, gas, backend)
+                        .await
+                }
+                _ => Err(EngineError::NotCallable(
+                    runtime.heap.type_name(&func)?.into(),
+                )),
+            }
+        }
+    }
+}
+
+#[async_recursion]
 pub(crate) async fn apply<State>(
     runtime: &RuntimeSnapshot<State>,
     func: Pointer,
@@ -5691,11 +5828,18 @@ mod eval_loop_tests {
     use crate::compiler::Compiler;
     use crate::value::{pointer_display, pointer_eq};
 
-    async fn assert_loop_matches_recursive(source: &str) {
-        let mut compiler = Compiler::new(Engine::with_prelude(()).unwrap());
+    fn compile_loop_test(
+        source: &str,
+        engine: Engine<()>,
+    ) -> (RuntimeSnapshot<()>, CompiledProgram) {
+        let mut compiler = Compiler::new(engine);
         let mut compile_gas = GasMeter::default();
         let program = compiler.compile_snippet(source, &mut compile_gas).unwrap();
-        let runtime = compiler.engine.runtime_snapshot();
+        (compiler.engine.runtime_snapshot(), program)
+    }
+
+    async fn assert_loop_matches_recursive(source: &str) {
+        let (runtime, program) = compile_loop_test(source, Engine::with_prelude(()).unwrap());
 
         let mut recursive_gas = GasMeter::default();
         let recursive = eval_typed_expr(
@@ -5720,6 +5864,73 @@ mod eval_loop_tests {
                 "loop evaluator disagreed with recursive evaluator\nsource:\n{source}\nrecursive: {recursive_display}\nloop: {loop_display}",
             );
         }
+    }
+
+    async fn eval_loop_bool(source: &str, engine: Engine<()>) -> bool {
+        let (runtime, program) = compile_loop_test(source, engine);
+        let mut gas = GasMeter::default();
+        let value = eval_typed_expr_loop(&runtime, &program.env, program.expr.as_ref(), &mut gas)
+            .await
+            .unwrap();
+        runtime.heap.pointer_as_bool(&value).unwrap()
+    }
+
+    fn engine_with_backend_marker() -> Engine<()> {
+        let mut engine = Engine::with_prelude(()).unwrap();
+        let bool_ty = Type::builtin(BuiltinTypeId::Bool);
+        let i32_ty = Type::builtin(BuiltinTypeId::I32);
+        engine
+            .export_native(
+                "backend_marker0",
+                Scheme::new(vec![], vec![], bool_ty.clone()),
+                0,
+                |engine, _, _| {
+                    engine
+                        .heap
+                        .alloc_bool(engine.backend() == EvalBackend::Loop)
+                },
+            )
+            .unwrap();
+        engine
+            .export_native(
+                "backend_marker",
+                Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), bool_ty.clone())),
+                1,
+                |engine, _, _| {
+                    engine
+                        .heap
+                        .alloc_bool(engine.backend() == EvalBackend::Loop)
+                },
+            )
+            .unwrap();
+
+        let func_ty = Type::fun(i32_ty.clone(), bool_ty.clone());
+        let call_once_ty = Type::fun(func_ty.clone(), Type::fun(i32_ty.clone(), bool_ty));
+        engine
+            .export_native_async(
+                "call_once",
+                Scheme::new(vec![], vec![], call_once_ty),
+                2,
+                move |engine, _, args| {
+                    let func_ty = func_ty.clone();
+                    let i32_ty = i32_ty.clone();
+                    async move {
+                        let mut gas = GasMeter::default();
+                        engine
+                            .apply_pointer(
+                                args[0],
+                                args[1],
+                                Some(&func_ty),
+                                Some(&i32_ty),
+                                &mut gas,
+                            )
+                            .await
+                    }
+                    .boxed()
+                },
+            )
+            .unwrap();
+        engine
     }
 
     #[tokio::test]
@@ -5778,6 +5989,33 @@ mod eval_loop_tests {
             "#,
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn loop_native_callbacks_keep_loop_backend() {
+        assert!(eval_loop_bool("call_once backend_marker 1", engine_with_backend_marker()).await);
+    }
+
+    #[tokio::test]
+    async fn loop_class_method_resolution_uses_loop_backend() {
+        assert!(
+            eval_loop_bool(
+                r#"
+                class Backend a where
+                    marker : a -> bool
+
+                instance Backend i32 where
+                    marker =
+                        if backend_marker0
+                        then (\x -> true)
+                        else (\x -> false)
+
+                marker 1
+                "#,
+                engine_with_backend_marker(),
+            )
+            .await
+        );
     }
 
     #[tokio::test]

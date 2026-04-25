@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::Engine;
 use crate::EvaluatorRef;
-use crate::engine::{RuntimeSnapshot, apply as apply_pointer, binary_arg_types};
+use crate::engine::{RuntimeSnapshot, binary_arg_types};
 use crate::value::{Heap, Pointer, list_to_vec};
 use crate::{EngineError, FromPointer, IntoPointer, OverloadedFn, Value};
 use rex_util::GasMeter;
@@ -29,14 +29,16 @@ fn values_to_ptrs<T: IntoPointer>(
 }
 
 async fn invoke_pointer_fn<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     func: Pointer,
     arg: Pointer,
     func_ty: Option<&Type>,
     arg_ty: Option<&Type>,
 ) -> Result<Pointer, EngineError> {
     let mut gas = GasMeter::default();
-    apply_pointer(engine, func, arg, func_ty, arg_ty, &mut gas).await
+    engine
+        .apply_pointer(func, arg, func_ty, arg_ty, &mut gas)
+        .await
 }
 
 fn expect_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
@@ -119,14 +121,12 @@ pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
 }
 
 pub(crate) async fn resolve_binary_op<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     name: &str,
     elem_ty: &Type,
 ) -> Result<Pointer, EngineError> {
     let op_ty = Type::fun(elem_ty.clone(), Type::fun(elem_ty.clone(), elem_ty.clone()));
-    EvaluatorRef::new(engine)
-        .resolve_global(&sym(name), &op_ty)
-        .await
+    engine.resolve_global(&sym(name), &op_ty).await
 }
 
 pub(crate) fn len_value_for_type(
@@ -240,7 +240,7 @@ pub(crate) fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
 }
 
 pub(crate) async fn map_values<State: Clone + Send + Sync + 'static, F, I, T>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -261,7 +261,7 @@ where
 }
 
 pub(crate) async fn filter_values<State: Clone + Send + Sync + 'static, P, I, T>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     pred: P,
     pred_ty: &Type,
     elem_ty: &Type,
@@ -285,7 +285,7 @@ where
 }
 
 pub(crate) async fn filter_map_values<State: Clone + Send + Sync + 'static, F, I, T>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -309,7 +309,7 @@ where
 }
 
 pub(crate) async fn flat_map_values<State: Clone + Send + Sync + 'static, F, I, T>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     func: F,
     func_ty: &Type,
     elem_ty: &Type,
@@ -332,7 +332,7 @@ where
 }
 
 pub(crate) async fn foldl_values<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     func: Pointer,
     func_ty: &Type,
     acc_ty: &Type,
@@ -349,7 +349,7 @@ pub(crate) async fn foldl_values<State: Clone + Send + Sync + 'static>(
 }
 
 pub(crate) async fn foldr_values<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &EvaluatorRef<'_, State>,
     func: Pointer,
     func_ty: &Type,
     acc_ty: &Type,
