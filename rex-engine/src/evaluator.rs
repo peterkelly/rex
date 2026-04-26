@@ -37,12 +37,14 @@ where
 {
     runtime: RuntimeSnapshot<State>,
     #[allow(dead_code)]
-    pub(crate) context: EvalContext,
+    #[doc(hidden)]
+    pub context: EvalContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct EvalContext {
-    pub(crate) parent: Option<Pointer>,
+#[doc(hidden)]
+pub struct EvalContext {
+    pub parent: Option<Pointer>,
 }
 
 impl EvalContext {
@@ -71,7 +73,7 @@ where
         }
     }
 
-    pub(crate) fn sync_runtime_from_compiler(&mut self) {
+    fn sync_runtime_from_compiler(&mut self) {
         if let Some(compiler) = &self.compiler {
             self.runtime.sync_from_engine(&compiler.engine);
         }
@@ -82,16 +84,6 @@ where
         program: &CompiledProgram,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EvalError> {
-        self.run_internal(program, gas)
-            .await
-            .map_err(EvalError::from)
-    }
-
-    pub(crate) async fn run_internal(
-        &mut self,
-        program: &CompiledProgram,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
         check_runtime_cancelled(&self.runtime.runtime)?;
         self.runtime.validate_internal(program)?;
         eval_typed_expr(
@@ -101,6 +93,7 @@ where
             gas,
         )
         .await
+        .map_err(EvalError::from)
     }
 
     pub async fn eval(
@@ -112,7 +105,7 @@ where
             .await
     }
 
-    pub async fn run_prepared(
+    async fn run_prepared(
         &mut self,
         program: CompiledProgram,
         gas: &mut GasMeter,
@@ -123,7 +116,7 @@ where
         Ok((value, typ))
     }
 
-    pub(crate) async fn prepare_and_run<F>(
+    async fn prepare_and_run<F>(
         &mut self,
         gas: &mut GasMeter,
         compile: F,

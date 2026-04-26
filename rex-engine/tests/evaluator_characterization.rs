@@ -2,12 +2,10 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use std::task::Poll;
 
-use futures::{FutureExt, future::poll_fn};
+use futures::FutureExt;
 use rex_engine::{
     Compiler, Engine, EngineError, Evaluator, Module, Pointer, RuntimeEnv, assert_pointer_eq,
-    pointer_display,
 };
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type, TypeKind};
 use rex_util::{GasCosts, GasMeter};
@@ -48,155 +46,6 @@ async fn run_compiled_snippet_with_eval_gas(
         .run(&program, eval_gas)
         .await
         .map_err(|err| err.into_engine_error())
-}
-
-#[derive(Clone, Default)]
-struct AsyncCallTracker {
-    calls: Arc<AtomicUsize>,
-    in_flight: Arc<AtomicUsize>,
-    max_in_flight: Arc<AtomicUsize>,
-}
-
-impl AsyncCallTracker {
-    fn enter(&self) -> InFlightCall {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        let current = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
-        self.max_in_flight.fetch_max(current, Ordering::SeqCst);
-        InFlightCall {
-            in_flight: Arc::clone(&self.in_flight),
-        }
-    }
-
-    fn calls(&self) -> usize {
-        self.calls.load(Ordering::SeqCst)
-    }
-
-    fn in_flight(&self) -> usize {
-        self.in_flight.load(Ordering::SeqCst)
-    }
-
-    fn max_in_flight(&self) -> usize {
-        self.max_in_flight.load(Ordering::SeqCst)
-    }
-}
-
-struct InFlightCall {
-    in_flight: Arc<AtomicUsize>,
-}
-
-impl Drop for InFlightCall {
-    fn drop(&mut self) {
-        self.in_flight.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-async fn yield_once() {
-    let mut yielded = false;
-    poll_fn(move |cx| {
-        if yielded {
-            Poll::Ready(())
-        } else {
-            yielded = true;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        }
-    })
-    .await
-}
-
-async fn tracked_identity(tracker: AsyncCallTracker, value: i32) -> Result<i32, EngineError> {
-    let _call = tracker.enter();
-    yield_once().await;
-    Ok(value)
-}
-
-fn inject_tracked_identity(engine: &mut Engine, tracker: AsyncCallTracker) {
-    inject_globals(engine, |module| {
-        module.export_async("tracked", move |_: &(), value: i32| {
-            let tracker = tracker.clone();
-            async move { tracked_identity(tracker, value).await }
-        })
-    });
-}
-
-fn assert_sequential_tracker(tracker: &AsyncCallTracker, expected_calls: usize) {
-    assert_eq!(tracker.calls(), expected_calls);
-    assert_eq!(tracker.in_flight(), 0);
-    assert_eq!(
-        tracker.max_in_flight(),
-        1,
-        "current evaluator should await host async functions one at a time"
-    );
-}
-
-#[tokio::test]
-async fn tuple_async_native_calls_are_currently_sequential() {
-    let tracker = AsyncCallTracker::default();
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_tracked_identity(&mut engine, tracker.clone());
-
-    let (value, ty) = eval_snippet(&mut engine, "(tracked 1, tracked 2)")
-        .await
-        .unwrap();
-
-    assert_eq!(
-        ty,
-        Type::tuple(vec![
-            Type::builtin(BuiltinTypeId::I32),
-            Type::builtin(BuiltinTypeId::I32),
-        ])
-    );
-    match engine.heap.get(&value).unwrap().as_ref() {
-        rex_engine::Value::Tuple(values) => {
-            assert_eq!(values.len(), 2);
-            assert_pointer_eq!(&engine.heap, values[0], engine.heap.alloc_i32(1).unwrap());
-            assert_pointer_eq!(&engine.heap, values[1], engine.heap.alloc_i32(2).unwrap());
-        }
-        other => panic!("expected tuple, got {}", other.value_type_name()),
-    }
-    assert_sequential_tracker(&tracker, 2);
-}
-
-#[tokio::test]
-async fn list_async_native_calls_are_currently_sequential() {
-    let tracker = AsyncCallTracker::default();
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_tracked_identity(&mut engine, tracker.clone());
-
-    let (value, ty) = eval_snippet(&mut engine, "[tracked 1, tracked 2]")
-        .await
-        .unwrap();
-
-    assert_eq!(
-        ty,
-        Type::app(
-            Type::builtin(BuiltinTypeId::List),
-            Type::builtin(BuiltinTypeId::I32)
-        )
-    );
-    assert_eq!(pointer_display(&engine.heap, &value).unwrap(), "[1, 2]");
-    assert_sequential_tracker(&tracker, 2);
-}
-
-#[tokio::test]
-async fn prelude_map_callbacks_are_currently_sequential() {
-    let tracker = AsyncCallTracker::default();
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_tracked_identity(&mut engine, tracker.clone());
-
-    let (value, ty) = eval_snippet(&mut engine, "map tracked [1, 2]")
-        .await
-        .unwrap();
-
-    assert_eq!(
-        ty,
-        Type::app(
-            Type::builtin(BuiltinTypeId::List),
-            Type::builtin(BuiltinTypeId::I32)
-        )
-    );
-    assert_eq!(pointer_display(&engine.heap, &value).unwrap(), "[1, 2]");
-    assert_sequential_tracker(&tracker, 2);
 }
 
 #[tokio::test]

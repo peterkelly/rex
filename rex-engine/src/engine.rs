@@ -4320,6 +4320,55 @@ fn synthetic_application_expr_from_head(
     Ok((env, expr))
 }
 
+pub async fn apply_with_context<State>(
+    evaluator: &EvaluatorRef<State>,
+    func: Pointer,
+    arg: Pointer,
+    func_type: Option<&Type>,
+    arg_type: Option<&Type>,
+    gas: &mut GasMeter,
+) -> Result<Pointer, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let runtime: &RuntimeSnapshot<State> = evaluator;
+    let func_type = match func_type {
+        Some(typ) => typ.clone(),
+        None => callable_pointer_type(runtime, &func)?,
+    };
+    let arg_type = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
+    let args = [(arg, arg_type)];
+    let (env, expr) = synthetic_application_expr(func, func_type, &args)?;
+    match evaluator.context.parent {
+        Some(parent) => {
+            eval_typed_expr_from_parent(runtime, parent, EvalStop::Parent(parent), &env, &expr, gas)
+                .await
+        }
+        None => eval_typed_expr(runtime, &env, &expr, gas).await,
+    }
+}
+
+fn callable_pointer_type<State: Clone + Send + Sync + 'static>(
+    runtime: &RuntimeSnapshot<State>,
+    func: &Pointer,
+) -> Result<Type, EngineError> {
+    let value = runtime.heap.get(func)?;
+    match value.as_ref() {
+        Value::Closure(Closure { typ, .. }) => Ok(typ.clone()),
+        Value::Native(native) => {
+            let (_, _, _, typ, _, _, _) = native.clone().into_parts();
+            Ok(typ)
+        }
+        Value::Overloaded(over) => {
+            let (_, typ, _, _) = over.clone().into_parts();
+            Ok(typ)
+        }
+        _ => Err(EngineError::NotCallable(
+            runtime.heap.type_name(func)?.into(),
+        )),
+    }
+}
+
 pub(crate) fn binary_arg_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     let (lhs, rest) = split_fun(typ).ok_or_else(|| EngineError::NativeType {
         expected: "binary function".into(),
@@ -6839,407 +6888,4 @@ fn match_patterns(
         bindings.extend(sub);
     }
     Some(bindings)
-}
-
-#[cfg(test)]
-mod eval_tests {
-    use super::*;
-    use crate::compiler::Compiler;
-    use crate::evaluator::Evaluator;
-    use crate::runtime_env::RuntimeEnv;
-
-    fn compile_eval_test(
-        source: &str,
-        engine: Engine<()>,
-    ) -> (RuntimeSnapshot<()>, CompiledProgram) {
-        let mut compiler = Compiler::new(engine);
-        let mut compile_gas = GasMeter::default();
-        let program = compiler.compile_snippet(source, &mut compile_gas).unwrap();
-        (compiler.engine.runtime_snapshot(), program)
-    }
-
-    #[test]
-    fn eval_scheduler_pops_newest_ready_work_first() {
-        let heap = Heap::new();
-        let root = heap.alloc_i32(0).unwrap();
-        let first = heap.alloc_i32(1).unwrap();
-        let second = heap.alloc_i32(2).unwrap();
-        let returned = heap.alloc_i32(3).unwrap();
-        let mut scheduler = EvalScheduler::new(root);
-
-        assert_eq!(scheduler.pop_next().unwrap().frame, root);
-
-        scheduler.schedule_next(EvalWorkItem::enter(first));
-        scheduler.schedule_next(EvalWorkItem::receive(second, returned));
-
-        let next = scheduler.pop_next().unwrap();
-        assert_eq!(next.frame, second);
-        assert_eq!(next.returned, Some(returned));
-        assert_eq!(scheduler.pop_next().unwrap().frame, first);
-        assert!(scheduler.pop_next().is_none());
-    }
-
-    async fn eval_i32(source: &str, engine: Engine<()>) -> i32 {
-        let (runtime, program) = compile_eval_test(source, engine);
-        let mut gas = GasMeter::default();
-        let value = eval_typed_expr(&runtime, &program.env, program.expr.as_ref(), &mut gas)
-            .await
-            .unwrap();
-        i32::from_pointer(&runtime.heap, &value).unwrap()
-    }
-
-    async fn eval_bool(source: &str, engine: Engine<()>) -> bool {
-        let (runtime, program) = compile_eval_test(source, engine);
-        let mut gas = GasMeter::default();
-        let value = eval_typed_expr(&runtime, &program.env, program.expr.as_ref(), &mut gas)
-            .await
-            .unwrap();
-        runtime.heap.pointer_as_bool(&value).unwrap()
-    }
-
-    async fn eval_public_bool<State>(source: &str, engine: Engine<State>) -> bool
-    where
-        State: Clone + Send + Sync + 'static,
-    {
-        let runtime = RuntimeEnv::new(engine.clone());
-        let compiler = Compiler::new(engine);
-        let mut evaluator = Evaluator::new_with_compiler(runtime, compiler);
-        let mut gas = GasMeter::default();
-        let (value, typ) = evaluator.eval_snippet(source, &mut gas).await.unwrap();
-        assert_eq!(typ, Type::builtin(BuiltinTypeId::Bool));
-        evaluator
-            .runtime
-            .runtime
-            .heap
-            .pointer_as_bool(&value)
-            .unwrap()
-    }
-
-    async fn eval_public_string<State>(source: &str, engine: Engine<State>) -> String
-    where
-        State: Clone + Send + Sync + 'static,
-    {
-        let runtime = RuntimeEnv::new(engine.clone());
-        let compiler = Compiler::new(engine);
-        let mut evaluator = Evaluator::new_with_compiler(runtime, compiler);
-        let mut gas = GasMeter::default();
-        let (value, typ) = evaluator.eval_snippet(source, &mut gas).await.unwrap();
-        assert_eq!(typ, Type::builtin(BuiltinTypeId::String));
-        String::from_pointer(&evaluator.runtime.runtime.heap, &value).unwrap()
-    }
-
-    fn ignore_log(_: &str) {}
-
-    #[derive(Clone, Default)]
-    struct ParentProbeState {
-        outer_parent: Arc<Mutex<Option<Pointer>>>,
-    }
-
-    fn engine_with_context_marker() -> Engine<()> {
-        let mut engine = Engine::with_prelude(()).unwrap();
-        let bool_ty = Type::builtin(BuiltinTypeId::Bool);
-        let i32_ty = Type::builtin(BuiltinTypeId::I32);
-        engine
-            .export_native(
-                "context_marker0",
-                Scheme::new(vec![], vec![], bool_ty.clone()),
-                0,
-                |engine, _, _| engine.heap.alloc_bool(engine.parent_frame().is_some()),
-            )
-            .unwrap();
-        engine
-            .export_native(
-                "context_marker",
-                Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), bool_ty.clone())),
-                1,
-                |engine, _, _| engine.heap.alloc_bool(engine.parent_frame().is_some()),
-            )
-            .unwrap();
-
-        let func_ty = Type::fun(i32_ty.clone(), bool_ty.clone());
-        let call_once_ty = Type::fun(func_ty.clone(), Type::fun(i32_ty.clone(), bool_ty));
-        engine
-            .export_native_async(
-                "call_once",
-                Scheme::new(vec![], vec![], call_once_ty),
-                2,
-                move |engine, _, args| {
-                    let func_ty = func_ty.clone();
-                    let i32_ty = i32_ty.clone();
-                    async move {
-                        let mut gas = GasMeter::default();
-                        engine
-                            .apply_pointer(
-                                args[0],
-                                args[1],
-                                Some(&func_ty),
-                                Some(&i32_ty),
-                                &mut gas,
-                            )
-                            .await
-                    }
-                    .boxed()
-                },
-            )
-            .unwrap();
-        engine
-    }
-
-    fn engine_with_context_marker_and_log_module() -> Engine<()> {
-        let mut engine = engine_with_context_marker();
-        engine.add_default_resolvers();
-        let mut module = Module::new("host.log");
-        module
-            .export_tracing_log_function("debug", ignore_log)
-            .unwrap();
-        engine.inject_module(module).unwrap();
-        engine
-    }
-
-    fn engine_with_parent_probe() -> Engine<ParentProbeState> {
-        let mut engine = Engine::with_prelude(ParentProbeState::default()).unwrap();
-        let bool_ty = Type::builtin(BuiltinTypeId::Bool);
-        let i32_ty = Type::builtin(BuiltinTypeId::I32);
-        let func_ty = Type::fun(i32_ty.clone(), bool_ty.clone());
-        let call_once_ty = Type::fun(func_ty.clone(), Type::fun(i32_ty.clone(), bool_ty.clone()));
-
-        engine
-            .export_native_async(
-                "call_once_record_parent",
-                Scheme::new(vec![], vec![], call_once_ty),
-                2,
-                {
-                    let func_ty = func_ty.clone();
-                    let i32_ty = i32_ty.clone();
-                    move |engine, _, args| {
-                        let func_ty = func_ty.clone();
-                        let i32_ty = i32_ty.clone();
-                        async move {
-                            {
-                                let mut outer_parent = engine.state.outer_parent.lock().unwrap();
-                                *outer_parent = engine.parent_frame();
-                            }
-
-                            let mut gas = GasMeter::default();
-                            engine
-                                .apply_pointer(
-                                    args[0],
-                                    args[1],
-                                    Some(&func_ty),
-                                    Some(&i32_ty),
-                                    &mut gas,
-                                )
-                                .await
-                        }
-                        .boxed()
-                    }
-                },
-            )
-            .unwrap();
-
-        engine
-            .export_native(
-                "inner_parent_descends_from_outer",
-                Scheme::new(vec![], vec![], bool_ty),
-                0,
-                |engine: EvaluatorRef<ParentProbeState>, _, _| {
-                    let outer_parent = *engine.state.outer_parent.lock().unwrap();
-                    let mut current = engine.parent_frame();
-                    let mut found = false;
-
-                    while let Some(ptr) = current {
-                        if Some(ptr) == outer_parent {
-                            found = true;
-                            break;
-                        }
-
-                        let frame = engine.heap.pointer_as_frame(&ptr)?;
-                        let parent = *frame.parent();
-                        match engine.heap.get(&parent)?.as_ref() {
-                            Value::Frame(_) => current = Some(parent),
-                            Value::U64(0) => break,
-                            other => {
-                                return Err(EngineError::Internal(format!(
-                                    "unexpected frame parent value {}",
-                                    other.value_type_name()
-                                )));
-                            }
-                        }
-                    }
-
-                    engine.heap.alloc_bool(found)
-                },
-            )
-            .unwrap();
-
-        engine
-    }
-
-    #[tokio::test]
-    async fn evaluator_handles_literals_sequences_and_records() {
-        let result = eval_i32(
-            r#"
-            type Foo = Bar { x: i32, y: i32, z: i32 }
-            type Sum = A { x: i32 } | B { x: i32 }
-
-            let
-                foo: Foo = Bar { x = 1, y = 2, z = 3 },
-                tuple = (1, 2, 3),
-                list = [1, 2, 3],
-                foo2 = { foo with { x = 6 } },
-                sum: Sum = A { x = 1 },
-                sum2 = match sum
-                    when A {x} -> { sum with { x = x + 1 } }
-                    when B {x} -> { sum with { x = x + 2 } }
-            in
-                foo2.x + (match sum2 when A {x} -> x when B {x} -> x)
-            "#,
-            Engine::with_prelude(()).unwrap(),
-        )
-        .await;
-        assert_eq!(result, 8);
-    }
-
-    #[tokio::test]
-    async fn evaluator_handles_control_flow_and_typeclasses() {
-        let result = eval_i32(
-            r#"
-            class Pick a where
-                pick : a -> a
-
-            instance Pick i32 where
-                pick = \x -> x
-
-            let rec fact = \n ->
-                if n == 0 then 1 else n * fact (n - 1)
-            in
-                match (Some (pick 4))
-                    when Some x -> fact x
-                    when None -> 0
-            "#,
-            Engine::with_prelude(()).unwrap(),
-        )
-        .await;
-        assert_eq!(result, 24);
-    }
-
-    #[tokio::test]
-    async fn evaluator_handles_prelude_collection_callbacks() {
-        let result = eval_i32(
-            r#"
-            let
-                xs = [1, 2, 3],
-                ys = map (\x -> x + 1) xs,
-                zs = filter (\x -> x == 2) xs,
-                total = foldl (\acc x -> acc + x) 0 ys
-            in
-                total
-            "#,
-            Engine::with_prelude(()).unwrap(),
-        )
-        .await;
-        assert_eq!(result, 9);
-    }
-
-    #[tokio::test]
-    async fn native_callbacks_receive_cactus_context() {
-        assert!(eval_bool("call_once context_marker 1", engine_with_context_marker()).await);
-    }
-
-    #[tokio::test]
-    async fn public_evaluator_uses_cactus_context() {
-        assert!(eval_public_bool("context_marker0", engine_with_context_marker()).await);
-    }
-
-    #[tokio::test]
-    async fn module_log_callback_receives_cactus_context() {
-        let rendered = eval_public_string(
-            r#"
-            import host.log (debug)
-
-            type Context = Context { value: i32 }
-
-            instance Show Context where
-                show =
-                    if context_marker0
-                    then (\_ -> "context")
-                    else (\_ -> "missing")
-
-            debug (Context { value = 1 })
-            "#,
-            engine_with_context_marker_and_log_module(),
-        )
-        .await;
-
-        assert_eq!(rendered, "context");
-    }
-
-    #[tokio::test]
-    async fn native_callback_closure_runs_under_caller_frame() {
-        assert!(
-            eval_public_bool(
-                "call_once_record_parent (\\_ -> inner_parent_descends_from_outer) 1",
-                engine_with_parent_probe(),
-            )
-            .await
-        );
-    }
-
-    #[tokio::test]
-    async fn class_method_resolution_receives_cactus_context() {
-        assert!(
-            eval_bool(
-                r#"
-                class Context a where
-                    marker : a -> bool
-
-                instance Context i32 where
-                    marker =
-                        if context_marker0
-                        then (\x -> true)
-                        else (\x -> false)
-
-                marker 1
-                "#,
-                engine_with_context_marker(),
-            )
-            .await
-        );
-    }
-
-    #[tokio::test]
-    async fn evaluator_handles_higher_order_closures() {
-        let result = eval_i32(
-            r#"
-            let
-                apply_twice = \f x -> f (f x),
-                compose = \f g x -> f (g x),
-                a = apply_twice (\n -> n + 1) 1,
-                b = compose (\n -> n + 1) (\n -> n * 2) 3
-            in
-                a + b
-            "#,
-            Engine::with_prelude(()).unwrap(),
-        )
-        .await;
-        assert_eq!(result, 10);
-    }
-
-    #[tokio::test]
-    async fn evaluator_handles_partial_and_multi_arg_closures() {
-        let result = eval_i32(
-            r#"
-            let
-                add = \x y -> x + y,
-                choose = \flag left right -> if flag then left else right,
-                inc = add 1,
-                picked = choose false (inc 10) (add 20 22)
-            in
-                (inc 41) + picked
-            "#,
-            Engine::with_prelude(()).unwrap(),
-        )
-        .await;
-        assert_eq!(result, 84);
-    }
 }

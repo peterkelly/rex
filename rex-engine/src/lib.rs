@@ -13,8 +13,6 @@ mod modules;
 mod prelude;
 mod runtime_env;
 mod stack;
-#[cfg(test)]
-pub(crate) mod test_helpers;
 mod value;
 
 pub use cancel::CancellationToken;
@@ -25,7 +23,7 @@ pub use engine::{
     EngineOptions, Export, Handler, NativeCapability, NativeFn, NativeFuture, NativeRequirement,
     OverloadedFn, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault,
     RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable,
-    collect_adts_error_to_engine,
+    apply_with_context, collect_adts_error_to_engine,
 };
 pub use env::Environment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
