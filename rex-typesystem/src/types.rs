@@ -531,48 +531,54 @@ impl<T: Types> Types for Vec<T> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TypedExpr {
     pub typ: Type,
-    pub kind: TypedExprKind,
+    pub kind: Arc<TypedExprKind>,
 }
 
 impl TypedExpr {
     pub fn new(typ: Type, kind: TypedExprKind) -> Self {
-        Self { typ, kind }
+        Self {
+            typ,
+            kind: Arc::new(kind),
+        }
     }
 
     pub fn apply(&self, s: &Subst) -> Self {
-        match &self.kind {
+        // TODO: This still allocates a transformed expression tree. That may
+        // become too expensive for hot polymorphic apply paths once evaluator
+        // frames retain shared typed AST nodes.
+        match self.kind.as_ref() {
             TypedExprKind::Lam { .. } => {
                 let mut params: Vec<(Symbol, Type)> = Vec::new();
                 let mut cur = self;
-                while let TypedExprKind::Lam { param, body } = &cur.kind {
+                while let TypedExprKind::Lam { param, body } = cur.kind.as_ref() {
                     params.push((param.clone(), cur.typ.apply(s)));
                     cur = body.as_ref();
                 }
                 let mut out = cur.apply(s);
                 for (param, typ) in params.into_iter().rev() {
-                    out = TypedExpr {
+                    out = TypedExpr::new(
                         typ,
-                        kind: TypedExprKind::Lam {
+                        TypedExprKind::Lam {
                             param,
-                            body: Box::new(out),
+                            body: Arc::new(out),
                         },
-                    };
+                    );
                 }
                 return out;
             }
             TypedExprKind::App(..) => {
-                let mut apps: Vec<(Type, &TypedExpr)> = Vec::new();
+                let mut apps: Vec<(Type, Arc<TypedExpr>)> = Vec::new();
                 let mut cur = self;
-                while let TypedExprKind::App(f, x) = &cur.kind {
-                    apps.push((cur.typ.apply(s), x.as_ref()));
+                while let TypedExprKind::App(f, x) = cur.kind.as_ref() {
+                    apps.push((cur.typ.apply(s), Arc::clone(x)));
                     cur = f.as_ref();
                 }
                 let mut out = cur.apply(s);
                 for (typ, arg) in apps.into_iter().rev() {
-                    out = TypedExpr {
+                    out = TypedExpr::new(
                         typ,
-                        kind: TypedExprKind::App(Box::new(out), Box::new(arg.apply(s))),
-                    };
+                        TypedExprKind::App(Arc::new(out), Arc::new(arg.apply(s))),
+                    );
                 }
                 return out;
             }
@@ -580,7 +586,7 @@ impl TypedExpr {
         }
 
         let typ = self.typ.apply(s);
-        let kind = match &self.kind {
+        let kind = match self.kind.as_ref() {
             TypedExprKind::Bool(v) => TypedExprKind::Bool(*v),
             TypedExprKind::Uint(v) => TypedExprKind::Uint(*v),
             TypedExprKind::Int(v) => TypedExprKind::Int(*v),
@@ -590,25 +596,25 @@ impl TypedExpr {
             TypedExprKind::DateTime(v) => TypedExprKind::DateTime(*v),
             TypedExprKind::Hole => TypedExprKind::Hole,
             TypedExprKind::Tuple(elems) => {
-                TypedExprKind::Tuple(elems.iter().map(|e| e.apply(s)).collect())
+                TypedExprKind::Tuple(elems.iter().map(|e| Arc::new(e.apply(s))).collect())
             }
             TypedExprKind::List(elems) => {
-                TypedExprKind::List(elems.iter().map(|e| e.apply(s)).collect())
+                TypedExprKind::List(elems.iter().map(|e| Arc::new(e.apply(s))).collect())
             }
             TypedExprKind::Dict(kvs) => {
                 let mut out = BTreeMap::new();
                 for (k, v) in kvs {
-                    out.insert(k.clone(), v.apply(s));
+                    out.insert(k.clone(), Arc::new(v.apply(s)));
                 }
                 TypedExprKind::Dict(out)
             }
             TypedExprKind::RecordUpdate { base, updates } => {
                 let mut out = BTreeMap::new();
                 for (k, v) in updates {
-                    out.insert(k.clone(), v.apply(s));
+                    out.insert(k.clone(), Arc::new(v.apply(s)));
                 }
                 TypedExprKind::RecordUpdate {
-                    base: Box::new(base.apply(s)),
+                    base: Arc::new(base.apply(s)),
                     updates: out,
                 }
             }
@@ -617,43 +623,46 @@ impl TypedExpr {
                 overloads: overloads.iter().map(|t| t.apply(s)).collect(),
             },
             TypedExprKind::App(f, x) => {
-                TypedExprKind::App(Box::new(f.apply(s)), Box::new(x.apply(s)))
+                TypedExprKind::App(Arc::new(f.apply(s)), Arc::new(x.apply(s)))
             }
             TypedExprKind::Project { expr, field } => TypedExprKind::Project {
-                expr: Box::new(expr.apply(s)),
+                expr: Arc::new(expr.apply(s)),
                 field: field.clone(),
             },
             TypedExprKind::Lam { param, body } => TypedExprKind::Lam {
                 param: param.clone(),
-                body: Box::new(body.apply(s)),
+                body: Arc::new(body.apply(s)),
             },
             TypedExprKind::Let { name, def, body } => TypedExprKind::Let {
                 name: name.clone(),
-                def: Box::new(def.apply(s)),
-                body: Box::new(body.apply(s)),
+                def: Arc::new(def.apply(s)),
+                body: Arc::new(body.apply(s)),
             },
             TypedExprKind::LetRec { bindings, body } => TypedExprKind::LetRec {
                 bindings: bindings
                     .iter()
-                    .map(|(name, def)| (name.clone(), def.apply(s)))
+                    .map(|(name, def)| (name.clone(), Arc::new(def.apply(s))))
                     .collect(),
-                body: Box::new(body.apply(s)),
+                body: Arc::new(body.apply(s)),
             },
             TypedExprKind::Ite {
                 cond,
                 then_expr,
                 else_expr,
             } => TypedExprKind::Ite {
-                cond: Box::new(cond.apply(s)),
-                then_expr: Box::new(then_expr.apply(s)),
-                else_expr: Box::new(else_expr.apply(s)),
+                cond: Arc::new(cond.apply(s)),
+                then_expr: Arc::new(then_expr.apply(s)),
+                else_expr: Arc::new(else_expr.apply(s)),
             },
             TypedExprKind::Match { scrutinee, arms } => TypedExprKind::Match {
-                scrutinee: Box::new(scrutinee.apply(s)),
-                arms: arms.iter().map(|(p, e)| (p.clone(), e.apply(s))).collect(),
+                scrutinee: Arc::new(scrutinee.apply(s)),
+                arms: arms
+                    .iter()
+                    .map(|(p, e)| (p.clone(), Arc::new(e.apply(s))))
+                    .collect(),
             },
         };
-        TypedExpr { typ, kind }
+        TypedExpr::new(typ, kind)
     }
 }
 
@@ -667,43 +676,43 @@ pub enum TypedExprKind {
     Uuid(Uuid),
     DateTime(DateTime<Utc>),
     Hole,
-    Tuple(Vec<TypedExpr>),
-    List(Vec<TypedExpr>),
-    Dict(BTreeMap<Symbol, TypedExpr>),
+    Tuple(Vec<Arc<TypedExpr>>),
+    List(Vec<Arc<TypedExpr>>),
+    Dict(BTreeMap<Symbol, Arc<TypedExpr>>),
     RecordUpdate {
-        base: Box<TypedExpr>,
-        updates: BTreeMap<Symbol, TypedExpr>,
+        base: Arc<TypedExpr>,
+        updates: BTreeMap<Symbol, Arc<TypedExpr>>,
     },
     Var {
         name: Symbol,
         overloads: Vec<Type>,
     },
-    App(Box<TypedExpr>, Box<TypedExpr>),
+    App(Arc<TypedExpr>, Arc<TypedExpr>),
     Project {
-        expr: Box<TypedExpr>,
+        expr: Arc<TypedExpr>,
         field: Symbol,
     },
     Lam {
         param: Symbol,
-        body: Box<TypedExpr>,
+        body: Arc<TypedExpr>,
     },
     Let {
         name: Symbol,
-        def: Box<TypedExpr>,
-        body: Box<TypedExpr>,
+        def: Arc<TypedExpr>,
+        body: Arc<TypedExpr>,
     },
     LetRec {
-        bindings: Vec<(Symbol, TypedExpr)>,
-        body: Box<TypedExpr>,
+        bindings: Vec<(Symbol, Arc<TypedExpr>)>,
+        body: Arc<TypedExpr>,
     },
     Ite {
-        cond: Box<TypedExpr>,
-        then_expr: Box<TypedExpr>,
-        else_expr: Box<TypedExpr>,
+        cond: Arc<TypedExpr>,
+        then_expr: Arc<TypedExpr>,
+        else_expr: Arc<TypedExpr>,
     },
     Match {
-        scrutinee: Box<TypedExpr>,
-        arms: Vec<(Pattern, TypedExpr)>,
+        scrutinee: Arc<TypedExpr>,
+        arms: Vec<(Pattern, Arc<TypedExpr>)>,
     },
 }
 

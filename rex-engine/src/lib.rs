@@ -23,9 +23,9 @@ pub use engine::{
     EngineOptions, Export, Handler, NativeCapability, NativeFn, NativeFuture, NativeRequirement,
     OverloadedFn, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault,
     RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable,
-    collect_adts_error_to_engine,
+    apply_with_context, collect_adts_error_to_engine,
 };
-pub use env::Env;
+pub use env::Environment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
 pub use evaluator::{Evaluator, EvaluatorRef};
 pub use modules::virtual_export_name;
@@ -34,7 +34,7 @@ pub use modules::{
     ResolveRequest, ResolvedModule, ResolvedModuleContent, SymbolKind,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
-pub use stack::DEFAULT_STACK_SIZE_BYTES;
+pub use stack::*;
 pub use value::{
     Closure, FromPointer, Heap, IntoPointer, Pointer, RexType, Value, ValueDisplayOptions,
     ValueRef, closure_debug, closure_eq, pointer_display, pointer_display_with, pointer_eq,

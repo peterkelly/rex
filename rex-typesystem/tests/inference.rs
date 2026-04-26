@@ -1275,7 +1275,7 @@ fn infer_typed_hole_expr_is_hole_kind() {
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let (typed, _preds, _ty) = infer_typed(&mut ts, expr.as_ref()).unwrap();
     assert!(
-        matches!(typed.kind, TypedExprKind::Hole),
+        matches!(typed.kind.as_ref(), TypedExprKind::Hole),
         "typed={typed:#?}"
     );
 }

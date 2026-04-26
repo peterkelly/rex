@@ -11,8 +11,9 @@ use rex_typesystem::types::{AdtDecl, BuiltinTypeId, Type, TypedExpr};
 use uuid::Uuid;
 
 use crate::EngineError;
-use crate::Env;
+use crate::Environment;
 use crate::engine::{NativeFn, OverloadedFn};
+use crate::stack::Frame;
 
 #[derive(Default)]
 struct HeapState {
@@ -195,6 +196,10 @@ impl Heap {
         self.get(pointer)?.as_ref().value_as_overloaded()
     }
 
+    pub fn pointer_as_frame(&self, pointer: &Pointer) -> Result<Frame, EngineError> {
+        self.get(pointer)?.as_ref().value_as_frame()
+    }
+
     pub fn alloc_bool(&self, value: bool) -> Result<Pointer, EngineError> {
         self.alloc_slot(Value::Bool(value))
     }
@@ -259,6 +264,30 @@ impl Heap {
         self.alloc_slot(Value::Uninitialized(name))
     }
 
+    pub fn alloc_frame(&self, frame: Frame) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Value::Frame(frame))
+    }
+
+    pub fn alloc_root_frame_parent(&self) -> Result<Pointer, EngineError> {
+        self.alloc_u64(0)
+    }
+
+    pub fn replace_frame(&self, pointer: &Pointer, frame: Frame) -> Result<(), EngineError> {
+        self.pointer_as_frame(pointer)?;
+        self.overwrite(pointer, Value::Frame(frame))
+    }
+
+    pub fn update_frame<R>(
+        &self,
+        pointer: &Pointer,
+        update: impl FnOnce(&mut Frame) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        let mut frame = self.pointer_as_frame(pointer)?;
+        let result = update(&mut frame)?;
+        self.replace_frame(pointer, frame)?;
+        Ok(result)
+    }
+
     pub fn alloc_tuple(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
         self.alloc_slot(Value::Tuple(values))
     }
@@ -277,7 +306,7 @@ impl Heap {
 
     pub fn alloc_closure(
         &self,
-        env: Env,
+        env: Environment,
         param: Symbol,
         param_ty: Type,
         typ: Type,
@@ -428,7 +457,7 @@ impl Deref for ValueRef {
 
 #[derive(Clone)]
 pub struct Closure {
-    pub env: Env,
+    pub env: Environment,
     pub param: Symbol,
     pub param_ty: Type,
     pub typ: Type,
@@ -463,6 +492,7 @@ pub enum Value {
     Dict(BTreeMap<Symbol, Pointer>),
     Adt(Symbol, Vec<Pointer>),
     Uninitialized(Symbol),
+    Frame(Frame),
     Closure(Closure),
     Native(NativeFn),
     Overloaded(OverloadedFn),
@@ -491,6 +521,7 @@ impl Value {
             Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
             Value::Adt(..) => "adt",
             Value::Uninitialized(..) => "uninitialized",
+            Value::Frame(..) => "frame",
             Value::Closure(..) => "closure",
             Value::Native(..) => "native",
             Value::Overloaded(..) => "overloaded",
@@ -637,6 +668,13 @@ impl Value {
         }
     }
 
+    pub fn value_as_frame(&self) -> Result<Frame, EngineError> {
+        match self {
+            Value::Frame(frame) => Ok(frame.clone()),
+            _ => Err(self.value_type_error("frame")),
+        }
+    }
+
     pub fn value_as_closure(&self) -> Result<Closure, EngineError> {
         match self {
             Value::Closure(v) => Ok(v.clone()),
@@ -741,7 +779,7 @@ fn pointer_display_inner(
 
 fn env_debug_inner(
     heap: &Heap,
-    env: &Env,
+    env: &Environment,
     active: &mut HashSet<PointerKey>,
 ) -> Result<String, EngineError> {
     let mut bindings = env.bindings().iter().collect::<Vec<_>>();
@@ -846,6 +884,7 @@ fn value_debug_inner(
             }
         }
         Value::Uninitialized(name) => format!("<uninitialized:{name}>"),
+        Value::Frame(frame) => format!("<frame:{frame:?}>"),
         Value::Closure(closure) => closure_debug_inner(heap, closure, active)?,
         Value::Native(native) => format!("<native:{}>", native.name()),
         Value::Overloaded(over) => format!("<overloaded:{}>", over.name()),
@@ -978,6 +1017,7 @@ fn value_display_inner(
             }
         }
         Value::Uninitialized(name) => format!("<uninitialized:{name}>"),
+        Value::Frame(frame) => format!("<frame:{frame:?}>"),
         Value::Closure(..) => "<closure>".to_string(),
         Value::Native(native) => format!("<native:{}>", native.name()),
         Value::Overloaded(over) => format!("<overloaded:{}>", over.name()),
@@ -1029,8 +1069,8 @@ fn pointer_eq_inner(
 
 fn env_eq_inner(
     heap: &Heap,
-    lhs: &Env,
-    rhs: &Env,
+    lhs: &Environment,
+    rhs: &Environment,
     seen: &mut HashSet<PointerPairKey>,
 ) -> Result<bool, EngineError> {
     if lhs.bindings().len() != rhs.bindings().len() {
@@ -1125,6 +1165,7 @@ fn value_eq_inner(
             Ok(true)
         }
         (Value::Uninitialized(lhs), Value::Uninitialized(rhs)) => Ok(lhs == rhs),
+        (Value::Frame(lhs), Value::Frame(rhs)) => Ok(lhs == rhs),
         (Value::Closure(lhs), Value::Closure(rhs)) => closure_eq_inner(heap, lhs, rhs, seen),
         (Value::Native(lhs), Value::Native(rhs)) => Ok(lhs == rhs),
         (Value::Overloaded(lhs), Value::Overloaded(rhs)) => Ok(lhs == rhs),

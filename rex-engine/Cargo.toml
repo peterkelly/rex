@@ -18,7 +18,6 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 rex-typesystem = { path = "../rex-typesystem", version = "3.9.12" }
-async-recursion = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 rex-lexer = { path = "../rex-lexer", version = "3.9.12" }

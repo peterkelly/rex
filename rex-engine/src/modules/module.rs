@@ -1,18 +1,17 @@
-use futures::FutureExt;
 use rex_ast::expr::{Decl, NameRef, TypeDecl, TypeExpr, TypeVariant, intern, sym};
 use rex_lexer::span::Span;
 use rex_typesystem::{
     types::collect_adts_in_types,
     types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeKind, TypeVar},
 };
-use rex_util::GasMeter;
 
 use crate::EvaluatorRef;
-use crate::engine::{AsyncHandler, Export, Handler, NativeFuture, apply, order_adt_family};
-use crate::evaluator::EvaluatorRef as RuntimeEvaluatorRef;
+use crate::engine::{
+    AsyncHandler, Export, Handler, NativeFuture, SchedulerNativeResult, order_adt_family,
+};
+use crate::stack::{NativeLogShow, NativeTask};
 use crate::{
-    CancellationToken, Engine, EngineError, FromPointer, IntoPointer, Pointer, ROOT_MODULE_NAME,
-    RexType, Value,
+    CancellationToken, Engine, EngineError, IntoPointer, Pointer, ROOT_MODULE_NAME, RexType, Value,
 };
 
 /// A staged host module that you build up in Rust and later inject into an [`Engine`].
@@ -406,44 +405,34 @@ where
         let name = name.into();
         let name_sym = sym(&name);
         let scheme = Self::tracing_log_scheme();
-        self.exports.push(Export::from_native_async(
+        self.exports.push(Export::from_native_scheduler(
             name,
             scheme,
             1,
             move |engine, call_type, args| {
                 let name_sym = name_sym.clone();
-                async move {
-                    if args.len() != 1 {
-                        return Err(EngineError::NativeArity {
-                            name: name_sym.clone(),
-                            expected: 1,
-                            got: args.len(),
-                        });
-                    }
-
-                    let (arg_ty, _ret_ty) = match call_type.as_ref() {
-                        TypeKind::Fun(arg, ret) => (arg.clone(), ret.clone()),
-                        _ => return Err(EngineError::NotCallable(call_type.to_string())),
-                    };
-                    let show_ty = Type::fun(arg_ty.clone(), Type::builtin(BuiltinTypeId::String));
-                    let mut gas = GasMeter::default();
-                    let show_ptr = RuntimeEvaluatorRef::new(&engine)
-                        .resolve_class_method(&sym("show"), &show_ty, &mut gas)
-                        .await?;
-                    let rendered_ptr = apply(
-                        &engine,
-                        show_ptr,
-                        args[0],
-                        Some(&show_ty),
-                        Some(&arg_ty),
-                        &mut gas,
-                    )
-                    .await?;
-                    let rendered = String::from_pointer(&engine.heap, &rendered_ptr)?;
-                    log(&rendered);
-                    engine.heap.alloc_string(rendered)
+                if args.len() != 1 {
+                    return Err(EngineError::NativeArity {
+                        name: name_sym.clone(),
+                        expected: 1,
+                        got: args.len(),
+                    });
                 }
-                .boxed()
+
+                let (arg_ty, _ret_ty) = match call_type.as_ref() {
+                    TypeKind::Fun(arg, ret) => (arg.clone(), ret.clone()),
+                    _ => return Err(EngineError::NotCallable(call_type.to_string())),
+                };
+                let show_ty = Type::fun(arg_ty.clone(), Type::builtin(BuiltinTypeId::String));
+                let _ = engine;
+                Ok(SchedulerNativeResult::Task(NativeTask::LogShow(
+                    NativeLogShow {
+                        show_type: show_ty,
+                        arg_type: arg_ty,
+                        arg: args[0],
+                        log,
+                    },
+                )))
             },
         )?);
         Ok(())
@@ -481,7 +470,7 @@ where
     /// );
     ///
     /// module
-    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<'_, ()>, _typ: &Type, args: &[Pointer]| {
+    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Pointer]| {
     ///         Ok(args[0].clone())
     ///     })
     ///     .unwrap();
@@ -494,11 +483,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                &'a Type,
-                &'a [Pointer],
-            ) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
@@ -517,11 +502,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                &'a Type,
-                &'a [Pointer],
-            ) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
@@ -552,7 +533,7 @@ where
     ///         "answer_async",
     ///         scheme,
     ///         0,
-    ///         |engine: EvaluatorRef<'_, ()>, _typ: Type, _args: Vec<Pointer>| {
+    ///         |engine: EvaluatorRef<()>, _typ: Type, _args: Vec<Pointer>| {
     ///             async move { engine.heap.alloc_i32(42) }.boxed()
     ///         },
     ///     )
@@ -566,10 +547,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
     {
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);
@@ -585,10 +563,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
     {
         self.exports.push(Export::from_native_async_with_gas_cost(
             name, scheme, arity, gas_cost, handler,
@@ -604,12 +579,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                CancellationToken,
-                Type,
-                &'a [Pointer],
-            ) -> NativeFuture<'a>
+        F: Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
             + Send
             + Sync
             + 'static,
@@ -626,12 +596,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                CancellationToken,
-                Type,
-                &'a [Pointer],
-            ) -> NativeFuture<'a>
+        F: Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
             + Send
             + Sync
             + 'static,

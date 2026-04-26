@@ -17,9 +17,9 @@ use crate::engine::{
     eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
-use crate::value::Value;
 use crate::{
-    CompileError, Compiler, EngineError, Env, EvalError, ExecutionError, Pointer, RuntimeEnv,
+    CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, Pointer,
+    RuntimeEnv,
 };
 
 pub struct Evaluator<State = ()>
@@ -30,12 +30,29 @@ where
     pub(crate) compiler: Option<Compiler<State>>,
 }
 
-#[derive(Clone, Copy)]
-pub struct EvaluatorRef<'a, State = ()>
+#[derive(Clone)]
+pub struct EvaluatorRef<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    runtime: &'a RuntimeSnapshot<State>,
+    runtime: RuntimeSnapshot<State>,
+    #[allow(dead_code)]
+    #[doc(hidden)]
+    pub context: EvalContext,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct EvalContext {
+    pub parent: Option<Pointer>,
+}
+
+impl EvalContext {
+    pub(crate) fn child(parent: Pointer) -> Self {
+        Self {
+            parent: Some(parent),
+        }
+    }
 }
 
 impl<State> Evaluator<State>
@@ -56,7 +73,7 @@ where
         }
     }
 
-    pub(crate) fn sync_runtime_from_compiler(&mut self) {
+    fn sync_runtime_from_compiler(&mut self) {
         if let Some(compiler) = &self.compiler {
             self.runtime.sync_from_engine(&compiler.engine);
         }
@@ -67,16 +84,6 @@ where
         program: &CompiledProgram,
         gas: &mut GasMeter,
     ) -> Result<Pointer, EvalError> {
-        self.run_internal(program, gas)
-            .await
-            .map_err(EvalError::from)
-    }
-
-    pub(crate) async fn run_internal(
-        &mut self,
-        program: &CompiledProgram,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
         check_runtime_cancelled(&self.runtime.runtime)?;
         self.runtime.validate_internal(program)?;
         eval_typed_expr(
@@ -86,6 +93,7 @@ where
             gas,
         )
         .await
+        .map_err(EvalError::from)
     }
 
     pub async fn eval(
@@ -97,7 +105,7 @@ where
             .await
     }
 
-    pub async fn run_prepared(
+    async fn run_prepared(
         &mut self,
         program: CompiledProgram,
         gas: &mut GasMeter,
@@ -108,7 +116,7 @@ where
         Ok((value, typ))
     }
 
-    pub(crate) async fn prepare_and_run<F>(
+    async fn prepare_and_run<F>(
         &mut self,
         gas: &mut GasMeter,
         compile: F,
@@ -237,19 +245,26 @@ where
     }
 }
 
-impl<'a, State> EvaluatorRef<'a, State>
+impl<State> EvaluatorRef<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(runtime: &'a RuntimeSnapshot<State>) -> Self {
-        Self { runtime }
+    pub(crate) fn new_with_context(runtime: &RuntimeSnapshot<State>, context: EvalContext) -> Self {
+        Self {
+            runtime: runtime.clone(),
+            context,
+        }
+    }
+
+    pub(crate) fn new_with_parent(runtime: &RuntimeSnapshot<State>, parent: Pointer) -> Self {
+        Self::new_with_context(runtime, EvalContext::child(parent))
     }
 
     fn resolve_typeclass_method_impl(
         &self,
         name: &Symbol,
         call_type: &Type,
-    ) -> Result<(Env, Arc<TypedExpr>, Subst), EngineError> {
+    ) -> Result<(Environment, Arc<TypedExpr>, Subst), EngineError> {
         let info = self
             .runtime
             .type_system
@@ -276,7 +291,7 @@ where
             .resolve(&info.class, name, &param_type)
     }
 
-    fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
+    pub(crate) fn cached_class_method(&self, name: &Symbol, typ: &Type) -> Option<Pointer> {
         if !typ.ftv().is_empty() {
             return None;
         }
@@ -284,19 +299,11 @@ where
         cache.get(&(name.clone(), typ.clone())).cloned()
     }
 
-    fn insert_cached_class_method(&self, name: &Symbol, typ: &Type, pointer: &Pointer) {
-        if typ.ftv().is_empty()
-            && let Ok(mut cache) = self.runtime.typeclass_cache.lock()
-        {
-            cache.insert((name.clone(), typ.clone()), *pointer);
-        }
-    }
-
-    fn resolve_class_method_plan(
+    pub(crate) fn resolve_class_method_plan(
         &self,
         name: &Symbol,
         typ: &Type,
-    ) -> Result<Result<(Env, TypedExpr), Pointer>, EngineError> {
+    ) -> Result<Result<(Environment, TypedExpr), Pointer>, EngineError> {
         let (def_env, typed, s) = match self.resolve_typeclass_method_impl(name, typ) {
             Ok(res) => res,
             Err(EngineError::AmbiguousOverload { .. }) if is_function_type(typ) => {
@@ -312,29 +319,6 @@ where
         };
         let specialized = typed.as_ref().apply(&s);
         Ok(Ok((def_env, specialized)))
-    }
-
-    pub(crate) async fn resolve_class_method(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(pointer) = self.cached_class_method(name, typ) {
-            return Ok(pointer);
-        }
-
-        let pointer = match self.resolve_class_method_plan(name, typ)? {
-            Ok((def_env, specialized)) => {
-                eval_typed_expr(self.runtime, &def_env, &specialized, gas).await?
-            }
-            Err(pointer) => pointer,
-        };
-
-        if typ.ftv().is_empty() {
-            self.insert_cached_class_method(name, typ, &pointer);
-        }
-        Ok(pointer)
     }
 
     pub(crate) fn resolve_native_impl(
@@ -420,56 +404,15 @@ where
             }
         }
     }
-
-    pub(crate) async fn resolve_global(
-        &self,
-        name: &Symbol,
-        typ: &Type,
-    ) -> Result<Pointer, EngineError> {
-        if let Some(ptr) = self.runtime.env.get(name) {
-            let value = self.runtime.heap.get(&ptr)?;
-            match value.as_ref() {
-                Value::Native(native) if native.is_zero_unapplied() => {
-                    let mut gas = GasMeter::default();
-                    native.call_zero(self.runtime, &mut gas).await
-                }
-                _ => Ok(ptr),
-            }
-        } else if self.runtime.type_system.class_methods.contains_key(name) {
-            let mut gas = GasMeter::default();
-            self.resolve_class_method(name, typ, &mut gas).await
-        } else {
-            let mut gas = GasMeter::default();
-            let pointer = self.resolve_native(name.as_ref(), typ, &mut gas)?;
-            let value = self.runtime.heap.get(&pointer)?;
-            match value.as_ref() {
-                Value::Native(native) if native.is_zero_unapplied() => {
-                    let mut gas = GasMeter::default();
-                    native.call_zero(self.runtime, &mut gas).await
-                }
-                _ => Ok(pointer),
-            }
-        }
-    }
-
-    pub(crate) async fn call_native_impl(
-        &self,
-        name: &str,
-        typ: &Type,
-        args: &[Pointer],
-    ) -> Result<Pointer, EngineError> {
-        let imp = self.resolve_native_impl(name, typ)?;
-        imp.func.call(self.runtime, typ.clone(), args).await
-    }
 }
 
-impl<'a, State> Deref for EvaluatorRef<'a, State>
+impl<State> Deref for EvaluatorRef<State>
 where
     State: Clone + Send + Sync + 'static,
 {
     type Target = RuntimeSnapshot<State>;
 
     fn deref(&self) -> &Self::Target {
-        self.runtime
+        &self.runtime
     }
 }

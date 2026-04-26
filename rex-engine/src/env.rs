@@ -6,37 +6,37 @@ use rex_ast::expr::Symbol;
 use crate::value::Pointer;
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct Env(Arc<EnvFrame>);
+pub struct Environment(Arc<EnvEntry>);
 
 #[derive(Default, Debug, PartialEq)]
-struct EnvFrame {
-    parent: Option<Env>,
+struct EnvEntry {
+    parent: Option<Environment>,
     bindings: BTreeMap<Symbol, Pointer>,
 }
 
-impl Env {
+impl Environment {
     pub fn new() -> Self {
-        Env(Arc::new(EnvFrame::default()))
+        Environment(Arc::new(EnvEntry::default()))
     }
 
     pub fn extend(&self, name: Symbol, value: Pointer) -> Self {
         let mut bindings = BTreeMap::new();
         bindings.insert(name, value);
-        Env(Arc::new(EnvFrame {
+        Environment(Arc::new(EnvEntry {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
     pub fn extend_many(&self, bindings: BTreeMap<Symbol, Pointer>) -> Self {
-        Env(Arc::new(EnvFrame {
+        Environment(Arc::new(EnvEntry {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
     pub fn get(&self, name: &Symbol) -> Option<Pointer> {
-        let mut current: Option<&Env> = Some(self);
+        let mut current: Option<&Environment> = Some(self);
         while let Some(env) = current {
             if let Some(v) = env.0.bindings.get(name) {
                 return Some(*v);
@@ -46,7 +46,7 @@ impl Env {
         None
     }
 
-    pub(crate) fn parent(&self) -> Option<&Env> {
+    pub(crate) fn parent(&self) -> Option<&Environment> {
         self.0.parent.as_ref()
     }
 
@@ -55,7 +55,7 @@ impl Env {
     }
 }
 
-impl Default for Env {
+impl Default for Environment {
     fn default() -> Self {
         Self::new()
     }
