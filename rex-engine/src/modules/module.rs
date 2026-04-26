@@ -470,7 +470,7 @@ where
     /// );
     ///
     /// module
-    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<'_, ()>, _typ: &Type, args: &[Pointer]| {
+    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Pointer]| {
     ///         Ok(args[0].clone())
     ///     })
     ///     .unwrap();
@@ -483,11 +483,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                &'a Type,
-                &'a [Pointer],
-            ) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
@@ -506,11 +502,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                &'a Type,
-                &'a [Pointer],
-            ) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
             + Send
             + Sync
             + 'static,
@@ -541,7 +533,7 @@ where
     ///         "answer_async",
     ///         scheme,
     ///         0,
-    ///         |engine: EvaluatorRef<'_, ()>, _typ: Type, _args: Vec<Pointer>| {
+    ///         |engine: EvaluatorRef<()>, _typ: Type, _args: Vec<Pointer>| {
     ///             async move { engine.heap.alloc_i32(42) }.boxed()
     ///         },
     ///     )
@@ -555,10 +547,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
     {
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);
@@ -574,10 +563,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<'a, State>, Type, Vec<Pointer>) -> NativeFuture<'a>
-            + Send
-            + Sync
-            + 'static,
+        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
     {
         self.exports.push(Export::from_native_async_with_gas_cost(
             name, scheme, arity, gas_cost, handler,
@@ -593,12 +579,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                CancellationToken,
-                Type,
-                &'a [Pointer],
-            ) -> NativeFuture<'a>
+        F: Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
             + Send
             + Sync
             + 'static,
@@ -615,12 +596,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(
-                EvaluatorRef<'a, State>,
-                CancellationToken,
-                Type,
-                &'a [Pointer],
-            ) -> NativeFuture<'a>
+        F: Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
             + Send
             + Sync
             + 'static,

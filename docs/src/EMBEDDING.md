@@ -391,11 +391,14 @@ APIs and provide an explicit `Scheme` + arity:
 - `Module::export_native`
 - `Module::export_native_async`
 
-These callbacks receive `EvaluatorRef<'_, State>` (not just `&State`), so they can:
+These callbacks receive `EvaluatorRef<State>` (not just `&State`), so they can:
 
 - read state via `engine.state`
 - allocate new values via `engine.heap`
 - inspect typed call information via the explicit `&Type` / `Type` callback parameter
+
+Async native callbacks receive owned argument vectors and return `Send + 'static` futures so the
+runtime can suspend them as explicit pending evaluation frames.
 
 ```rust
 use futures::FutureExt;
@@ -408,12 +411,12 @@ engine.add_default_resolvers();
 let mut m = Module::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
-m.export_native("id_ptr", scheme.clone(), 1, |_engine: EvaluatorRef<'_, ()>, _typ: &Type, args: &[Pointer]| {
+m.export_native("id_ptr", scheme.clone(), 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Pointer]| {
     Ok(args[0].clone())
 })?;
 
-m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: EvaluatorRef<'_, ()>, _typ: Type, _args: Vec<Pointer>| {
-    async move { engine.heap.alloc_i32(42) }.boxed_local()
+m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: EvaluatorRef<()>, _typ: Type, _args: Vec<Pointer>| {
+    async move { engine.heap.alloc_i32(42) }.boxed()
 })?;
 
 engine.inject_module(m)?;
@@ -456,7 +459,7 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
 - If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
 - `export` / `export_async` callbacks receive `&State` as their first parameter.
 - Pointer-level APIs (`export_native*`) receive
-  `EvaluatorRef<'_, State>` so
+  `EvaluatorRef<State>` so
   they can use heap/runtime internals and read `engine.state`.
 
 ```rust
@@ -742,7 +745,7 @@ globals.export_native_async_cancellable("stall", scheme, 0, |engine, token: Canc
             token.cancelled().await;
             engine.heap.alloc_i32(0)
         }
-        .boxed_local()
+        .boxed()
     })?;
 engine.inject_module(globals)?;
 

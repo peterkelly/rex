@@ -752,7 +752,7 @@ fn engine_export_native_rejects_invalid_arity_scheme_pair() {
             "bad",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<'_, ()>, _: &Type, _args| {
+            |_engine: EvaluatorRef<()>, _: &Type, _args| {
                 Err(rex_engine::EngineError::Internal("unused".into()))
             },
         )
@@ -781,7 +781,7 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
             "bad_async",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<'_, ()>, _: Type, _args| {
+            |_engine: EvaluatorRef<()>, _: Type, _args| {
                 async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed()
             },
         )

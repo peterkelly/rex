@@ -553,7 +553,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "pick",
             i32_binop_scheme(),
             2,
-            |engine: EvaluatorRef<'_, bool>, _: &Type, args: &[Pointer]| {
+            |engine: EvaluatorRef<bool>, _: &Type, args: &[Pointer]| {
                 let idx = if *engine.state.as_ref() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
@@ -566,7 +566,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "heap_i32",
             i32_value_scheme(),
             0,
-            |engine: EvaluatorRef<'_, bool>, _: &Type, _args| engine.heap.alloc_i32(123),
+            |engine: EvaluatorRef<bool>, _: &Type, _args| engine.heap.alloc_i32(123),
         )
         .unwrap();
 
@@ -575,7 +575,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     module
         .export_native("pick_typed", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: EvaluatorRef<'_, bool>, typ: &Type, args: &[Pointer]| {
+            move |engine: EvaluatorRef<bool>, typ: &Type, args: &[Pointer]| {
                 if typ == &expected_type {
                     typed_called.store(true, Ordering::Relaxed);
                 }
@@ -695,7 +695,7 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
             "make_run_spec",
             Scheme::new(vec![], vec![], LocalRunSpec::rex_type()),
             0,
-            |engine: EvaluatorRef<'_, ()>, _typ: &Type, _args: &[Pointer]| {
+            |engine: EvaluatorRef<()>, _typ: &Type, _args: &[Pointer]| {
                 engine.heap.alloc_adt(sym("Pending"), vec![])
             },
         )
@@ -727,7 +727,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "pick_async",
             i32_binop_scheme(),
             2,
-            |engine: EvaluatorRef<'_, bool>, _: Type, args: Vec<Pointer>| {
+            |engine: EvaluatorRef<bool>, _: Type, args: Vec<Pointer>| {
                 let idx = if *engine.state.as_ref() { 1 } else { 0 };
                 async move {
                     args.get(idx)
@@ -743,7 +743,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "heap_i32_async",
             i32_value_scheme(),
             0,
-            |engine: EvaluatorRef<'_, bool>, _: Type, _args: Vec<Pointer>| {
+            |engine: EvaluatorRef<bool>, _: Type, _args: Vec<Pointer>| {
                 async move { engine.heap.alloc_i32(77) }.boxed()
             },
         )
@@ -754,7 +754,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     module
         .export_native_async("pick_typed_async", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: EvaluatorRef<'_, bool>, typ: Type, args: Vec<Pointer>| {
+            move |engine: EvaluatorRef<bool>, typ: Type, args: Vec<Pointer>| {
                 let type_match = typ == expected_type;
                 let idx = if *engine.state.as_ref() { 1 } else { 0 };
                 let typed_called = Arc::clone(&typed_called);
@@ -823,7 +823,7 @@ fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<'_, ()>, _: &Type, _args: &[Pointer]| {
+            |_engine: EvaluatorRef<()>, _: &Type, _args: &[Pointer]| {
                 Err(rex_engine::EngineError::Internal("unused".into()))
             },
         )
@@ -845,7 +845,7 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad_async",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<'_, ()>, _: Type, _args: Vec<Pointer>| {
+            |_engine: EvaluatorRef<()>, _: Type, _args: Vec<Pointer>| {
                 async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed()
             },
         )
@@ -1445,7 +1445,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
             "pending",
             Scheme::new(vec![], vec![], Type::con("RunSpec", 0)),
             0,
-            |engine: EvaluatorRef<'_, ()>, _: &Type, _args| {
+            |engine: EvaluatorRef<()>, _: &Type, _args| {
                 engine.heap.alloc_adt(sym("Pending"), vec![])
             },
         )

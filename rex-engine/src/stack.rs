@@ -32,6 +32,7 @@ pub enum Frame {
     Ite(FrIte),
     Match(FrMatch),
     NativeCall(FrNativeCall),
+    NativeAsync(FrNativeAsync),
 }
 
 impl Frame {
@@ -58,6 +59,7 @@ impl Frame {
             Frame::Ite(frame) => &frame.parent,
             Frame::Match(frame) => &frame.parent,
             Frame::NativeCall(frame) => &frame.parent,
+            Frame::NativeAsync(frame) => &frame.parent,
         }
     }
 
@@ -84,6 +86,7 @@ impl Frame {
             Frame::Ite(frame) => &frame.expr,
             Frame::Match(frame) => &frame.expr,
             Frame::NativeCall(_) => panic!("native call frames do not carry typed expressions"),
+            Frame::NativeAsync(_) => panic!("native async frames do not carry typed expressions"),
         }
     }
 
@@ -110,6 +113,7 @@ impl Frame {
             Frame::Ite(frame) => &frame.env,
             Frame::Match(frame) => &frame.env,
             Frame::NativeCall(_) => panic!("native call frames do not carry environments"),
+            Frame::NativeAsync(_) => panic!("native async frames do not carry environments"),
         }
     }
 }
@@ -563,4 +567,9 @@ pub struct FrNativeCall {
     pub parent: Pointer,
     pub state: FrNativeCallState,
     pub task: NativeTask,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrNativeAsync {
+    pub parent: Pointer,
 }

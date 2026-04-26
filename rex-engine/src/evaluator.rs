@@ -32,12 +32,12 @@ where
     pub(crate) compiler: Option<Compiler<State>>,
 }
 
-#[derive(Clone, Copy)]
-pub struct EvaluatorRef<'a, State = ()>
+#[derive(Clone)]
+pub struct EvaluatorRef<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    runtime: &'a RuntimeSnapshot<State>,
+    runtime: RuntimeSnapshot<State>,
     #[allow(dead_code)]
     context: EvalContext,
 }
@@ -259,18 +259,18 @@ where
     }
 }
 
-impl<'a, State> EvaluatorRef<'a, State>
+impl<State> EvaluatorRef<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new_with_context(
-        runtime: &'a RuntimeSnapshot<State>,
-        context: EvalContext,
-    ) -> Self {
-        Self { runtime, context }
+    pub(crate) fn new_with_context(runtime: &RuntimeSnapshot<State>, context: EvalContext) -> Self {
+        Self {
+            runtime: runtime.clone(),
+            context,
+        }
     }
 
-    pub(crate) fn new_with_parent(runtime: &'a RuntimeSnapshot<State>, parent: Pointer) -> Self {
+    pub(crate) fn new_with_parent(runtime: &RuntimeSnapshot<State>, parent: Pointer) -> Self {
         Self::new_with_context(runtime, EvalContext::child(parent))
     }
 
@@ -289,7 +289,7 @@ where
         gas: &mut GasMeter,
     ) -> Result<Pointer, EngineError> {
         apply_with_context(
-            self.runtime,
+            &self.runtime,
             func,
             arg,
             func_type,
@@ -446,13 +446,13 @@ where
     }
 }
 
-impl<'a, State> Deref for EvaluatorRef<'a, State>
+impl<State> Deref for EvaluatorRef<State>
 where
     State: Clone + Send + Sync + 'static,
 {
     type Target = RuntimeSnapshot<State>;
 
     fn deref(&self) -> &Self::Target {
-        self.runtime
+        &self.runtime
     }
 }
