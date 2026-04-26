@@ -2725,7 +2725,7 @@ where
         result
     }
 
-    fn inject_root_export(&mut self, export: Export<State>) -> Result<(), EngineError> {
+    pub(crate) fn inject_root_export(&mut self, export: Export<State>) -> Result<(), EngineError> {
         self.inject_module_export(ROOT_MODULE_NAME, export)
     }
 
@@ -2849,20 +2849,6 @@ where
         Ok(())
     }
 
-    #[cfg(test)]
-    pub(crate) fn export_native_async<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
-    {
-        self.export_native_async_with_gas_cost(name, scheme, arity, 0, handler)
-    }
-
     pub(crate) fn export_native_scheduler<F>(
         &mut self,
         name: impl Into<String>,
@@ -2917,29 +2903,6 @@ where
         let func: SyncNativeCallable<State> =
             Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
         let registration = NativeRegistration::sync(scheme, arity, func, gas_cost);
-        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn export_native_async_with_gas_cost<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
-    {
-        validate_native_export_scheme(&scheme, arity)?;
-        let name = name.into();
-        let handler = Arc::new(handler);
-        let func: AsyncNativeCallable<State> = Arc::new(move |engine, typ, args| {
-            let handler = Arc::clone(&handler);
-            handler(engine, typ, args)
-        });
-        let registration = NativeRegistration::r#async(scheme, arity, func, gas_cost);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
@@ -4259,7 +4222,7 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
     }
 }
 
-fn resolve_arg_type(
+pub(crate) fn resolve_arg_type(
     heap: &Heap,
     arg_type: Option<&Type>,
     arg: &Pointer,
@@ -4281,22 +4244,6 @@ fn resolve_arg_type(
     }
 }
 
-#[cfg(test)]
-fn callable_pointer_type<State: Clone + Send + Sync + 'static>(
-    runtime: &RuntimeSnapshot<State>,
-    func: &Pointer,
-) -> Result<Type, EngineError> {
-    let value = runtime.heap.get(func)?;
-    match value.as_ref() {
-        Value::Closure(Closure { typ, .. }) => Ok(typ.clone()),
-        Value::Native(native) => Ok(native.typ.clone()),
-        Value::Overloaded(over) => Ok(over.typ.clone()),
-        _ => Err(EngineError::NotCallable(
-            runtime.heap.type_name(func)?.into(),
-        )),
-    }
-}
-
 fn application_result_type(func_type: &Type, arg_type: &Type) -> Result<Type, EngineError> {
     let (expected_arg, result) =
         split_fun(func_type).ok_or_else(|| EngineError::NotCallable(func_type.to_string()))?;
@@ -4307,7 +4254,7 @@ fn application_result_type(func_type: &Type, arg_type: &Type) -> Result<Type, En
     Ok(result.apply(&subst))
 }
 
-fn synthetic_application_expr(
+pub(crate) fn synthetic_application_expr(
     func: Pointer,
     func_type: Type,
     args: &[(Pointer, Type)],
@@ -4371,22 +4318,6 @@ fn synthetic_application_expr_from_head(
     }
 
     Ok((env, expr))
-}
-
-#[cfg(test)]
-async fn eval_synthetic_application<State: Clone + Send + Sync + 'static>(
-    runtime: &RuntimeSnapshot<State>,
-    func: Pointer,
-    func_type: Type,
-    args: &[(Pointer, Type)],
-    gas: &mut GasMeter,
-    context: EvalContext,
-) -> Result<Pointer, EngineError> {
-    let (env, expr) = synthetic_application_expr(func, func_type, args)?;
-    match context.parent() {
-        Some(parent) => eval_typed_expr_child(runtime, parent, &env, &expr, gas).await,
-        None => eval_typed_expr(runtime, &env, &expr, gas).await,
-    }
 }
 
 pub(crate) fn binary_arg_types(typ: &Type) -> Result<(Type, Type), EngineError> {
@@ -4529,29 +4460,14 @@ where
     eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr, gas).await
 }
 
-#[cfg(test)]
-pub(crate) async fn eval_typed_expr_child<State>(
-    runtime: &RuntimeSnapshot<State>,
-    parent: Pointer,
-    env: &Environment,
-    expr: &TypedExpr,
-    gas: &mut GasMeter,
-) -> Result<Pointer, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    check_runtime_cancelled(runtime)?;
-    eval_typed_expr_from_parent(runtime, parent, EvalStop::Parent(parent), env, expr, gas).await
-}
-
 #[derive(Clone, Copy)]
-enum EvalStop {
+pub(crate) enum EvalStop {
     RootSentinel,
-    #[cfg(test)]
+    #[allow(dead_code)]
     Parent(Pointer),
 }
 
-async fn eval_typed_expr_from_parent<State>(
+pub(crate) async fn eval_typed_expr_from_parent<State>(
     runtime: &RuntimeSnapshot<State>,
     initial_parent: Pointer,
     stop: EvalStop,
@@ -4609,7 +4525,6 @@ where
                             return Ok(value);
                         }
                     }
-                    #[cfg(test)]
                     EvalStop::Parent(stop_parent) => {
                         if parent == stop_parent {
                             return Ok(value);
@@ -6841,27 +6756,6 @@ fn unexpected_child_result<T>(frame: &'static str) -> Result<T, EngineError> {
     Err(EngineError::Internal(format!(
         "{frame} frame received an unexpected child result"
     )))
-}
-
-#[cfg(test)]
-pub(crate) async fn apply_with_context<State>(
-    runtime: &RuntimeSnapshot<State>,
-    func: Pointer,
-    arg: Pointer,
-    func_type: Option<&Type>,
-    arg_type: Option<&Type>,
-    gas: &mut GasMeter,
-    context: EvalContext,
-) -> Result<Pointer, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let func_type = match func_type {
-        Some(typ) => typ.clone(),
-        None => callable_pointer_type(runtime, &func)?,
-    };
-    let arg_type = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
-    eval_synthetic_application(runtime, func, func_type, &[(arg, arg_type)], gas, context).await
 }
 
 fn match_pattern_ptr(

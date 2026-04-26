@@ -13,6 +13,8 @@ mod modules;
 mod prelude;
 mod runtime_env;
 mod stack;
+#[cfg(test)]
+pub(crate) mod test_helpers;
 mod value;
 
 pub use cancel::CancellationToken;

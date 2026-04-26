@@ -12,8 +12,6 @@ use rex_typesystem::{
 };
 use rex_util::{GasMeter, sha256_hex};
 
-#[cfg(test)]
-use crate::engine::apply_with_context;
 use crate::engine::{
     CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, check_runtime_cancelled,
     eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
@@ -39,12 +37,12 @@ where
 {
     runtime: RuntimeSnapshot<State>,
     #[allow(dead_code)]
-    context: EvalContext,
+    pub(crate) context: EvalContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct EvalContext {
-    parent: Option<Pointer>,
+    pub(crate) parent: Option<Pointer>,
 }
 
 impl EvalContext {
@@ -52,11 +50,6 @@ impl EvalContext {
         Self {
             parent: Some(parent),
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn parent(self) -> Option<Pointer> {
-        self.parent
     }
 }
 
@@ -272,32 +265,6 @@ where
 
     pub(crate) fn new_with_parent(runtime: &RuntimeSnapshot<State>, parent: Pointer) -> Self {
         Self::new_with_context(runtime, EvalContext::child(parent))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn parent_frame(&self) -> Option<Pointer> {
-        self.context.parent()
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn apply_pointer(
-        &self,
-        func: Pointer,
-        arg: Pointer,
-        func_type: Option<&Type>,
-        arg_type: Option<&Type>,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
-        apply_with_context(
-            &self.runtime,
-            func,
-            arg,
-            func_type,
-            arg_type,
-            gas,
-            self.context,
-        )
-        .await
     }
 
     fn resolve_typeclass_method_impl(
