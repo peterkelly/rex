@@ -7,7 +7,7 @@ use rex_typesystem::{
 
 use crate::EvaluatorRef;
 use crate::engine::{
-    AsyncHandler, Export, Handler, NativeFuture, SchedulerNativeResult, order_adt_family,
+    Export, HostFnAsync, HostFnSync, NativeFuture, SchedulerNativeResult, order_adt_family,
 };
 use crate::stack::{NativeLogShow, NativeTask};
 use crate::{Engine, EngineError, IntoPointer, Pointer, ROOT_MODULE_NAME, RexType, Value};
@@ -360,7 +360,7 @@ where
     /// ```
     pub fn export<Sig, H>(&mut self, name: impl Into<String>, handler: H) -> Result<(), EngineError>
     where
-        H: Handler<State, Sig>,
+        H: HostFnSync<State, Sig>,
     {
         self.exports.push(Export::from_handler(name, handler)?);
         Ok(())
@@ -387,7 +387,7 @@ where
         handler: H,
     ) -> Result<(), EngineError>
     where
-        H: AsyncHandler<State, Sig>,
+        H: HostFnAsync<State, Sig>,
     {
         self.exports
             .push(Export::from_async_handler(name, handler)?);

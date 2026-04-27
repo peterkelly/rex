@@ -371,7 +371,7 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
     }
 }
 
-pub trait Handler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
+pub trait HostFnSync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
     fn interface_decl(export_name: &str) -> DeclareFnDecl;
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         Self::interface_decl(export_name)
@@ -379,7 +379,7 @@ pub trait Handler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'sta
     fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError>;
 }
 
-pub trait AsyncHandler<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
+pub trait HostFnAsync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
     fn interface_decl(export_name: &str) -> DeclareFnDecl;
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         Self::interface_decl(export_name)
@@ -423,7 +423,7 @@ where
 
     pub fn from_handler<Sig, H>(name: impl Into<String>, handler: H) -> Result<Self, EngineError>
     where
-        H: Handler<State, Sig>,
+        H: HostFnSync<State, Sig>,
     {
         let name = name.into();
         let normalized = normalize_name(&name).to_string();
@@ -438,7 +438,7 @@ where
         handler: H,
     ) -> Result<Self, EngineError>
     where
-        H: AsyncHandler<State, Sig>,
+        H: HostFnAsync<State, Sig>,
     {
         let name = name.into();
         let normalized = normalize_name(&name).to_string();
@@ -924,7 +924,7 @@ fn validate_native_export_scheme(scheme: &Scheme, arity: usize) -> Result<(), En
 
 macro_rules! define_handler_impl {
     ([] ; $arity:literal ; $sig:ty) => {
-        impl<State, F, R> Handler<State, $sig> for F
+        impl<State, F, R> HostFnSync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State) -> Result<R, EngineError> + Send + Sync + 'static,
@@ -962,7 +962,7 @@ macro_rules! define_handler_impl {
 
     };
     ([ $(($arg_ty:ident, $arg_name:ident, $idx:tt)),+ ] ; $arity:literal ; $sig:ty) => {
-        impl<State, F, R, $($arg_ty),+> Handler<State, $sig> for F
+        impl<State, F, R, $($arg_ty),+> HostFnSync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State, $($arg_ty),+) -> Result<R, EngineError> + Send + Sync + 'static,
@@ -1005,7 +1005,7 @@ macro_rules! define_handler_impl {
     };
 }
 
-impl<State> Handler<State, NativeCallableSig> for (Scheme, usize, SyncNativeCallable<State>)
+impl<State> HostFnSync<State, NativeCallableSig> for (Scheme, usize, SyncNativeCallable<State>)
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -1028,7 +1028,7 @@ where
 
 macro_rules! define_async_handler_impl {
     ([] ; $arity:literal ; $sig:ty) => {
-        impl<State, F, Fut, R> AsyncHandler<State, $sig> for F
+        impl<State, F, Fut, R> HostFnAsync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State) -> Fut + Send + Sync + 'static,
@@ -1072,7 +1072,7 @@ macro_rules! define_async_handler_impl {
         }
     };
     ([ $(($arg_ty:ident, $arg_name:ident, $idx:tt)),+ ] ; $arity:literal ; $sig:ty) => {
-        impl<State, F, Fut, R, $($arg_ty),+> AsyncHandler<State, $sig> for F
+        impl<State, F, Fut, R, $($arg_ty),+> HostFnAsync<State, $sig> for F
         where
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State, $($arg_ty),+) -> Fut + Send + Sync + 'static,
@@ -1121,7 +1121,7 @@ macro_rules! define_async_handler_impl {
     };
 }
 
-impl<State> AsyncHandler<State, AsyncNativeCallableSig>
+impl<State> HostFnAsync<State, AsyncNativeCallableSig>
     for (Scheme, usize, AsyncNativeCallable<State>)
 where
     State: Clone + Send + Sync + 'static,
@@ -2543,7 +2543,7 @@ where
         handler: H,
     ) -> Result<(), EngineError>
     where
-        H: Handler<State, Sig>,
+        H: HostFnSync<State, Sig>,
     {
         self.inject_root_export(Export::from_handler(name, handler)?)
     }

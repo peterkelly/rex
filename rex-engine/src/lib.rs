@@ -16,9 +16,9 @@ mod value;
 
 pub use compiler::Compiler;
 pub use engine::{
-    AsyncHandler, AsyncNativeCallable, ClassMethodCapability, ClassMethodRequirement,
-    CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine, EngineOptions, Export,
-    Handler, NativeCapability, NativeFn, NativeFuture, NativeRequirement, OverloadedFn,
+    AsyncNativeCallable, ClassMethodCapability, ClassMethodRequirement, CompiledExterns,
+    CompiledProgram, CompiledProgramBoundary, Engine, EngineOptions, Export, HostFnAsync,
+    HostFnSync, NativeCapability, NativeFn, NativeFuture, NativeRequirement, OverloadedFn,
     PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault, RuntimeCapabilities,
     RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable, apply_with_context,
     collect_adts_error_to_engine,

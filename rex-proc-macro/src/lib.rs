@@ -114,7 +114,7 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             ) -> Result<(), ::rex::EngineError>
             where
                 State: Clone + Send + Sync + 'static,
-                H: ::rex::Handler<State, Sig>,
+                H: ::rex::HostFnSync<State, Sig>,
             {
                 <Self as ::rex::RexAdt>::inject_rex(engine)?;
                 let mut module = ::rex::Module::global();
