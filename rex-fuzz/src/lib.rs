@@ -5,15 +5,10 @@ use std::io::Read;
 
 use rex_lexer::{Token, Tokens};
 use rex_parser::ParserLimits;
-use rex_util::{GasCosts, GasMeter};
 
 pub const MAX_FUZZ_BYTES: usize = 1 << 20; // 1MiB
 
 pub fn env_usize(name: &str) -> Option<usize> {
-    std::env::var(name).ok().and_then(|v| v.parse().ok())
-}
-
-pub fn env_u64(name: &str) -> Option<u64> {
     std::env::var(name).ok().and_then(|v| v.parse().ok())
 }
 
@@ -36,13 +31,6 @@ pub fn parser_limits_from_env() -> ParserLimits {
     } else {
         ParserLimits::safe_defaults()
     }
-}
-
-pub fn gas_meter_from_env(default: u64) -> GasMeter {
-    GasMeter::new(
-        env_u64("REX_FUZZ_GAS").or(Some(default)),
-        GasCosts::sensible_defaults(),
-    )
 }
 
 pub fn tokenize_fuzz_input(input: &[u8]) -> Option<Tokens> {

@@ -1,6 +1,4 @@
-use rex::{
-    Engine, GasCosts, GasMeter, Module, Parser, ParserLimits, Token, TypeSystem, infer_with_gas,
-};
+use rex::{Engine, Module, Parser, ParserLimits, Token, TypeSystem, infer};
 
 #[derive(Clone)]
 struct XorShift64 {
@@ -55,18 +53,16 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
             Err(_) => continue,
         };
 
-        let mut gas = GasMeter::new(Some(200_000), GasCosts::sensible_defaults());
-
         let mut parser = Parser::new(tokens);
         parser.set_limits(ParserLimits::safe_defaults());
-        let program = match parser.parse_program(&mut gas) {
+        let program = match parser.parse_program() {
             Ok(p) => p,
             Err(_) => continue,
         };
 
         let mut ts = TypeSystem::new_with_prelude().unwrap();
         let _ = ts.register_decls(&program.decls);
-        let _ = infer_with_gas(&mut ts, program.expr.as_ref(), &mut gas);
+        let _ = infer(&mut ts, program.expr.as_ref());
 
         let mut engine = Engine::with_prelude(()).unwrap();
         let mut module = Module::global();
@@ -76,7 +72,7 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
             rex::RuntimeEnv::new(engine.clone()),
             rex::Compiler::new(engine.clone()),
         )
-        .eval(program.expr.as_ref(), &mut gas)
+        .eval(program.expr.as_ref())
         .await;
     }
 }

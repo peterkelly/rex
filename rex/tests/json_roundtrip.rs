@@ -1,27 +1,20 @@
 #![allow(clippy::disallowed_names)]
 
 use rex::{Engine, JsonOptions, Module, Type, rex_to_json};
-use rex_util::GasMeter;
 use serde::{Deserialize, Serialize};
 
 fn engine_with_prelude() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
-
-fn unlimited_gas() -> GasMeter {
-    GasMeter::default()
-}
-
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
 ) -> Result<(rex::Pointer, Type), rex::EngineError> {
-    let mut gas = unlimited_gas();
     rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval_snippet(source, &mut gas)
+    .eval_snippet(source)
     .await
     .map_err(|err| err.into_engine_error())
 }

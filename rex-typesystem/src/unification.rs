@@ -4,13 +4,12 @@ use crate::{
 };
 use rex_ast::expr::Symbol;
 use rex_lexer::span::Span;
-use rex_util::gas::GasMeter;
 use rpds::HashTrieMapSync;
 
 pub type Subst = HashTrieMapSync<TypeVarId, Type>;
 
 #[derive(Debug)]
-pub(crate) struct Unifier<'g> {
+pub(crate) struct Unifier {
     // `subs[id] = Some(t)` means type variable `id` has been bound to `t`.
     //
     // This is intentionally a dense `Vec` rather than a `BTreeMap`: inference
@@ -18,25 +17,14 @@ pub(crate) struct Unifier<'g> {
     // “small id space, lots of lookups”. This makes the cost model obvious:
     // you pay O(max_id) space, and you get O(1) binds/queries.
     subs: Vec<Option<Type>>,
-    gas: Option<&'g mut GasMeter>,
     max_infer_depth: Option<usize>,
     infer_depth: usize,
 }
 
-impl<'g> Unifier<'g> {
+impl Unifier {
     pub(crate) fn new(max_infer_depth: Option<usize>) -> Self {
         Self {
             subs: Vec::new(),
-            gas: None,
-            max_infer_depth,
-            infer_depth: 0,
-        }
-    }
-
-    pub(crate) fn with_gas(gas: &'g mut GasMeter, max_infer_depth: Option<usize>) -> Self {
-        Self {
-            subs: Vec::new(),
-            gas: Some(gas),
             max_infer_depth,
             infer_depth: 0,
         }
@@ -61,24 +49,6 @@ impl<'g> Unifier<'g> {
         let res = f(self);
         self.infer_depth = self.infer_depth.saturating_sub(1);
         res
-    }
-
-    pub(crate) fn charge_infer_node(&mut self) -> Result<(), TypeError> {
-        let Some(gas) = self.gas.as_mut() else {
-            return Ok(());
-        };
-        let cost = gas.costs.infer_node;
-        gas.charge(cost)?;
-        Ok(())
-    }
-
-    fn charge_unify_step(&mut self) -> Result<(), TypeError> {
-        let Some(gas) = self.gas.as_mut() else {
-            return Ok(());
-        };
-        let cost = gas.costs.unify_step;
-        gas.charge(cost)?;
-        Ok(())
     }
 
     fn bind_var(&mut self, id: TypeVarId, ty: Type) {
@@ -140,7 +110,6 @@ impl<'g> Unifier<'g> {
     }
 
     pub(crate) fn unify(&mut self, t1: &Type, t2: &Type) -> Result<(), TypeError> {
-        self.charge_unify_step()?;
         let t1 = self.prune(t1);
         let t2 = self.prune(t2);
         match (t1.as_ref(), t2.as_ref()) {
@@ -267,7 +236,7 @@ pub(crate) fn scheme_compatible(existing: &Scheme, declared: &Scheme) -> bool {
 
 fn record_elem_type_unifier(
     fields: &[(Symbol, Type)],
-    unifier: &mut Unifier<'_>,
+    unifier: &mut Unifier,
 ) -> Result<Type, TypeError> {
     let mut iter = fields.iter();
     let first = match iter.next() {

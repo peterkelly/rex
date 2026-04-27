@@ -7,17 +7,16 @@ use rex_typesystem::{
     error::TypeError,
     types::{BuiltinTypeId, Scheme, Type},
 };
-use rex_util::{GasCosts, GasMeter};
 use std::sync::Arc;
 
 fn parse(code: &str) -> Arc<rex_ast::expr::Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap().expr
+    parser.parse_program().unwrap().expr
 }
 
 fn parse_program(code: &str) -> rex_ast::expr::Program {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap()
+    parser.parse_program().unwrap()
 }
 
 fn strip_span(mut err: TypeError) -> TypeError {
@@ -30,11 +29,6 @@ fn strip_span(mut err: TypeError) -> TypeError {
 fn engine_with_arith() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
-
-fn unlimited_gas() -> GasMeter {
-    GasMeter::default()
-}
-
 fn inject_globals(
     engine: &mut Engine,
     build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
@@ -67,12 +61,11 @@ async fn eval_expr(
     engine: &mut Engine,
     expr: &rex_ast::expr::Expr,
 ) -> Result<rex_engine::Pointer, EngineError> {
-    let mut gas = unlimited_gas();
     rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval(expr, &mut gas)
+    .eval(expr)
     .await
     .map_err(|err| err.into_engine_error())
     .map(|(value, _)| value)
@@ -234,14 +227,13 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
 
 #[tokio::test]
 async fn runtime_env_validates_compiled_program_requirements_before_eval() {
-    let mut gas = unlimited_gas();
     let mut compile_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut compile_engine, |module| {
         module.export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
     });
 
     let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
-    let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
+    let program = compiler.compile_snippet("inc 1").unwrap();
 
     assert_eq!(program.externs().natives, vec![sym("inc")]);
     assert_eq!(
@@ -282,7 +274,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
 
     let mut evaluator = rex_engine::Evaluator::new(runtime);
     let err = evaluator
-        .run(&program, &mut gas)
+        .run(&program)
         .await
         .unwrap_err()
         .into_engine_error();
@@ -297,14 +289,13 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
 
 #[tokio::test]
 async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
-    let mut gas = unlimited_gas();
     let mut compile_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut compile_engine, |module| {
         module.export("inc", |_: &(), x: i32| Ok(x + 1))
     });
 
     let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
-    let program = compiler.compile_snippet("inc 1", &mut gas).unwrap();
+    let program = compiler.compile_snippet("inc 1").unwrap();
 
     let mut runtime_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut runtime_engine, |module| {
@@ -327,7 +318,6 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
 
 #[tokio::test]
 async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
-    let mut gas = unlimited_gas();
     let compile_engine = Engine::with_prelude(()).unwrap();
 
     let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
@@ -337,7 +327,6 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
             let answer = 41 in
                 answer
             "#,
-            &mut gas,
         )
         .unwrap();
 
@@ -349,7 +338,7 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     runtime.validate(&program).unwrap();
 
     let mut evaluator = rex_engine::Evaluator::new(runtime);
-    let value = evaluator.run(&program, &mut gas).await.unwrap();
+    let value = evaluator.run(&program).await.unwrap();
     assert_pointer_eq!(
         &runtime_engine.heap,
         value,
@@ -359,14 +348,13 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
 
 #[tokio::test]
 async fn export_value_is_runtime_linked_like_other_host_exports() {
-    let mut gas = unlimited_gas();
     let mut compile_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut compile_engine, |module| {
         module.export_value("answer", 41i32)
     });
 
     let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
-    let program = compiler.compile_snippet("answer + 1", &mut gas).unwrap();
+    let program = compiler.compile_snippet("answer + 1").unwrap();
 
     assert_eq!(program.externs().natives, vec![sym("answer")]);
     assert_eq!(program.externs().class_methods, vec![sym("+")]);
@@ -389,7 +377,6 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
 
 #[tokio::test]
 async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
-    let mut gas = unlimited_gas();
     let compile_engine = Engine::with_prelude(()).unwrap();
     let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
     let program = compiler
@@ -403,7 +390,6 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
 
             pick 1
             "#,
-            &mut gas,
         )
         .unwrap();
 
@@ -502,30 +488,6 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
     }
 }
 
-#[tokio::test]
-async fn eval_with_gas_rejects_out_of_budget() {
-    let expr = parse("1");
-    let engine = Engine::with_prelude(()).unwrap();
-    let mut gas = GasMeter::new(
-        Some(0),
-        GasCosts {
-            eval_node: 1,
-            ..GasCosts::sensible_defaults()
-        },
-    );
-    let err = match rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
-    )
-    .eval(expr.as_ref(), &mut gas)
-    .await
-    {
-        Ok(_) => panic!("expected out of gas"),
-        Err(e) => e,
-    };
-    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
-}
-
 #[test]
 fn eval_deep_list_does_not_overflow() {
     // Regression test: deeply nested terms (right-nested arguments) can overflow the default
@@ -553,7 +515,7 @@ fn eval_deep_list_does_not_overflow() {
             runtime.block_on(async move {
                 let tokens = Token::tokenize(&code).unwrap();
                 let mut parser = Parser::new(tokens);
-                let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+                let program = parser.parse_program().unwrap();
                 let expr = program.expr;
                 let mut engine = Engine::with_prelude(()).unwrap();
                 let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();

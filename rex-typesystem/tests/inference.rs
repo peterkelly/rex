@@ -3,7 +3,7 @@ use rex_lexer::{Token, span::Span};
 use rex_parser::Parser;
 use rex_typesystem::{
     error::TypeError,
-    inference::{infer, infer_typed, infer_with_gas},
+    inference::{infer, infer_typed},
     types::{
         BuiltinTypeId, Predicate, Scheme, Type, TypeEnv, TypeKind, TypeVar, TypeVarId,
         TypedExprKind, collect_adts_in_types,
@@ -11,8 +11,6 @@ use rex_typesystem::{
     typesystem::{TypeSystem, TypeSystemLimits, TypeVarSupply, entails, generalize, instantiate},
     unification::unify,
 };
-use rex_util::{GasCosts, GasMeter};
-
 fn tvar(id: TypeVarId, name: &str) -> Type {
     Type::var(TypeVar::new(id, Some(sym(name))))
 }
@@ -104,12 +102,12 @@ fn adt_constructors_are_present() {
 
 fn parse_expr(code: &str) -> std::sync::Arc<rex_ast::expr::Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap().expr
+    parser.parse_program().unwrap().expr
 }
 
 fn parse_program(code: &str) -> rex_ast::expr::Program {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap()
+    parser.parse_program().unwrap()
 }
 
 #[test]
@@ -132,7 +130,7 @@ fn infer_deep_list_does_not_overflow() {
         .spawn(move || {
             let tokens = Token::tokenize(&code).unwrap();
             let mut parser = Parser::new(tokens);
-            parser.parse_program(&mut GasMeter::default())
+            parser.parse_program()
         })
         .unwrap();
     let program = parse_handle.join().unwrap().unwrap();
@@ -291,22 +289,6 @@ fn type_errors_include_span() {
         }
         other => panic!("expected spanned error, got {other:?}"),
     }
-}
-
-#[test]
-fn infer_with_gas_rejects_out_of_budget() {
-    let expr = parse_expr("1");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
-    let mut gas = GasMeter::new(
-        Some(0),
-        GasCosts {
-            infer_node: 1,
-            unify_step: 0,
-            ..GasCosts::sensible_defaults()
-        },
-    );
-    let err = infer_with_gas(&mut ts, expr.as_ref(), &mut gas).unwrap_err();
-    assert!(matches!(strip_span(err), TypeError::OutOfGas(..)));
 }
 
 #[test]

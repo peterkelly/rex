@@ -7,8 +7,8 @@ use std::io::{self, BufRead, Read, Write};
 
 use clap::{Args, Parser, Subcommand};
 use rex::{
-    Engine, GasCosts, GasMeter, Parser as RexParser, ParserErr, ParserLimits, Program, ReplState,
-    Token, ValueDisplayOptions, pointer_display_with,
+    Engine, Parser as RexParser, ParserErr, ParserLimits, Program, ReplState, Token,
+    ValueDisplayOptions, pointer_display_with,
 };
 use serde_json::json;
 
@@ -81,14 +81,6 @@ struct RunArgs {
     /// Disable the parsing nesting-depth limit.
     #[arg(long = "no-max-nesting")]
     no_max_nesting: bool,
-
-    /// Gas budget (in abstract units) for parsing + type inference + evaluation.
-    #[arg(long = "gas", default_value_t = 10_000_000)]
-    gas: u64,
-
-    /// Disable gas metering.
-    #[arg(long = "no-gas")]
-    no_gas: bool,
 }
 
 #[derive(Args)]
@@ -112,14 +104,6 @@ struct ReplArgs {
     /// Disable the parsing nesting-depth limit.
     #[arg(long = "no-max-nesting")]
     no_max_nesting: bool,
-
-    /// Gas budget (in abstract units) for parsing + type inference + evaluation (per input).
-    #[arg(long = "gas", default_value_t = 10_000_000)]
-    gas: u64,
-
-    /// Disable gas metering.
-    #[arg(long = "no-gas")]
-    no_gas: bool,
 }
 
 #[tokio::main]
@@ -169,8 +153,6 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
         stack_size_mb: _stack_size_mb,
         max_nesting,
         no_max_nesting,
-        gas,
-        no_gas,
     } = args;
 
     let source = if let Some(code) = code {
@@ -204,8 +186,6 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
             include,
             emit_ast,
             emit_type,
-            gas,
-            no_gas,
             parser_limits,
         },
     )
@@ -218,8 +198,6 @@ async fn repl_cmd(args: ReplArgs) -> Result<(), String> {
         stack_size_mb: _stack_size_mb,
         max_nesting,
         no_max_nesting,
-        gas,
-        no_gas,
     } = args;
 
     let parser_limits = if no_max_nesting {
@@ -232,15 +210,10 @@ async fn repl_cmd(args: ReplArgs) -> Result<(), String> {
         ParserLimits::safe_defaults()
     };
 
-    repl_loop(include, gas, no_gas, parser_limits).await
+    repl_loop(include, parser_limits).await
 }
 
-async fn repl_loop(
-    include: Vec<String>,
-    gas_budget: u64,
-    no_gas: bool,
-    parser_limits: ParserLimits,
-) -> Result<(), String> {
+async fn repl_loop(include: Vec<String>, parser_limits: ParserLimits) -> Result<(), String> {
     let mut engine =
         Engine::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
     engine.add_default_resolvers();
@@ -290,13 +263,6 @@ async fn repl_loop(
             buffer.clone()
         };
 
-        let costs = GasCosts::sensible_defaults();
-        let mut gas = if no_gas {
-            GasMeter::unlimited(costs)
-        } else {
-            GasMeter::new(Some(gas_budget), costs)
-        };
-
         let tokens = match Token::tokenize(&parse_source) {
             Ok(t) => t,
             Err(e) => {
@@ -307,7 +273,7 @@ async fn repl_loop(
         };
         let mut parser = RexParser::new(tokens);
         parser.set_limits(parser_limits);
-        let program = match parser.parse_program(&mut gas) {
+        let program = match parser.parse_program() {
             Ok(p) => p,
             Err(errs) => {
                 let incomplete =
@@ -325,7 +291,7 @@ async fn repl_loop(
             rex::RuntimeEnv::new(engine.clone()),
             rex::Compiler::new(engine.clone()),
         )
-        .eval_repl_program(&program, &mut state, &mut gas)
+        .eval_repl_program(&program, &mut state)
         .await
         {
             Ok((v, _)) => {
@@ -363,8 +329,6 @@ struct RunSourceOpts {
     include: Vec<String>,
     emit_ast: bool,
     emit_type: bool,
-    gas: u64,
-    no_gas: bool,
     parser_limits: ParserLimits,
 }
 
@@ -387,32 +351,19 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         include,
         emit_ast,
         emit_type,
-        gas,
-        no_gas,
         parser_limits,
     } = opts;
-    let costs = GasCosts::sensible_defaults();
-    let mut gas = if no_gas {
-        GasMeter::unlimited(costs)
-    } else {
-        GasMeter::new(Some(gas), costs)
-    };
 
     let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = RexParser::new(tokens);
     parser.set_limits(parser_limits);
     let program = parser
-        .parse_program(&mut gas)
+        .parse_program()
         .map_err(|errs| format_parse_errors(&errs))?;
 
     if emit_ast || emit_type {
         let type_json = if emit_type {
-            Some(infer_type_json(
-                source,
-                file.as_deref(),
-                &include,
-                &mut gas,
-            )?)
+            Some(infer_type_json(source, file.as_deref(), &include)?)
         } else {
             None
         };
@@ -428,7 +379,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
             rex::RuntimeEnv::new(engine.clone()),
             rex::Compiler::new(engine.clone()),
         )
-        .eval_module_file(&path, &mut gas)
+        .eval_module_file(&path)
         .await
         .map_err(|e| format!("{e}"))?
     } else {
@@ -436,7 +387,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
             rex::RuntimeEnv::new(engine.clone()),
             rex::Compiler::new(engine.clone()),
         )
-        .eval_snippet(source, &mut gas)
+        .eval_snippet(source)
         .await
         .map_err(|e| format!("{e}"))?
     };
@@ -469,18 +420,13 @@ fn infer_type_json(
     source: &str,
     file: Option<&str>,
     include: &[String],
-    gas: &mut GasMeter,
 ) -> Result<serde_json::Value, String> {
     let mut engine = init_engine(include)?;
 
     let (preds, ty) = if let Some(path) = file {
-        engine
-            .infer_module_file(path, gas)
-            .map_err(|e| format!("{e}"))?
+        engine.infer_module_file(path).map_err(|e| format!("{e}"))?
     } else {
-        engine
-            .infer_snippet(source, gas)
-            .map_err(|e| format!("{e}"))?
+        engine.infer_snippet(source).map_err(|e| format!("{e}"))?
     };
 
     let constraints = preds
@@ -524,11 +470,9 @@ mod tests {
         let mut parser = RexParser::new(tokens);
         parser.set_limits(ParserLimits::safe_defaults());
 
-        let costs = GasCosts::sensible_defaults();
-        let mut gas = GasMeter::unlimited(costs);
-        let program = parser.parse_program(&mut gas).expect("parse");
+        let program = parser.parse_program().expect("parse");
 
-        let ty_json = infer_type_json(source, None, &[], &mut gas).expect("infer");
+        let ty_json = infer_type_json(source, None, &[]).expect("infer");
         let ast_out = emit_json(&program, true, None).expect("emit ast");
         let type_out = emit_json(&program, false, Some(ty_json.clone())).expect("emit type");
         let both_out = emit_json(&program, true, Some(ty_json)).expect("emit both");
@@ -540,8 +484,6 @@ mod tests {
 
     #[test]
     fn emit_type_resolves_imports() {
-        let costs = GasCosts::sensible_defaults();
-        let mut gas = GasMeter::unlimited(costs);
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock is before unix epoch")
@@ -563,7 +505,7 @@ mod tests {
             bar.add (bar.triple 10) 2
         "#;
         let include = vec![root.to_string_lossy().to_string()];
-        let json = infer_type_json(source, None, &include, &mut gas).expect("infer");
+        let json = infer_type_json(source, None, &include).expect("infer");
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
     }

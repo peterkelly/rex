@@ -11,35 +11,20 @@ use rex_lsp::server::{
 };
 use rex_parser::{Parser, ParserLimits, error::ParserErr};
 use rex_typesystem::{
-    inference::infer_with_gas,
+    inference::infer,
     typesystem::{TypeSystem, TypeSystemLimits},
 };
-use rex_util::{GasCosts, GasMeter};
 use wasm_bindgen::prelude::*;
-
-const DEFAULT_GAS_LIMIT: u64 = 5_000_000;
-
-fn new_gas(limit: Option<u64>) -> GasMeter {
-    GasMeter::new(
-        Some(limit.unwrap_or(DEFAULT_GAS_LIMIT)),
-        GasCosts::sensible_defaults(),
-    )
-}
-
-fn new_unlimited_gas() -> GasMeter {
-    GasMeter::unlimited(GasCosts::sensible_defaults())
-}
 
 fn parse_program_with_limits(
     source: &str,
-    gas: &mut GasMeter,
     limits: ParserLimits,
 ) -> Result<rex_ast::expr::Program, String> {
     let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     parser.set_limits(limits);
     parser
-        .parse_program(gas)
+        .parse_program()
         .map_err(|errs| format_parse_errors(&errs))
 }
 
@@ -53,23 +38,21 @@ fn format_parse_errors(errs: &[ParserErr]) -> String {
     out
 }
 
-pub fn parse_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, String> {
-    let mut gas = new_gas(gas_limit);
-    let program = parse_program_with_limits(source, &mut gas, ParserLimits::safe_defaults())?;
+pub fn parse_to_json(source: &str) -> Result<String, String> {
+    let program = parse_program_with_limits(source, ParserLimits::safe_defaults())?;
     serde_json::to_string(&program).map_err(|e| format!("serialization error: {e}"))
 }
 
-pub fn infer_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, String> {
-    let mut gas = new_gas(gas_limit);
-    let program = parse_program_with_limits(source, &mut gas, ParserLimits::safe_defaults())?;
+pub fn infer_to_json(source: &str) -> Result<String, String> {
+    let program = parse_program_with_limits(source, ParserLimits::safe_defaults())?;
 
     let mut ts = TypeSystem::new_with_prelude().map_err(|e| format!("type system error: {e}"))?;
     ts.set_limits(TypeSystemLimits::safe_defaults());
     ts.register_decls(&program.decls)
         .map_err(|e| format!("type declaration error: {e}"))?;
 
-    let (preds, typ) = infer_with_gas(&mut ts, program.expr.as_ref(), &mut gas)
-        .map_err(|e| format!("type error: {e}"))?;
+    let (preds, typ) =
+        infer(&mut ts, program.expr.as_ref()).map_err(|e| format!("type error: {e}"))?;
 
     let payload = serde_json::json!({
         "type": typ.to_string(),
@@ -140,13 +123,8 @@ pub fn lsp_code_actions_to_json(source: &str, line: u32, character: u32) -> Resu
     serde_json::to_string(&actions).map_err(|e| format!("serialization error: {e}"))
 }
 
-pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<String, String> {
-    let mut gas = if gas_limit.is_some() {
-        new_gas(gas_limit)
-    } else {
-        new_unlimited_gas()
-    };
-    let _ = parse_program_with_limits(source, &mut gas, ParserLimits::unlimited())?;
+pub async fn eval_to_string(source: &str) -> Result<String, String> {
+    let _ = parse_program_with_limits(source, ParserLimits::unlimited())?;
 
     let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
     engine.type_system.set_limits(TypeSystemLimits::unlimited());
@@ -156,7 +134,7 @@ pub async fn eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<Stri
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval_snippet(source, &mut gas)
+    .eval_snippet(source)
     .await
     .map_err(|e| format!("runtime error: {e}"))?;
 
@@ -169,13 +147,13 @@ fn as_js_err(err: String) -> JsValue {
 }
 
 #[wasm_bindgen(js_name = parseToJson)]
-pub fn wasm_parse_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, JsValue> {
-    parse_to_json(source, gas_limit).map_err(as_js_err)
+pub fn wasm_parse_to_json(source: &str) -> Result<String, JsValue> {
+    parse_to_json(source).map_err(as_js_err)
 }
 
 #[wasm_bindgen(js_name = inferToJson)]
-pub fn wasm_infer_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, JsValue> {
-    infer_to_json(source, gas_limit).map_err(as_js_err)
+pub fn wasm_infer_to_json(source: &str) -> Result<String, JsValue> {
+    infer_to_json(source).map_err(as_js_err)
 }
 
 #[wasm_bindgen(js_name = lspDiagnosticsToJson)]
@@ -246,14 +224,8 @@ pub fn wasm_lsp_code_actions_to_json(
 }
 
 #[wasm_bindgen(js_name = evalToJson)]
-pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String, JsValue> {
-    let mut gas = if gas_limit.is_some() {
-        new_gas(gas_limit)
-    } else {
-        new_unlimited_gas()
-    };
-    let _ = parse_program_with_limits(source, &mut gas, ParserLimits::unlimited())
-        .map_err(as_js_err)?;
+pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
+    let _ = parse_program_with_limits(source, ParserLimits::unlimited()).map_err(as_js_err)?;
 
     let fut = async move {
         let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
@@ -261,7 +233,7 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
             rex_engine::RuntimeEnv::new(engine.clone()),
             rex_engine::Compiler::new(engine.clone()),
         )
-        .eval_snippet(source, &mut gas)
+        .eval_snippet(source)
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
         let rendered =
@@ -274,8 +246,8 @@ pub fn wasm_eval_to_json(source: &str, gas_limit: Option<u64>) -> Result<String,
 }
 
 #[wasm_bindgen(js_name = evalToString)]
-pub fn wasm_eval_to_string(source: &str, gas_limit: Option<u64>) -> Result<String, JsValue> {
-    block_on(eval_to_string(source, gas_limit)).map_err(as_js_err)
+pub fn wasm_eval_to_string(source: &str) -> Result<String, JsValue> {
+    block_on(eval_to_string(source)).map_err(as_js_err)
 }
 
 #[cfg(test)]
@@ -295,12 +267,12 @@ let
 in
   (n, [x, B])
 "#;
-        let full = wasm_eval_to_json(source, None).expect("wasm eval failed");
+        let full = wasm_eval_to_json(source).expect("wasm eval failed");
         assert!(full.contains("2i32"));
         assert!(full.contains("A"));
         assert!(full.contains("B"));
 
-        let sanitized = block_on(eval_to_string(source, None)).expect("wasm string eval failed");
+        let sanitized = block_on(eval_to_string(source)).expect("wasm string eval failed");
         assert_eq!(sanitized, "(2, [A, B])");
     }
 

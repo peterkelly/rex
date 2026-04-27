@@ -1,6 +1,6 @@
 use rex::{
-    AdtDecl, BuiltinTypeId, Engine, EngineError, EnumPatch, GasMeter, Heap, JsonOptions, Parser,
-    Pointer, Program, ReplState, Rex, Token, Type, TypeSystem, TypeVarSupply, intern, json_to_rex,
+    AdtDecl, BuiltinTypeId, Engine, EngineError, EnumPatch, Heap, JsonOptions, Parser, Pointer,
+    Program, ReplState, Rex, Token, Type, TypeSystem, TypeVarSupply, intern, json_to_rex,
     rex_to_json, sym,
 };
 use serde::Serialize;
@@ -37,7 +37,7 @@ fn temp_dir(name: &str) -> PathBuf {
 fn parse_program(source: &str) -> Program {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
-    parser.parse_program(&mut GasMeter::default()).unwrap()
+    parser.parse_program().unwrap()
 }
 
 fn fixed_uuid() -> Uuid {
@@ -332,24 +332,20 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .unwrap(),
         expected_json
     );
-
-    let mut gas = GasMeter::default();
     let expr_program = parse_program(rex_code);
     let (ptr_eval, ty_eval) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr_program.expr.as_ref(), &mut gas)
+    .eval(expr_program.expr.as_ref())
     .await
     .unwrap();
     assert_eval_json(&engine, &ptr_eval, &ty_eval, expected_json.clone());
-
-    let mut gas = GasMeter::default();
     let (ptr_snippet, ty_snippet) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval_snippet(rex_code, &mut gas)
+    .eval_snippet(rex_code)
     .await
     .unwrap();
     assert_eval_json(&engine, &ptr_snippet, &ty_snippet, expected_json.clone());
@@ -357,12 +353,11 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let mut gas = GasMeter::default();
     let (ptr_snippet_at, ty_snippet_at) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval_snippet_at(rex_code, &importer, &mut gas)
+    .eval_snippet_at(rex_code, &importer)
     .await
     .unwrap();
     assert_eval_json(
@@ -374,12 +369,11 @@ async fn eval_entry_points_return_type_for_json_eval() {
 
     let repl_program = parse_program(rex_code);
     let mut repl_state = ReplState::new();
-    let mut gas = GasMeter::default();
     let (ptr_repl, ty_repl) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval_repl_program(&repl_program, &mut repl_state, &mut gas)
+    .eval_repl_program(&repl_program, &mut repl_state)
     .await
     .unwrap();
     assert_eval_json(&engine, &ptr_repl, &ty_repl, expected_json);

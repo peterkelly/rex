@@ -41,7 +41,6 @@ printf '(' | cargo run -q -p rex-fuzz --bin parse
 
 Tuning knobs (environment variables):
 
-- `REX_FUZZ_GAS`: gas budget for the harness run
 - `REX_FUZZ_MAX_NESTING`: parser nesting cap (defaults to `ParserLimits::safe_defaults()`)
 - `REX_FUZZ_STACK_MB`: stack size (MiB) for the harness thread
 

@@ -129,8 +129,6 @@ Other useful flags:
 - `--stack-size-mb`: control the runner thread stack size
 - `--max-nesting`: cap syntactic nesting depth during parsing
 - `--no-max-nesting`: disable the parsing nesting cap
-- `--gas`: total gas budget for parse/type/eval
-- `--no-gas`: disable gas metering
 
 ## Standard Module (Prelude)
 

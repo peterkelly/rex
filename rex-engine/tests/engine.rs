@@ -1,27 +1,23 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use futures::FutureExt;
 use rex_ast::expr::{Expr, Program, sym};
-use rex_engine::{
-    CancellationToken, Engine, EngineError, Module, ReplState, Value, assert_pointer_eq,
-};
+use rex_engine::{Engine, EngineError, Module, ReplState, Value, assert_pointer_eq};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_typesystem::{
     error::TypeError,
-    types::{BuiltinTypeId, Scheme, Type, TypeVar},
+    types::{BuiltinTypeId, Type, TypeVar},
 };
-use rex_util::{GasCosts, GasMeter};
 
 fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap().expr
+    parser.parse_program().unwrap().expr
 }
 
 fn parse_program(code: &str) -> Program {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap()
+    parser.parse_program().unwrap()
 }
 
 fn strip_span(mut err: TypeError) -> TypeError {
@@ -34,11 +30,6 @@ fn strip_span(mut err: TypeError) -> TypeError {
 fn engine_with_arith() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
-
-fn unlimited_gas() -> GasMeter {
-    GasMeter::default()
-}
-
 fn inject_globals(
     engine: &mut Engine,
     build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
@@ -130,7 +121,6 @@ fn inject_adt_family_rejects_cycles() {
 
 #[tokio::test]
 async fn repl_persists_function_definitions() {
-    let mut gas = unlimited_gas();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
     let mut state = ReplState::new();
@@ -141,7 +131,7 @@ async fn repl_persists_function_definitions() {
 
     let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
     let (v1, t1) = evaluator
-        .eval_repl_program(&program1, &mut state, &mut gas)
+        .eval_repl_program(&program1, &mut state)
         .await
         .unwrap();
     assert_eq!(t1, Type::builtin(BuiltinTypeId::I32));
@@ -149,7 +139,7 @@ async fn repl_persists_function_definitions() {
 
     let program2 = parse_program("inc 2");
     let (v2, t2) = evaluator
-        .eval_repl_program(&program2, &mut state, &mut gas)
+        .eval_repl_program(&program2, &mut state)
         .await
         .unwrap();
     assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
@@ -158,7 +148,6 @@ async fn repl_persists_function_definitions() {
 
 #[tokio::test]
 async fn repl_persists_import_aliases() {
-    let mut gas = unlimited_gas();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
@@ -172,7 +161,7 @@ async fn repl_persists_import_aliases() {
     );
     let program1 = parse_program("import foo.bar as Bar\n()");
     let (v1, t1) = evaluator
-        .eval_repl_program(&program1, &mut state, &mut gas)
+        .eval_repl_program(&program1, &mut state)
         .await
         .unwrap();
     assert_eq!(t1, Type::tuple(vec![]));
@@ -180,7 +169,7 @@ async fn repl_persists_import_aliases() {
 
     let program2 = parse_program("Bar.triple 10");
     let (v2, t2) = evaluator
-        .eval_repl_program(&program2, &mut state, &mut gas)
+        .eval_repl_program(&program2, &mut state)
         .await
         .unwrap();
     assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
@@ -189,7 +178,6 @@ async fn repl_persists_import_aliases() {
 
 #[tokio::test]
 async fn repl_persists_imported_values() {
-    let mut gas = unlimited_gas();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
@@ -203,7 +191,7 @@ async fn repl_persists_imported_values() {
     );
     let program1 = parse_program("import foo.bar (triple as t)\n()");
     let (v1, t1) = evaluator
-        .eval_repl_program(&program1, &mut state, &mut gas)
+        .eval_repl_program(&program1, &mut state)
         .await
         .unwrap();
     assert_eq!(t1, Type::tuple(vec![]));
@@ -211,7 +199,7 @@ async fn repl_persists_imported_values() {
 
     let program2 = parse_program("t 10");
     let (v2, t2) = evaluator
-        .eval_repl_program(&program2, &mut state, &mut gas)
+        .eval_repl_program(&program2, &mut state)
         .await
         .unwrap();
     assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
@@ -220,7 +208,6 @@ async fn repl_persists_imported_values() {
 
 #[tokio::test]
 async fn injected_module_can_define_pub_adt_declarations() {
-    let mut gas = unlimited_gas();
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
 
@@ -239,7 +226,6 @@ async fn injected_module_can_define_pub_adt_declarations() {
             import acme.status (Failed)
             Failed "boom"
             "#,
-        &mut gas,
     )
     .await
     .unwrap();
@@ -255,212 +241,21 @@ async fn injected_module_can_define_pub_adt_declarations() {
 }
 
 #[tokio::test]
-async fn eval_can_be_cancelled_while_waiting_on_async_native() {
-    let expr = parse("stall");
-    let mut engine = Engine::with_prelude(()).unwrap();
-
-    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-    let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |module| {
-        module.export_native_async_cancellable(
-            "stall",
-            scheme,
-            0,
-            move |engine, token: CancellationToken, _, _args| {
-                let started_tx = started_tx.clone();
-                async move {
-                    let _ = started_tx.send(());
-                    token.cancelled().await;
-                    engine.heap.alloc_i32(0)
-                }
-                .boxed()
-            },
-        )
-    });
-
-    let token = engine.cancellation_token();
-    let canceller = std::thread::spawn(move || {
-        let recv = started_rx.recv_timeout(std::time::Duration::from_secs(2));
-        assert!(recv.is_ok(), "stall native never started");
-        token.cancel();
-    });
-
-    let mut gas = unlimited_gas();
-    let res = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
-    )
-    .eval(expr.as_ref(), &mut gas)
-    .await;
-    let joined = canceller.join();
-    assert!(joined.is_ok(), "cancel thread panicked");
-    assert!(matches!(
-        res,
-        Err(ref err) if matches!(err.as_engine_error(), EngineError::Cancelled)
-    ));
-}
-
-#[tokio::test]
-async fn eval_can_be_cancelled_while_waiting_on_non_cancellable_async_native() {
-    let expr = parse("stall");
-    let mut engine = Engine::with_prelude(()).unwrap();
-
-    let (started_tx, started_rx) = std::sync::mpsc::channel::<()>();
-    inject_globals(&mut engine, |module| {
-        module.export_async("stall", move |_state: &()| {
-            let started_tx = started_tx.clone();
-            async move {
-                let _ = started_tx.send(());
-                futures::future::pending::<Result<i32, EngineError>>().await
-            }
-        })
-    });
-
-    let token = engine.cancellation_token();
-    let canceller = std::thread::spawn(move || {
-        let recv = started_rx.recv_timeout(std::time::Duration::from_secs(2));
-        assert!(recv.is_ok(), "stall native never started");
-        token.cancel();
-    });
-
-    let mut gas = unlimited_gas();
-    let res = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
-    )
-    .eval(expr.as_ref(), &mut gas)
-    .await;
-    let joined = canceller.join();
-    assert!(joined.is_ok(), "cancel thread panicked");
-    assert!(matches!(
-        res,
-        Err(ref err) if matches!(err.as_engine_error(), EngineError::Cancelled)
-    ));
-}
-
-#[tokio::test]
-async fn native_per_impl_gas_cost_is_charged() {
-    let expr = parse("foo");
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |module| {
-        module.export_native_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
-            engine.heap.alloc_i32(1)
-        })
-    });
-
-    let mut gas = GasMeter::new(
-        Some(10),
-        GasCosts {
-            eval_node: 1,
-            native_call_base: 1,
-            native_call_per_arg: 0,
-            ..GasCosts::sensible_defaults()
-        },
-    );
-    let err = match rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
-    )
-    .eval(expr.as_ref(), &mut gas)
-    .await
-    {
-        Ok(_) => panic!("expected out of gas"),
-        Err(e) => e,
-    };
-    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
-}
-
-#[tokio::test]
 async fn export_value_typed_registers_global_value() {
     let expr = parse("answer");
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut engine, |module| {
         module.export_value_typed("answer", Type::builtin(BuiltinTypeId::I32), Value::I32(42))
     });
-
-    let mut gas = unlimited_gas();
     let (value, ty) = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
-}
-
-#[tokio::test]
-async fn async_native_per_impl_gas_cost_is_charged() {
-    let expr = parse("foo");
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |module| {
-        module.export_native_async_with_gas_cost("foo", scheme, 0, 50, |engine, _t, _args| {
-            async move { engine.heap.alloc_i32(1) }.boxed()
-        })
-    });
-
-    let mut gas = GasMeter::new(
-        Some(10),
-        GasCosts {
-            eval_node: 1,
-            native_call_base: 1,
-            native_call_per_arg: 0,
-            ..GasCosts::sensible_defaults()
-        },
-    );
-    let err = match rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
-    )
-    .eval(expr.as_ref(), &mut gas)
-    .await
-    {
-        Ok(_) => panic!("expected out of gas"),
-        Err(e) => e,
-    };
-    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
-}
-
-#[tokio::test]
-async fn cancellable_async_native_per_impl_gas_cost_is_charged() {
-    let expr = parse("foo");
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-    inject_globals(&mut engine, |module| {
-        module.export_native_async_cancellable_with_gas_cost(
-            "foo",
-            scheme,
-            0,
-            50,
-            |engine, _token: CancellationToken, _t, _args| {
-                async move { engine.heap.alloc_i32(1) }.boxed()
-            },
-        )
-    });
-
-    let mut gas = GasMeter::new(
-        Some(10),
-        GasCosts {
-            eval_node: 1,
-            native_call_base: 1,
-            native_call_per_arg: 0,
-            ..GasCosts::sensible_defaults()
-        },
-    );
-    let err = match rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
-    )
-    .eval(expr.as_ref(), &mut gas)
-    .await
-    {
-        Ok(_) => panic!("expected out of gas"),
-        Err(e) => e,
-    };
-    assert!(matches!(err.as_engine_error(), EngineError::OutOfGas(..)));
 }
 
 #[tokio::test]
@@ -478,12 +273,11 @@ async fn record_update_requires_known_variant_for_sum_types() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let mut gas = unlimited_gas();
     match rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     {
         Err(err) => {

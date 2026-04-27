@@ -5,7 +5,6 @@ use rex_ast::expr::Symbol;
 use rex_lexer::LexicalError;
 use rex_parser::error::ParserErr;
 use rex_typesystem::error::TypeError;
-use rex_util::OutOfGas;
 
 use crate::modules::ModuleId;
 
@@ -278,10 +277,6 @@ pub enum EngineError {
     Internal(String),
     #[error(transparent)]
     Module(#[from] Box<ModuleError>),
-    #[error("cancelled")]
-    Cancelled,
-    #[error("{0}")]
-    OutOfGas(#[from] OutOfGas),
     #[error("{0}")]
     Custom(String),
     #[error("Evaluation suspended")]

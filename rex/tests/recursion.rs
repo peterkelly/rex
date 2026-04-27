@@ -1,22 +1,21 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, GasMeter, Heap, Module, Parser, Pointer, Token, Type,
-    TypeKind, assert_pointer_eq,
+    BuiltinTypeId, Engine, EngineError, Heap, Module, Parser, Pointer, Token, Type, TypeKind,
+    assert_pointer_eq,
 };
 
 async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let mut gas = GasMeter::default();
     let (pointer, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();

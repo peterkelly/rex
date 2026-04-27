@@ -11,15 +11,7 @@ use rex_lexer::span::Span;
 
 use crate::prelude;
 
-pub use crate::{
-    // inference::{
-    //     infer,
-    //     infer_typed,
-    //     infer_with_gas,
-    //     infer_typed_with_gas,
-    // },
-    unification::{Subst, compose_subst, unify},
-};
+pub use crate::unification::{Subst, compose_subst, unify};
 
 use crate::{
     error::TypeError,

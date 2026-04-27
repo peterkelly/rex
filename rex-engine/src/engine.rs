@@ -6,7 +6,7 @@ use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 
-use futures::{FutureExt, future::BoxFuture, pin_mut};
+use futures::{FutureExt, future::BoxFuture};
 use rex_ast::expr::{
     ClassDecl, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern, Program, Scope,
     Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern, sym, sym_eq,
@@ -14,7 +14,7 @@ use rex_ast::expr::{
 use rex_lexer::span::Span;
 use rex_typesystem::{
     error::{CollectAdtsError, TypeError},
-    inference::{infer_typed, infer_with_gas},
+    inference::{infer, infer_typed},
     prelude::prelude_typeclasses_program,
     types::{
         AdtDecl, BuiltinTypeId, Instance, Predicate, Scheme, Type, TypeKind, TypedExpr,
@@ -24,7 +24,6 @@ use rex_typesystem::{
     typesystem::{entails, instantiate},
     unification::{Subst, compose_subst, unify},
 };
-use rex_util::GasMeter;
 
 use crate::modules::{
     CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleSystem, ResolveRequest, ResolvedModule,
@@ -50,7 +49,7 @@ use crate::stack::{
 };
 use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
 use crate::{
-    CancellationToken, EngineError, Environment, FromPointer, IntoPointer, RexType,
+    EngineError, Environment, FromPointer, IntoPointer, RexType,
     evaluator::{EvalContext, EvaluatorRef},
 };
 
@@ -123,16 +122,6 @@ pub trait RexAdt: RexType {
         for adt in order_adt_family(family)? {
             engine.inject_adt(adt)?;
         }
-        Ok(())
-    }
-}
-
-pub(crate) fn check_runtime_cancelled<State: Clone + Send + Sync + 'static>(
-    runtime: &RuntimeSnapshot<State>,
-) -> Result<(), EngineError> {
-    if runtime.cancel.is_cancelled() {
-        Err(EngineError::Cancelled)
-    } else {
         Ok(())
     }
 }
@@ -346,12 +335,6 @@ pub(crate) type SchedulerNativeCallable<State> = Arc<
 >;
 pub type AsyncNativeCallable<State> =
     Arc<dyn Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static>;
-pub type AsyncNativeCallableCancellable<State> = Arc<
-    dyn Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
-        + Send
-        + Sync
-        + 'static,
->;
 
 type ExportInjector<State> =
     Box<dyn FnOnce(&mut Engine<State>, &str) -> Result<(), EngineError> + Send + 'static>;
@@ -360,58 +343,30 @@ struct NativeRegistration<State: Clone + Send + Sync + 'static> {
     scheme: Scheme,
     arity: usize,
     callable: NativeCallable<State>,
-    gas_cost: u64,
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
-    fn sync(scheme: Scheme, arity: usize, func: SyncNativeCallable<State>, gas_cost: u64) -> Self {
+    fn sync(scheme: Scheme, arity: usize, func: SyncNativeCallable<State>) -> Self {
         Self {
             scheme,
             arity,
             callable: NativeCallable::Sync(func),
-            gas_cost,
         }
     }
 
-    fn scheduler(
-        scheme: Scheme,
-        arity: usize,
-        func: SchedulerNativeCallable<State>,
-        gas_cost: u64,
-    ) -> Self {
+    fn scheduler(scheme: Scheme, arity: usize, func: SchedulerNativeCallable<State>) -> Self {
         Self {
             scheme,
             arity,
             callable: NativeCallable::Scheduler(func),
-            gas_cost,
         }
     }
 
-    fn r#async(
-        scheme: Scheme,
-        arity: usize,
-        func: AsyncNativeCallable<State>,
-        gas_cost: u64,
-    ) -> Self {
+    fn r#async(scheme: Scheme, arity: usize, func: AsyncNativeCallable<State>) -> Self {
         Self {
             scheme,
             arity,
             callable: NativeCallable::Async(func),
-            gas_cost,
-        }
-    }
-
-    fn async_cancellable(
-        scheme: Scheme,
-        arity: usize,
-        func: AsyncNativeCallableCancellable<State>,
-        gas_cost: u64,
-    ) -> Self {
-        Self {
-            scheme,
-            arity,
-            callable: NativeCallable::AsyncCancellable(func),
-            gas_cost,
         }
     }
 }
@@ -505,22 +460,6 @@ where
             + Sync
             + 'static,
     {
-        Self::from_native_with_gas_cost(name, scheme, arity, 0, handler)
-    }
-
-    pub fn from_native_with_gas_cost<F>(
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<Self, EngineError>
-    where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
-            + Send
-            + Sync
-            + 'static,
-    {
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
         let normalized = normalize_name(&name).to_string();
@@ -530,7 +469,7 @@ where
             let handler = Arc::clone(&handler);
             let func: SyncNativeCallable<State> =
                 Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
-            let registration = NativeRegistration::sync(scheme.clone(), arity, func, gas_cost);
+            let registration = NativeRegistration::sync(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
@@ -540,26 +479,6 @@ where
         name: impl Into<String>,
         scheme: Scheme,
         arity: usize,
-        handler: F,
-    ) -> Result<Self, EngineError>
-    where
-        F: for<'a> Fn(
-                EvaluatorRef<State>,
-                Type,
-                Vec<Pointer>,
-            ) -> Result<SchedulerNativeResult, EngineError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        Self::from_native_scheduler_with_gas_cost(name, scheme, arity, 0, handler)
-    }
-
-    pub(crate) fn from_native_scheduler_with_gas_cost<F>(
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
         handler: F,
     ) -> Result<Self, EngineError>
     where
@@ -584,7 +503,7 @@ where
                 let handler = Arc::clone(&handler);
                 handler(engine, typ, args)
             });
-            let registration = NativeRegistration::scheduler(scheme.clone(), arity, func, gas_cost);
+            let registration = NativeRegistration::scheduler(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
@@ -594,19 +513,6 @@ where
         name: impl Into<String>,
         scheme: Scheme,
         arity: usize,
-        handler: F,
-    ) -> Result<Self, EngineError>
-    where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
-    {
-        Self::from_native_async_with_gas_cost(name, scheme, arity, 0, handler)
-    }
-
-    pub fn from_native_async_with_gas_cost<F>(
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
         handler: F,
     ) -> Result<Self, EngineError>
     where
@@ -623,36 +529,7 @@ where
                 let handler = Arc::clone(&handler);
                 handler(engine, typ, args)
             });
-            let registration = NativeRegistration::r#async(scheme.clone(), arity, func, gas_cost);
-            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
-        });
-        Self::from_injector(name, interface, injector)
-    }
-
-    pub fn from_native_async_cancellable_with_gas_cost<F>(
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<Self, EngineError>
-    where
-        F: Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
-            + Send
-            + Sync
-            + 'static,
-    {
-        validate_native_export_scheme(&scheme, arity)?;
-        let name = name.into();
-        let normalized = normalize_name(&name).to_string();
-        let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
-        let handler = Arc::new(handler);
-        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
-            let handler = Arc::clone(&handler);
-            let func: AsyncNativeCallableCancellable<State> =
-                Arc::new(move |engine, token, typ, args| handler(engine, token, typ, args));
-            let registration =
-                NativeRegistration::async_cancellable(scheme.clone(), arity, func, gas_cost);
+            let registration = NativeRegistration::r#async(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
@@ -676,7 +553,7 @@ where
                     stored.clone().into_pointer(&engine.heap)
                 });
             let registration =
-                NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func, 0);
+                NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
@@ -700,7 +577,7 @@ where
                     engine.heap.alloc_value(stored.clone())
                 });
             let registration =
-                NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func, 0);
+                NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
@@ -1078,7 +955,7 @@ macro_rules! define_handler_impl {
                     },
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
-                let registration = NativeRegistration::sync(scheme, $arity, func, 0);
+                let registration = NativeRegistration::sync(scheme, $arity, func);
                 engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
@@ -1120,7 +997,7 @@ macro_rules! define_handler_impl {
                 );
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
-                let registration = NativeRegistration::sync(scheme, $arity, func, 0);
+                let registration = NativeRegistration::sync(scheme, $arity, func);
                 engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
@@ -1144,7 +1021,7 @@ where
     fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
-        let registration = NativeRegistration::sync(scheme, arity, func, 0);
+        let registration = NativeRegistration::sync(scheme, arity, func);
         engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
@@ -1189,7 +1066,7 @@ macro_rules! define_async_handler_impl {
                     },
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
-                let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
+                let registration = NativeRegistration::r#async(scheme, $arity, func);
                 engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
@@ -1237,7 +1114,7 @@ macro_rules! define_async_handler_impl {
                 );
                 let typ = native_fn_type!($($arg_ty),+ ; R);
                 let scheme = Scheme::new(vec![], vec![], typ);
-                let registration = NativeRegistration::r#async(scheme, $arity, func, 0);
+                let registration = NativeRegistration::r#async(scheme, $arity, func);
                 engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
             }
         }
@@ -1265,7 +1142,7 @@ where
     ) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
-        let registration = NativeRegistration::r#async(scheme, arity, func, 0);
+        let registration = NativeRegistration::r#async(scheme, arity, func);
         engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
@@ -1275,7 +1152,6 @@ pub(crate) enum NativeCallable<State: Clone + Send + Sync + 'static> {
     Sync(SyncNativeCallable<State>),
     Scheduler(SchedulerNativeCallable<State>),
     Async(AsyncNativeCallable<State>),
-    AsyncCancellable(AsyncNativeCallableCancellable<State>),
 }
 
 impl<State: Clone + Send + Sync + 'static> PartialEq for NativeCallable<State> {
@@ -1290,7 +1166,6 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
             NativeCallable::Sync(_) => write!(f, "Sync"),
             NativeCallable::Scheduler(_) => write!(f, "Scheduler"),
             NativeCallable::Async(_) => write!(f, "Async"),
-            NativeCallable::AsyncCancellable(_) => write!(f, "AsyncCancellable"),
         }
     }
 }
@@ -1298,28 +1173,6 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 pub(crate) enum NativeCallResult {
     Ready(Pointer),
     Pending(NativeFuture),
-}
-
-fn cancellable_native_future(token: CancellationToken, call_fut: NativeFuture) -> NativeFuture {
-    async move {
-        if token.is_cancelled() {
-            return Err(EngineError::Cancelled);
-        }
-        let call_fut = call_fut.fuse();
-        let cancel_fut = token.cancelled().fuse();
-        pin_mut!(call_fut, cancel_fut);
-        futures::select! {
-            _ = cancel_fut => Err(EngineError::Cancelled),
-            res = call_fut => {
-                if token.is_cancelled() {
-                    Err(EngineError::Cancelled)
-                } else {
-                    res
-                }
-            },
-        }
-    }
-    .boxed()
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
@@ -1330,11 +1183,6 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
         args: &[Pointer],
         context: EvalContext,
     ) -> Result<NativeCallResult, EngineError> {
-        let token = runtime.cancel.clone();
-        if token.is_cancelled() {
-            return Err(EngineError::Cancelled);
-        }
-
         match self {
             NativeCallable::Sync(f) => {
                 (f)(EvaluatorRef::new_with_context(runtime, context), &typ, args)
@@ -1349,20 +1197,7 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
                     typ,
                     args.to_vec(),
                 );
-                Ok(NativeCallResult::Pending(cancellable_native_future(
-                    token, call_fut,
-                )))
-            }
-            NativeCallable::AsyncCancellable(f) => {
-                let call_fut = (f)(
-                    EvaluatorRef::new_with_context(runtime, context),
-                    token.clone(),
-                    typ,
-                    args.to_vec(),
-                );
-                Ok(NativeCallResult::Pending(cancellable_native_future(
-                    token, call_fut,
-                )))
+                Ok(NativeCallResult::Pending(call_fut))
             }
         }
     }
@@ -1374,7 +1209,6 @@ pub struct NativeFn {
     name: Symbol,
     arity: usize,
     typ: Type,
-    gas_cost: u64,
     applied: Vec<Pointer>,
     applied_types: Vec<Type>,
 }
@@ -1386,13 +1220,12 @@ enum NativeApplyResult {
 }
 
 impl NativeFn {
-    fn new(native_id: NativeId, name: Symbol, arity: usize, typ: Type, gas_cost: u64) -> Self {
+    fn new(native_id: NativeId, name: Symbol, arity: usize, typ: Type) -> Self {
         Self {
             native_id,
             name,
             arity,
             typ,
-            gas_cost,
             applied: Vec::new(),
             applied_types: Vec::new(),
         }
@@ -1403,7 +1236,6 @@ impl NativeFn {
         name: Symbol,
         arity: usize,
         typ: Type,
-        gas_cost: u64,
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Self {
@@ -1412,21 +1244,17 @@ impl NativeFn {
             name,
             arity,
             typ,
-            gas_cost,
             applied,
             applied_types,
         }
     }
 
-    pub(crate) fn into_parts(
-        self,
-    ) -> (NativeId, Symbol, usize, Type, u64, Vec<Pointer>, Vec<Type>) {
+    pub(crate) fn into_parts(self) -> (NativeId, Symbol, usize, Type, Vec<Pointer>, Vec<Type>) {
         (
             self.native_id,
             self.name,
             self.arity,
             self.typ,
-            self.gas_cost,
             self.applied,
             self.applied_types,
         )
@@ -1439,15 +1267,8 @@ impl NativeFn {
     pub(crate) fn call_zero_with_context<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeSnapshot<State>,
-        gas: &mut GasMeter,
         context: EvalContext,
     ) -> Result<NativeCallResult, EngineError> {
-        let amount = gas
-            .costs
-            .native_call_base
-            .saturating_add(self.gas_cost)
-            .saturating_add(gas.costs.native_call_per_arg.saturating_mul(0));
-        gas.charge(amount)?;
         if self.arity != 0 {
             return Err(EngineError::NativeArity {
                 name: self.name.clone(),
@@ -1468,7 +1289,6 @@ impl NativeFn {
         runtime: &RuntimeSnapshot<State>,
         arg: Pointer,
         arg_type: Option<&Type>,
-        gas: &mut GasMeter,
         context: EvalContext,
     ) -> Result<NativeApplyResult, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
@@ -1496,21 +1316,12 @@ impl NativeFn {
                 name,
                 arity,
                 typ,
-                gas_cost,
                 applied,
                 applied_types,
             } = self;
             return runtime
                 .heap
-                .alloc_native(
-                    native_id,
-                    name,
-                    arity,
-                    typ,
-                    gas_cost,
-                    applied,
-                    applied_types,
-                )
+                .alloc_native(native_id, name, arity, typ, applied, applied_types)
                 .map(NativeApplyResult::Value);
         }
 
@@ -1519,16 +1330,6 @@ impl NativeFn {
             full_ty = Type::fun(arg_ty.clone(), full_ty);
         }
 
-        let amount = gas
-            .costs
-            .native_call_base
-            .saturating_add(self.gas_cost)
-            .saturating_add(
-                gas.costs
-                    .native_call_per_arg
-                    .saturating_mul(self.applied.len() as u64),
-            );
-        gas.charge(amount)?;
         match runtime.native_callable(self.native_id)? {
             NativeCallable::Scheduler(f) => {
                 match f(
@@ -1598,12 +1399,11 @@ pub(crate) struct NativeImpl<State: Clone + Send + Sync + 'static> {
     arity: usize,
     scheme: Scheme,
     pub(crate) func: NativeCallable<State>,
-    gas_cost: u64,
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeImpl<State> {
     pub(crate) fn to_native_fn(&self, typ: Type) -> NativeFn {
-        NativeFn::new(self.id, self.name.clone(), self.arity, typ, self.gas_cost)
+        NativeFn::new(self.id, self.name.clone(), self.arity, typ)
     }
 }
 
@@ -1621,7 +1421,6 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistry<State> {
         arity: usize,
         scheme: Scheme,
         func: NativeCallable<State>,
-        gas_cost: u64,
     ) -> Result<(), EngineError> {
         let entry = self.entries.entry(name.clone()).or_default();
         if entry.iter().any(|existing| existing.scheme == scheme) {
@@ -1638,7 +1437,6 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistry<State> {
             arity,
             scheme,
             func,
-            gas_cost,
         };
         self.by_id.insert(id, imp.clone());
         entry.push(imp);
@@ -1770,7 +1568,6 @@ where
     virtual_modules: BTreeMap<String, VirtualModule>,
     module_local_type_names: BTreeMap<String, BTreeSet<Symbol>>,
     registration_module_context: Option<String>,
-    cancel: CancellationToken,
     pub heap: Heap,
 }
 
@@ -1975,7 +1772,6 @@ where
     pub(crate) typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
-    pub(crate) cancel: CancellationToken,
     pub heap: Heap,
 }
 
@@ -2002,7 +1798,6 @@ where
             virtual_modules: self.virtual_modules.clone(),
             module_local_type_names: self.module_local_type_names.clone(),
             registration_module_context: self.registration_module_context.clone(),
-            cancel: self.cancel.clone(),
             heap: self.heap.clone(),
         }
     }
@@ -2085,7 +1880,6 @@ where
             typeclasses: self.typeclasses.clone(),
             type_system: self.type_system.clone(),
             typeclass_cache: Arc::clone(&self.typeclass_cache),
-            cancel: self.cancel.clone(),
             heap: self.heap.clone(),
         }
     }
@@ -2155,7 +1949,6 @@ where
             virtual_modules: BTreeMap::new(),
             module_local_type_names: BTreeMap::new(),
             registration_module_context: None,
-            cancel: CancellationToken::new(),
             heap: Heap::new(),
         }
     }
@@ -2187,7 +1980,6 @@ where
             virtual_modules: BTreeMap::new(),
             module_local_type_names: BTreeMap::new(),
             registration_module_context: None,
-            cancel: CancellationToken::new(),
             heap: Heap::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {
@@ -2199,10 +1991,6 @@ where
 
     pub fn into_heap(self) -> Heap {
         self.heap
-    }
-
-    pub fn cancellation_token(&self) -> CancellationToken {
-        self.cancel.clone()
     }
 
     pub fn set_default_imports(&mut self, imports: Vec<String>) {
@@ -2529,17 +2317,14 @@ where
             native_names.sort();
             for name in native_names {
                 if let Some(impls) = self.natives.get(&name) {
-                    let mut rows: Vec<(usize, String, u64)> = impls
+                    let mut rows: Vec<(usize, String)> = impls
                         .iter()
-                        .map(|imp| (imp.arity, imp.scheme.typ.to_string(), imp.gas_cost))
+                        .map(|imp| (imp.arity, imp.scheme.typ.to_string()))
                         .collect();
                     rows.sort_by(|a, b| a.1.cmp(&b.1));
                     let _ = writeln!(&mut out, "### `{name}`");
-                    for (arity, typ, gas_cost) in rows {
-                        let _ = writeln!(
-                            &mut out,
-                            "- arity `{arity}`, gas `{gas_cost}`, type `{typ}`"
-                        );
+                    for (arity, typ) in rows {
+                        let _ = writeln!(&mut out, "- arity `{arity}`, type `{typ}`");
                     }
                     let _ = writeln!(&mut out);
                 }
@@ -2547,10 +2332,6 @@ where
         }
 
         out
-    }
-
-    pub fn cancel(&self) {
-        self.cancel.cancel();
     }
 
     pub fn inject_module(&mut self, module: Module<State>) -> Result<(), EngineError> {
@@ -2588,7 +2369,7 @@ where
             } else {
                 let source = module.raw_declarations.join("\n");
                 let context = ModuleId::Virtual(ROOT_MODULE_NAME.to_string());
-                parse_program_from_source(&source, Some(&context), None)?.decls
+                parse_program_from_source(&source, Some(&context))?.decls
             };
 
             for export in module.exports {
@@ -2739,7 +2520,6 @@ where
             mut scheme,
             arity,
             callable,
-            gas_cost,
         } = registration;
         let scheme_module = if module_name == ROOT_MODULE_NAME {
             self.registration_module_context
@@ -2754,7 +2534,7 @@ where
             scheme = qualify_module_scheme_refs(&scheme, scheme_module, local_type_names);
         }
         let name = normalize_name(&Self::module_export_symbol(module_name, export_name));
-        self.register_native(name, scheme, arity, callable, gas_cost)
+        self.register_native(name, scheme, arity, callable)
     }
 
     pub(crate) fn export<Sig, H>(
@@ -2781,7 +2561,13 @@ where
             + Sync
             + 'static,
     {
-        self.export_native_with_gas_cost(name, scheme, arity, 0, handler)
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
+        let handler = Arc::new(handler);
+        let func: SyncNativeCallable<State> =
+            Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
+        let registration = NativeRegistration::sync(scheme, arity, func);
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub fn inject_rex_default_instance<T>(&mut self) -> Result<(), EngineError>
@@ -2866,7 +2652,15 @@ where
             + Sync
             + 'static,
     {
-        self.export_native_scheduler_with_gas_cost(name, scheme, arity, 0, handler)
+        validate_native_export_scheme(&scheme, arity)?;
+        let name = name.into();
+        let handler = Arc::new(handler);
+        let func: SchedulerNativeCallable<State> = Arc::new(move |engine, typ, args| {
+            let handler = Arc::clone(&handler);
+            handler(engine, typ, args.to_vec())
+        });
+        let registration = NativeRegistration::scheduler(scheme, arity, func);
+        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub(crate) fn export_value<V: IntoPointer + RexType>(
@@ -2879,60 +2673,8 @@ where
         let func: SyncNativeCallable<State> =
             Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value));
         let scheme = Scheme::new(vec![], vec![], typ);
-        let registration = NativeRegistration::sync(scheme, 0, func, 0);
+        let registration = NativeRegistration::sync(scheme, 0, func);
         self.register_native_registration(ROOT_MODULE_NAME, name, registration)
-    }
-
-    pub(crate) fn export_native_with_gas_cost<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        validate_native_export_scheme(&scheme, arity)?;
-        let name = name.into();
-        let handler = Arc::new(handler);
-        let func: SyncNativeCallable<State> =
-            Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
-        let registration = NativeRegistration::sync(scheme, arity, func, gas_cost);
-        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
-    }
-
-    pub(crate) fn export_native_scheduler_with_gas_cost<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: for<'a> Fn(
-                EvaluatorRef<State>,
-                Type,
-                Vec<Pointer>,
-            ) -> Result<SchedulerNativeResult, EngineError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        validate_native_export_scheme(&scheme, arity)?;
-        let name = name.into();
-        let handler = Arc::new(handler);
-        let func: SchedulerNativeCallable<State> = Arc::new(move |engine, typ, args| {
-            let handler = Arc::clone(&handler);
-            handler(engine, typ, args.to_vec())
-        });
-        let registration = NativeRegistration::scheduler(scheme, arity, func, gas_cost);
-        self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
@@ -3030,7 +2772,7 @@ where
                 },
             );
             let arity = type_arity(&scheme.typ);
-            self.register_native(ctor, scheme, arity, NativeCallable::Sync(func), 0)?;
+            self.register_native(ctor, scheme, arity, NativeCallable::Sync(func))?;
         }
         Ok(())
     }
@@ -3289,7 +3031,6 @@ where
         scheme: Scheme,
         arity: usize,
         func: NativeCallable<State>,
-        gas_cost: u64,
     ) -> Result<(), EngineError> {
         let expected = type_arity(&scheme.typ);
         if expected != arity {
@@ -3300,7 +3041,7 @@ where
             });
         }
         self.register_type_scheme(&name, &scheme)?;
-        self.natives.insert(name, arity, scheme, func, gas_cost)
+        self.natives.insert(name, arity, scheme, func)
     }
 
     fn register_type_scheme(
@@ -3343,9 +3084,8 @@ where
     pub(crate) fn infer_type(
         &mut self,
         expr: &Expr,
-        gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        infer_with_gas(&mut self.type_system, expr, gas).map_err(EngineError::Type)
+        infer(&mut self.type_system, expr).map_err(EngineError::Type)
     }
 
     fn type_check_expr(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
@@ -4326,7 +4066,6 @@ pub async fn apply_with_context<State>(
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-    gas: &mut GasMeter,
 ) -> Result<Pointer, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -4341,10 +4080,10 @@ where
     let (env, expr) = synthetic_application_expr(func, func_type, &args)?;
     match evaluator.context.parent {
         Some(parent) => {
-            eval_typed_expr_from_parent(runtime, parent, EvalStop::Parent(parent), &env, &expr, gas)
+            eval_typed_expr_from_parent(runtime, parent, EvalStop::Parent(parent), &env, &expr)
                 .await
         }
-        None => eval_typed_expr(runtime, &env, &expr, gas).await,
+        None => eval_typed_expr(runtime, &env, &expr).await,
     }
 }
 
@@ -4356,7 +4095,7 @@ fn callable_pointer_type<State: Clone + Send + Sync + 'static>(
     match value.as_ref() {
         Value::Closure(Closure { typ, .. }) => Ok(typ.clone()),
         Value::Native(native) => {
-            let (_, _, _, typ, _, _, _) = native.clone().into_parts();
+            let (_, _, _, typ, _, _) = native.clone().into_parts();
             Ok(typ)
         }
         Value::Overloaded(over) => {
@@ -4499,14 +4238,12 @@ pub(crate) async fn eval_typed_expr<State>(
     runtime: &RuntimeSnapshot<State>,
     env: &Environment,
     expr: &TypedExpr,
-    gas: &mut GasMeter,
 ) -> Result<Pointer, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    check_runtime_cancelled(runtime)?;
     let root_parent = runtime.heap.alloc_root_frame_parent()?;
-    eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr, gas).await
+    eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr).await
 }
 
 #[derive(Clone, Copy)]
@@ -4522,7 +4259,6 @@ pub(crate) async fn eval_typed_expr_from_parent<State>(
     stop: EvalStop,
     env: &Environment,
     expr: &TypedExpr,
-    gas: &mut GasMeter,
 ) -> Result<Pointer, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -4535,14 +4271,13 @@ where
     let mut scheduler = EvalScheduler::new(root_frame);
 
     loop {
-        check_runtime_cancelled(runtime)?;
         let item = scheduler
             .pop_next()
             .ok_or_else(|| EngineError::Internal("eval scheduler ran out of ready work".into()))?;
         let frame = runtime.heap.pointer_as_frame(&item.frame)?;
         let control = match item.returned {
-            Some(value) => eval_receive(runtime, item.frame, frame, value, gas)?,
-            None => eval_enter(runtime, item.frame, frame, gas)?,
+            Some(value) => eval_receive(runtime, item.frame, frame, value)?,
+            None => eval_enter(runtime, item.frame, frame)?,
         };
 
         match control {
@@ -4765,121 +4500,85 @@ fn eval_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     frame: Frame,
-    gas: &mut GasMeter,
 ) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     match frame {
-        Frame::Bool(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Bool(value) => {
-                    Ok(EvalControl::Return(runtime.heap.alloc_bool(*value)?))
-                }
-                _ => frame_kind_error("bool"),
+        Frame::Bool(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Bool(value) => Ok(EvalControl::Return(runtime.heap.alloc_bool(*value)?)),
+            _ => frame_kind_error("bool"),
+        },
+        Frame::Uint(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Uint(value) => Ok(EvalControl::Return(alloc_uint_literal_as(
+                runtime,
+                *value,
+                &frame.expr.typ,
+            )?)),
+            _ => frame_kind_error("uint"),
+        },
+        Frame::Int(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Int(value) => Ok(EvalControl::Return(alloc_int_literal_as(
+                runtime,
+                *value,
+                &frame.expr.typ,
+            )?)),
+            _ => frame_kind_error("int"),
+        },
+        Frame::Float(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Float(value) => {
+                Ok(EvalControl::Return(runtime.heap.alloc_f32(*value as f32)?))
             }
-        }
-        Frame::Uint(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Uint(value) => Ok(EvalControl::Return(alloc_uint_literal_as(
-                    runtime,
-                    *value,
-                    &frame.expr.typ,
-                )?)),
-                _ => frame_kind_error("uint"),
+            _ => frame_kind_error("float"),
+        },
+        Frame::String(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::String(value) => Ok(EvalControl::Return(
+                runtime.heap.alloc_string(value.clone())?,
+            )),
+            _ => frame_kind_error("string"),
+        },
+        Frame::Uuid(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Uuid(value) => Ok(EvalControl::Return(runtime.heap.alloc_uuid(*value)?)),
+            _ => frame_kind_error("uuid"),
+        },
+        Frame::DateTime(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::DateTime(value) => {
+                Ok(EvalControl::Return(runtime.heap.alloc_datetime(*value)?))
             }
-        }
-        Frame::Int(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Int(value) => Ok(EvalControl::Return(alloc_int_literal_as(
-                    runtime,
-                    *value,
-                    &frame.expr.typ,
-                )?)),
-                _ => frame_kind_error("int"),
+            _ => frame_kind_error("datetime"),
+        },
+        Frame::Hole(_) => Err(EngineError::UnsupportedExpr),
+        Frame::Tuple(mut frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Tuple(elems) if elems.is_empty() => {
+                Ok(EvalControl::Return(runtime.heap.alloc_tuple(vec![])?))
             }
-        }
-        Frame::Float(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Float(value) => {
-                    Ok(EvalControl::Return(runtime.heap.alloc_f32(*value as f32)?))
-                }
-                _ => frame_kind_error("float"),
+            TypedExprKind::Tuple(elems) => {
+                frame.state = FrSequenceState::EvalItem;
+                frame.values = Vec::with_capacity(elems.len());
+                let expr = Arc::clone(&elems[0]);
+                let env = frame.env.clone();
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
+                Ok(EvalControl::Push { expr, env })
             }
-        }
-        Frame::String(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::String(value) => Ok(EvalControl::Return(
-                    runtime.heap.alloc_string(value.clone())?,
-                )),
-                _ => frame_kind_error("string"),
+            _ => frame_kind_error("tuple"),
+        },
+        Frame::List(mut frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::List(elems) if elems.is_empty() => Ok(EvalControl::Return(
+                runtime.heap.alloc_adt(sym("Empty"), vec![])?,
+            )),
+            TypedExprKind::List(elems) => {
+                frame.state = FrSequenceState::EvalItem;
+                frame.values = Vec::with_capacity(elems.len());
+                let expr = Arc::clone(&elems[0]);
+                let env = frame.env.clone();
+                runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
+                Ok(EvalControl::Push { expr, env })
             }
-        }
-        Frame::Uuid(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Uuid(value) => {
-                    Ok(EvalControl::Return(runtime.heap.alloc_uuid(*value)?))
-                }
-                _ => frame_kind_error("uuid"),
-            }
-        }
-        Frame::DateTime(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::DateTime(value) => {
-                    Ok(EvalControl::Return(runtime.heap.alloc_datetime(*value)?))
-                }
-                _ => frame_kind_error("datetime"),
-            }
-        }
-        Frame::Hole(_) => {
-            gas.charge(gas.costs.eval_node)?;
-            Err(EngineError::UnsupportedExpr)
-        }
-        Frame::Tuple(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Tuple(elems) if elems.is_empty() => {
-                    Ok(EvalControl::Return(runtime.heap.alloc_tuple(vec![])?))
-                }
-                TypedExprKind::Tuple(elems) => {
-                    frame.state = FrSequenceState::EvalItem;
-                    frame.values = Vec::with_capacity(elems.len());
-                    let expr = Arc::clone(&elems[0]);
-                    let env = frame.env.clone();
-                    runtime
-                        .heap
-                        .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
-                    Ok(EvalControl::Push { expr, env })
-                }
-                _ => frame_kind_error("tuple"),
-            }
-        }
-        Frame::List(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::List(elems) if elems.is_empty() => Ok(EvalControl::Return(
-                    runtime.heap.alloc_adt(sym("Empty"), vec![])?,
-                )),
-                TypedExprKind::List(elems) => {
-                    frame.state = FrSequenceState::EvalItem;
-                    frame.values = Vec::with_capacity(elems.len());
-                    let expr = Arc::clone(&elems[0]);
-                    let env = frame.env.clone();
-                    runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
-                    Ok(EvalControl::Push { expr, env })
-                }
-                _ => frame_kind_error("list"),
-            }
-        }
+            _ => frame_kind_error("list"),
+        },
         Frame::Dict(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             if frame.keys.is_empty() {
                 return Ok(EvalControl::Return(
                     runtime.heap.alloc_dict(BTreeMap::new())?,
@@ -4899,7 +4598,6 @@ where
             Ok(EvalControl::Push { expr, env })
         }
         Frame::RecordUpdate(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             let base = match frame.expr.kind.as_ref() {
                 TypedExprKind::RecordUpdate { base, .. } => Arc::clone(base),
                 _ => return frame_kind_error("record update"),
@@ -4911,40 +4609,28 @@ where
                 .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
             Ok(EvalControl::Push { expr: base, env })
         }
-        Frame::Var(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Var { name, .. } => {
-                    match eval_resolve_var(
-                        runtime,
-                        frame_ptr,
-                        &frame.env,
-                        name,
-                        &frame.expr.typ,
-                        gas,
-                    )? {
-                        EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
-                        EvalVarResult::Push { expr, env } => {
-                            frame.state = FrValueState::Enter;
-                            runtime.heap.replace_frame(&frame_ptr, Frame::Var(frame))?;
-                            Ok(EvalControl::Push { expr, env })
-                        }
-                        EvalVarResult::AwaitNative(future) => {
-                            frame.state = FrValueState::Enter;
-                            runtime.heap.replace_frame(&frame_ptr, Frame::Var(frame))?;
-                            Ok(EvalControl::AwaitNative(future))
-                        }
+        Frame::Var(mut frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Var { name, .. } => {
+                match eval_resolve_var(runtime, frame_ptr, &frame.env, name, &frame.expr.typ)? {
+                    EvalVarResult::Value(value) => Ok(EvalControl::Return(value)),
+                    EvalVarResult::Push { expr, env } => {
+                        frame.state = FrValueState::Enter;
+                        runtime.heap.replace_frame(&frame_ptr, Frame::Var(frame))?;
+                        Ok(EvalControl::Push { expr, env })
+                    }
+                    EvalVarResult::AwaitNative(future) => {
+                        frame.state = FrValueState::Enter;
+                        runtime.heap.replace_frame(&frame_ptr, Frame::Var(frame))?;
+                        Ok(EvalControl::AwaitNative(future))
                     }
                 }
-                _ => frame_kind_error("var"),
             }
-        }
+            _ => frame_kind_error("var"),
+        },
         Frame::App(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             let mut spine = Vec::new();
             let mut head = Arc::clone(&frame.expr);
             while let TypedExprKind::App(func, arg) = head.kind.as_ref() {
-                check_runtime_cancelled(runtime)?;
                 spine.push(FrAppArg {
                     func_type: func.typ.clone(),
                     expr: Arc::clone(arg),
@@ -4960,7 +4646,6 @@ where
             Ok(EvalControl::Push { expr: head, env })
         }
         Frame::Project(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             let expr = match frame.expr.kind.as_ref() {
                 TypedExprKind::Project { expr, .. } => Arc::clone(expr),
                 _ => return frame_kind_error("project"),
@@ -4972,27 +4657,23 @@ where
                 .replace_frame(&frame_ptr, Frame::Project(frame))?;
             Ok(EvalControl::Push { expr, env })
         }
-        Frame::Lam(frame) => {
-            gas.charge(gas.costs.eval_node)?;
-            match frame.expr.kind.as_ref() {
-                TypedExprKind::Lam { param, body } => {
-                    let param_ty = split_fun(&frame.expr.typ)
-                        .map(|(arg, _)| arg)
-                        .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
-                    let value = runtime.heap.alloc_closure(
-                        frame.env.clone(),
-                        param.clone(),
-                        param_ty,
-                        frame.expr.typ.clone(),
-                        Arc::clone(body),
-                    )?;
-                    Ok(EvalControl::Return(value))
-                }
-                _ => frame_kind_error("lambda"),
+        Frame::Lam(frame) => match frame.expr.kind.as_ref() {
+            TypedExprKind::Lam { param, body } => {
+                let param_ty = split_fun(&frame.expr.typ)
+                    .map(|(arg, _)| arg)
+                    .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
+                let value = runtime.heap.alloc_closure(
+                    frame.env.clone(),
+                    param.clone(),
+                    param_ty,
+                    frame.expr.typ.clone(),
+                    Arc::clone(body),
+                )?;
+                Ok(EvalControl::Return(value))
             }
-        }
+            _ => frame_kind_error("lambda"),
+        },
         Frame::Let(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             let def = match frame.expr.kind.as_ref() {
                 TypedExprKind::Let { def, .. } => Arc::clone(def),
                 _ => return frame_kind_error("let"),
@@ -5003,7 +4684,6 @@ where
             Ok(EvalControl::Push { expr: def, env })
         }
         Frame::LetRec(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             let TypedExprKind::LetRec { bindings, body } = frame.expr.kind.as_ref() else {
                 return frame_kind_error("let rec");
             };
@@ -5027,7 +4707,6 @@ where
                     env: recursive_env,
                 });
             }
-            gas.charge(gas.costs.eval_node)?;
             frame.state = FrLetRecState::EvalBinding;
             let def = Arc::clone(&bindings[0].1);
             runtime
@@ -5039,7 +4718,6 @@ where
             })
         }
         Frame::Ite(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             let cond = match frame.expr.kind.as_ref() {
                 TypedExprKind::Ite { cond, .. } => Arc::clone(cond),
                 _ => return frame_kind_error("if"),
@@ -5050,7 +4728,6 @@ where
             Ok(EvalControl::Push { expr: cond, env })
         }
         Frame::Match(mut frame) => {
-            gas.charge(gas.costs.eval_node)?;
             let scrutinee = match frame.expr.kind.as_ref() {
                 TypedExprKind::Match { scrutinee, .. } => Arc::clone(scrutinee),
                 _ => return frame_kind_error("match"),
@@ -5065,7 +4742,7 @@ where
                 env,
             })
         }
-        Frame::NativeCall(frame) => eval_native_enter(runtime, frame_ptr, frame, gas),
+        Frame::NativeCall(frame) => eval_native_enter(runtime, frame_ptr, frame),
         Frame::NativeAsync(_) => unexpected_child_result("native async"),
     }
 }
@@ -5075,7 +4752,6 @@ fn eval_receive<State>(
     frame_ptr: Pointer,
     frame: Frame,
     value: Pointer,
-    gas: &mut GasMeter,
 ) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -5156,12 +4832,8 @@ where
             FrRecordUpdateState::EvalBase => {
                 frame.base_value = Some(value);
                 if frame.update_keys.is_empty() {
-                    let result = apply_record_update_values(
-                        runtime,
-                        value,
-                        frame.update_values.clone(),
-                        gas,
-                    )?;
+                    let result =
+                        apply_record_update_values(runtime, value, frame.update_values.clone())?;
                     return Ok(EvalControl::Return(result));
                 }
                 frame.state = FrRecordUpdateState::EvalUpdate;
@@ -5186,8 +4858,7 @@ where
                     let base = frame.base_value.ok_or_else(|| {
                         EngineError::Internal("record update frame missing base".into())
                     })?;
-                    let result =
-                        apply_record_update_values(runtime, base, frame.update_values, gas)?;
+                    let result = apply_record_update_values(runtime, base, frame.update_values)?;
                     return Ok(EvalControl::Return(result));
                 }
                 let expr = record_update_expr_at(&frame, frame.next_update_index)?;
@@ -5206,7 +4877,6 @@ where
                 if frame.spine.is_empty() {
                     return Ok(EvalControl::Return(value));
                 }
-                gas.charge(gas.costs.eval_app_step)?;
                 frame.state = FrAppState::EvalArg;
                 frame.next_arg_index = 0;
                 let expr = Arc::clone(&frame.spine[0].expr);
@@ -5229,10 +4899,9 @@ where
                     value,
                     Some(&arg_info.func_type),
                     Some(&arg_info.expr.typ),
-                    gas,
                 )? {
                     EvalApplyResult::Value(applied) => {
-                        continue_app_after_apply(runtime, frame_ptr, frame, applied, gas)
+                        continue_app_after_apply(runtime, frame_ptr, frame, applied)
                     }
                     EvalApplyResult::Push { expr, env } => {
                         frame.arg = Some(value);
@@ -5258,7 +4927,7 @@ where
                     }
                 }
             }
-            FrAppState::ApplyArg => continue_app_after_apply(runtime, frame_ptr, frame, value, gas),
+            FrAppState::ApplyArg => continue_app_after_apply(runtime, frame_ptr, frame, value),
             _ => unexpected_child_result("application"),
         },
         Frame::Project(frame) => match frame.expr.kind.as_ref() {
@@ -5311,7 +4980,6 @@ where
                         env: recursive_env,
                     });
                 }
-                gas.charge(gas.costs.eval_node)?;
                 let def = Arc::clone(&bindings[frame.next_binding_index].1);
                 runtime
                     .heap
@@ -5359,8 +5027,6 @@ where
             FrMatchState::EvalScrutinee => {
                 frame.scrutinee_value = Some(value);
                 for idx in frame.next_arm_index..frame.arms.len() {
-                    check_runtime_cancelled(runtime)?;
-                    gas.charge(gas.costs.eval_match_arm)?;
                     let arm = &frame.arms[idx];
                     if let Some(bindings) = match_pattern_ptr(&runtime.heap, &arm.pattern, &value) {
                         let env = frame.env.extend_many(bindings);
@@ -5379,7 +5045,7 @@ where
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
         },
-        Frame::NativeCall(frame) => eval_native_receive(runtime, frame_ptr, frame, value, gas),
+        Frame::NativeCall(frame) => eval_native_receive(runtime, frame_ptr, frame, value),
         Frame::NativeAsync(_) => Ok(EvalControl::Return(value)),
         _ => unexpected_child_result("value"),
     }
@@ -5397,7 +5063,6 @@ fn eval_native_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
-    gas: &mut GasMeter,
 ) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -5405,7 +5070,7 @@ where
     if frame.state != FrNativeCallState::Enter {
         return unexpected_child_result("native call");
     }
-    let step = native_task_enter(runtime, &mut frame.task, gas)?;
+    let step = native_task_enter(runtime, &mut frame.task)?;
     native_step_to_control(runtime, frame_ptr, frame, step)
 }
 
@@ -5414,7 +5079,6 @@ fn eval_native_receive<State>(
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
     value: Pointer,
-    gas: &mut GasMeter,
 ) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -5422,7 +5086,7 @@ where
     if frame.state != FrNativeCallState::Waiting {
         return unexpected_child_result("native call");
     }
-    let step = native_task_receive(runtime, &mut frame.task, value, gas)?;
+    let step = native_task_receive(runtime, &mut frame.task, value)?;
     native_step_to_control(runtime, frame_ptr, frame, step)
 }
 
@@ -5450,12 +5114,10 @@ where
 fn native_task_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     task: &mut NativeTask,
-    gas: &mut GasMeter,
 ) -> Result<NativeStep, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    gas.charge(gas.costs.eval_node)?;
     match task {
         NativeTask::EvalExpr(task) => Ok(NativeStep::Push {
             expr: Arc::clone(&task.expr),
@@ -5509,12 +5171,10 @@ fn native_task_receive<State>(
     runtime: &RuntimeSnapshot<State>,
     task: &mut NativeTask,
     value: Pointer,
-    gas: &mut GasMeter,
 ) -> Result<NativeStep, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    gas.charge(gas.costs.eval_app_step)?;
     match task {
         NativeTask::EvalExpr(_) | NativeTask::ApplyUnary(_) => Ok(NativeStep::Return(value)),
         NativeTask::SequenceMap(task) => native_sequence_map_receive(runtime, task, value),
@@ -6449,7 +6109,6 @@ fn eval_apply_overloaded_arg<State>(
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-    gas: &mut GasMeter,
 ) -> Result<EvalApplyResult, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -6507,16 +6166,6 @@ where
     let context = EvalContext::child(parent);
     let imp = EvaluatorRef::new_with_context(runtime, context)
         .resolve_native_impl(over.name.as_ref(), &full_ty)?;
-    let amount = gas
-        .costs
-        .native_call_base
-        .saturating_add(imp.gas_cost)
-        .saturating_add(
-            gas.costs
-                .native_call_per_arg
-                .saturating_mul(over.applied.len() as u64),
-        );
-    gas.charge(amount)?;
     match imp
         .func
         .call_with_context(runtime, full_ty, &over.applied, context)?
@@ -6533,7 +6182,6 @@ fn eval_apply_arg<State>(
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-    gas: &mut GasMeter,
 ) -> Result<EvalApplyResult, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -6567,19 +6215,15 @@ where
                 env: env.extend(param, arg),
             })
         }
-        Value::Native(native) => match native.apply_with_context(
-            runtime,
-            arg,
-            arg_type,
-            gas,
-            EvalContext::child(parent),
-        )? {
-            NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
-            NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
-            NativeApplyResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
-        },
+        Value::Native(native) => {
+            match native.apply_with_context(runtime, arg, arg_type, EvalContext::child(parent))? {
+                NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
+                NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
+                NativeApplyResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
+            }
+        }
         Value::Overloaded(over) => {
-            eval_apply_overloaded_arg(runtime, parent, over, arg, func_type, arg_type, gas)
+            eval_apply_overloaded_arg(runtime, parent, over, arg, func_type, arg_type)
         }
         _ => Err(EngineError::NotCallable(
             runtime.heap.type_name(&func)?.into(),
@@ -6592,7 +6236,6 @@ fn continue_app_after_apply<State>(
     frame_ptr: Pointer,
     mut frame: FrApp,
     applied: Pointer,
-    gas: &mut GasMeter,
 ) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -6608,7 +6251,6 @@ where
     if frame.next_arg_index == frame.spine.len() {
         return Ok(EvalControl::Return(applied));
     }
-    gas.charge(gas.costs.eval_app_step)?;
     frame.state = FrAppState::EvalArg;
     let expr = Arc::clone(&frame.spine[frame.next_arg_index].expr);
     let env = frame.env.clone();
@@ -6622,7 +6264,6 @@ fn eval_resolve_var<State>(
     env: &Environment,
     name: &Symbol,
     typ: &Type,
-    gas: &mut GasMeter,
 ) -> Result<EvalVarResult, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -6631,7 +6272,7 @@ where
         let value = runtime.heap.get(&ptr)?;
         match value.as_ref() {
             Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                match native.call_zero_with_context(runtime, gas, EvalContext::child(parent))? {
+                match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
                     NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
                     NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
                 }
@@ -6651,14 +6292,11 @@ where
             Err(pointer) => Ok(EvalVarResult::Value(pointer)),
         }
     } else {
-        let value = EvaluatorRef::new_with_parent(runtime, parent).resolve_native(
-            name.as_ref(),
-            typ,
-            gas,
-        )?;
+        let value =
+            EvaluatorRef::new_with_parent(runtime, parent).resolve_native(name.as_ref(), typ)?;
         match runtime.heap.get(&value)?.as_ref() {
             Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                match native.call_zero_with_context(runtime, gas, EvalContext::child(parent))? {
+                match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
                     NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
                     NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
                 }
@@ -6689,7 +6327,6 @@ fn apply_record_update_values<State>(
     runtime: &RuntimeSnapshot<State>,
     base_ptr: Pointer,
     update_vals: BTreeMap<Symbol, Pointer>,
-    gas: &mut GasMeter,
 ) -> Result<Pointer, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -6699,7 +6336,6 @@ where
         Value::Dict(map) => {
             let mut map = map.clone();
             for (key, value) in update_vals {
-                gas.charge(gas.costs.eval_record_update_field)?;
                 map.insert(key, value);
             }
             runtime.heap.alloc_dict(map)
@@ -6710,7 +6346,6 @@ where
                 Value::Dict(map) => {
                     let mut out = map.clone();
                     for (key, value) in update_vals {
-                        gas.charge(gas.costs.eval_record_update_field)?;
                         out.insert(key, value);
                     }
                     let dict = runtime.heap.alloc_dict(out)?;

@@ -11,21 +11,18 @@ This document focuses on common embedding patterns.
 
 ## Running Untrusted Rex Code (Production Checklist)
 
-This repo provides the *mechanisms* to safely run user-submitted Rex (gas metering, parsing limits,
-cancellation). Your production server is responsible for enforcing hard resource limits (process
-isolation, wall-clock timeouts, memory limits).
+This repo provides language-level parsing limits and a pure evaluator suitable for embedding. Your
+production server is responsible for enforcing hard resource limits (process isolation, wall-clock
+timeouts, memory limits).
 
 Recommended defaults for untrusted input:
 
 - Always cap parsing nesting depth with `ParserLimits::safe_defaults()` (or stricter).
-- Always run with a bounded `GasMeter` for **parse + infer + eval** (and calibrate budgets with real workloads).
-- Treat `EvalError::OutOfGas` / `EvalError::Cancelled` and the same variants wrapped inside
-  `ExecutionError` as normal user-visible outcomes.
 - Run evaluation in an isolation boundary you can hard-kill (separate process/container), with CPU/RSS/time limits.
 
 Evaluation API:
 
-- Evaluation is async and gas-metered via `Engine::eval_with_gas`.
+- Evaluation is async via `Evaluator`.
 
 ## Compile Then Run
 
@@ -39,17 +36,16 @@ The current implementation still keeps engine-backed state internally, but the p
 separates compile-time and runtime phases.
 
 ```rust
-use rex::{Engine, GasMeter};
+use rex::Engine;
 
 let engine = Engine::with_prelude(())?;
 let mut compiler = rex::Compiler::new(engine.clone());
 let runtime = rex::RuntimeEnv::new(engine.clone());
 let mut evaluator = rex::Evaluator::new(runtime.clone());
-let mut gas = GasMeter::default();
 
-let program = compiler.compile_snippet("let x = 1 + 2 in x * 3", &mut gas)?;
+let program = compiler.compile_snippet("let x = 1 + 2 in x * 3")?;
 runtime.validate(&program)?;
-let value = evaluator.run(&program, &mut gas).await?;
+let value = evaluator.run(&program).await?;
 assert_eq!(program.result_type().to_string(), "i32");
 ```
 
@@ -95,7 +91,7 @@ let runtime = rex::RuntimeEnv::new(engine.clone());
 runtime.validate(&program)?;
 
 let mut evaluator = rex::Evaluator::new(runtime);
-let value = evaluator.run(&program, &mut gas).await?;
+let value = evaluator.run(&program).await?;
 ```
 
 The convenience helpers such as `Evaluator::eval`, `eval_snippet`, `eval_snippet_at`, and
@@ -105,22 +101,21 @@ still sugar, but they no longer use a separate execution path.
 ## Evaluate Rex Code Directly
 
 ```rust
-use rex::{Engine, GasMeter, Module, Parser, Token};
+use rex::{Engine, Module, Parser, Token};
 
 let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
 engine.inject_module(globals)?;
-let mut gas = GasMeter::default();
 let mut compiler = rex::Compiler::new(engine.clone());
 let program = compiler.compile_expr(program.expr.as_ref())?;
 let mut evaluator =
     rex::Evaluator::new_with_compiler(rex::RuntimeEnv::new(engine.clone()), rex::Compiler::new(engine.clone()));
-let value = evaluator.run(&program, &mut gas).await?;
+let value = evaluator.run(&program).await?;
 println!("{value}");
 ```
 
@@ -163,15 +158,13 @@ This is fully supported in `rex-engine`. You can compose module loading from:
 ### 1) Use Built-In Resolvers
 
 ```rust
-use rex::{Engine, GasMeter};
+use rex::{Engine};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 engine.add_include_resolver("/opt/my-app/rex-modules")?;
-
-let mut gas = GasMeter::default();
 let value = engine
-    .eval_module_file("workflows/main.rex", &mut gas)
+    .eval_module_file("workflows/main.rex")
     .await?;
 println!("{value}");
 ```
@@ -194,7 +187,7 @@ For host-managed modules, add a resolver that maps `module_name` to source text.
 
 ```rust
 use rex_engine::{ModuleId, ResolveRequest, ResolvedModule};
-use rex::{Engine, GasMeter};
+use rex::{Engine};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -224,10 +217,8 @@ engine.add_resolver("host-map", {
         }))
     }
 });
-
-let mut gas = GasMeter::default();
 let value = engine
-    .eval_snippet("import acme.main (main)\nmain", &mut gas)
+    .eval_snippet("import acme.main (main)\nmain")
     .await?;
 println!("{value}");
 ```
@@ -263,7 +254,6 @@ passes before calling `Engine::inject_module`.
 
 ```rust
 use rex_engine::{Engine, Module};
-use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -272,13 +262,8 @@ let mut math = Module::new("acme.math");
 math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
 engine.inject_module(math)?;
-
-let mut gas = GasMeter::default();
 let value = engine
-    .eval_snippet(
-        "import acme.math (inc, double_async as d)\ninc (d 20)",
-        &mut gas,
-    )
+    .eval_snippet("import acme.math (inc, double_async as d)\ninc (d 20)")
     .await?;
 println!("{value}");
 ```
@@ -330,7 +315,6 @@ Example:
 
 ```rust
 use rex::{Engine, EngineError, Module, Rex};
-use rex_util::GasMeter;
 
 #[derive(Clone, Debug, PartialEq, Rex)]
 enum Side {
@@ -360,8 +344,6 @@ m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
 })?;
 engine.inject_module(m)?;
-
-let mut gas = GasMeter::default();
 let value = engine
     .eval_snippet(
         r#"
@@ -370,8 +352,7 @@ let value = engine
             render_label (Label { text = "left", side = Left }),
             render_label (Label { text = "right", side = Right })
         )
-        "#,
-        &mut gas,
+        "#
     )
     .await?;
 println!("{value}"); // ("left        ", "       right")
@@ -444,9 +425,8 @@ If you evaluate ad-hoc Rex snippets that contain imports, use `eval_snippet_at` 
 `infer_snippet_at`) to provide an importer path anchor:
 
 ```rust
-let mut gas = rex_util::GasMeter::default();
 let value = engine
-    .eval_snippet_at("import foo.bar as Bar\nBar.add 1 2", "/tmp/workflow/_snippet.rex", &mut gas)
+    .eval_snippet_at("import foo.bar as Bar\nBar.add 1 2", "/tmp/workflow/_snippet.rex")
     .await?;
 ```
 
@@ -536,7 +516,7 @@ use rex::{Parser, Token, TypeSystem, infer};
 
 let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
 let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
@@ -591,7 +571,7 @@ size [1, 2, 3]
 
 let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
 let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
@@ -614,7 +594,6 @@ assert_eq!(ty.to_string(), "i32");
 ```rust
 use rex_engine::{Engine, EngineError};
 use rex::{Parser, Token};
-use rex_util::{GasCosts, GasMeter};
 
 let code = r#"
 class Size a
@@ -631,15 +610,14 @@ instance Size (List t)
 
 let tokens = Token::tokenize(code)?;
 let mut parser = Parser::new(tokens);
-let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| format!("{errs:?}"))?;
+let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
 engine.inject_module(globals)?;
-let mut gas = GasMeter::default();
 let value = engine
-    .eval_with_gas(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await?;
 println!("{value}");
 ```
@@ -668,7 +646,6 @@ direct calls, `let` bindings, and lambda wrappers:
 
 ```rust
 use rex_engine::{Engine, Module};
-use rex_util::GasMeter;
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
@@ -684,10 +661,9 @@ for code in [
     let tokens = Token::tokenize(code)?;
     let mut parser = Parser::new(tokens);
     let program = parser
-        .parse_program(&mut GasMeter::default())
+        .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
-    let mut gas = GasMeter::default();
-    let value = engine.eval_with_gas(program.expr.as_ref(), &mut gas).await?;
+    let value = engine.eval(program.expr.as_ref()).await?;
     println!("{value}");
 }
 ```
@@ -698,11 +674,10 @@ while `num_u32 (-3)` is a type error.
 ### Async Natives
 
 If your host functions are async, stage them in a module with `export_async` and evaluate with
-`Engine::eval_with_gas`.
+`Evaluator::eval`.
 
 ```rust
 use rex_engine::{Engine, Module};
-use rex_util::{GasCosts, GasMeter};
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
@@ -712,60 +687,11 @@ engine.inject_module(globals)?;
 let tokens = Token::tokenize("inc 1")?;
 let mut parser = Parser::new(tokens);
 let program = parser
-    .parse_program(&mut GasMeter::default())
+    .parse_program()
     .map_err(|errs| format!("parse error: {errs:?}"))?;
-let mut gas = GasMeter::default();
-let v = engine.eval_with_gas(program.expr.as_ref(), &mut gas).await?;
+let v = engine.eval(program.expr.as_ref()).await?;
 println!("{v}");
 ```
-
-### Cancellation
-
-Async natives can be cancelled. Cancellation is cooperative: you get a `CancellationToken` and
-trigger it from another thread/task, and the engine will stop evaluation with `EngineError::Cancelled`.
-
-```rust
-use futures::FutureExt;
-use rex_engine::{CancellationToken, Engine, EngineError, Module};
-use rex::{BuiltinTypeId, Scheme, Type};
-use rex_util::{GasCosts, GasMeter};
-
-let tokens = Token::tokenize("stall")?;
-let mut parser = Parser::new(tokens);
-let expr = parser
-    .parse_program(&mut GasMeter::default())
-    .map_err(|errs| format!("parse error: {errs:?}"))?
-    .expr;
-
-let mut engine = Engine::with_prelude(())?;
-let scheme = Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32));
-let mut globals = Module::global();
-globals.export_native_async_cancellable("stall", scheme, 0, |engine, token: CancellationToken, _, _args| {
-        async move {
-            token.cancelled().await;
-            engine.heap.alloc_i32(0)
-        }
-        .boxed()
-    })?;
-engine.inject_module(globals)?;
-
-let token = engine.cancellation_token();
-std::thread::spawn(move || {
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    token.cancel();
-});
-let mut gas = GasMeter::default();
-let res = engine.eval_with_gas(expr.as_ref(), &mut gas).await;
-assert!(matches!(res, Err(EngineError::Cancelled)));
-```
-
-### Gas Metering
-
-To defend against untrusted/large programs, you can run the pipeline with a gas budget:
-
-- `Parser::parse_program`
-- `infer_with_gas(&mut ts, ...)` / `infer_typed_with_gas(&mut ts, ...)`
-- `Engine::eval_with_gas`
 
 ### Parsing Limits
 
@@ -776,7 +702,7 @@ use rex::{Parser, ParserLimits, Token};
 
 let mut parser = Parser::new(Token::tokenize("(((1)))")?);
 parser.set_limits(ParserLimits::safe_defaults());
-let program = parser.parse_program(&mut GasMeter::default())?;
+let program = parser.parse_program()?;
 ```
 
 ## Bridge Rust Types with `#[derive(Rex)]`
@@ -828,7 +754,7 @@ Fragment::inject_rex(&mut engine)?;
 ```
 
 ```rust
-use rex::{Engine, FromPointer, GasMeter, Parser, Token, Rex};
+use rex::{Engine, FromPointer, Parser, Token, Rex};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -840,11 +766,10 @@ let mut engine = Engine::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
 let expr = Parser::new(Token::tokenize("Just 1")?)
-    .parse_program(&mut GasMeter::default())
+    .parse_program()
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .expr;
-let mut gas = GasMeter::default();
-let (v, _ty) = engine.eval_with_gas(expr.as_ref(), &mut gas).await?;
+let (v, _ty) = engine.eval(expr.as_ref()).await?;
 assert_eq!(Maybe::<i32>::from_pointer(&engine.heap, &v)?, Maybe::Just(1));
 ```
 

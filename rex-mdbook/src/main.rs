@@ -779,10 +779,7 @@ self.onmessage = async (event) => {
   const id = msg.id;
   try {
     const wasm = await ensureWasm();
-    const output = wasm.evalToString(
-      typeof msg.code === "string" ? msg.code : "",
-      undefined
-    );
+    const output = wasm.evalToString(typeof msg.code === "string" ? msg.code : "");
     self.postMessage({ type: "result", id, ok: true, output });
   } catch (e) {
     self.postMessage({ type: "result", id, ok: false, error: String(e) });

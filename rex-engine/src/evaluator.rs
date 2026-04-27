@@ -10,11 +10,11 @@ use rex_typesystem::{
     types::{Type, TypedExpr, Types},
     unification::{Subst, unify},
 };
-use rex_util::{GasMeter, sha256_hex};
+use rex_util::sha256_hex;
 
 use crate::engine::{
-    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, check_runtime_cancelled,
-    eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
+    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, eval_typed_expr, impl_matches_type,
+    is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
 use crate::{
@@ -79,62 +79,42 @@ where
         }
     }
 
-    pub async fn run(
-        &mut self,
-        program: &CompiledProgram,
-        gas: &mut GasMeter,
-    ) -> Result<Pointer, EvalError> {
-        check_runtime_cancelled(&self.runtime.runtime)?;
+    pub async fn run(&mut self, program: &CompiledProgram) -> Result<Pointer, EvalError> {
         self.runtime.validate_internal(program)?;
-        eval_typed_expr(
-            &self.runtime.runtime,
-            &program.env,
-            program.expr.as_ref(),
-            gas,
-        )
-        .await
-        .map_err(EvalError::from)
+        eval_typed_expr(&self.runtime.runtime, &program.env, program.expr.as_ref())
+            .await
+            .map_err(EvalError::from)
     }
 
-    pub async fn eval(
-        &mut self,
-        expr: &Expr,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        self.prepare_and_run(gas, |compiler, _gas| compiler.compile_expr(expr))
+    pub async fn eval(&mut self, expr: &Expr) -> Result<(Pointer, Type), ExecutionError> {
+        self.prepare_and_run(|compiler| compiler.compile_expr(expr))
             .await
     }
 
     async fn run_prepared(
         &mut self,
         program: CompiledProgram,
-        gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         self.sync_runtime_from_compiler();
         let typ = program.result_type().clone();
-        let value = self.run(&program, gas).await?;
+        let value = self.run(&program).await?;
         Ok((value, typ))
     }
 
-    async fn prepare_and_run<F>(
-        &mut self,
-        gas: &mut GasMeter,
-        compile: F,
-    ) -> Result<(Pointer, Type), ExecutionError>
+    async fn prepare_and_run<F>(&mut self, compile: F) -> Result<(Pointer, Type), ExecutionError>
     where
-        F: FnOnce(&mut Compiler<State>, &mut GasMeter) -> Result<CompiledProgram, CompileError>,
+        F: FnOnce(&mut Compiler<State>) -> Result<CompiledProgram, CompileError>,
     {
         let compiler = self.compiler.as_mut().ok_or_else(|| {
             CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
         })?;
-        let program = compile(compiler, gas)?;
-        self.run_prepared(program, gas).await
+        let program = compile(compiler)?;
+        self.run_prepared(program).await
     }
 
     pub async fn eval_module_file(
         &mut self,
         path: impl AsRef<Path>,
-        gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         let (id, bytes) = self
             .runtime
@@ -165,13 +145,10 @@ where
         let inst = self
             .runtime
             .loader
-            .load_module_from_resolved(
-                ResolvedModule {
-                    id,
-                    content: ResolvedModuleContent::Source(source),
-                },
-                gas,
-            )
+            .load_module_from_resolved(ResolvedModule {
+                id,
+                content: ResolvedModuleContent::Source(source),
+            })
             .await
             .map_err(CompileError::from)?;
         Ok((inst.init_value, inst.init_type))
@@ -180,7 +157,6 @@ where
     pub async fn eval_module_source(
         &mut self,
         source: &str,
-        gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         let mut hasher = DefaultHasher::new();
         source.hash(&mut hasher);
@@ -197,24 +173,17 @@ where
         let inst = self
             .runtime
             .loader
-            .load_module_from_resolved(
-                ResolvedModule {
-                    id,
-                    content: ResolvedModuleContent::Source(source.to_string()),
-                },
-                gas,
-            )
+            .load_module_from_resolved(ResolvedModule {
+                id,
+                content: ResolvedModuleContent::Source(source.to_string()),
+            })
             .await
             .map_err(CompileError::from)?;
         Ok((inst.init_value, inst.init_type))
     }
 
-    pub async fn eval_snippet(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-    ) -> Result<(Pointer, Type), ExecutionError> {
-        self.prepare_and_run(gas, |compiler, gas| compiler.compile_snippet(source, gas))
+    pub async fn eval_snippet(&mut self, source: &str) -> Result<(Pointer, Type), ExecutionError> {
+        self.prepare_and_run(|compiler| compiler.compile_snippet(source))
             .await
     }
 
@@ -222,26 +191,22 @@ where
         &mut self,
         program: &Program,
         state: &mut ReplState,
-        gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         let compiler = self.compiler.as_mut().ok_or_else(|| {
             CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
         })?;
-        let compiled = compiler.compile_repl_program(program, state, gas).await?;
-        self.run_prepared(compiled, gas).await
+        let compiled = compiler.compile_repl_program(program, state).await?;
+        self.run_prepared(compiled).await
     }
 
     pub async fn eval_snippet_at(
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
-        gas: &mut GasMeter,
     ) -> Result<(Pointer, Type), ExecutionError> {
         let path = importer_path.as_ref().to_path_buf();
-        self.prepare_and_run(gas, |compiler, gas| {
-            compiler.compile_snippet_at(source, &path, gas)
-        })
-        .await
+        self.prepare_and_run(|compiler| compiler.compile_snippet_at(source, &path))
+            .await
     }
 }
 
@@ -350,12 +315,7 @@ where
         }
     }
 
-    pub(crate) fn resolve_native(
-        &self,
-        name: &str,
-        typ: &Type,
-        _gas: &mut GasMeter,
-    ) -> Result<Pointer, EngineError> {
+    pub(crate) fn resolve_native(&self, name: &str, typ: &Type) -> Result<Pointer, EngineError> {
         let sym_name = sym(name);
         let impls = self
             .runtime
@@ -374,17 +334,11 @@ where
             }),
             1 => {
                 let imp = matches[0].clone();
-                let (native_id, name, arity, typ, gas_cost, applied, applied_types) =
+                let (native_id, name, arity, typ, applied, applied_types) =
                     imp.to_native_fn(typ.clone()).into_parts();
-                self.runtime.heap.alloc_native(
-                    native_id,
-                    name,
-                    arity,
-                    typ,
-                    gas_cost,
-                    applied,
-                    applied_types,
-                )
+                self.runtime
+                    .heap
+                    .alloc_native(native_id, name, arity, typ, applied, applied_types)
             }
             _ => {
                 if typ.ftv().is_empty() {

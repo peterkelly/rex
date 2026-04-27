@@ -2,7 +2,7 @@ use lsp_types::{
     CodeAction, CodeActionOrCommand, Diagnostic, DiagnosticSeverity, Position, Range, Url,
     WorkspaceEdit,
 };
-use rex::{Engine, GasMeter, Parser, Token};
+use rex::{Engine, Parser, Token};
 use rex_ast::expr::{Decl, Expr, TypeExpr};
 use rex_engine::{ValueDisplayOptions, pointer_display_with};
 use rex_lsp::server::*;
@@ -54,9 +54,7 @@ fn assert_internal_name_ref(name: &rex_ast::expr::NameRef) {
 async fn eval_source_to_display(code: &str) -> (String, String) {
     let tokens = Token::tokenize(code).expect("tokenize source");
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program(&mut GasMeter::default())
-        .expect("parse source");
+    let program = parser.parse_program().expect("parse source");
     let mut engine = Engine::with_prelude(()).expect("build engine");
     let mut module = rex_engine::Module::global();
     module.add_decls(program.decls.clone());
@@ -65,7 +63,7 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut GasMeter::default())
+    .eval(program.expr.as_ref())
     .await
     .expect("evaluate source");
     let display = pointer_display_with(
@@ -119,9 +117,7 @@ x is D.Boxed
 "#;
     let tokens = Token::tokenize(source).expect("tokenize");
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program(&mut GasMeter::default())
-        .expect("parse");
+    let program = parser.parse_program().expect("parse");
     let (rewritten, _ts, _imports, diags) =
         prepare_program_with_imports(&uri, &program).expect("prepare");
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
@@ -184,9 +180,7 @@ pick is i32
 "#;
     let tokens = Token::tokenize(source).expect("tokenize");
     let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program(&mut GasMeter::default())
-        .expect("parse");
+    let program = parser.parse_program().expect("parse");
     let (rewritten, _ts, _imports, diags) =
         prepare_program_with_imports(&uri, &program).expect("prepare");
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");

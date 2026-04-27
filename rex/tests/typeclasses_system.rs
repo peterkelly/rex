@@ -1,5 +1,5 @@
 use rex::{
-    BuiltinTypeId, Engine, GasMeter, Module, Parser, Token, Type, TypeKind, ValueDisplayOptions,
+    BuiltinTypeId, Engine, Module, Parser, Token, Type, TypeKind, ValueDisplayOptions,
     pointer_display_with,
 };
 
@@ -27,19 +27,18 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
     let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     let program = parser
-        .parse_program(&mut GasMeter::default())
+        .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
 
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).map_err(|e| format!("{e}"))?;
-    let mut gas = GasMeter::default();
     let (pointer, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .map_err(|e| format!("{e}"))?;
     assert!(

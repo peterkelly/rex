@@ -21,5 +21,3 @@ cargo run -p rex-fuzz --bin e2e < path/to/input
 
 - `REX_FUZZ_STACK_MB`: per-input thread stack size
 - `REX_FUZZ_MAX_NESTING`: parser nesting cap override
-- `REX_FUZZ_GAS`: total gas budget (parse/type/eval depending on binary)
-

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use rex::virtual_export_name;
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, GasMeter, Heap, IntoPointer, Module,
-    Parser, Pointer, Rex, RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
+    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, Heap, IntoPointer, Module, Parser,
+    Pointer, Rex, RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
 };
 use uuid::Uuid;
 
@@ -56,8 +56,6 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
         })
         .unwrap();
     engine.inject_module(module).unwrap();
-
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
@@ -73,7 +71,6 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
                 (Wrong is Sample.Correctness)
             )
             "#,
-        &mut gas,
     )
     .await
     .unwrap();
@@ -131,8 +128,6 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
         })
         .unwrap();
     engine.inject_module(module).unwrap();
-
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
@@ -142,7 +137,6 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
             import sample (Label, Left, render_label)
             render_label (Label { text = "left", side = Left })
         "#,
-        &mut gas,
     )
     .await
     .unwrap();
@@ -167,8 +161,6 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     module.add_rex_adt::<Side>().unwrap();
     module.add_rex_adt::<Correctness>().unwrap();
     engine.inject_module(module).unwrap();
-
-    let mut gas = unlimited_gas();
     let err = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
@@ -182,7 +174,6 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
               when Right -> true
               when Wrong -> false
             "#,
-        &mut gas,
     )
     .await
     .expect_err("expected ambiguity error for overlapping constructor in match pattern");
@@ -280,13 +271,8 @@ async fn have_role_async(state: HostState, role: String) -> Result<bool, EngineE
 
 fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap().expr
+    parser.parse_program().unwrap().expr
 }
-
-fn unlimited_gas() -> GasMeter {
-    GasMeter::default()
-}
-
 fn list_from_pointers(heap: &Heap, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
     let mut list = heap.alloc_adt(sym("Empty"), vec![])?;
     for value in values.into_iter().rev() {
@@ -370,12 +356,11 @@ async fn injected_functions_can_read_shared_state_fields() {
     let expr = parse(
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
     );
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(
@@ -413,12 +398,11 @@ async fn derived_rex_default_can_read_host_state() {
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
     let expr = parse("let e: Entity1 = default in e");
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
@@ -454,12 +438,11 @@ async fn derived_rex_default_record_update_can_override_fields() {
     let expr = parse(
         r#"let e: Entity1 = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
     );
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
@@ -493,12 +476,11 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
     let expr = parse(r#"Entity2 "sample" [7, 11]"#);
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
@@ -540,12 +522,11 @@ async fn entity2_constructor_result_can_be_record_updated() {
             }
         }"#,
     );
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
@@ -582,12 +563,11 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     .unwrap();
 
     let expr = parse("(have_role_async \"editor\", have_role_async \"admin\")");
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(
@@ -631,12 +611,11 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
     .unwrap();
 
     let expr = parse(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(
@@ -692,12 +671,11 @@ async fn generic_export_can_swap_two_values_of_different_types() {
     .unwrap();
 
     let expr = parse(r#"(swap_pair "left" 7, swap_pair true "right")"#);
-    let mut gas = unlimited_gas();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(expr.as_ref(), &mut gas)
+    .eval(expr.as_ref())
     .await
     .unwrap();
     assert_eq!(
@@ -772,16 +750,14 @@ async fn overloaded_exports_types_and_values() {
     )
     "#;
 
-    let (_, inferred) = engine
-        .infer_snippet(expr, &mut GasMeter::default())
-        .unwrap();
+    let (_, inferred) = engine.infer_snippet(expr).unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
     let value = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(parse(expr).as_ref(), &mut GasMeter::default())
+    .eval(parse(expr).as_ref())
     .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let (value, ty) = value.unwrap();
@@ -850,16 +826,14 @@ async fn overloaded_async_exports_types_and_values() {
     )
     "#;
 
-    let (_, inferred) = engine
-        .infer_snippet(expr, &mut GasMeter::default())
-        .unwrap();
+    let (_, inferred) = engine.infer_snippet(expr).unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
     let value = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(parse(expr).as_ref(), &mut GasMeter::default())
+    .eval(parse(expr).as_ref())
     .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let (value, ty) = value.unwrap();

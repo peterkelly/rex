@@ -505,14 +505,9 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 
 #[cfg(test)]
 mod tests {
-    use rex::{Engine, GasMeter, assert_pointer_eq};
+    use rex::{Engine, assert_pointer_eq};
 
     use super::*;
-
-    fn unlimited_gas() -> GasMeter {
-        GasMeter::default()
-    }
-
     #[tokio::test]
     async fn cli_prelude_typecheck_smoke() {
         let code = r#"
@@ -526,12 +521,11 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
-        let mut gas = unlimited_gas();
         rex::Evaluator::new_with_compiler(
             rex::RuntimeEnv::new(engine.clone()),
             rex::Compiler::new(engine.clone()),
         )
-        .eval_snippet(code, &mut gas)
+        .eval_snippet(code)
         .await
         .unwrap();
     }
@@ -548,12 +542,11 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
-        let mut gas = unlimited_gas();
         let (value, ty) = rex::Evaluator::new_with_compiler(
             rex::RuntimeEnv::new(engine.clone()),
             rex::Compiler::new(engine.clone()),
         )
-        .eval_snippet(code, &mut gas)
+        .eval_snippet(code)
         .await
         .unwrap();
         assert_eq!(

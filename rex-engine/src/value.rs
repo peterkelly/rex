@@ -321,14 +321,12 @@ impl Heap {
         }))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn alloc_native(
         &self,
         native_id: u64,
         name: Symbol,
         arity: usize,
         typ: Type,
-        gas_cost: u64,
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer, EngineError> {
@@ -337,7 +335,6 @@ impl Heap {
             name,
             arity,
             typ,
-            gas_cost,
             applied,
             applied_types,
         )))

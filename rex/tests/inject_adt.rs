@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use rex::{
-    AdtDecl, BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, Parser,
-    Pointer, Rex, RexAdt, RexType, Token, Type, TypeVarSupply, assert_pointer_eq, sym,
+    AdtDecl, BuiltinTypeId, Engine, EngineError, FromPointer, Heap, IntoPointer, Parser, Pointer,
+    Rex, RexAdt, RexType, Token, Type, TypeVarSupply, assert_pointer_eq, sym,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,14 +158,12 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
 
     let tokens = Token::tokenize("ManualRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, ManualRecord::rex_type());
@@ -186,14 +184,12 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
 
     let tokens = Token::tokenize("DerivedRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, DerivedRecord::rex_type());
@@ -221,14 +217,12 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -249,14 +243,12 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -354,14 +346,12 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -388,14 +378,12 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));

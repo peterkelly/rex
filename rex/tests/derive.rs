@@ -1,7 +1,6 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, FromPointer, GasMeter, Heap, IntoPointer, JsonOptions,
-    Module, Parser, Pointer, Rex, RexAdt, RexType, Token, Type, Value, assert_pointer_eq,
-    rex_to_json,
+    BuiltinTypeId, Engine, EngineError, FromPointer, Heap, IntoPointer, JsonOptions, Module,
+    Parser, Pointer, Rex, RexAdt, RexType, Token, Type, Value, assert_pointer_eq, rex_to_json,
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -18,7 +17,7 @@ fn inject_globals(
 async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
 
     let mut engine = Engine::with_prelude(())?;
     MyInnerStruct::inject_rex(&mut engine)?;
@@ -30,12 +29,11 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let mut gas = GasMeter::default();
     let (pointer, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();
@@ -214,7 +212,7 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
 
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
 
     let mut engine = Engine::with_prelude(()).unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
@@ -222,13 +220,11 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-
-    let mut gas = GasMeter::default();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
 
@@ -316,19 +312,18 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser
-        .parse_program(&mut GasMeter::default())
+        .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))
         .unwrap();
 
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let mut gas = GasMeter::default();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     let expected_ty = Type::tuple(vec![Maybe::<i32>::rex_type(), Maybe::<bool>::rex_type()]);
@@ -379,7 +374,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
 
     let mut engine = Engine::with_prelude(()).unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
@@ -392,13 +387,11 @@ async fn derive_can_be_used_in_injected_native_functions() {
         })
     })
     .unwrap();
-
-    let mut gas = GasMeter::default();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, MyStruct::rex_type());
@@ -422,12 +415,12 @@ async fn derive_can_be_used_in_injected_native_functions() {
     .unwrap();
     let tokens = Token::tokenize("const_struct.y").unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     let (v, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -454,14 +447,12 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (v, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -483,14 +474,12 @@ async fn derive_types_implement_rex_adt_trait() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (v, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -514,13 +503,12 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
 
     let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
     let mut parser = Parser::new(tokens);
-    let mut gas = GasMeter::default();
-    let program = parser.parse_program(&mut gas).unwrap();
+    let program = parser.parse_program().unwrap();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     assert_eq!(
@@ -622,14 +610,12 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
     )
     .unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
 
@@ -655,14 +641,12 @@ async fn derive_leaf_rex_type_field_does_not_require_rex_adt_dependency() {
 
     let tokens = Token::tokenize("Fragment [1, 2, 3]").unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
 
@@ -679,14 +663,12 @@ async fn derive_leaf_rex_type_record_fields_support_manual_leaf_types() {
     let tokens =
         Token::tokenize("BoundingBox { min = (1.0, 2.0, 3.0), max = (4.0, 5.0, 6.0) }").unwrap();
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
-
-    let mut gas = GasMeter::default();
+    let program = parser.parse_program().unwrap();
     let (v_ptr, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
 

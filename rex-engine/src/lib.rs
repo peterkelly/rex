@@ -3,7 +3,6 @@
 
 //! Evaluation engine for Rex.
 
-mod cancel;
 mod compiler;
 mod engine;
 mod env;
@@ -15,15 +14,14 @@ mod runtime_env;
 mod stack;
 mod value;
 
-pub use cancel::CancellationToken;
 pub use compiler::Compiler;
 pub use engine::{
-    AsyncHandler, AsyncNativeCallable, AsyncNativeCallableCancellable, ClassMethodCapability,
-    ClassMethodRequirement, CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine,
-    EngineOptions, Export, Handler, NativeCapability, NativeFn, NativeFuture, NativeRequirement,
-    OverloadedFn, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault,
-    RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable,
-    apply_with_context, collect_adts_error_to_engine,
+    AsyncHandler, AsyncNativeCallable, ClassMethodCapability, ClassMethodRequirement,
+    CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine, EngineOptions, Export,
+    Handler, NativeCapability, NativeFn, NativeFuture, NativeRequirement, OverloadedFn,
+    PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault, RuntimeCapabilities,
+    RuntimeCompatibility, RuntimeLinkContract, SyncNativeCallable, apply_with_context,
+    collect_adts_error_to_engine,
 };
 pub use env::Environment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};

@@ -26,7 +26,7 @@ use rex_typesystem::{
     typesystem::{PreparedInstanceDecl, TypeSystem, instantiate},
     unification::unify,
 };
-use rex_util::{GasMeter, sha256_hex};
+use rex_util::sha256_hex;
 use serde_json::{Value, json, to_value};
 
 const MAX_DIAGNOSTICS: usize = 50;
@@ -149,7 +149,7 @@ fn tokenize_and_parse(text: &str) -> std::result::Result<(Tokens, Program), Toke
     let tokens = Token::tokenize(text).map_err(TokenizeOrParseError::Lex)?;
     let mut parser = Parser::new(tokens.clone());
     let program = parser
-        .parse_program(&mut GasMeter::default())
+        .parse_program()
         .map_err(TokenizeOrParseError::Parse)?;
     Ok((tokens, program))
 }
@@ -4910,11 +4910,10 @@ fn push_type_diagnostics(
     };
     engine.add_default_resolvers();
 
-    let mut gas = GasMeter::default();
     let result = if let Some(path) = uri_to_file_path(uri) {
-        engine.infer_snippet_at(text, path, &mut gas)
+        engine.infer_snippet_at(text, path)
     } else {
-        engine.infer_snippet(text, &mut gas)
+        engine.infer_snippet(text)
     };
 
     if let Err(err) = result {

@@ -10,9 +10,7 @@ use crate::engine::{
     AsyncHandler, Export, Handler, NativeFuture, SchedulerNativeResult, order_adt_family,
 };
 use crate::stack::{NativeLogShow, NativeTask};
-use crate::{
-    CancellationToken, Engine, EngineError, IntoPointer, Pointer, ROOT_MODULE_NAME, RexType, Value,
-};
+use crate::{Engine, EngineError, IntoPointer, Pointer, ROOT_MODULE_NAME, RexType, Value};
 
 /// A staged host module that you build up in Rust and later inject into an [`Engine`].
 ///
@@ -493,26 +491,6 @@ where
         Ok(())
     }
 
-    pub fn export_native_with_gas_cost<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.exports.push(Export::from_native_with_gas_cost(
-            name, scheme, arity, gas_cost, handler,
-        )?);
-        Ok(())
-    }
-
     /// Stage a pointer-level asynchronous native export with an explicit Rex type scheme.
     ///
     /// This is the async counterpart to [`Module::export_native`]. Use it when the export needs
@@ -551,60 +529,6 @@ where
     {
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);
-        Ok(())
-    }
-
-    pub fn export_native_async_with_gas_cost<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
-    {
-        self.exports.push(Export::from_native_async_with_gas_cost(
-            name, scheme, arity, gas_cost, handler,
-        )?);
-        Ok(())
-    }
-
-    pub fn export_native_async_cancellable<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.export_native_async_cancellable_with_gas_cost(name, scheme, arity, 0, handler)
-    }
-
-    pub fn export_native_async_cancellable_with_gas_cost<F>(
-        &mut self,
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        gas_cost: u64,
-        handler: F,
-    ) -> Result<(), EngineError>
-    where
-        F: Fn(EvaluatorRef<State>, CancellationToken, Type, Vec<Pointer>) -> NativeFuture
-            + Send
-            + Sync
-            + 'static,
-    {
-        self.exports
-            .push(Export::from_native_async_cancellable_with_gas_cost(
-                name, scheme, arity, gas_cost, handler,
-            )?);
         Ok(())
     }
 

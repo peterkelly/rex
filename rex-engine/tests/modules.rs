@@ -15,7 +15,6 @@ use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind},
     typesystem::TypeVarSupply,
 };
-use rex_util::GasMeter;
 use uuid::Uuid;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -35,11 +34,6 @@ fn write_file(path: &Path, contents: &str) {
 fn engine_with_prelude() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
-
-fn unlimited_gas() -> GasMeter {
-    GasMeter::default()
-}
-
 fn i32_type() -> Type {
     Type::builtin(BuiltinTypeId::I32)
 }
@@ -132,12 +126,11 @@ async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
 ) -> Result<(Pointer, Type), rex_engine::EngineError> {
-    let mut gas = unlimited_gas();
     rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval_snippet(source, &mut gas)
+    .eval_snippet(source)
     .await
     .map_err(|err| err.into_engine_error())
 }
@@ -147,12 +140,11 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     source: &str,
     importer_path: impl AsRef<Path>,
 ) -> Result<(Pointer, Type), rex_engine::EngineError> {
-    let mut gas = unlimited_gas();
     rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval_snippet_at(source, importer_path, &mut gas)
+    .eval_snippet_at(source, importer_path)
     .await
     .map_err(|err| err.into_engine_error())
 }
@@ -226,12 +218,11 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     engine.add_default_resolvers();
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
-    let mut gas = unlimited_gas();
     let _ = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval_module_file(&module, &mut gas)
+    .eval_module_file(&module)
     .await
     .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
@@ -246,12 +237,11 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     // Edit the same local module path and ensure the engine invalidates path-keyed
     // module cache entries before reloading.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
-    let mut gas = unlimited_gas();
     let _ = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
-    .eval_module_file(&module, &mut gas)
+    .eval_module_file(&module)
     .await
     .unwrap();
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)

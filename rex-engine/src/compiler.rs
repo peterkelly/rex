@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 
 use rex_ast::expr::{Expr, Program, Symbol};
 use rex_typesystem::types::{TypedExpr, TypedExprKind};
-use rex_util::GasMeter;
 use uuid::Uuid;
 
 use crate::engine::{
@@ -312,23 +311,18 @@ where
         program: &Program,
         importer: Option<ModuleId>,
         prefix: &str,
-        gas: &mut GasMeter,
         loaded: &mut BTreeMap<ModuleId, ModuleExports>,
         loading: &mut BTreeSet<ModuleId>,
     ) -> Result<Program, EngineError> {
         let rewritten = self
             .engine
-            .rewrite_program_with_imports(program, importer, prefix, gas, loaded, loading)?;
+            .rewrite_program_with_imports(program, importer, prefix, loaded, loading)?;
         self.engine.inject_decls(&rewritten.decls)?;
         Ok(rewritten)
     }
 
-    pub fn compile_snippet(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-    ) -> Result<CompiledProgram, CompileError> {
-        self.compile_snippet_with_gas_and_importer(source, gas, None)
+    pub fn compile_snippet(&mut self, source: &str) -> Result<CompiledProgram, CompileError> {
+        self.compile_snippet_with_importer(source, None)
             .map_err(CompileError::from)
     }
 
@@ -336,17 +330,15 @@ where
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
-        gas: &mut GasMeter,
     ) -> Result<CompiledProgram, CompileError> {
         let path = importer_path.as_ref().to_path_buf();
-        self.compile_snippet_with_gas_and_importer(source, gas, Some(path))
+        self.compile_snippet_with_importer(source, Some(path))
             .map_err(CompileError::from)
     }
 
     pub fn compile_module_file(
         &mut self,
         path: impl AsRef<Path>,
-        gas: &mut GasMeter,
     ) -> Result<CompiledProgram, CompileError> {
         let (id, bytes) = self
             .engine
@@ -356,13 +348,10 @@ where
             .engine
             .decode_local_module_source(&id, bytes)
             .map_err(CompileError::from)?;
-        self.compile_module_source(
-            ResolvedModule {
-                id,
-                content: crate::modules::ResolvedModuleContent::Source(source),
-            },
-            gas,
-        )
+        self.compile_module_source(ResolvedModule {
+            id,
+            content: crate::modules::ResolvedModuleContent::Source(source),
+        })
         .map_err(CompileError::from)
     }
 
@@ -370,9 +359,8 @@ where
         &mut self,
         program: &Program,
         state: &mut ReplState,
-        gas: &mut GasMeter,
     ) -> Result<CompiledProgram, CompileError> {
-        self.compile_repl_program_internal(program, state, gas)
+        self.compile_repl_program_internal(program, state)
             .await
             .map_err(CompileError::from)
     }
@@ -381,7 +369,6 @@ where
         &mut self,
         program: &Program,
         state: &mut ReplState,
-        gas: &mut GasMeter,
     ) -> Result<CompiledProgram, EngineError> {
         let importer = state
             .importer_path
@@ -405,7 +392,7 @@ where
         };
         let import_bindings = self
             .engine
-            .import_bindings_for_decls(&program.decls, importer.clone(), &import_policy, gas)
+            .import_bindings_for_decls(&program.decls, importer.clone(), &import_policy)
             .await?;
         state.alias_exports.extend(import_bindings.alias_exports);
         state
@@ -441,7 +428,6 @@ where
     fn compile_module_source(
         &mut self,
         resolved: ResolvedModule,
-        gas: &mut GasMeter,
     ) -> Result<CompiledProgram, EngineError> {
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
@@ -449,12 +435,11 @@ where
         loading.insert(resolved.id.clone());
 
         let prefix = prefix_for_module(&resolved.id);
-        let program = crate::modules::program_from_resolved(&resolved, &mut *gas)?;
+        let program = crate::modules::program_from_resolved(&resolved)?;
         let rewritten = self.rewrite_and_inject_program(
             &program,
             Some(resolved.id.clone()),
             &prefix,
-            gas,
             &mut loaded,
             &mut loading,
         )?;
@@ -466,13 +451,12 @@ where
         self.compile_expr_internal(rewritten.expr.as_ref())
     }
 
-    fn compile_snippet_with_gas_and_importer(
+    fn compile_snippet_with_importer(
         &mut self,
         source: &str,
-        gas: &mut GasMeter,
         importer_path: Option<PathBuf>,
     ) -> Result<CompiledProgram, EngineError> {
-        let program = parse_program_from_source(source, None, Some(&mut *gas))?;
+        let program = parse_program_from_source(source, None)?;
 
         let importer = importer_path.map(|p| ModuleId::Local { path: p });
         let prefix = format!("@snippet{}", Uuid::new_v4());
@@ -482,7 +466,6 @@ where
             &program,
             importer,
             &prefix,
-            gas,
             &mut loaded,
             &mut loading,
         )?;

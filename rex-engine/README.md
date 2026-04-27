@@ -10,10 +10,9 @@ application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 ## Quickstart
 
 ```rust
-use rex_engine::{Engine, Module};
+use rex_engine::{Compiler, Engine, Module, RuntimeEnv};
 use rex_lexer::Token;
 use rex_parser::Parser;
-use rex_util::{GasCosts, GasMeter};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,15 +24,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let tokens = Token::tokenize("answer + 1")?;
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| {
+    let program = parser.parse_program().map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
     let mut compiler = Compiler::new(engine.clone());
     let mut evaluator =
         Evaluator::new_with_compiler(RuntimeEnv::new(engine.clone()), Compiler::new(engine.clone()));
-    let mut gas = GasMeter::default();
     let compiled = compiler.compile_expr(program.expr.as_ref())?;
-    let value = evaluator.run(&compiled, &mut gas).await?;
+    let value = evaluator.run(&compiled).await?;
 
     assert_eq!(engine.heap.pointer_as_i32(&value)?, 43);
     Ok(())

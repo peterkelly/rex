@@ -3,7 +3,6 @@ use std::sync::OnceLock;
 use rex_ast::expr::{Decl, Program};
 use rex_lexer::Token;
 use rex_parser::Parser;
-use rex_util::GasMeter;
 
 use crate::{
     error::TypeError,
@@ -33,7 +32,7 @@ pub fn prelude_typeclasses_program() -> Result<&'static Program, TypeError> {
         let tokens =
             Token::tokenize(source).map_err(|e| format!("prelude_typeclasses: lex error: {e}"))?;
         let mut parser = Parser::new(tokens);
-        match parser.parse_program(&mut GasMeter::default()) {
+        match parser.parse_program() {
             Ok(program) => Ok(program),
             Err(errs) => {
                 let mut out = String::from("prelude_typeclasses: parse error:");

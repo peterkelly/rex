@@ -12,7 +12,7 @@ use rex_parser::Parser;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tokens = Token::tokenize("1 + 2")?;
     let mut parser = Parser::new(tokens);
-    let program = parser.parse_program(&mut GasMeter::default()).map_err(|errs| {
+    let program = parser.parse_program().map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
     let _ = program;
@@ -20,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-## Limits and metering
+## Limits
 
 - `ParserLimits`: controls syntactic nesting limits
-- `parse_program`: optional gas metering via `rex-util`
+- `parse_program`: parses a complete Rex program from the token stream

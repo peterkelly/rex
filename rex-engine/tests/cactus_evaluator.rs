@@ -6,7 +6,6 @@ use rex_engine::{
     Pointer, RuntimeEnv, Value, apply_with_context,
 };
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
-use rex_util::GasMeter;
 
 fn inject_globals<State>(
     engine: &mut Engine<State>,
@@ -42,8 +41,7 @@ where
     let runtime = RuntimeEnv::new(engine.clone());
     let compiler = Compiler::new(engine.clone());
     let mut evaluator = Evaluator::new_with_compiler(runtime, compiler);
-    let mut gas = GasMeter::default();
-    let (value, typ) = evaluator.eval_snippet(source, &mut gas).await.unwrap();
+    let (value, typ) = evaluator.eval_snippet(source).await.unwrap();
     (engine, value, typ)
 }
 
@@ -112,16 +110,7 @@ fn engine_with_context_marker() -> Engine<()> {
             let func_ty = func_ty.clone();
             let i32_ty = i32_ty.clone();
             async move {
-                let mut gas = GasMeter::default();
-                apply_with_context(
-                    &engine,
-                    args[0],
-                    args[1],
-                    Some(&func_ty),
-                    Some(&i32_ty),
-                    &mut gas,
-                )
-                .await
+                apply_with_context(&engine, args[0], args[1], Some(&func_ty), Some(&i32_ty)).await
             }
             .boxed()
         },
@@ -164,17 +153,8 @@ fn engine_with_parent_probe() -> Engine<ParentProbeState> {
                         let mut outer_parent = engine.state.outer_parent.lock().unwrap();
                         *outer_parent = engine.context.parent;
                     }
-
-                    let mut gas = GasMeter::default();
-                    apply_with_context(
-                        &engine,
-                        args[0],
-                        args[1],
-                        Some(&func_ty),
-                        Some(&i32_ty),
-                        &mut gas,
-                    )
-                    .await
+                    apply_with_context(&engine, args[0], args[1], Some(&func_ty), Some(&i32_ty))
+                        .await
                 }
                 .boxed()
             }

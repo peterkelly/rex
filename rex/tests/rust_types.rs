@@ -1,6 +1,6 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, FromPointer, GasCosts, GasMeter, Heap, Module, Parser,
-    Pointer, Rex, RexType, Token, Type, assert_pointer_eq, sym,
+    BuiltinTypeId, Engine, EngineError, FromPointer, Heap, Module, Parser, Pointer, Rex, RexType,
+    Token, Type, assert_pointer_eq, sym,
 };
 use serde_json::json;
 
@@ -16,13 +16,12 @@ fn inject_globals(
 /// Helper to evaluate a Rex expression and return the result pointer
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
     let tokens = Token::tokenize(expr).unwrap();
-    let mut gas = GasMeter::default();
-    let program = Parser::new(tokens).parse_program(&mut gas).unwrap();
+    let program = Parser::new(tokens).parse_program().unwrap();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap();
     let heap = engine.into_heap();
@@ -31,9 +30,7 @@ async fn eval_expr(engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
 
 /// Helper to infer the type of a Rex expression
 fn infer_type(engine: &mut Engine<()>, expr: &str) -> Type {
-    let costs = GasCosts::sensible_defaults();
-    let mut gas = GasMeter::unlimited(costs);
-    let (_, ty) = engine.infer_snippet(expr, &mut gas).unwrap();
+    let (_, ty) = engine.infer_snippet(expr).unwrap();
     ty
 }
 

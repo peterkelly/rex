@@ -12,7 +12,7 @@ use rex_ast::expr::{
 use rex_lexer::Token;
 use rex_parser::Parser as RexParser;
 use rex_typesystem::types::{Predicate, Type};
-use rex_util::{GasMeter, sha256_hex};
+use rex_util::sha256_hex;
 use uuid::Uuid;
 
 use crate::{CompileError, Engine, EngineError};
@@ -2144,7 +2144,6 @@ pub(crate) fn exports_from_program(
 pub(crate) fn parse_program_from_source(
     source: &str,
     context: Option<&ModuleId>,
-    gas: Option<&mut GasMeter>,
 ) -> Result<Program, EngineError> {
     let tokens = Token::tokenize(source).map_err(|e| match context {
         Some(id) => EngineError::from(crate::ModuleError::LexInModule {
@@ -2154,11 +2153,7 @@ pub(crate) fn parse_program_from_source(
         None => EngineError::from(crate::ModuleError::Lex { source: e }),
     })?;
     let mut parser = RexParser::new(tokens);
-    let program = match gas {
-        Some(gas) => parser.parse_program(gas),
-        None => parser.parse_program(&mut GasMeter::default()),
-    }
-    .map_err(|errs| match context {
+    let program = parser.parse_program().map_err(|errs| match context {
         Some(id) => EngineError::from(crate::ModuleError::ParseInModule {
             module: id.clone(),
             errors: errs,
@@ -2176,13 +2171,10 @@ pub(crate) fn parse_program_from_source(
     Ok(program)
 }
 
-pub(crate) fn program_from_resolved(
-    resolved: &ResolvedModule,
-    gas: &mut GasMeter,
-) -> Result<Program, EngineError> {
+pub(crate) fn program_from_resolved(resolved: &ResolvedModule) -> Result<Program, EngineError> {
     match &resolved.content {
         ResolvedModuleContent::Source(source) => {
-            parse_program_from_source(source, Some(&resolved.id), Some(gas))
+            parse_program_from_source(source, Some(&resolved.id))
         }
         ResolvedModuleContent::Program(program) => {
             if !matches!(program.expr.as_ref(), Expr::Tuple(_, elems) if elems.is_empty()) {
@@ -2274,7 +2266,6 @@ where
     fn load_module_types_via_scc(
         &mut self,
         root: ResolvedModule,
-        gas: &mut GasMeter,
         loaded: &mut BTreeMap<ModuleId, ModuleExports>,
         loading: &mut BTreeSet<ModuleId>,
     ) -> Result<ModuleExports, EngineError> {
@@ -2305,7 +2296,7 @@ where
             }
 
             let prefix = prefix_for_module(&resolved.id);
-            let program = program_from_resolved(&resolved, &mut *gas)?;
+            let program = program_from_resolved(&resolved)?;
             let exports = exports_from_program(&program, &prefix, &resolved.id);
             loaded.insert(resolved.id.clone(), exports);
             loading.insert(resolved.id.clone());
@@ -2380,7 +2371,6 @@ where
                     &node.program,
                     Some(node.resolved.id.clone()),
                     &node.prefix,
-                    gas,
                     loaded,
                     loading,
                 )?;
@@ -2428,7 +2418,6 @@ where
         &'a mut self,
         import_decl: &'a ImportDecl,
         importer: Option<ModuleId>,
-        gas: &'a mut GasMeter,
     ) -> BoxFuture<'a, Result<ModuleExports, EngineError>> {
         Box::pin(async move {
             let spec = import_specifier(&import_decl.path);
@@ -2444,7 +2433,7 @@ where
                 self.ensure_cycle_interfaces_published(&imported.id)?;
                 return Ok(exports);
             }
-            let inst = self.load_module_from_resolved(imported, gas).await?;
+            let inst = self.load_module_from_resolved(imported).await?;
             Ok(inst.exports)
         })
     }
@@ -2455,7 +2444,6 @@ where
         decls: &[Decl],
         importer: Option<ModuleId>,
         policy: &ImportBindingPolicy<'_>,
-        gas: &mut GasMeter,
     ) -> Result<(), EngineError> {
         let existing_value_names: BTreeSet<Symbol> =
             policy.existing_imported_values.cloned().unwrap_or_default();
@@ -2467,7 +2455,7 @@ where
             }
             let import_decl = default_import_decl(&module_name);
             let exports = self
-                .resolve_module_exports_from_import_decl_async(&import_decl, importer.clone(), gas)
+                .resolve_module_exports_from_import_decl_async(&import_decl, importer.clone())
                 .await?;
             for (local, target) in exports.values() {
                 if !policy.forbidden_values.contains(local)
@@ -2557,7 +2545,6 @@ where
         decls: &'a [Decl],
         importer: Option<ModuleId>,
         policy: &'a ImportBindingPolicy<'_>,
-        gas: &'a mut GasMeter,
     ) -> BoxFuture<'a, Result<ImportBindings, EngineError>> {
         Box::pin(async move {
             let mut bindings = ImportBindings::default();
@@ -2566,15 +2553,11 @@ where
                     continue;
                 };
                 let exports = self
-                    .resolve_module_exports_from_import_decl_async(
-                        import_decl,
-                        importer.clone(),
-                        gas,
-                    )
+                    .resolve_module_exports_from_import_decl_async(import_decl, importer.clone())
                     .await?;
                 add_import_bindings(&mut bindings, import_decl, &exports, policy)?;
             }
-            self.add_default_import_bindings(&mut bindings, decls, importer, policy, gas)
+            self.add_default_import_bindings(&mut bindings, decls, importer, policy)
                 .await?;
             Ok(bindings)
         })
@@ -2583,7 +2566,6 @@ where
     pub(crate) fn load_module_from_resolved<'a>(
         &'a mut self,
         resolved: ResolvedModule,
-        gas: &'a mut GasMeter,
     ) -> BoxFuture<'a, Result<ModuleInstance, EngineError>> {
         Box::pin(async move {
             let source_fingerprint = self.refresh_if_stale(&resolved)?;
@@ -2594,7 +2576,7 @@ where
             self.modules.mark_loading(&resolved.id)?;
 
             let prefix = prefix_for_module(&resolved.id);
-            let program = program_from_resolved(&resolved, gas)?;
+            let program = program_from_resolved(&resolved)?;
             if let ResolvedModuleContent::Source(source) = &resolved.content {
                 self.module_sources
                     .insert(resolved.id.clone(), source.clone());
@@ -2622,7 +2604,6 @@ where
                     &program.decls,
                     Some(resolved.id.clone()),
                     &import_policy,
-                    gas,
                 )
                 .await?;
 
@@ -2661,7 +2642,6 @@ where
     fn load_module_types_from_resolved(
         &mut self,
         resolved: ResolvedModule,
-        gas: &mut GasMeter,
         loaded: &mut BTreeMap<ModuleId, ModuleExports>,
         loading: &mut BTreeSet<ModuleId>,
     ) -> Result<ModuleExports, EngineError> {
@@ -2674,14 +2654,13 @@ where
         {
             return Ok(exports.clone());
         }
-        self.load_module_types_via_scc(resolved, gas, loaded, loading)
+        self.load_module_types_via_scc(resolved, loaded, loading)
     }
 
     fn resolve_module_exports_for_rewrite(
         &mut self,
         import_decl: &ImportDecl,
         importer: Option<ModuleId>,
-        gas: &mut GasMeter,
         loaded: &mut BTreeMap<ModuleId, ModuleExports>,
         loading: &mut BTreeSet<ModuleId>,
     ) -> Result<ModuleExports, EngineError> {
@@ -2694,7 +2673,7 @@ where
             importer,
         })?;
         self.refresh_if_stale(&imported)?;
-        self.load_module_types_from_resolved(imported, gas, loaded, loading)
+        self.load_module_types_from_resolved(imported, loaded, loading)
     }
 
     pub(crate) fn rewrite_program_with_imports(
@@ -2702,7 +2681,6 @@ where
         program: &Program,
         importer: Option<ModuleId>,
         prefix: &str,
-        gas: &mut GasMeter,
         loaded: &mut BTreeMap<ModuleId, ModuleExports>,
         loading: &mut BTreeSet<ModuleId>,
     ) -> Result<Program, EngineError> {
@@ -2723,7 +2701,6 @@ where
             let exports = self.resolve_module_exports_for_rewrite(
                 import_decl,
                 importer.clone(),
-                gas,
                 loaded,
                 loading,
             )?;
@@ -2740,7 +2717,6 @@ where
             let exports = self.resolve_module_exports_for_rewrite(
                 &import_decl,
                 importer.clone(),
-                gas,
                 loaded,
                 loading,
             )?;
@@ -2823,24 +2799,19 @@ where
     pub fn infer_module_file(
         &mut self,
         path: impl AsRef<Path>,
-        gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
         let source = self.decode_local_module_source(&id, bytes)?;
-        self.infer_module_source(
-            ResolvedModule {
-                id,
-                content: ResolvedModuleContent::Source(source),
-            },
-            gas,
-        )
+        self.infer_module_source(ResolvedModule {
+            id,
+            content: ResolvedModuleContent::Source(source),
+        })
         .map_err(CompileError::from)
     }
 
     fn infer_module_source(
         &mut self,
         resolved: ResolvedModule,
-        gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
@@ -2848,19 +2819,18 @@ where
         loading.insert(resolved.id.clone());
 
         let prefix = prefix_for_module(&resolved.id);
-        let program = program_from_resolved(&resolved, &mut *gas)?;
+        let program = program_from_resolved(&resolved)?;
 
         let rewritten = self.rewrite_program_with_imports(
             &program,
             Some(resolved.id.clone()),
             &prefix,
-            gas,
             &mut loaded,
             &mut loading,
         )?;
         self.inject_decls(&rewritten.decls)?;
 
-        let (preds, ty) = self.infer_type(rewritten.expr.as_ref(), gas)?;
+        let (preds, ty) = self.infer_type(rewritten.expr.as_ref())?;
 
         let exports = exports_from_program(&program, &prefix, &resolved.id);
         loaded.insert(resolved.id.clone(), exports);
@@ -2869,12 +2839,8 @@ where
         Ok((preds, ty))
     }
 
-    pub fn infer_snippet(
-        &mut self,
-        source: &str,
-        gas: &mut GasMeter,
-    ) -> Result<(Vec<Predicate>, Type), CompileError> {
-        self.infer_snippet_with_gas_and_importer(source, gas, None)
+    pub fn infer_snippet(&mut self, source: &str) -> Result<(Vec<Predicate>, Type), CompileError> {
+        self.infer_snippet_with_importer(source, None)
             .map_err(CompileError::from)
     }
 
@@ -2882,20 +2848,18 @@ where
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
-        gas: &mut GasMeter,
     ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let path = importer_path.as_ref().to_path_buf();
-        self.infer_snippet_with_gas_and_importer(source, gas, Some(path))
+        self.infer_snippet_with_importer(source, Some(path))
             .map_err(CompileError::from)
     }
 
-    fn infer_snippet_with_gas_and_importer(
+    fn infer_snippet_with_importer(
         &mut self,
         source: &str,
-        gas: &mut GasMeter,
         importer_path: Option<PathBuf>,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        let program = parse_program_from_source(source, None, Some(&mut *gas))?;
+        let program = parse_program_from_source(source, None)?;
 
         let importer = importer_path.map(|p| ModuleId::Local { path: p });
 
@@ -2907,11 +2871,10 @@ where
             &program,
             importer,
             &prefix,
-            gas,
             &mut loaded,
             &mut loading,
         )?;
         self.inject_decls(&rewritten.decls)?;
-        self.infer_type(rewritten.expr.as_ref(), gas)
+        self.infer_type(rewritten.expr.as_ref())
     }
 }

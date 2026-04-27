@@ -104,8 +104,8 @@ pipelines, including caps on scanned environment schemes, in-scope values, candi
 hole-report counts. This is a pragmatic defense against unbounded CPU and output growth in LSP-side
 analysis.
 
-These bounds are not a complete security model. They should be combined with host-level gas budgets,
-timeouts, concurrency limits, and request-rate controls in production embeddings.
+These bounds are not a complete security model. They should be combined with host-level timeouts,
+concurrency limits, memory limits, and request-rate controls in production embeddings.
 
 ## Trying the Workflow in the Browser Playground
 

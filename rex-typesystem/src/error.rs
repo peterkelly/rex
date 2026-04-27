@@ -1,7 +1,6 @@
 use crate::types::{Type, TypeVarId};
 use rex_ast::expr::Symbol;
 use rex_lexer::span::Span;
-use rex_util::OutOfGas;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TypeError {
@@ -69,8 +68,6 @@ pub enum TypeError {
     Spanned { span: Span, error: Box<TypeError> },
     #[error("internal error: {0}")]
     Internal(String),
-    #[error("{0}")]
-    OutOfGas(#[from] OutOfGas),
 }
 
 impl TypeError {

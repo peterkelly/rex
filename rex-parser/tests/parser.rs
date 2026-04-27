@@ -9,11 +9,10 @@ use rex_lexer::{Token, span, span::Span};
 use rex_parser::error::ParserErr;
 
 use rex_parser::{Parser, ParserLimits};
-use rex_util::GasMeter;
 
 fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program(&mut GasMeter::default()).unwrap().expr
+    parser.parse_program().unwrap().expr
 }
 
 fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
@@ -30,11 +29,11 @@ fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
 #[test]
 fn test_parse_comment() {
     let mut parser = Parser::new(Token::tokenize("true {- this is a boolean -}").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(expr, b!(span!(1:1 - 1:5); true));
 
     let mut parser = Parser::new(Token::tokenize("{- this is a boolean -} false").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(expr, b!(span!(1:25 - 1:30); false));
 
     let mut parser = Parser::new(
@@ -43,7 +42,7 @@ fn test_parse_comment() {
         )
         .unwrap(),
     );
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         tup!(
@@ -63,7 +62,7 @@ fn test_max_nesting_depth_is_enforced_during_parse() {
         max_nesting: Some(5),
     });
 
-    let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+    let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -79,7 +78,7 @@ fn test_max_nesting_binary_chain() {
         max_nesting: Some(5),
     });
 
-    let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+    let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -98,7 +97,7 @@ fn test_max_nesting_type_fun_chain() {
         max_nesting: Some(5),
     });
 
-    let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+    let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -118,7 +117,7 @@ fn test_max_nesting_cons_pattern_chain() {
         max_nesting: Some(5),
     });
 
-    let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+    let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -129,7 +128,7 @@ fn test_max_nesting_cons_pattern_chain() {
 #[test]
 fn test_add() {
     let mut parser = Parser::new(Token::tokenize("1 + 2").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -144,7 +143,7 @@ fn test_add() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(6.9 + 3.17)").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -159,7 +158,7 @@ fn test_add() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(+) 420").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -177,7 +176,7 @@ fn test_parse_type_decl() {
     42
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Type(decl) => {
@@ -213,7 +212,7 @@ fn test_parse_fn_decl_simple() {
     add 1 2
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -243,7 +242,7 @@ fn test_parse_fn_decl_signature_form_with_lambda_body() {
     add 1 2
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -275,7 +274,7 @@ fn test_parse_fn_sig_multiline_lambda() {
     f 1
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -299,7 +298,7 @@ fn test_parse_fn_decl_signature_form_eta_expands_non_lambda_body() {
     inc
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -323,7 +322,7 @@ fn test_parse_fn_decl_signature_form_where_constraints() {
     my_fun
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -345,7 +344,7 @@ fn test_parse_fn_decl_signature_form_rejects_mismatched_lambda_arity() {
     add
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    assert!(parser.parse_program(&mut GasMeter::default()).is_err());
+    assert!(parser.parse_program().is_err());
 }
 
 #[test]
@@ -355,7 +354,7 @@ fn test_parse_fn_decl_where_constraints() {
     my_fun
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -385,7 +384,7 @@ fn test_parse_declare_fn_decl_where_constraints() {
     42
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
@@ -416,7 +415,7 @@ fn test_parse_declare_fn_decl_bare_signature() {
     0
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
@@ -447,7 +446,7 @@ fn test_parse_declare_fn_decl_bare_signature_with_colon() {
     0
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
@@ -478,7 +477,7 @@ fn test_parse_declare_fn_decl_rejects_body() {
     0
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    assert!(parser.parse_program(&mut GasMeter::default()).is_err());
+    assert!(parser.parse_program().is_err());
 }
 
 #[test]
@@ -488,7 +487,7 @@ fn test_parse_fn_decl_param_fun_type_requires_parens() {
     apply
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -514,7 +513,7 @@ fn test_parse_fn_decl_parenthesized_params_allow_fun_types() {
     reduce
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -537,7 +536,7 @@ fn test_parse_fn_decl_parenthesized_params_require_arrow_delimiter() {
     reduce
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    assert!(parser.parse_program(&mut GasMeter::default()).is_err());
+    assert!(parser.parse_program().is_err());
 }
 
 #[test]
@@ -547,7 +546,7 @@ fn test_parse_unit_type() {
     unit_id ()
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -563,7 +562,7 @@ fn test_parse_unit_type() {
 #[test]
 fn test_sub() {
     let mut parser = Parser::new(Token::tokenize("1 - 2").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -578,7 +577,7 @@ fn test_sub() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(6.9 - 3.17)").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -593,7 +592,7 @@ fn test_sub() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(-) 4.20").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -607,7 +606,7 @@ fn test_sub() {
 #[test]
 fn test_negate() {
     let mut parser = Parser::new(Token::tokenize("-1").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -618,7 +617,7 @@ fn test_negate() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(-1)").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -629,7 +628,7 @@ fn test_negate() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(- 6.9)").unwrap());
-    let expr = parser.parse_program(&mut GasMeter::default()).unwrap().expr;
+    let expr = parser.parse_program().unwrap().expr;
     assert_expr_eq!(
         expr,
         app!(
@@ -667,7 +666,7 @@ fn test_projection_tuple_index_expr() {
 #[test]
 fn test_projection_expr_colon_rejected() {
     let mut parser = Parser::new(Token::tokenize("x:field").unwrap());
-    assert!(parser.parse_program(&mut GasMeter::default()).is_err());
+    assert!(parser.parse_program().is_err());
 }
 
 #[test]
@@ -1131,7 +1130,7 @@ fn test_match_empty_dict_pattern() {
 fn test_import_clause_all() {
     let code = "import foo.bar (*)\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1143,7 +1142,7 @@ fn test_import_clause_all() {
 fn test_import_clause_items_with_alias() {
     let code = "import foo.bar (x, y as z)\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1162,7 +1161,7 @@ fn test_import_clause_items_with_alias() {
 fn test_import_clause_rejects_module_alias_combo() {
     let code = "import foo.bar (x) as Bar\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let err = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+    let err = parser.parse_program().unwrap_err();
     assert!(
         err[0]
             .message
@@ -1174,7 +1173,7 @@ fn test_import_clause_rejects_module_alias_combo() {
 fn test_import_clause_rejects_duplicate_local_names() {
     let code = "import foo.bar (x, y as x)\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let err = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+    let err = parser.parse_program().unwrap_err();
     assert!(err[0].message.contains("duplicate imported name `x`"));
 }
 
@@ -1182,7 +1181,7 @@ fn test_import_clause_rejects_duplicate_local_names() {
 fn test_import_relative_current_dir_path() {
     let code = "import ./foo/bar (x)\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1200,7 +1199,7 @@ fn test_import_relative_current_dir_path() {
 fn test_import_relative_parent_dir_path() {
     let code = "import ../../foo/bar as FB\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1225,7 +1224,7 @@ fn test_import_relative_parent_dir_path() {
 #[test]
 fn test_errors() {
     let mut parser = Parser::new(Token::tokenize("1 + 2 + in + 3").unwrap());
-    let res = parser.parse_program(&mut GasMeter::default());
+    let res = parser.parse_program();
     assert_eq!(
         res,
         Err(vec![ParserErr::new(
@@ -1235,14 +1234,14 @@ fn test_errors() {
     );
 
     let mut parser = Parser::new(Token::tokenize("1 + 2 in + 3").unwrap());
-    let res = parser.parse_program(&mut GasMeter::default());
+    let res = parser.parse_program();
     assert_eq!(
         res,
         Err(vec![ParserErr::new(Span::new(1, 7, 1, 9), "unexpected in")])
     );
 
     let mut parser = Parser::new(Token::tokenize("get 0 [    ").unwrap());
-    let res = parser.parse_program(&mut GasMeter::default());
+    let res = parser.parse_program();
     assert_eq!(
         res,
         Err(vec![ParserErr::new(
@@ -1252,7 +1251,7 @@ fn test_errors() {
     );
 
     let mut parser = Parser::new(Token::tokenize("elem0 (  ").unwrap());
-    let res = parser.parse_program(&mut GasMeter::default());
+    let res = parser.parse_program();
     assert_eq!(
         res,
         Err(vec![ParserErr::new(
@@ -1271,7 +1270,7 @@ fn test_errors() {
         )
         .unwrap(),
     );
-    let res = parser.parse_program(&mut GasMeter::default());
+    let res = parser.parse_program();
     assert_eq!(
         res,
         Err(vec![
@@ -1295,7 +1294,7 @@ default
 "#;
 
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 2);
 
     match &program.decls[0] {
@@ -1330,7 +1329,7 @@ true
 "#;
 
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 2);
     assert!(matches!(program.expr.as_ref(), Expr::Bool(..)));
 }
@@ -1345,7 +1344,7 @@ default
 "#;
 
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program(&mut GasMeter::default()).unwrap();
+    let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 1);
 
     let Decl::Instance(decl) = &program.decls[0] else {
@@ -1399,7 +1398,7 @@ fn test_parse_hole_in_nested_expression_positions() {
 #[test]
 fn test_parse_hole_not_allowed_in_type_annotation_failure_case() {
     let mut parser = Parser::new(Token::tokenize("let x : ? = 1 in x").unwrap());
-    let errs = parser.parse_program(&mut GasMeter::default()).unwrap_err();
+    let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.message.contains("expected type") || e.message.contains("unexpected")),

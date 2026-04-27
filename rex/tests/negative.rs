@@ -1,6 +1,5 @@
 use rex::{
-    Engine, EngineError, GasMeter, Module, Parser, ParserErr, ParserLimits, Program, Token,
-    TypeError, sym,
+    Engine, EngineError, Module, Parser, ParserErr, ParserLimits, Program, Token, TypeError, sym,
 };
 
 fn strip_span(mut err: TypeError) -> TypeError {
@@ -14,7 +13,7 @@ fn parse_program(code: &str) -> Result<Program, Vec<ParserErr>> {
     let tokens = Token::tokenize(code).expect("lexer should not panic");
     let mut parser = Parser::new(tokens);
     parser.set_limits(ParserLimits::safe_defaults());
-    parser.parse_program(&mut GasMeter::default())
+    parser.parse_program()
 }
 
 async fn compile_err(code: &str) -> EngineError {
@@ -28,12 +27,11 @@ async fn compile_err(code: &str) -> EngineError {
     if let Err(e) = engine.inject_module(module) {
         return e;
     }
-    let mut gas = GasMeter::default();
     match rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     {
         Ok((v, _)) => {

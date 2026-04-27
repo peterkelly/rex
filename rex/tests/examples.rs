@@ -1,4 +1,4 @@
-use rex::{BuiltinTypeId, Engine, GasMeter, Module, Parser, ParserErr, Token, Type, Value};
+use rex::{BuiltinTypeId, Engine, Module, Parser, ParserErr, Token, Type, Value};
 
 fn format_parse_errors(errs: &[ParserErr]) -> String {
     let mut out = String::from("parse error:");
@@ -12,7 +12,7 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     let tokens = Token::tokenize(source).unwrap_or_else(|err| panic!("{name}: lex error: {err}"));
     let mut parser = Parser::new(tokens);
     let program = parser
-        .parse_program(&mut GasMeter::default())
+        .parse_program()
         .unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)));
 
     let mut engine = Engine::with_prelude(()).unwrap();
@@ -21,12 +21,11 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     engine
         .inject_module(module)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
-    let mut gas = GasMeter::default();
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
-    .eval(program.expr.as_ref(), &mut gas)
+    .eval(program.expr.as_ref())
     .await
     .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");

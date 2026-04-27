@@ -1,4 +1,4 @@
-use rex::{BuiltinTypeId, Engine, GasMeter, Heap, Pointer, Type, Value};
+use rex::{BuiltinTypeId, Engine, Heap, Pointer, Type, Value};
 
 const DEMO_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -35,17 +35,14 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
                 .unwrap()
                 .block_on(async move {
                     let mut engine = Engine::with_prelude(()).unwrap();
-                    let mut gas = GasMeter::default();
                     engine
-                        .infer_snippet(&source, &mut gas)
+                        .infer_snippet(&source)
                         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
-
-                    let mut gas = GasMeter::default();
                     let (value, ty) = rex::Evaluator::new_with_compiler(
                         rex::RuntimeEnv::new(engine.clone()),
                         rex::Compiler::new(engine.clone()),
                     )
-                    .eval_snippet(&source, &mut gas)
+                    .eval_snippet(&source)
                     .await
                     .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
                     (engine.into_heap(), value, ty)

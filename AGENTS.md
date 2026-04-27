@@ -130,8 +130,7 @@ Never commit with a lowercase subject after the colon, for example:
 ## Guidelines for embedders running untrusted code
 
 - Always cap parsing nesting depth with `ParserLimits::safe_defaults()` (or stricter).
-- Always run with a bounded `GasMeter` for parse + infer + eval.
-- Prefer async evaluation with `Engine::eval_with_gas`.
+- Prefer async evaluation with `Evaluator::eval`.
 
 ## Lockfiles
 
