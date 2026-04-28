@@ -47,9 +47,10 @@ use crate::stack::{
     NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFlatMap,
     NativeUnaryMap, NativeUnaryShape,
 };
-use crate::value::{Closure, Heap, Pointer, Value, list_to_vec};
+use crate::value::FromPointer;
+use crate::value::{Cell, Closure, Handle, Heap, Pointer, list_to_vec};
 use crate::{
-    EngineError, Environment, FromPointer, IntoPointer, RexType,
+    EngineError, Environment, FromRex, IntoRex, RexType,
     evaluator::{EvalContext, EvaluatorRef},
 };
 
@@ -74,7 +75,7 @@ pub trait RexDefault<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn rex_default(engine: &Engine<State>) -> Result<Pointer, EngineError>;
+    fn rex_default(engine: &Engine<State>) -> Result<Handle, EngineError>;
 }
 
 pub const ROOT_MODULE_NAME: &str = "__root__";
@@ -132,25 +133,23 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
     typ: &Type,
 ) -> Result<Pointer, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => {
-            engine
-                .heap
-                .alloc_i32(i32::try_from(value).map_err(|_| EngineError::NativeType {
-                    expected: "i32".into(),
-                    got: value.to_string(),
-                })?)
-        }
+        TypeKind::Var(_) => engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+            EngineError::NativeType {
+                expected: "i32".into(),
+                got: value.to_string(),
+            }
+        })?),
         TypeKind::Con(tc) => match tc.builtin_id {
             Some(BuiltinTypeId::U8) => {
-                engine
-                    .heap
-                    .alloc_u8(u8::try_from(value).map_err(|_| EngineError::NativeType {
+                engine.heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
-                    })?)
+                    }
+                })?)
             }
             Some(BuiltinTypeId::U16) => {
-                engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
@@ -158,24 +157,24 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
                 })?)
             }
             Some(BuiltinTypeId::U32) => {
-                engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
                     }
                 })?)
             }
-            Some(BuiltinTypeId::U64) => engine.heap.alloc_u64(value),
+            Some(BuiltinTypeId::U64) => engine.heap.alloc_ptr_u64(value),
             Some(BuiltinTypeId::I8) => {
-                engine
-                    .heap
-                    .alloc_i8(i8::try_from(value).map_err(|_| EngineError::NativeType {
+                engine.heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
-                    })?)
+                    }
+                })?)
             }
             Some(BuiltinTypeId::I16) => {
-                engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
@@ -183,7 +182,7 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
                 })?)
             }
             Some(BuiltinTypeId::I32) => {
-                engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
@@ -191,7 +190,7 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
                 })?)
             }
             Some(BuiltinTypeId::I64) => {
-                engine.heap.alloc_i64(i64::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_i64(i64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i64".into(),
                         got: value.to_string(),
@@ -216,25 +215,23 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
     typ: &Type,
 ) -> Result<Pointer, EngineError> {
     match typ.as_ref() {
-        TypeKind::Var(_) => {
-            engine
-                .heap
-                .alloc_i32(i32::try_from(value).map_err(|_| EngineError::NativeType {
-                    expected: "i32".into(),
-                    got: value.to_string(),
-                })?)
-        }
+        TypeKind::Var(_) => engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
+            EngineError::NativeType {
+                expected: "i32".into(),
+                got: value.to_string(),
+            }
+        })?),
         TypeKind::Con(tc) => match tc.builtin_id {
             Some(BuiltinTypeId::I8) => {
-                engine
-                    .heap
-                    .alloc_i8(i8::try_from(value).map_err(|_| EngineError::NativeType {
+                engine.heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
                         expected: "i8".into(),
                         got: value.to_string(),
-                    })?)
+                    }
+                })?)
             }
             Some(BuiltinTypeId::I16) => {
-                engine.heap.alloc_i16(i16::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_i16(i16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i16".into(),
                         got: value.to_string(),
@@ -242,24 +239,24 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
                 })?)
             }
             Some(BuiltinTypeId::I32) => {
-                engine.heap.alloc_i32(i32::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_i32(i32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "i32".into(),
                         got: value.to_string(),
                     }
                 })?)
             }
-            Some(BuiltinTypeId::I64) => engine.heap.alloc_i64(value),
+            Some(BuiltinTypeId::I64) => engine.heap.alloc_ptr_i64(value),
             Some(BuiltinTypeId::U8) => {
-                engine
-                    .heap
-                    .alloc_u8(u8::try_from(value).map_err(|_| EngineError::NativeType {
+                engine.heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
+                    EngineError::NativeType {
                         expected: "u8".into(),
                         got: value.to_string(),
-                    })?)
+                    }
+                })?)
             }
             Some(BuiltinTypeId::U16) => {
-                engine.heap.alloc_u16(u16::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_u16(u16::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u16".into(),
                         got: value.to_string(),
@@ -267,7 +264,7 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
                 })?)
             }
             Some(BuiltinTypeId::U32) => {
-                engine.heap.alloc_u32(u32::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_u32(u32::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u32".into(),
                         got: value.to_string(),
@@ -275,7 +272,7 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
                 })?)
             }
             Some(BuiltinTypeId::U64) => {
-                engine.heap.alloc_u64(u64::try_from(value).map_err(|_| {
+                engine.heap.alloc_ptr_u64(u64::try_from(value).map_err(|_| {
                     EngineError::NativeType {
                         expected: "u64".into(),
                         got: value.to_string(),
@@ -309,7 +306,8 @@ fn sanitize_type_name_for_symbol(typ: &Type) -> String {
         .collect()
 }
 
-pub type NativeFuture = BoxFuture<'static, Result<Pointer, EngineError>>;
+pub type NativeFuture = BoxFuture<'static, Result<Handle, EngineError>>;
+pub(crate) type NativePointerFuture = BoxFuture<'static, Result<Pointer, EngineError>>;
 type NativeId = u64;
 pub(crate) const RUNTIME_LINK_ABI_VERSION: u32 = 1;
 pub(crate) enum SchedulerNativeResult {
@@ -318,6 +316,15 @@ pub(crate) enum SchedulerNativeResult {
 }
 
 pub type SyncNativeCallable<State> = Arc<
+    dyn for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+        + Send
+        + Sync
+        + 'static,
+>;
+pub type AsyncNativeCallable<State> =
+    Arc<dyn Fn(EvaluatorRef<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static>;
+
+pub(crate) type SyncNativePointerCallable<State> = Arc<
     dyn for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
         + Send
         + Sync
@@ -333,8 +340,9 @@ pub(crate) type SchedulerNativeCallable<State> = Arc<
         + Sync
         + 'static,
 >;
-pub type AsyncNativeCallable<State> =
-    Arc<dyn Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static>;
+pub(crate) type AsyncNativePointerCallable<State> = Arc<
+    dyn Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativePointerFuture + Send + Sync + 'static,
+>;
 
 type ExportInjector<State> =
     Box<dyn FnOnce(&mut Engine<State>, &str) -> Result<(), EngineError> + Send + 'static>;
@@ -346,7 +354,7 @@ struct NativeRegistration<State: Clone + Send + Sync + 'static> {
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
-    fn sync(scheme: Scheme, arity: usize, func: SyncNativeCallable<State>) -> Self {
+    fn sync(scheme: Scheme, arity: usize, func: SyncNativePointerCallable<State>) -> Self {
         Self {
             scheme,
             arity,
@@ -362,7 +370,7 @@ impl<State: Clone + Send + Sync + 'static> NativeRegistration<State> {
         }
     }
 
-    fn r#async(scheme: Scheme, arity: usize, func: AsyncNativeCallable<State>) -> Self {
+    fn r#async(scheme: Scheme, arity: usize, func: AsyncNativePointerCallable<State>) -> Self {
         Self {
             scheme,
             arity,
@@ -455,7 +463,7 @@ where
         handler: F,
     ) -> Result<Self, EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
             + Send
             + Sync
             + 'static,
@@ -467,8 +475,12 @@ where
         let handler = Arc::new(handler);
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let handler = Arc::clone(&handler);
-            let func: SyncNativeCallable<State> =
-                Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
+            let func: SyncNativePointerCallable<State> =
+                Arc::new(move |engine, typ: &Type, args: &[Pointer]| {
+                    let handles = engine.handles_from_pointers(args)?;
+                    let value = handler(engine.clone(), typ, &handles)?;
+                    value.pointer_for_heap(engine.heap())
+                });
             let registration = NativeRegistration::sync(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
@@ -516,7 +528,7 @@ where
         handler: F,
     ) -> Result<Self, EngineError>
     where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
+        F: Fn(EvaluatorRef<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static,
     {
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
@@ -525,9 +537,14 @@ where
         let handler = Arc::new(handler);
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let handler = Arc::clone(&handler);
-            let func: AsyncNativeCallable<State> = Arc::new(move |engine, typ, args| {
+            let func: AsyncNativePointerCallable<State> = Arc::new(move |engine, typ, args| {
                 let handler = Arc::clone(&handler);
-                handler(engine, typ, args)
+                async move {
+                    let handles = engine.handles_from_pointers(&args)?;
+                    let value = handler(engine.clone(), typ, handles).await?;
+                    value.pointer_for_heap(engine.heap())
+                }
+                .boxed()
             });
             let registration = NativeRegistration::r#async(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
@@ -537,7 +554,7 @@ where
 
     pub fn from_value<V>(name: impl Into<String>, value: V) -> Result<Self, EngineError>
     where
-        V: IntoPointer + RexType + Clone + Send + Sync + 'static,
+        V: IntoRex + RexType + Clone + Send + Sync + 'static,
     {
         let name = name.into();
         let typ = V::rex_type();
@@ -548,33 +565,9 @@ where
         let name = interface.name.name.to_string();
         let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
             let stored = value.clone();
-            let func: SyncNativeCallable<State> =
+            let func: SyncNativePointerCallable<State> =
                 Arc::new(move |engine, _: &Type, _args: &[Pointer]| {
-                    stored.clone().into_pointer(&engine.heap)
-                });
-            let registration =
-                NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func);
-            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
-        });
-        Self::from_injector(name, interface, injector)
-    }
-
-    pub fn from_value_typed(
-        name: impl Into<String>,
-        typ: Type,
-        value: Value,
-    ) -> Result<Self, EngineError> {
-        let name = name.into();
-        let interface = declare_fn_decl_from_scheme(
-            normalize_name(&name).as_ref(),
-            &Scheme::new(vec![], vec![], typ.clone()),
-        );
-        let name = interface.name.name.to_string();
-        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
-            let stored = value.clone();
-            let func: SyncNativeCallable<State> =
-                Arc::new(move |engine, _: &Type, _args: &[Pointer]| {
-                    engine.heap.alloc_value(stored.clone())
+                    Ok(stored.clone().into_rex(engine.heap())?.pointer())
                 });
             let registration =
                 NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func);
@@ -928,7 +921,7 @@ macro_rules! define_handler_impl {
         where
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State) -> Result<R, EngineError> + Send + Sync + 'static,
-            R: IntoPointer + RexType,
+            R: IntoRex + RexType,
         {
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
@@ -941,7 +934,7 @@ macro_rules! define_handler_impl {
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
-                let func: SyncNativeCallable<State> = Arc::new(
+                let func: SyncNativePointerCallable<State> = Arc::new(
                     move |engine, _: &Type, args: &[Pointer]| {
                         if args.len() != $arity {
                             return Err(EngineError::NativeArity {
@@ -950,8 +943,8 @@ macro_rules! define_handler_impl {
                                 got: args.len(),
                             });
                         }
-                        let value = self(engine.state.as_ref())?;
-                        value.into_pointer(&engine.heap)
+                        let value = self(engine.state())?;
+                        Ok(value.into_rex(engine.heap())?.pointer())
                     },
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
@@ -966,8 +959,8 @@ macro_rules! define_handler_impl {
         where
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State, $($arg_ty),+) -> Result<R, EngineError> + Send + Sync + 'static,
-            R: IntoPointer + RexType,
-            $($arg_ty: FromPointer + RexType),+
+            R: IntoRex + RexType,
+            $($arg_ty: FromRex + RexType),+
         {
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
@@ -981,7 +974,7 @@ macro_rules! define_handler_impl {
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
-                let func: SyncNativeCallable<State> = Arc::new(
+                let func: SyncNativePointerCallable<State> = Arc::new(
                     move |engine, _: &Type, args: &[Pointer]| {
                         if args.len() != $arity {
                             return Err(EngineError::NativeArity {
@@ -990,9 +983,12 @@ macro_rules! define_handler_impl {
                                 got: args.len(),
                             });
                         }
-                        $(let $arg_name = $arg_ty::from_pointer(&engine.heap, &args[$idx])?;)*
-                        let value = self(engine.state.as_ref(), $($arg_name),+)?;
-                        value.into_pointer(&engine.heap)
+                        $(let $arg_name = {
+                            let handle = engine.heap().handle(args[$idx])?;
+                            $arg_ty::from_rex(&handle)?
+                        };)*
+                        let value = self(engine.state(), $($arg_name),+)?;
+                        Ok(value.into_rex(engine.heap())?.pointer())
                     },
                 );
                 let typ = native_fn_type!($($arg_ty),+ ; R);
@@ -1021,7 +1017,13 @@ where
     fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
-        let registration = NativeRegistration::sync(scheme, arity, func);
+        let pointer_func: SyncNativePointerCallable<State> =
+            Arc::new(move |engine, typ: &Type, args: &[Pointer]| {
+                let handles = engine.handles_from_pointers(args)?;
+                let value = func(engine.clone(), typ, &handles)?;
+                value.pointer_for_heap(engine.heap())
+            });
+        let registration = NativeRegistration::sync(scheme, arity, pointer_func);
         engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
@@ -1033,7 +1035,7 @@ macro_rules! define_async_handler_impl {
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
-            R: IntoPointer + RexType,
+            R: IntoRex + RexType,
         {
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
@@ -1047,8 +1049,8 @@ macro_rules! define_async_handler_impl {
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
-                let func: AsyncNativeCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Pointer>| -> NativeFuture {
+                let func: AsyncNativePointerCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Pointer>| -> NativePointerFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         async move {
@@ -1059,8 +1061,8 @@ macro_rules! define_async_handler_impl {
                                     got: args.len(),
                                 });
                             }
-                            let value = f(engine.state.as_ref()).await?;
-                            value.into_pointer(&engine.heap)
+                            let value = f(engine.state()).await?;
+                            Ok(value.into_rex(engine.heap())?.pointer())
                         }
                         .boxed()
                     },
@@ -1077,8 +1079,8 @@ macro_rules! define_async_handler_impl {
             State: Clone + Send + Sync + 'static,
             F: for<'a> Fn(&'a State, $($arg_ty),+) -> Fut + Send + Sync + 'static,
             Fut: Future<Output = Result<R, EngineError>> + Send + 'static,
-            R: IntoPointer + RexType,
-            $($arg_ty: FromPointer + RexType),+
+            R: IntoRex + RexType,
+            $($arg_ty: FromRex + RexType),+
         {
             fn interface_decl(export_name: &str) -> DeclareFnDecl {
                 let typ = native_fn_type!($($arg_ty),+ ; R);
@@ -1093,8 +1095,8 @@ macro_rules! define_async_handler_impl {
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
-                let func: AsyncNativeCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Pointer>| -> NativeFuture {
+                let func: AsyncNativePointerCallable<State> = Arc::new(
+                    move |engine, _: Type, args: Vec<Pointer>| -> NativePointerFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         async move {
@@ -1105,9 +1107,12 @@ macro_rules! define_async_handler_impl {
                                     got: args.len(),
                                 });
                             }
-                            $(let $arg_name = $arg_ty::from_pointer(&engine.heap, &args[$idx])?;)*
-                            let value = f(engine.state.as_ref(), $($arg_name),+).await?;
-                            value.into_pointer(&engine.heap)
+                            $(let $arg_name = {
+                                let handle = engine.heap().handle(args[$idx])?;
+                                $arg_ty::from_rex(&handle)?
+                            };)*
+                            let value = f(engine.state(), $($arg_name),+).await?;
+                            Ok(value.into_rex(engine.heap())?.pointer())
                         }
                         .boxed()
                     },
@@ -1142,16 +1147,25 @@ where
     ) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
-        let registration = NativeRegistration::r#async(scheme, arity, func);
+        let pointer_func: AsyncNativePointerCallable<State> = Arc::new(move |engine, typ, args| {
+            let func = Arc::clone(&func);
+            async move {
+                let handles = engine.handles_from_pointers(&args)?;
+                let value = func(engine.clone(), typ, handles).await?;
+                value.pointer_for_heap(engine.heap())
+            }
+            .boxed()
+        });
+        let registration = NativeRegistration::r#async(scheme, arity, pointer_func);
         engine.register_native_registration(ROOT_MODULE_NAME, export_name, registration)
     }
 }
 
 #[derive(Clone)]
 pub(crate) enum NativeCallable<State: Clone + Send + Sync + 'static> {
-    Sync(SyncNativeCallable<State>),
+    Sync(SyncNativePointerCallable<State>),
     Scheduler(SchedulerNativeCallable<State>),
-    Async(AsyncNativeCallable<State>),
+    Async(AsyncNativePointerCallable<State>),
 }
 
 impl<State: Clone + Send + Sync + 'static> PartialEq for NativeCallable<State> {
@@ -1172,7 +1186,7 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 
 pub(crate) enum NativeCallResult {
     Ready(Pointer),
-    Pending(NativeFuture),
+    Pending(NativePointerFuture),
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
@@ -1204,7 +1218,7 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct NativeFn {
+pub(crate) struct NativeFn {
     native_id: NativeId,
     name: Symbol,
     arity: usize,
@@ -1216,7 +1230,7 @@ pub struct NativeFn {
 enum NativeApplyResult {
     Value(Pointer),
     Task(NativeTask),
-    Pending(NativeFuture),
+    Pending(NativePointerFuture),
 }
 
 impl NativeFn {
@@ -1321,7 +1335,7 @@ impl NativeFn {
             } = self;
             return runtime
                 .heap
-                .alloc_native(native_id, name, arity, typ, applied, applied_types)
+                .alloc_ptr_native(native_id, name, arity, typ, applied, applied_types)
                 .map(NativeApplyResult::Value);
         }
 
@@ -1352,7 +1366,7 @@ impl NativeFn {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct OverloadedFn {
+pub(crate) struct OverloadedFn {
     name: Symbol,
     typ: Type,
     applied: Vec<Pointer>,
@@ -2564,7 +2578,7 @@ where
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
         let handler = Arc::new(handler);
-        let func: SyncNativeCallable<State> =
+        let func: SyncNativePointerCallable<State> =
             Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
         let registration = NativeRegistration::sync(scheme, arity, func);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
@@ -2608,7 +2622,8 @@ where
             0,
             move |engine, _, _| {
                 let _ = engine;
-                T::rex_default(&engine_for_default)
+                let value = T::rex_default(&engine_for_default)?;
+                value.pointer_for_heap(&engine_for_default.heap)
             },
         )?;
 
@@ -2663,15 +2678,15 @@ where
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
 
-    pub(crate) fn export_value<V: IntoPointer + RexType>(
+    pub(crate) fn export_value<V: IntoRex + RexType>(
         &mut self,
         name: &str,
         value: V,
     ) -> Result<(), EngineError> {
         let typ = V::rex_type();
-        let value = value.into_pointer(&self.heap)?;
-        let func: SyncNativeCallable<State> =
-            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value));
+        let value = value.into_rex(&self.heap)?;
+        let func: SyncNativePointerCallable<State> =
+            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value.pointer()));
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func);
         self.register_native_registration(ROOT_MODULE_NAME, name, registration)
@@ -2751,7 +2766,7 @@ where
         };
 
         // Type system gets the constructor schemes; runtime gets constructor functions
-        // that build `Value::Adt` with the constructor tag and evaluated args.
+        // that build `Cell::Adt` with the constructor tag and evaluated args.
         if register_type {
             self.type_system.register_adt(&adt);
         }
@@ -2764,11 +2779,11 @@ where
                 continue;
             }
             let ctor_name = ctor.clone();
-            let func = Arc::new(
+            let func: SyncNativePointerCallable<State> = Arc::new(
                 move |engine: EvaluatorRef<State>, _: &Type, args: &[Pointer]| {
                     engine
-                        .heap
-                        .alloc_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())
+                        .heap()
+                        .alloc_ptr_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())
                 },
             );
             let arity = type_arity(&scheme.typ);
@@ -2816,7 +2831,7 @@ where
             if let Some(existing) = env_rec.get(&decl.name.name) {
                 slots.push(existing);
             } else {
-                let placeholder = self.heap.alloc_uninitialized(decl.name.name.clone())?;
+                let placeholder = self.heap.alloc_ptr_uninitialized(decl.name.name.clone())?;
                 env_rec = env_rec.extend(decl.name.name.clone(), placeholder);
                 slots.push(placeholder);
             }
@@ -2853,7 +2868,7 @@ where
                         "fn declaration did not lower to lambda".into(),
                     ));
                 };
-                let ptr = self.heap.alloc_closure(
+                let ptr = self.heap.alloc_ptr_closure(
                     self.env.clone(),
                     param.clone(),
                     param_ty,
@@ -2914,7 +2929,7 @@ where
             if self.env.get(&df.name.name).is_some() {
                 continue;
             }
-            let placeholder = self.heap.alloc_uninitialized(df.name.name.clone())?;
+            let placeholder = self.heap.alloc_ptr_uninitialized(df.name.name.clone())?;
             self.env = self.env.extend(df.name.name.clone(), placeholder);
         }
         Ok(())
@@ -3863,35 +3878,35 @@ pub(crate) fn class_method_capability_matches_requirement(
     capability.name == requirement.name && unify(&scheme_ty, &requirement.typ).is_ok()
 }
 
-fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
+fn cell_type(heap: &Heap, cell: &Cell) -> Result<Type, EngineError> {
     let pointer_type = |pointer: &Pointer| -> Result<Type, EngineError> {
-        let value = heap.get(pointer)?;
-        value_type(heap, value.as_ref())
+        let cell = heap.get(pointer)?;
+        cell_type(heap, cell.as_ref())
     };
 
-    match value {
-        Value::Bool(..) => Ok(Type::builtin(BuiltinTypeId::Bool)),
-        Value::U8(..) => Ok(Type::builtin(BuiltinTypeId::U8)),
-        Value::U16(..) => Ok(Type::builtin(BuiltinTypeId::U16)),
-        Value::U32(..) => Ok(Type::builtin(BuiltinTypeId::U32)),
-        Value::U64(..) => Ok(Type::builtin(BuiltinTypeId::U64)),
-        Value::I8(..) => Ok(Type::builtin(BuiltinTypeId::I8)),
-        Value::I16(..) => Ok(Type::builtin(BuiltinTypeId::I16)),
-        Value::I32(..) => Ok(Type::builtin(BuiltinTypeId::I32)),
-        Value::I64(..) => Ok(Type::builtin(BuiltinTypeId::I64)),
-        Value::F32(..) => Ok(Type::builtin(BuiltinTypeId::F32)),
-        Value::F64(..) => Ok(Type::builtin(BuiltinTypeId::F64)),
-        Value::String(..) => Ok(Type::builtin(BuiltinTypeId::String)),
-        Value::Uuid(..) => Ok(Type::builtin(BuiltinTypeId::Uuid)),
-        Value::DateTime(..) => Ok(Type::builtin(BuiltinTypeId::DateTime)),
-        Value::Tuple(elems) => {
+    match cell {
+        Cell::Bool(..) => Ok(Type::builtin(BuiltinTypeId::Bool)),
+        Cell::U8(..) => Ok(Type::builtin(BuiltinTypeId::U8)),
+        Cell::U16(..) => Ok(Type::builtin(BuiltinTypeId::U16)),
+        Cell::U32(..) => Ok(Type::builtin(BuiltinTypeId::U32)),
+        Cell::U64(..) => Ok(Type::builtin(BuiltinTypeId::U64)),
+        Cell::I8(..) => Ok(Type::builtin(BuiltinTypeId::I8)),
+        Cell::I16(..) => Ok(Type::builtin(BuiltinTypeId::I16)),
+        Cell::I32(..) => Ok(Type::builtin(BuiltinTypeId::I32)),
+        Cell::I64(..) => Ok(Type::builtin(BuiltinTypeId::I64)),
+        Cell::F32(..) => Ok(Type::builtin(BuiltinTypeId::F32)),
+        Cell::F64(..) => Ok(Type::builtin(BuiltinTypeId::F64)),
+        Cell::String(..) => Ok(Type::builtin(BuiltinTypeId::String)),
+        Cell::Uuid(..) => Ok(Type::builtin(BuiltinTypeId::Uuid)),
+        Cell::DateTime(..) => Ok(Type::builtin(BuiltinTypeId::DateTime)),
+        Cell::Tuple(elems) => {
             let mut tys = Vec::with_capacity(elems.len());
             for elem in elems {
                 tys.push(pointer_type(elem)?);
             }
             Ok(Type::tuple(tys))
         }
-        Value::Array(elems) => {
+        Cell::Array(elems) => {
             let first = elems
                 .first()
                 .ok_or_else(|| EngineError::UnknownType(sym("array")))?;
@@ -3907,7 +3922,7 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
             }
             Ok(Type::app(Type::builtin(BuiltinTypeId::Array), elem_ty))
         }
-        Value::Dict(map) => {
+        Cell::Dict(map) => {
             let first = map
                 .values()
                 .next()
@@ -3924,20 +3939,20 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
             }
             Ok(Type::app(Type::builtin(BuiltinTypeId::Dict), elem_ty))
         }
-        Value::Adt(tag, args) if sym_eq(tag, "Some") && args.len() == 1 => {
+        Cell::Adt(tag, args) if sym_eq(tag, "Some") && args.len() == 1 => {
             let inner = pointer_type(&args[0])?;
             Ok(Type::app(Type::builtin(BuiltinTypeId::Option), inner))
         }
-        Value::Adt(tag, args) if sym_eq(tag, "None") && args.is_empty() => {
+        Cell::Adt(tag, args) if sym_eq(tag, "None") && args.is_empty() => {
             Err(EngineError::UnknownType(sym("option")))
         }
-        Value::Adt(tag, args) if (sym_eq(tag, "Ok") || sym_eq(tag, "Err")) && args.len() == 1 => {
+        Cell::Adt(tag, args) if (sym_eq(tag, "Ok") || sym_eq(tag, "Err")) && args.len() == 1 => {
             Err(EngineError::UnknownType(sym("result")))
         }
-        Value::Adt(tag, args)
+        Cell::Adt(tag, args)
             if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 =>
         {
-            let elems = list_to_vec(heap, value)?;
+            let elems = list_to_vec(heap, cell)?;
             let first = elems
                 .first()
                 .ok_or_else(|| EngineError::UnknownType(sym("list")))?;
@@ -3953,12 +3968,12 @@ fn value_type(heap: &Heap, value: &Value) -> Result<Type, EngineError> {
             }
             Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
         }
-        Value::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
-        Value::Uninitialized(..) => Err(EngineError::UnknownType(sym("uninitialized"))),
-        Value::Frame(..) => Err(EngineError::UnknownType(sym("frame"))),
-        Value::Closure(..) => Err(EngineError::UnknownType(sym("closure"))),
-        Value::Native(..) => Err(EngineError::UnknownType(sym("native"))),
-        Value::Overloaded(..) => Err(EngineError::UnknownType(sym("overloaded"))),
+        Cell::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
+        Cell::Uninitialized(..) => Err(EngineError::UnknownType(sym("uninitialized"))),
+        Cell::Frame(..) => Err(EngineError::UnknownType(sym("frame"))),
+        Cell::Closure(..) => Err(EngineError::UnknownType(sym("closure"))),
+        Cell::Native(..) => Err(EngineError::UnknownType(sym("native"))),
+        Cell::Overloaded(..) => Err(EngineError::UnknownType(sym("overloaded"))),
     }
 }
 
@@ -3967,20 +3982,20 @@ pub(crate) fn resolve_arg_type(
     arg_type: Option<&Type>,
     arg: &Pointer,
 ) -> Result<Type, EngineError> {
-    let infer_from_value = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
-        let value = heap.get(arg)?;
+    let infer_from_cell = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
+        let cell = heap.get(arg)?;
         match ty_hint {
-            Some(ty) => match value_type(heap, value.as_ref()) {
+            Some(ty) => match cell_type(heap, cell.as_ref()) {
                 Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),
                 _ => Ok(ty.clone()),
             },
-            None => value_type(heap, value.as_ref()),
+            None => cell_type(heap, cell.as_ref()),
         }
     };
     match arg_type {
         Some(ty) if ty.ftv().is_empty() => Ok(ty.clone()),
-        Some(ty) => infer_from_value(Some(ty)),
-        None => infer_from_value(None),
+        Some(ty) => infer_from_cell(Some(ty)),
+        None => infer_from_cell(None),
     }
 }
 
@@ -4060,54 +4075,6 @@ fn synthetic_application_expr_from_head(
     Ok((env, expr))
 }
 
-pub async fn apply_with_context<State>(
-    evaluator: &EvaluatorRef<State>,
-    func: Pointer,
-    arg: Pointer,
-    func_type: Option<&Type>,
-    arg_type: Option<&Type>,
-) -> Result<Pointer, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let runtime: &RuntimeSnapshot<State> = evaluator;
-    let func_type = match func_type {
-        Some(typ) => typ.clone(),
-        None => callable_pointer_type(runtime, &func)?,
-    };
-    let arg_type = resolve_arg_type(&runtime.heap, arg_type, &arg)?;
-    let args = [(arg, arg_type)];
-    let (env, expr) = synthetic_application_expr(func, func_type, &args)?;
-    match evaluator.context.parent {
-        Some(parent) => {
-            eval_typed_expr_from_parent(runtime, parent, EvalStop::Parent(parent), &env, &expr)
-                .await
-        }
-        None => eval_typed_expr(runtime, &env, &expr).await,
-    }
-}
-
-fn callable_pointer_type<State: Clone + Send + Sync + 'static>(
-    runtime: &RuntimeSnapshot<State>,
-    func: &Pointer,
-) -> Result<Type, EngineError> {
-    let value = runtime.heap.get(func)?;
-    match value.as_ref() {
-        Value::Closure(Closure { typ, .. }) => Ok(typ.clone()),
-        Value::Native(native) => {
-            let (_, _, _, typ, _, _) = native.clone().into_parts();
-            Ok(typ)
-        }
-        Value::Overloaded(over) => {
-            let (_, typ, _, _) = over.clone().into_parts();
-            Ok(typ)
-        }
-        _ => Err(EngineError::NotCallable(
-            runtime.heap.type_name(func)?.into(),
-        )),
-    }
-}
-
 pub(crate) fn binary_arg_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     let (lhs, rest) = split_fun(typ).ok_or_else(|| EngineError::NativeType {
         expected: "binary function".into(),
@@ -4124,7 +4091,7 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
     let value = heap.get(pointer)?;
     if let Ok(index) = field.as_ref().parse::<usize>() {
         return match value.as_ref() {
-            Value::Tuple(items) => {
+            Cell::Tuple(items) => {
                 items
                     .get(index)
                     .cloned()
@@ -4140,10 +4107,10 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
         };
     }
     match value.as_ref() {
-        Value::Adt(_, args) if args.len() == 1 => {
+        Cell::Adt(_, args) if args.len() == 1 => {
             let inner = heap.get(&args[0])?;
             match inner.as_ref() {
-                Value::Dict(map) => {
+                Cell::Dict(map) => {
                     map.get(field)
                         .cloned()
                         .ok_or_else(|| EngineError::UnknownField {
@@ -4170,7 +4137,7 @@ enum EvalControl {
         env: Environment,
     },
     PushFrame(Frame),
-    AwaitNative(NativeFuture),
+    AwaitNative(NativePointerFuture),
     Return(Pointer),
 }
 
@@ -4181,7 +4148,7 @@ enum EvalApplyResult {
         env: Environment,
     },
     PushNative(NativeTask),
-    AwaitNative(NativeFuture),
+    AwaitNative(NativePointerFuture),
 }
 
 enum EvalVarResult {
@@ -4190,7 +4157,7 @@ enum EvalVarResult {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
-    AwaitNative(NativeFuture),
+    AwaitNative(NativePointerFuture),
 }
 
 struct EvalWorkItem {
@@ -4242,7 +4209,7 @@ pub(crate) async fn eval_typed_expr<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let root_parent = runtime.heap.alloc_root_frame_parent()?;
+    let root_parent = runtime.heap.alloc_ptr_root_frame_parent()?;
     eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr).await
 }
 
@@ -4267,7 +4234,7 @@ where
     let root_frame =
         runtime
             .heap
-            .alloc_frame(frame_for_expr(initial_parent, root_expr, env.clone()))?;
+            .alloc_ptr_frame(frame_for_expr(initial_parent, root_expr, env.clone()))?;
     let mut scheduler = EvalScheduler::new(root_frame);
 
     loop {
@@ -4284,17 +4251,17 @@ where
             EvalControl::Push { expr, env } => {
                 let child = runtime
                     .heap
-                    .alloc_frame(frame_for_expr(item.frame, expr, env))?;
+                    .alloc_ptr_frame(frame_for_expr(item.frame, expr, env))?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::PushFrame(frame) => {
-                let child = runtime.heap.alloc_frame(frame)?;
+                let child = runtime.heap.alloc_ptr_frame(frame)?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::AwaitNative(future) => {
                 let child = runtime
                     .heap
-                    .alloc_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
+                    .alloc_ptr_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
                 let value = future.await?;
                 scheduler.schedule_next(EvalWorkItem::receive(child, value));
             }
@@ -4506,7 +4473,9 @@ where
 {
     match frame {
         Frame::Bool(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Bool(value) => Ok(EvalControl::Return(runtime.heap.alloc_bool(*value)?)),
+            TypedExprKind::Bool(value) => {
+                Ok(EvalControl::Return(runtime.heap.alloc_ptr_bool(*value)?))
+            }
             _ => frame_kind_error("bool"),
         },
         Frame::Uint(frame) => match frame.expr.kind.as_ref() {
@@ -4526,31 +4495,33 @@ where
             _ => frame_kind_error("int"),
         },
         Frame::Float(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Float(value) => {
-                Ok(EvalControl::Return(runtime.heap.alloc_f32(*value as f32)?))
-            }
+            TypedExprKind::Float(value) => Ok(EvalControl::Return(
+                runtime.heap.alloc_ptr_f32(*value as f32)?,
+            )),
             _ => frame_kind_error("float"),
         },
         Frame::String(frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::String(value) => Ok(EvalControl::Return(
-                runtime.heap.alloc_string(value.clone())?,
+                runtime.heap.alloc_ptr_string(value.clone())?,
             )),
             _ => frame_kind_error("string"),
         },
         Frame::Uuid(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Uuid(value) => Ok(EvalControl::Return(runtime.heap.alloc_uuid(*value)?)),
+            TypedExprKind::Uuid(value) => {
+                Ok(EvalControl::Return(runtime.heap.alloc_ptr_uuid(*value)?))
+            }
             _ => frame_kind_error("uuid"),
         },
         Frame::DateTime(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::DateTime(value) => {
-                Ok(EvalControl::Return(runtime.heap.alloc_datetime(*value)?))
-            }
+            TypedExprKind::DateTime(value) => Ok(EvalControl::Return(
+                runtime.heap.alloc_ptr_datetime(*value)?,
+            )),
             _ => frame_kind_error("datetime"),
         },
         Frame::Hole(_) => Err(EngineError::UnsupportedExpr),
         Frame::Tuple(mut frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::Tuple(elems) if elems.is_empty() => {
-                Ok(EvalControl::Return(runtime.heap.alloc_tuple(vec![])?))
+                Ok(EvalControl::Return(runtime.heap.alloc_ptr_tuple(vec![])?))
             }
             TypedExprKind::Tuple(elems) => {
                 frame.state = FrSequenceState::EvalItem;
@@ -4566,7 +4537,7 @@ where
         },
         Frame::List(mut frame) => match frame.expr.kind.as_ref() {
             TypedExprKind::List(elems) if elems.is_empty() => Ok(EvalControl::Return(
-                runtime.heap.alloc_adt(sym("Empty"), vec![])?,
+                runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?,
             )),
             TypedExprKind::List(elems) => {
                 frame.state = FrSequenceState::EvalItem;
@@ -4581,7 +4552,7 @@ where
         Frame::Dict(mut frame) => {
             if frame.keys.is_empty() {
                 return Ok(EvalControl::Return(
-                    runtime.heap.alloc_dict(BTreeMap::new())?,
+                    runtime.heap.alloc_ptr_dict(BTreeMap::new())?,
                 ));
             }
             let key = frame.keys[0].clone();
@@ -4662,7 +4633,7 @@ where
                 let param_ty = split_fun(&frame.expr.typ)
                     .map(|(arg, _)| arg)
                     .ok_or_else(|| EngineError::NotCallable(frame.expr.typ.to_string()))?;
-                let value = runtime.heap.alloc_closure(
+                let value = runtime.heap.alloc_ptr_closure(
                     frame.env.clone(),
                     param.clone(),
                     param_ty,
@@ -4690,7 +4661,7 @@ where
             let mut recursive_env = frame.env.clone();
             let mut slots = Vec::with_capacity(bindings.len());
             for (name, _) in bindings {
-                let placeholder = runtime.heap.alloc_uninitialized(name.clone())?;
+                let placeholder = runtime.heap.alloc_ptr_uninitialized(name.clone())?;
                 recursive_env = recursive_env.extend(name.clone(), placeholder);
                 slots.push(placeholder);
             }
@@ -4769,7 +4740,7 @@ where
             frame.next_index += 1;
             if frame.next_index == elems.len() {
                 return Ok(EvalControl::Return(
-                    runtime.heap.alloc_tuple(frame.values.clone())?,
+                    runtime.heap.alloc_ptr_tuple(frame.values.clone())?,
                 ));
             }
             let expr = Arc::clone(&elems[frame.next_index]);
@@ -4790,9 +4761,9 @@ where
             frame.values.push(value);
             frame.next_index += 1;
             if frame.next_index == elems.len() {
-                let mut list = runtime.heap.alloc_adt(sym("Empty"), vec![])?;
+                let mut list = runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?;
                 for value in frame.values.clone().into_iter().rev() {
-                    list = runtime.heap.alloc_adt(sym("Cons"), vec![value, list])?;
+                    list = runtime.heap.alloc_ptr_adt(sym("Cons"), vec![value, list])?;
                 }
                 return Ok(EvalControl::Return(list));
             }
@@ -4813,7 +4784,7 @@ where
             frame.next_index += 1;
             if frame.next_index == frame.keys.len() {
                 return Ok(EvalControl::Return(
-                    runtime.heap.alloc_dict(frame.values.clone())?,
+                    runtime.heap.alloc_ptr_dict(frame.values.clone())?,
                 ));
             }
             let next_key = frame.keys[frame.next_index].clone();
@@ -5119,10 +5090,6 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match task {
-        NativeTask::EvalExpr(task) => Ok(NativeStep::Push {
-            expr: Arc::clone(&task.expr),
-            env: task.env.clone(),
-        }),
         NativeTask::ApplyUnary(task) => native_apply_step(
             task.func,
             task.func_type.clone(),
@@ -5176,7 +5143,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match task {
-        NativeTask::EvalExpr(_) | NativeTask::ApplyUnary(_) => Ok(NativeStep::Return(value)),
+        NativeTask::ApplyUnary(_) => Ok(NativeStep::Return(value)),
         NativeTask::SequenceMap(task) => native_sequence_map_receive(runtime, task, value),
         NativeTask::SequenceFilter(task) => native_sequence_filter_receive(runtime, task, value),
         NativeTask::SequenceFilterMap(task) => {
@@ -5233,13 +5200,13 @@ where
 {
     match shape {
         NativeSequenceShape::List => {
-            let mut list = runtime.heap.alloc_adt(sym("Empty"), vec![])?;
+            let mut list = runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?;
             for value in values.into_iter().rev() {
-                list = runtime.heap.alloc_adt(sym("Cons"), vec![value, list])?;
+                list = runtime.heap.alloc_ptr_adt(sym("Cons"), vec![value, list])?;
             }
             Ok(list)
         }
-        NativeSequenceShape::Array => runtime.heap.alloc_array(values),
+        NativeSequenceShape::Array => runtime.heap.alloc_ptr_array(values),
     }
 }
 
@@ -5251,8 +5218,8 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match value {
-        Some(value) => runtime.heap.alloc_adt(sym("Some"), vec![value]),
-        None => runtime.heap.alloc_adt(sym("None"), vec![]),
+        Some(value) => runtime.heap.alloc_ptr_adt(sym("Some"), vec![value]),
+        None => runtime.heap.alloc_ptr_adt(sym("None"), vec![]),
     }
 }
 
@@ -5264,8 +5231,8 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match value {
-        Ok(value) => runtime.heap.alloc_adt(sym("Ok"), vec![value]),
-        Err(value) => runtime.heap.alloc_adt(sym("Err"), vec![value]),
+        Ok(value) => runtime.heap.alloc_ptr_adt(sym("Ok"), vec![value]),
+        Err(value) => runtime.heap.alloc_ptr_adt(sym("Err"), vec![value]),
     }
 }
 
@@ -5337,7 +5304,7 @@ where
     let (name, typ, applied, applied_types) = OverloadedFn::new(sym(name), typ).into_parts();
     runtime
         .heap
-        .alloc_overloaded(name, typ, applied, applied_types)
+        .alloc_ptr_overloaded(name, typ, applied, applied_types)
 }
 
 fn binary_same_type(typ: &Type) -> Type {
@@ -5353,8 +5320,8 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match elem_ty.as_ref() {
-        TypeKind::Con(c) if sym_eq(&c.name, "f32") => runtime.heap.alloc_f32(len as f32),
-        TypeKind::Con(c) if sym_eq(&c.name, "f64") => runtime.heap.alloc_f64(len as f64),
+        TypeKind::Con(c) if sym_eq(&c.name, "f32") => runtime.heap.alloc_ptr_f32(len as f32),
+        TypeKind::Con(c) if sym_eq(&c.name, "f64") => runtime.heap.alloc_ptr_f64(len as f64),
         _ => Err(EngineError::NativeType {
             expected: "f32 or f64".into(),
             got: elem_ty.to_string(),
@@ -5690,7 +5657,7 @@ where
 {
     if task.entries.is_empty() {
         return Ok(NativeStep::Return(
-            runtime.heap.alloc_dict(BTreeMap::new())?,
+            runtime.heap.alloc_ptr_dict(BTreeMap::new())?,
         ));
     }
     task.next_index = 0;
@@ -5716,7 +5683,7 @@ where
     task.next_index += 1;
     if task.next_index == task.entries.len() {
         return Ok(NativeStep::Return(
-            runtime.heap.alloc_dict(task.output.clone())?,
+            runtime.heap.alloc_ptr_dict(task.output.clone())?,
         ));
     }
     let (_, value) = task.entries[task.next_index].clone();
@@ -5736,7 +5703,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     if task.entries.is_empty() {
-        let dict = runtime.heap.alloc_dict(BTreeMap::new())?;
+        let dict = runtime.heap.alloc_ptr_dict(BTreeMap::new())?;
         return Ok(NativeStep::Return(result_from_native_pointer(
             runtime,
             Ok(dict),
@@ -5774,7 +5741,7 @@ where
     }
     task.next_index += 1;
     if task.next_index == task.entries.len() {
-        let dict = runtime.heap.alloc_dict(task.output.clone())?;
+        let dict = runtime.heap.alloc_ptr_dict(task.output.clone())?;
         return Ok(NativeStep::Return(result_from_native_pointer(
             runtime,
             Ok(dict),
@@ -5875,11 +5842,9 @@ fn native_array_eq_result<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    Ok(NativeStep::Return(
-        runtime
-            .heap
-            .alloc_bool(if task.negate { !equal } else { equal })?,
-    ))
+    Ok(NativeStep::Return(runtime.heap.alloc_ptr_bool(
+        if task.negate { !equal } else { equal },
+    )?))
 }
 
 fn native_sum_enter<State>(
@@ -6099,7 +6064,7 @@ where
 {
     let rendered = String::from_pointer(&runtime.heap, &value)?;
     (task.log)(&rendered);
-    Ok(NativeStep::Return(runtime.heap.alloc_string(rendered)?))
+    Ok(NativeStep::Return(runtime.heap.alloc_ptr_string(rendered)?))
 }
 
 fn eval_apply_overloaded_arg<State>(
@@ -6131,7 +6096,7 @@ where
     over.applied.push(arg);
     over.applied_types.push(actual_ty);
     if is_function_type(&rest_ty) {
-        return Ok(EvalApplyResult::Value(runtime.heap.alloc_overloaded(
+        return Ok(EvalApplyResult::Value(runtime.heap.alloc_ptr_overloaded(
             over.name,
             rest_ty,
             over.applied,
@@ -6188,7 +6153,7 @@ where
 {
     let func_value = runtime.heap.get(&func)?.as_ref().clone();
     match func_value {
-        Value::Closure(Closure {
+        Cell::Closure(Closure {
             env,
             param,
             param_ty,
@@ -6215,14 +6180,14 @@ where
                 env: env.extend(param, arg),
             })
         }
-        Value::Native(native) => {
+        Cell::Native(native) => {
             match native.apply_with_context(runtime, arg, arg_type, EvalContext::child(parent))? {
                 NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
                 NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
                 NativeApplyResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
             }
         }
-        Value::Overloaded(over) => {
+        Cell::Overloaded(over) => {
             eval_apply_overloaded_arg(runtime, parent, over, arg, func_type, arg_type)
         }
         _ => Err(EngineError::NotCallable(
@@ -6271,7 +6236,7 @@ where
     if let Some(ptr) = env.get(name) {
         let value = runtime.heap.get(&ptr)?;
         match value.as_ref() {
-            Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                 match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
                     NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
                     NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
@@ -6295,7 +6260,7 @@ where
         let value =
             EvaluatorRef::new_with_parent(runtime, parent).resolve_native(name.as_ref(), typ)?;
         match runtime.heap.get(&value)?.as_ref() {
-            Value::Native(native) if native.arity == 0 && native.applied.is_empty() => {
+            Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                 match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
                     NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
                     NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
@@ -6333,23 +6298,23 @@ where
 {
     let base_val = runtime.heap.get(&base_ptr)?;
     match base_val.as_ref() {
-        Value::Dict(map) => {
+        Cell::Dict(map) => {
             let mut map = map.clone();
             for (key, value) in update_vals {
                 map.insert(key, value);
             }
-            runtime.heap.alloc_dict(map)
+            runtime.heap.alloc_ptr_dict(map)
         }
-        Value::Adt(tag, args) if args.len() == 1 => {
+        Cell::Adt(tag, args) if args.len() == 1 => {
             let inner = runtime.heap.get(&args[0])?;
             match inner.as_ref() {
-                Value::Dict(map) => {
+                Cell::Dict(map) => {
                     let mut out = map.clone();
                     for (key, value) in update_vals {
                         out.insert(key, value);
                     }
-                    let dict = runtime.heap.alloc_dict(out)?;
-                    runtime.heap.alloc_adt(tag.clone(), vec![dict])
+                    let dict = runtime.heap.alloc_ptr_dict(out)?;
+                    runtime.heap.alloc_ptr_adt(tag.clone(), vec![dict])
                 }
                 _ => Err(EngineError::UnsupportedExpr),
             }
@@ -6419,13 +6384,13 @@ fn mark_frame_complete(frame: &mut Frame, value: Pointer) {
 }
 
 fn is_root_frame_parent(heap: &Heap, pointer: &Pointer) -> Result<bool, EngineError> {
-    let value = heap.get(pointer)?;
-    match value.as_ref() {
-        Value::U64(0) => Ok(true),
-        Value::Frame(_) => Ok(false),
+    let cell = heap.get(pointer)?;
+    match cell.as_ref() {
+        Cell::U64(0) => Ok(true),
+        Cell::Frame(_) => Ok(false),
         other => Err(EngineError::Internal(format!(
             "unexpected frame parent value {}",
-            other.value_type_name()
+            other.cell_type_name()
         ))),
     }
 }
@@ -6457,7 +6422,7 @@ fn match_pattern_ptr(
         Pattern::Named(_, name, ps) => {
             let v = heap.get(value).ok()?;
             match v.as_ref() {
-                Value::Adt(vname, args)
+                Cell::Adt(vname, args)
                     if runtime_ctor_matches(vname, &name.to_dotted_symbol())
                         && args.len() == ps.len() =>
                 {
@@ -6469,7 +6434,7 @@ fn match_pattern_ptr(
         Pattern::Tuple(_, ps) => {
             let v = heap.get(value).ok()?;
             match v.as_ref() {
-                Value::Tuple(xs) if xs.len() == ps.len() => match_patterns(heap, ps, xs),
+                Cell::Tuple(xs) if xs.len() == ps.len() => match_patterns(heap, ps, xs),
                 _ => None,
             }
         }
@@ -6485,7 +6450,7 @@ fn match_pattern_ptr(
         Pattern::Cons(_, head, tail) => {
             let v = heap.get(value).ok()?;
             match v.as_ref() {
-                Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
+                Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                     let mut left = match_pattern_ptr(heap, head, &args[0])?;
                     let right = match_pattern_ptr(heap, tail, &args[1])?;
                     left.extend(right);
@@ -6497,7 +6462,7 @@ fn match_pattern_ptr(
         Pattern::Dict(_, fields) => {
             let v = heap.get(value).ok()?;
             match v.as_ref() {
-                Value::Dict(map) => {
+                Cell::Dict(map) => {
                     let mut bindings = BTreeMap::new();
                     for (key, pat) in fields {
                         let v = map.get(key)?;

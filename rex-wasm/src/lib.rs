@@ -2,7 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use futures::executor::block_on;
-use rex_engine::{Engine, ValueDisplayOptions, pointer_display_with};
+use rex_engine::{Engine, ValueDisplayOptions};
 use rex_lexer::Token;
 use rex_lsp::server::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,
@@ -130,7 +130,7 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
     engine.type_system.set_limits(TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
-    let (value_ptr, _value_ty) = rex_engine::Evaluator::new_with_compiler(
+    let (value, _value_ty) = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
@@ -138,7 +138,8 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
     .await
     .map_err(|e| format!("runtime error: {e}"))?;
 
-    pointer_display_with(&engine.heap, &value_ptr, ValueDisplayOptions::docs())
+    value
+        .display_with(ValueDisplayOptions::docs())
         .map_err(|e| format!("display error: {e}"))
 }
 
@@ -229,16 +230,16 @@ pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
 
     let fut = async move {
         let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-        let (value_ptr, _value_ty) = rex_engine::Evaluator::new_with_compiler(
+        let (value, _value_ty) = rex_engine::Evaluator::new_with_compiler(
             rex_engine::RuntimeEnv::new(engine.clone()),
             rex_engine::Compiler::new(engine.clone()),
         )
         .eval_snippet(source)
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
-        let rendered =
-            pointer_display_with(&engine.heap, &value_ptr, ValueDisplayOptions::unsanitized())
-                .map_err(|e| format!("display error: {e}"))?;
+        let rendered = value
+            .display_with(ValueDisplayOptions::unsanitized())
+            .map_err(|e| format!("display error: {e}"))?;
         let payload = serde_json::json!({ "value": rendered });
         serde_json::to_string(&payload).map_err(|e| format!("serialization error: {e}"))
     };

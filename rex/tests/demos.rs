@@ -1,4 +1,4 @@
-use rex::{BuiltinTypeId, Engine, Heap, Pointer, Type, Value};
+use rex::{BuiltinTypeId, Engine, Handle, Heap, Type, Value};
 
 const DEMO_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -22,7 +22,7 @@ fn extract_first_interactive_rex(markdown: &str) -> String {
     panic!("no rex,interactive fence found");
 }
 
-async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
+async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
     let source = extract_first_interactive_rex(markdown);
     let name = name.to_string();
     std::thread::Builder::new()
@@ -53,34 +53,40 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Pointer, Type) {
         .unwrap()
 }
 
-fn list_elements(heap: &Heap, list: &Pointer) -> Vec<Pointer> {
+fn tuple_items(value: &Handle) -> Vec<Handle> {
+    let Value::Tuple(items) = value.value().unwrap() else {
+        panic!("expected tuple, got {}", value.type_name().unwrap());
+    };
+    items
+}
+
+fn list_elements(list: &Handle) -> Vec<Handle> {
     let mut out = Vec::new();
-    let mut cur = *list;
+    let mut cur = list.clone();
     loop {
-        let val = heap.get(&cur).unwrap();
-        match val.as_ref() {
-            Value::Adt(tag, args) if tag.as_ref() == "Empty" => return out,
+        match cur.value().unwrap() {
+            Value::Adt(tag, _args) if tag.as_ref() == "Empty" => return out,
             Value::Adt(tag, args) if tag.as_ref() == "Cons" => {
                 assert_eq!(args.len(), 2, "Cons must have exactly two fields");
-                out.push(args[0]);
-                cur = args[1];
+                out.push(args[0].clone());
+                cur = args[1].clone();
             }
             other => panic!("expected list, got {}", other.value_type_name()),
         }
     }
 }
 
-fn list_i32_values(heap: &Heap, ptr: &Pointer) -> Vec<i32> {
-    let elems = list_elements(heap, ptr);
+fn list_i32_values(handle: &Handle) -> Vec<i32> {
+    let elems = list_elements(handle);
     elems
         .iter()
-        .map(|p| heap.pointer_as_i32(p).unwrap())
+        .map(|p| p.to_rust::<i32>().unwrap())
         .collect::<Vec<_>>()
 }
 
 #[tokio::test]
 async fn demo_factorial() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "factorial",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -89,12 +95,12 @@ async fn demo_factorial() {
     )
     .await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(heap.pointer_as_i32(&value).unwrap(), 720);
+    assert_eq!(value.to_rust::<i32>().unwrap(), 720);
 }
 
 #[tokio::test]
 async fn demo_fibonacci() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "fibonacci",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -104,14 +110,14 @@ async fn demo_fibonacci() {
     .await;
     assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
     assert_eq!(
-        list_i32_values(&heap, &value),
+        list_i32_values(&value),
         vec![0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
     );
 }
 
 #[tokio::test]
 async fn demo_merge_sort() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "merge_sort",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -120,15 +126,12 @@ async fn demo_merge_sort() {
     )
     .await;
     assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
-    assert_eq!(
-        list_i32_values(&heap, &value),
-        vec![1, 2, 3, 4, 5, 6, 7, 8, 9]
-    );
+    assert_eq!(list_i32_values(&value), vec![1, 2, 3, 4, 5, 6, 7, 8, 9]);
 }
 
 #[tokio::test]
 async fn demo_binary_search_tree() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "binary_search_tree",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -144,16 +147,16 @@ async fn demo_binary_search_tree() {
             Type::builtin(BuiltinTypeId::Bool),
         ])
     );
-    let items = heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 3);
-    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 6);
-    assert!(heap.pointer_as_bool(&items[1]).unwrap());
-    assert!(!heap.pointer_as_bool(&items[2]).unwrap());
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 6);
+    assert!(items[1].to_rust::<bool>().unwrap());
+    assert!(!items[2].to_rust::<bool>().unwrap());
 }
 
 #[tokio::test]
 async fn demo_expression_evaluator() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "expression_evaluator",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -169,16 +172,16 @@ async fn demo_expression_evaluator() {
             Type::builtin(BuiltinTypeId::I32),
         ])
     );
-    let items = heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 3);
-    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 14);
-    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 3);
-    assert_eq!(heap.pointer_as_i32(&items[2]).unwrap(), 14);
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 14);
+    assert_eq!(items[1].to_rust::<i32>().unwrap(), 3);
+    assert_eq!(items[2].to_rust::<i32>().unwrap(), 14);
 }
 
 #[tokio::test]
 async fn demo_dijkstra_lite() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "dijkstra_lite",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -193,15 +196,15 @@ async fn demo_dijkstra_lite() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let items = heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 2);
-    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 7);
-    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 5);
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 7);
+    assert_eq!(items[1].to_rust::<i32>().unwrap(), 5);
 }
 
 #[tokio::test]
 async fn demo_knapsack_01() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "knapsack_01",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -216,15 +219,15 @@ async fn demo_knapsack_01() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let items = heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 2);
-    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 8);
-    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 12);
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 8);
+    assert_eq!(items[1].to_rust::<i32>().unwrap(), 12);
 }
 
 #[tokio::test]
 async fn demo_union_find() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "union_find",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -241,17 +244,17 @@ async fn demo_union_find() {
             Type::builtin(BuiltinTypeId::I32),
         ])
     );
-    let items = heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 4);
-    assert!(heap.pointer_as_bool(&items[0]).unwrap());
-    assert!(!heap.pointer_as_bool(&items[1]).unwrap());
-    assert_eq!(heap.pointer_as_i32(&items[2]).unwrap(), 0);
-    assert_eq!(heap.pointer_as_i32(&items[3]).unwrap(), 3);
+    assert!(items[0].to_rust::<bool>().unwrap());
+    assert!(!items[1].to_rust::<bool>().unwrap());
+    assert_eq!(items[2].to_rust::<i32>().unwrap(), 0);
+    assert_eq!(items[3].to_rust::<i32>().unwrap(), 3);
 }
 
 #[tokio::test]
 async fn demo_prefix_parser() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "prefix_parser",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -268,17 +271,17 @@ async fn demo_prefix_parser() {
             Type::builtin(BuiltinTypeId::Bool),
         ])
     );
-    let items = heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 4);
-    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 14);
-    assert!(heap.pointer_as_bool(&items[1]).unwrap());
-    assert_eq!(heap.pointer_as_i32(&items[2]).unwrap(), 7);
-    assert!(heap.pointer_as_bool(&items[3]).unwrap());
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 14);
+    assert!(items[1].to_rust::<bool>().unwrap());
+    assert_eq!(items[2].to_rust::<i32>().unwrap(), 7);
+    assert!(items[3].to_rust::<bool>().unwrap());
 }
 
 #[tokio::test]
 async fn demo_topological_sort() {
-    let (heap, value, ty) = eval_demo(
+    let (_heap, value, ty) = eval_demo(
         "topological_sort",
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -295,11 +298,10 @@ async fn demo_topological_sort() {
         ty_str.ends_with(".Node)"),
         "topological_sort: expected element type ending in .Node, got {ty_str}"
     );
-    let elems = list_elements(&heap, &value);
+    let elems = list_elements(&value);
     assert_eq!(elems.len(), 4);
     for (idx, expected_tag) in ["A", "B", "C", "D"].iter().enumerate() {
-        let value = heap.get(&elems[idx]).unwrap();
-        let Value::Adt(tag, args) = value.as_ref() else {
+        let Value::Adt(tag, args) = elems[idx].value().unwrap() else {
             panic!("expected ADT constructor");
         };
         assert_eq!(tag.as_ref(), *expected_tag, "unexpected constructor tag");
@@ -313,7 +315,7 @@ fn demo_n_queens() {
         env!("CARGO_MANIFEST_DIR"),
         "/../docs/src/demos/n_queens.md"
     ));
-    let (heap, value, ty) = tokio::runtime::Builder::new_current_thread()
+    let (_heap, value, ty) = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .unwrap()
@@ -325,8 +327,8 @@ fn demo_n_queens() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let items = heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 2);
-    assert_eq!(heap.pointer_as_i32(&items[0]).unwrap(), 2);
-    assert_eq!(heap.pointer_as_i32(&items[1]).unwrap(), 10);
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 2);
+    assert_eq!(items[1].to_rust::<i32>().unwrap(), 10);
 }

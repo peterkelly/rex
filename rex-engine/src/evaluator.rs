@@ -1,6 +1,5 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::ops::Deref;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use rex_ast::expr::{Expr, Program, Symbol, sym};
 use rex_typesystem::{
     error::TypeError,
     types::{Type, TypedExpr, Types},
+    typesystem::TypeSystem,
     unification::{Subst, unify},
 };
 use rex_util::sha256_hex;
@@ -17,9 +17,9 @@ use crate::engine::{
     is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
+use crate::value::{Handle, Heap, Pointer};
 use crate::{
-    CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, Pointer,
-    RuntimeEnv,
+    CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, RuntimeEnv,
 };
 
 pub struct Evaluator<State = ()>
@@ -38,12 +38,12 @@ where
     runtime: RuntimeSnapshot<State>,
     #[allow(dead_code)]
     #[doc(hidden)]
-    pub context: EvalContext,
+    pub(crate) context: EvalContext,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
-pub struct EvalContext {
+pub(crate) struct EvalContext {
     pub parent: Option<Pointer>,
 }
 
@@ -79,14 +79,19 @@ where
         }
     }
 
-    pub async fn run(&mut self, program: &CompiledProgram) -> Result<Pointer, EvalError> {
+    pub async fn run(&mut self, program: &CompiledProgram) -> Result<Handle, EvalError> {
         self.runtime.validate_internal(program)?;
-        eval_typed_expr(&self.runtime.runtime, &program.env, program.expr.as_ref())
+        let pointer = eval_typed_expr(&self.runtime.runtime, &program.env, program.expr.as_ref())
             .await
+            .map_err(EvalError::from)?;
+        self.runtime
+            .runtime
+            .heap
+            .handle(pointer)
             .map_err(EvalError::from)
     }
 
-    pub async fn eval(&mut self, expr: &Expr) -> Result<(Pointer, Type), ExecutionError> {
+    pub async fn eval(&mut self, expr: &Expr) -> Result<(Handle, Type), ExecutionError> {
         self.prepare_and_run(|compiler| compiler.compile_expr(expr))
             .await
     }
@@ -94,14 +99,14 @@ where
     async fn run_prepared(
         &mut self,
         program: CompiledProgram,
-    ) -> Result<(Pointer, Type), ExecutionError> {
+    ) -> Result<(Handle, Type), ExecutionError> {
         self.sync_runtime_from_compiler();
         let typ = program.result_type().clone();
         let value = self.run(&program).await?;
         Ok((value, typ))
     }
 
-    async fn prepare_and_run<F>(&mut self, compile: F) -> Result<(Pointer, Type), ExecutionError>
+    async fn prepare_and_run<F>(&mut self, compile: F) -> Result<(Handle, Type), ExecutionError>
     where
         F: FnOnce(&mut Compiler<State>) -> Result<CompiledProgram, CompileError>,
     {
@@ -115,7 +120,7 @@ where
     pub async fn eval_module_file(
         &mut self,
         path: impl AsRef<Path>,
-    ) -> Result<(Pointer, Type), ExecutionError> {
+    ) -> Result<(Handle, Type), ExecutionError> {
         let (id, bytes) = self
             .runtime
             .loader
@@ -157,7 +162,7 @@ where
     pub async fn eval_module_source(
         &mut self,
         source: &str,
-    ) -> Result<(Pointer, Type), ExecutionError> {
+    ) -> Result<(Handle, Type), ExecutionError> {
         let mut hasher = DefaultHasher::new();
         source.hash(&mut hasher);
         let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
@@ -182,7 +187,7 @@ where
         Ok((inst.init_value, inst.init_type))
     }
 
-    pub async fn eval_snippet(&mut self, source: &str) -> Result<(Pointer, Type), ExecutionError> {
+    pub async fn eval_snippet(&mut self, source: &str) -> Result<(Handle, Type), ExecutionError> {
         self.prepare_and_run(|compiler| compiler.compile_snippet(source))
             .await
     }
@@ -191,7 +196,7 @@ where
         &mut self,
         program: &Program,
         state: &mut ReplState,
-    ) -> Result<(Pointer, Type), ExecutionError> {
+    ) -> Result<(Handle, Type), ExecutionError> {
         let compiler = self.compiler.as_mut().ok_or_else(|| {
             CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
         })?;
@@ -203,7 +208,7 @@ where
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
-    ) -> Result<(Pointer, Type), ExecutionError> {
+    ) -> Result<(Handle, Type), ExecutionError> {
         let path = importer_path.as_ref().to_path_buf();
         self.prepare_and_run(|compiler| compiler.compile_snippet_at(source, &path))
             .await
@@ -223,6 +228,28 @@ where
 
     pub(crate) fn new_with_parent(runtime: &RuntimeSnapshot<State>, parent: Pointer) -> Self {
         Self::new_with_context(runtime, EvalContext::child(parent))
+    }
+
+    pub fn state(&self) -> &State {
+        self.runtime.state.as_ref()
+    }
+
+    pub fn heap(&self) -> &Heap {
+        &self.runtime.heap
+    }
+
+    pub fn type_system(&self) -> &TypeSystem {
+        &self.runtime.type_system
+    }
+
+    pub(crate) fn handles_from_pointers(
+        &self,
+        pointers: &[Pointer],
+    ) -> Result<Vec<Handle>, EngineError> {
+        pointers
+            .iter()
+            .map(|pointer| self.runtime.heap.handle(*pointer))
+            .collect()
     }
 
     fn resolve_typeclass_method_impl(
@@ -277,7 +304,7 @@ where
                 let pointer =
                     self.runtime
                         .heap
-                        .alloc_overloaded(name, typ, applied, applied_types)?;
+                        .alloc_ptr_overloaded(name, typ, applied, applied_types)?;
                 return Ok(Err(pointer));
             }
             Err(err) => return Err(err),
@@ -336,9 +363,14 @@ where
                 let imp = matches[0].clone();
                 let (native_id, name, arity, typ, applied, applied_types) =
                     imp.to_native_fn(typ.clone()).into_parts();
-                self.runtime
-                    .heap
-                    .alloc_native(native_id, name, arity, typ, applied, applied_types)
+                self.runtime.heap.alloc_ptr_native(
+                    native_id,
+                    name,
+                    arity,
+                    typ,
+                    applied,
+                    applied_types,
+                )
             }
             _ => {
                 if typ.ftv().is_empty() {
@@ -351,22 +383,11 @@ where
                         OverloadedFn::new(sym_name.clone(), typ.clone()).into_parts();
                     self.runtime
                         .heap
-                        .alloc_overloaded(name, typ, applied, applied_types)
+                        .alloc_ptr_overloaded(name, typ, applied, applied_types)
                 } else {
                     Err(EngineError::AmbiguousOverload { name: sym_name })
                 }
             }
         }
-    }
-}
-
-impl<State> Deref for EvaluatorRef<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    type Target = RuntimeSnapshot<State>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
     }
 }

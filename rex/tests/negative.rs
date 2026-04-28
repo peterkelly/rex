@@ -35,7 +35,7 @@ async fn compile_err(code: &str) -> EngineError {
     .await
     {
         Ok((v, _)) => {
-            let value_type = engine.heap.type_name(&v).unwrap_or("<invalid pointer>");
+            let value_type = v.type_name().unwrap_or("<invalid handle>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");
         }
         Err(e) => e.into_engine_error(),

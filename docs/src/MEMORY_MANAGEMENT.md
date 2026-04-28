@@ -1,20 +1,20 @@
 # Memory Management
 
-`rex-engine` uses a pointer-based runtime: evaluated values live in a central heap, and the rest of the runtime passes lightweight pointers to those heap entries.
+`rex-engine` uses a heap-based runtime: evaluated values live in a central heap, and the internal evaluator passes lightweight pointers to those heap entries.
 
-This gives the engine a clear separation between identity (`Pointer`) and storage (`Heap`). It also makes behavior at host/native boundaries explicit: values are allocated once, referenced many times, and inspected through heap APIs.
+This gives the engine a clear separation between identity and storage without exposing raw heap pointers to embedders. Public API code works with rooted `Handle` values, while `Pointer` remains an internal representation detail.
 
 ## Design goals and rationale
 
 - Support graph-shaped runtime data, including cycles.
 - Keep allocation and dereference rules explicit and centralized.
-- Make host integration predictable by using stable pointers rather than implicit deep copies.
+- Make host integration predictable by using stable handles rather than implicit deep copies.
 - Preserve strong runtime safety checks for pointer validity and heap ownership.
 - Keep diagnostics (type names, debug/display output, equality) correct for heap graphs.
 
 ## Core runtime model
 
-### `Pointer` is an opaque stable pointer
+### `Pointer` is an internal stable pointer
 
 A `Pointer` identifies a slot in a heap using:
 
@@ -28,7 +28,20 @@ Conceptually:
 - `generation` distinguishes different occupants of the same slot over time.
 - `heap_id` prevents accidental cross-heap usage.
 
-`Pointer` is intentionally opaque to callers. The engine validates it on access, so stale pointers and cross-heap usage fail deterministically at runtime.
+`Pointer` is intentionally crate-private. The engine validates it on access, so stale pointers and cross-heap usage fail deterministically inside the runtime.
+
+### `Handle` is the public rooted value reference
+
+A `Handle` owns a temporary external heap root for one value. Cloning the handle
+clones that root handle, and dropping the final clone unregisters it.
+
+Host code can:
+
+- inspect a value with `Handle::value()`, which returns a `Value`.
+- convert to Rust with `Handle::to_rust()` or `FromRex::from_rex(...)`.
+- display/debug/compare values through handle methods.
+
+Host code cannot extract or store a raw runtime pointer.
 
 ### `Heap` stores all runtime values
 
@@ -40,33 +53,37 @@ Conceptually:
 Each `HeapSlot` stores:
 
 - `generation: u32`
-- `value: Option<Arc<Value>>`
+- `cell: Option<Arc<Cell>>`
 
-All runtime reads/writes go through heap methods (`alloc_*`, `get`, `type_name`, etc.). Pointer internals are not exposed in API shape.
+Internal runtime reads/writes go through heap methods. Public construction uses
+`Heap::make_*` / `Heap::alloc_*`, which return `Handle` values rather than raw
+pointers.
 
 ### Engine-owned heap lifecycle
 
 `Engine` constructs and owns its own `Heap` (`Engine::new`, `Engine::with_prelude`).
 
-- Evaluation returns `Pointer`, not `Value`.
-- Callers can inspect via `engine.heap()` or extract ownership with `engine.into_heap()`.
+- Evaluation returns `Handle`, not `Value`.
+- Callers can inspect via the returned handle or allocate more values through
+  `engine.heap`.
 
 This keeps allocation authority clear: the engine is responsible for heap creation, and the heap is the single runtime store for values.
 
 ## Read/write semantics
 
-### Reads return `ValueRef`
+### Public reads return `Value`
 
-`Heap::get` returns `ValueRef` (an `Arc<Value>` wrapper), not a copied `Value`.
+`Handle::value()` returns `Value`, a safe public value of the runtime value. Composite values contain child `Handle` values rather than raw pointers.
 
 Why:
 
 - Avoid accidental deep clones in hot paths.
-- Make cloning explicit and local where it is actually needed.
+- Keep internal runtime values and heap pointers out of the public API.
+- Root child values discovered during inspection.
 
 ### Writes are controlled
 
-Values are created through `Heap::alloc_*` methods.
+Public values are created through `Heap::make_*` / `Heap::alloc_*` methods, which return `Handle`.
 
 There is also an internal `overwrite` operation used for recursive initialization patterns (placeholder first, then finalized value).
 
@@ -74,27 +91,27 @@ There is also an internal `overwrite` operation used for recursive initializatio
 
 Structural operations are provided as heap-aware helpers:
 
-- `value_debug(heap, value)`
-- `value_display(heap, value)`
-- `value_eq(heap, lhs, rhs)`
-- `pointer_eq(heap, lhs, rhs)`
-- `closure_debug` / `closure_eq`
+- `Handle::debug()`
+- `Handle::display()` / `Handle::display_with(...)`
+- `Handle::value_eq(...)`
 
 These functions dereference through the heap and are cycle-safe (visited-set based), so recursive graphs can be inspected and compared without infinite recursion.
 
-## Pointer-first host/native boundary
+## Handle-first host/native boundary
 
-Runtime conversion traits are pointer-centric:
+Runtime conversion traits are handle-centric:
 
-- `IntoPointer`
-- `FromPointer`
+- `IntoRex`
+- `FromRex`
 
-Native injection and prelude paths pass pointers by default, including module runtime exports
-(`export_native` / `export_native_async`). These callbacks receive `EvaluatorRef<State>`, so they can allocate through
-`engine.heap` and inspect host state via `engine.state`. `Value` is used where direct payload
-inspection is required.
+Public native injection paths pass handles, including module runtime exports
+(`export_native` / `export_native_async`). These callbacks receive
+`EvaluatorRef<State>`, so they can allocate public handles through
+`engine.heap()` and inspect host state via `engine.state()`. `Value` is used
+where direct payload inspection is required.
 
-This keeps ownership/allocation behavior centralized in the heap and limits implicit copying.
+This keeps ownership/allocation behavior centralized in the heap while making it
+impossible for host code to store unrooted raw pointers.
 
 ## Safety and invariants
 

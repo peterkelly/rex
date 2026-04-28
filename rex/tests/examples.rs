@@ -30,12 +30,10 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");
 
-    let value = engine
-        .heap
-        .get(&value)
-        .map(|value| value.as_ref().clone())
-        .unwrap_or_else(|err| panic!("{name}: heap read error: {err}"));
-    match value {
+    match value
+        .value()
+        .unwrap_or_else(|err| panic!("{name}: heap read error: {err}"))
+    {
         Value::I32(actual) => assert_eq!(actual, expected_value, "{name}: unexpected eval value"),
         _ => panic!("{name}: expected i32 result"),
     }

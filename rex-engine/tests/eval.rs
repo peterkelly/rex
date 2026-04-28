@@ -1,6 +1,8 @@
 use futures::FutureExt;
 use rex_ast::expr::{Decl, sym, sym_eq};
-use rex_engine::{Engine, EngineError, EvaluatorRef, Module, Value, assert_pointer_eq};
+use rex_engine::{
+    Engine, EngineError, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module, RexType, Value,
+};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -29,6 +31,28 @@ fn strip_span(mut err: TypeError) -> TypeError {
 fn engine_with_arith() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
+
+#[derive(Clone, Debug, PartialEq)]
+struct HandleOnlyI32(i32);
+
+impl RexType for HandleOnlyI32 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::I32)
+    }
+}
+
+impl FromRex for HandleOnlyI32 {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        Ok(Self(i32::from_rex(handle)?))
+    }
+}
+
+impl IntoRex for HandleOnlyI32 {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        self.0.into_rex(heap)
+    }
+}
+
 fn inject_globals(
     engine: &mut Engine,
     build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
@@ -57,10 +81,7 @@ fn inject_global_type_decls(engine: &mut Engine, decls: &[Decl]) {
     );
 }
 
-async fn eval_expr(
-    engine: &mut Engine,
-    expr: &rex_ast::expr::Expr,
-) -> Result<rex_engine::Pointer, EngineError> {
+async fn eval_expr(engine: &mut Engine, expr: &rex_ast::expr::Expr) -> Result<Handle, EngineError> {
     rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
@@ -73,11 +94,7 @@ async fn eval_expr(
 
 macro_rules! pval {
     ($engine:expr, $ptr:expr) => {
-        $engine
-            .heap
-            .get(&$ptr)
-            .map(|value| value.as_ref().clone())
-            .unwrap()
+        $ptr.value().unwrap()
     };
 }
 
@@ -85,30 +102,49 @@ macro_rules! pvals {
     ($engine:expr, $vals:expr) => {
         $vals
             .iter()
-            .map(|value| {
-                $engine
-                    .heap
-                    .get(&value)
-                    .map(|value| value.as_ref().clone())
-                    .unwrap()
-            })
+            .map(|value| value.value().unwrap())
             .collect::<Vec<_>>()
     };
 }
 
-fn list_values(engine: &Engine, value: &Value) -> Vec<rex_engine::Pointer> {
+trait HandleRef {
+    fn handle_ref(&self) -> &Handle;
+}
+
+impl HandleRef for Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+impl HandleRef for &Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+macro_rules! assert_pointer_eq {
+    ($heap:expr, $lhs:expr, $rhs:expr) => {{
+        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
+        let rhs: Handle = HandleRef::handle_ref(&$rhs).clone();
+        assert!(
+            lhs.value_eq(&rhs).unwrap(),
+            "left: {}, right: {}",
+            lhs.display().unwrap(),
+            rhs.display().unwrap()
+        );
+    }};
+}
+
+fn list_values(value: &Value) -> Vec<Handle> {
     let mut out = Vec::new();
     let mut cur = value.clone();
     loop {
         match &cur {
             Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return out,
             Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
-                out.push(args[0]);
-                cur = engine
-                    .heap
-                    .get(&args[1])
-                    .map(|value| value.as_ref().clone())
-                    .unwrap();
+                out.push(args[0].clone());
+                cur = args[1].value().unwrap();
             }
             _ => panic!("expected list value"),
         }
@@ -519,11 +555,7 @@ fn eval_deep_list_does_not_overflow() {
                 let expr = program.expr;
                 let mut engine = Engine::with_prelude(()).unwrap();
                 let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-                let xs = engine
-                    .heap
-                    .get(&value)
-                    .map(|value| list_values(&engine, value.as_ref()))
-                    .unwrap();
+                let xs = list_values(&value.value().unwrap());
                 assert_eq!(xs.len(), N);
                 let expected = engine.heap.alloc_i32(0).unwrap();
                 assert_pointer_eq!(
@@ -681,6 +713,57 @@ async fn eval_sync_native_injection() {
 }
 
 #[tokio::test]
+async fn typed_native_injection_uses_handle_conversions() {
+    let mut engine = engine_with_arith();
+    inject_globals(&mut engine, |module| {
+        module.export("bump_handle_only", |_: &(), value: HandleOnlyI32| {
+            Ok(HandleOnlyI32(value.0 + 1))
+        })?;
+        module.export(
+            "shift_handle_only_array",
+            |_: &(), values: Vec<HandleOnlyI32>| {
+                Ok(values
+                    .into_iter()
+                    .map(|value| HandleOnlyI32(value.0 + 10))
+                    .collect::<Vec<_>>())
+            },
+        )?;
+        Ok(())
+    });
+
+    let expr = parse("(bump_handle_only 41, shift_handle_only_array (to_array [1, 2, 3]))");
+    let (ptr, ty) = rex_engine::Evaluator::new_with_compiler(
+        rex_engine::RuntimeEnv::new(engine.clone()),
+        rex_engine::Compiler::new(engine.clone()),
+    )
+    .eval(expr.as_ref())
+    .await
+    .unwrap();
+
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::array(Type::builtin(BuiltinTypeId::I32)),
+        ])
+    );
+
+    let Value::Tuple(items) = ptr.value().unwrap() else {
+        panic!("expected tuple");
+    };
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 42);
+
+    let Value::Array(shifted) = items[1].value().unwrap() else {
+        panic!("expected array");
+    };
+    let shifted = shifted
+        .iter()
+        .map(|item| item.to_rust::<i32>().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(shifted, vec![11, 12, 13]);
+}
+
+#[tokio::test]
 async fn eval_export_err_is_evaluation_failure() {
     let mut engine = Engine::new(());
     inject_globals(&mut engine, |module| {
@@ -790,10 +873,10 @@ async fn eval_cons_constructor_form_for_lists() {
     };
     assert_eq!(xs.len(), 3);
 
-    let sugar = engine.heap.get(&xs[0]).unwrap();
-    let ctor = engine.heap.get(&xs[1]).unwrap();
-    let sugar_items = list_values(&engine, sugar.as_ref());
-    let ctor_items = list_values(&engine, ctor.as_ref());
+    let sugar = xs[0].value().unwrap();
+    let ctor = xs[1].value().unwrap();
+    let sugar_items = list_values(&sugar);
+    let ctor_items = list_values(&ctor);
     assert_eq!(sugar_items.len(), 2);
     assert_eq!(ctor_items.len(), 2);
     assert_pointer_eq!(
@@ -1128,12 +1211,12 @@ async fn eval_list_map_fold_filter() {
         Value::Tuple(xs) => {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 3);
-            let vals = list_values(&engine, &xs[0]);
+            let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 3);
             assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(2).unwrap());
             assert_pointer_eq!(&engine.heap, vals[1], engine.heap.alloc_i32(3).unwrap());
             assert_pointer_eq!(&engine.heap, vals[2], engine.heap.alloc_i32(4).unwrap());
-            let vals = list_values(&engine, &xs[1]);
+            let vals = list_values(&xs[1]);
             assert_eq!(vals.len(), 1);
             assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(2).unwrap());
             assert_pointer_eq!(
@@ -1165,7 +1248,7 @@ async fn eval_list_flat_map_zip_unzip() {
         Value::Tuple(xs) => {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 2);
-            let vals = list_values(&engine, &xs[0]);
+            let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 4);
             assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(1).unwrap());
             assert_pointer_eq!(&engine.heap, vals[1], engine.heap.alloc_i32(1).unwrap());
@@ -1175,8 +1258,8 @@ async fn eval_list_flat_map_zip_unzip() {
                 Value::Tuple(parts) => {
                     let parts = pvals!(engine, parts);
                     assert_eq!(parts.len(), 2);
-                    list_values(&engine, &parts[0]);
-                    list_values(&engine, &parts[1]);
+                    list_values(&parts[0]);
+                    list_values(&parts[1]);
                 }
                 _ => panic!("expected unzip tuple"),
             }

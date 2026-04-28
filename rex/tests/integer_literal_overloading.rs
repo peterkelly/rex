@@ -1,4 +1,4 @@
-use rex::{BuiltinTypeId, Engine, EngineError, Heap, Module, Parser, Pointer, Token, Type};
+use rex::{BuiltinTypeId, Engine, EngineError, Handle, Heap, Module, Parser, Token, Type, Value};
 
 fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), EngineError> {
     let mut module = Module::global();
@@ -13,7 +13,7 @@ fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), Engin
     engine.inject_module(module)
 }
 
-async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
+async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
@@ -23,7 +23,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let (pointer, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -31,7 +31,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     .await
     .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();
-    Ok((heap, pointer, ty))
+    Ok((heap, handle, ty))
 }
 
 fn expected_values() -> Vec<&'static str> {
@@ -66,11 +66,13 @@ fn expected_negative_signed_type() -> Type {
     ])
 }
 
-fn assert_tuple_of_strings(heap: &Heap, pointer: &Pointer) {
-    let parts = heap.pointer_as_tuple(pointer).unwrap();
+fn assert_tuple_of_strings(_heap: &Heap, handle: &Handle) {
+    let Value::Tuple(parts) = handle.value().unwrap() else {
+        panic!("expected tuple");
+    };
     let got: Vec<String> = parts
         .iter()
-        .map(|p| heap.pointer_as_string(p).unwrap())
+        .map(|p| p.to_rust::<String>().unwrap())
         .collect();
     let expected = expected_values()
         .into_iter()
@@ -79,11 +81,13 @@ fn assert_tuple_of_strings(heap: &Heap, pointer: &Pointer) {
     assert_eq!(got, expected);
 }
 
-fn assert_tuple_of_negative_signed_strings(heap: &Heap, pointer: &Pointer) {
-    let parts = heap.pointer_as_tuple(pointer).unwrap();
+fn assert_tuple_of_negative_signed_strings(_heap: &Heap, handle: &Handle) {
+    let Value::Tuple(parts) = handle.value().unwrap() else {
+        panic!("expected tuple");
+    };
     let got: Vec<String> = parts
         .iter()
-        .map(|p| heap.pointer_as_string(p).unwrap())
+        .map(|p| p.to_rust::<String>().unwrap())
         .collect();
     let expected = expected_negative_signed_values()
         .into_iter()
@@ -113,9 +117,9 @@ async fn integer_literal_calls_each_num_function_directly() {
   num_i64 4
 )
 "#;
-    let (heap, pointer, ty) = eval(code).await.unwrap();
+    let (heap, handle, ty) = eval(code).await.unwrap();
     assert_eq!(ty, expected_type());
-    assert_tuple_of_strings(&heap, &pointer);
+    assert_tuple_of_strings(&heap, &handle);
 }
 
 #[tokio::test]
@@ -128,9 +132,9 @@ async fn negative_integer_literal_calls_each_signed_num_function_directly() {
   num_i64 (-3)
 )
 "#;
-    let (heap, pointer, ty) = eval(code).await.unwrap();
+    let (heap, handle, ty) = eval(code).await.unwrap();
     assert_eq!(ty, expected_negative_signed_type());
-    assert_tuple_of_negative_signed_strings(&heap, &pointer);
+    assert_tuple_of_negative_signed_strings(&heap, &handle);
 }
 
 #[tokio::test]
@@ -162,9 +166,9 @@ async fn integer_literal_let_binding_per_type() {
   let x = 4 in num_i64 x
 )
 "#;
-    let (heap, pointer, ty) = eval(code).await.unwrap();
+    let (heap, handle, ty) = eval(code).await.unwrap();
     assert_eq!(ty, expected_type());
-    assert_tuple_of_strings(&heap, &pointer);
+    assert_tuple_of_strings(&heap, &handle);
 }
 
 #[tokio::test]
@@ -181,9 +185,9 @@ async fn integer_literal_lambda_binding_per_type() {
   let f = \x -> num_i64 x in f 4
 )
 "#;
-    let (heap, pointer, ty) = eval(code).await.unwrap();
+    let (heap, handle, ty) = eval(code).await.unwrap();
     assert_eq!(ty, expected_type());
-    assert_tuple_of_strings(&heap, &pointer);
+    assert_tuple_of_strings(&heap, &handle);
 }
 
 #[tokio::test]
@@ -196,9 +200,9 @@ async fn negative_integer_literal_let_binding_per_signed_type() {
   let x: i64 = -3 in num_i64 x
 )
 "#;
-    let (heap, pointer, ty) = eval(code).await.unwrap();
+    let (heap, handle, ty) = eval(code).await.unwrap();
     assert_eq!(ty, expected_negative_signed_type());
-    assert_tuple_of_negative_signed_strings(&heap, &pointer);
+    assert_tuple_of_negative_signed_strings(&heap, &handle);
 }
 
 #[tokio::test]
@@ -226,9 +230,9 @@ async fn negative_integer_literal_lambda_binding_per_signed_type() {
   let f = \x -> num_i64 x in f (-3)
 )
 "#;
-    let (heap, pointer, ty) = eval(code).await.unwrap();
+    let (heap, handle, ty) = eval(code).await.unwrap();
     assert_eq!(ty, expected_negative_signed_type());
-    assert_tuple_of_negative_signed_strings(&heap, &pointer);
+    assert_tuple_of_negative_signed_strings(&heap, &handle);
 }
 
 #[tokio::test]

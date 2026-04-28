@@ -6,19 +6,13 @@ pub mod json;
 pub use crate::json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json};
 pub use rex_ast::expr::{Decl, Expr, Program, Symbol, intern, sym};
 pub use rex_engine::{
-    AsyncNativeCallable, ClassMethodCapability, ClassMethodRequirement, CompileError,
-    CompiledExterns, CompiledProgram, CompiledProgramBoundary, Compiler, DEFAULT_STACK_SIZE_BYTES,
-    Engine, EngineError, EngineOptions, EvalError, Evaluator, EvaluatorRef, ExecutionError, Export,
-    FrApp, FrAppArg, FrAppState, FrBool, FrBranchState, FrDateTime, FrDict, FrFloat, FrHole, FrInt,
-    FrIte, FrLam, FrLet, FrLetRec, FrLetRecState, FrLetState, FrList, FrMatch, FrMatchArm,
-    FrMatchState, FrProject, FrRecordUpdate, FrRecordUpdateState, FrSequenceState, FrString,
-    FrTuple, FrUint, FrUuid, FrValueState, FrVar, Frame, FromPointer, Heap, HostFnAsync,
-    HostFnSync, IntoPointer, Module, NativeCapability, NativeFuture, NativeRequirement,
-    PRELUDE_MODULE_NAME, Pointer, PreludeMode, ROOT_MODULE_NAME, ReplState, ResolveRequest,
-    ResolvedModule, ResolvedModuleContent, RexAdt, RexDefault, RexType, RuntimeCapabilities,
-    RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary, RuntimeLinkContract, SyncNativeCallable,
-    Value, ValueDisplayOptions, assert_pointer_eq, closure_debug, closure_eq,
-    collect_adts_error_to_engine, pointer_display, pointer_display_with, value_debug, value_eq,
+    ClassMethodCapability, ClassMethodRequirement, CompileError, CompiledExterns, CompiledProgram,
+    CompiledProgramBoundary, Compiler, Engine, EngineError, EngineOptions, EvalError, Evaluator,
+    EvaluatorRef, ExecutionError, Export, FromRex, Handle, Heap, HostFnAsync, HostFnSync, IntoRex,
+    Module, NativeCapability, NativeFuture, NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode,
+    ROOT_MODULE_NAME, ReplState, ResolveRequest, ResolvedModule, ResolvedModuleContent, RexAdt,
+    RexDefault, RexType, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary,
+    RuntimeLinkContract, Value, ValueDisplayOptions, collect_adts_error_to_engine,
     virtual_export_name,
 };
 pub use rex_lexer::Token;
@@ -53,10 +47,9 @@ pub async fn eval(source: &str) -> Result<String, crate::ExecutionError> {
     let program = compiler.compile_snippet(source)?;
     runtime.validate(&program)?;
     let mut evaluator = Evaluator::new(runtime);
-    let pointer = evaluator.run(&program).await?;
+    let value = evaluator.run(&program).await?;
 
-    Ok(
-        pointer_display_with(&engine.heap, &pointer, ValueDisplayOptions::default())
-            .map_err(crate::EvalError::from)?,
-    )
+    Ok(value
+        .display_with(ValueDisplayOptions::default())
+        .map_err(crate::EvalError::from)?)
 }

@@ -11,7 +11,8 @@ use rex_typesystem::{
 use uuid::Uuid;
 
 use crate::Engine;
-use crate::engine::{RuntimeSnapshot, SchedulerNativeResult, binary_arg_types};
+use crate::EngineError;
+use crate::engine::{SchedulerNativeResult, binary_arg_types};
 use crate::stack::{
     NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictMap, NativeDictTraverseResult,
     NativeFold, NativeFoldOrder, NativeFoldState, NativeMean, NativeMeanState,
@@ -19,8 +20,7 @@ use crate::stack::{
     NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFilterMap,
     NativeUnaryFlatMap, NativeUnaryMap, NativeUnaryShape,
 };
-use crate::value::{Heap, Pointer, list_to_vec};
-use crate::{EngineError, FromPointer, IntoPointer, Value};
+use crate::value::{Cell, FromPointer, Heap, IntoPointer, Pointer, list_to_vec};
 
 fn values_to_ptrs<T: IntoPointer>(
     heap: &Heap,
@@ -33,14 +33,14 @@ fn values_to_ptrs<T: IntoPointer>(
 }
 
 fn expect_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-    let value = heap.get(pointer)?;
-    list_to_vec(heap, value.as_ref())
+    let cell = heap.get(pointer)?;
+    list_to_vec(heap, cell.as_ref())
 }
 
 fn list_from_pointers(heap: &Heap, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-    let mut list = heap.alloc_adt(sym("Empty"), vec![])?;
+    let mut list = heap.alloc_ptr_adt(sym("Empty"), vec![])?;
     for value in values.into_iter().rev() {
-        list = heap.alloc_adt(sym("Cons"), vec![value, list])?;
+        list = heap.alloc_ptr_adt(sym("Cons"), vec![value, list])?;
     }
     Ok(list)
 }
@@ -120,8 +120,8 @@ pub(crate) fn option_from_pointer(
     value: Option<Pointer>,
 ) -> Result<Pointer, EngineError> {
     match value {
-        Some(v) => heap.alloc_adt(sym("Some"), vec![v]),
-        None => heap.alloc_adt(sym("None"), vec![]),
+        Some(v) => heap.alloc_ptr_adt(sym("Some"), vec![v]),
+        None => heap.alloc_ptr_adt(sym("None"), vec![]),
     }
 }
 
@@ -161,8 +161,8 @@ pub(crate) fn result_from_pointer(
     value: Result<Pointer, Pointer>,
 ) -> Result<Pointer, EngineError> {
     match value {
-        Ok(v) => heap.alloc_adt(sym("Ok"), vec![v]),
-        Err(v) => heap.alloc_adt(sym("Err"), vec![v]),
+        Ok(v) => heap.alloc_ptr_adt(sym("Ok"), vec![v]),
+        Err(v) => heap.alloc_ptr_adt(sym("Err"), vec![v]),
     }
 }
 
@@ -217,9 +217,9 @@ pub(crate) fn extremum_by_type(
     let mut values = values.into_iter();
     let mut best = values.next().ok_or(EngineError::EmptySequence)?;
     for value in values {
-        let value_ref = heap.get(&value)?;
-        let best_ref = heap.get(&best)?;
-        let ord = cmp_value_by_type(heap, &name, elem_ty, value_ref.as_ref(), best_ref.as_ref())?;
+        let cell = heap.get(&value)?;
+        let best_cell = heap.get(&best)?;
+        let ord = cmp_cell_by_type(heap, &name, elem_ty, cell.as_ref(), best_cell.as_ref())?;
         if ord == choose {
             best = value;
         }
@@ -245,7 +245,7 @@ pub(crate) fn zip_tuple2(
 ) -> Result<Vec<Pointer>, EngineError> {
     xs.into_iter()
         .zip(ys)
-        .map(|(x, y)| heap.alloc_tuple(vec![x, y]))
+        .map(|(x, y)| heap.alloc_ptr_tuple(vec![x, y]))
         .collect()
 }
 
@@ -274,27 +274,27 @@ pub(crate) fn as_nonneg_usize(n: i32) -> usize {
     if n <= 0 { 0 } else { n as usize }
 }
 
-fn cmp_value_by_type(
+fn cmp_cell_by_type(
     heap: &Heap,
     op_name: &Symbol,
     typ: &Type,
-    lhs: &Value,
-    rhs: &Value,
+    lhs: &Cell,
+    rhs: &Cell,
 ) -> Result<std::cmp::Ordering, EngineError> {
     fn mismatch(
         heap: &Heap,
         op_name: &Symbol,
         expected: &str,
-        lhs: &Value,
-        rhs: &Value,
+        lhs: &Cell,
+        rhs: &Cell,
     ) -> EngineError {
         let _ = op_name;
         EngineError::NativeType {
             expected: expected.to_string(),
             got: format!(
                 "{}, {}",
-                heap.type_name_of_value(lhs),
-                heap.type_name_of_value(rhs)
+                heap.type_name_of_cell(lhs),
+                heap.type_name_of_cell(rhs)
             ),
         }
     }
@@ -303,82 +303,82 @@ fn cmp_value_by_type(
         TypeKind::Con(tc) => match tc.builtin_id {
             Some(BuiltinTypeId::U8) => {
                 let a = lhs
-                    .value_as_u8()
+                    .cell_as_u8()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_u8()
+                    .cell_as_u8()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U16) => {
                 let a = lhs
-                    .value_as_u16()
+                    .cell_as_u16()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_u16()
+                    .cell_as_u16()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U32) => {
                 let a = lhs
-                    .value_as_u32()
+                    .cell_as_u32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_u32()
+                    .cell_as_u32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U64) => {
                 let a = lhs
-                    .value_as_u64()
+                    .cell_as_u64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_u64()
+                    .cell_as_u64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I8) => {
                 let a = lhs
-                    .value_as_i8()
+                    .cell_as_i8()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_i8()
+                    .cell_as_i8()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I16) => {
                 let a = lhs
-                    .value_as_i16()
+                    .cell_as_i16()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_i16()
+                    .cell_as_i16()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I32) => {
                 let a = lhs
-                    .value_as_i32()
+                    .cell_as_i32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_i32()
+                    .cell_as_i32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I64) => {
                 let a = lhs
-                    .value_as_i64()
+                    .cell_as_i64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_i64()
+                    .cell_as_i64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::F32) => {
                 let a = lhs
-                    .value_as_f32()
+                    .cell_as_f32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_f32()
+                    .cell_as_f32()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                     expected: tc.name.to_string(),
@@ -387,10 +387,10 @@ fn cmp_value_by_type(
             }
             Some(BuiltinTypeId::F64) => {
                 let a = lhs
-                    .value_as_f64()
+                    .cell_as_f64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_f64()
+                    .cell_as_f64()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                     expected: tc.name.to_string(),
@@ -399,28 +399,28 @@ fn cmp_value_by_type(
             }
             Some(BuiltinTypeId::String) => {
                 let a = lhs
-                    .value_as_string()
+                    .cell_as_string()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_string()
+                    .cell_as_string()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::Uuid) => {
                 let a = lhs
-                    .value_as_uuid()
+                    .cell_as_uuid()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_uuid()
+                    .cell_as_uuid()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::DateTime) => {
                 let a = lhs
-                    .value_as_datetime()
+                    .cell_as_datetime()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
-                    .value_as_datetime()
+                    .cell_as_datetime()
                     .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
@@ -536,8 +536,8 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
                 })?;
                 let array_ty = lhs_ty.apply(&subst);
                 let elem_ty = array_elem_type(&array_ty)?;
-                let xs = expect_array(&engine.heap, &args[0])?;
-                let ys = expect_array(&engine.heap, &args[1])?;
+                let xs = expect_array(engine.heap(), &args[0])?;
+                let ys = expect_array(engine.heap(), &args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                     NativeArrayEq {
                         elem_type: elem_ty,
@@ -565,8 +565,8 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
             })?;
             let array_ty = lhs_ty.apply(&subst);
             let elem_ty = array_elem_type(&array_ty)?;
-            let xs = expect_array(&engine.heap, &args[0])?;
-            let ys = expect_array(&engine.heap, &args[1])?;
+            let xs = expect_array(engine.heap(), &args[0])?;
+            let ys = expect_array(engine.heap(), &args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::ArrayEq(
                 NativeArrayEq {
                     elem_type: elem_ty,
@@ -708,23 +708,23 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     ] {
         let scheme = f32_bool.clone();
         engine.export_native(name, scheme, 2, move |engine, _, args| {
-            let a = f32::from_pointer(&engine.heap, &args[0])?;
-            let b = f32::from_pointer(&engine.heap, &args[1])?;
+            let a = f32::from_pointer(engine.heap(), &args[0])?;
+            let b = f32::from_pointer(engine.heap(), &args[1])?;
             let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                 expected: "f32".into(),
                 got: "nan".into(),
             })?;
-            engine.heap.alloc_bool(pred(ord))
+            engine.heap().alloc_ptr_bool(pred(ord))
         })?;
     }
     engine.export_native("prim_cmp", f32_cmp, 2, |engine, _, args| {
-        let a = f32::from_pointer(&engine.heap, &args[0])?;
-        let b = f32::from_pointer(&engine.heap, &args[1])?;
+        let a = f32::from_pointer(engine.heap(), &args[0])?;
+        let b = f32::from_pointer(engine.heap(), &args[1])?;
         let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
             expected: "f32".into(),
             got: "nan".into(),
         })?;
-        engine.heap.alloc_i32(cmp_to_i32(ord))
+        engine.heap().alloc_ptr_i32(cmp_to_i32(ord))
     })?;
 
     let f64_ty = Type::builtin(BuiltinTypeId::F64);
@@ -762,23 +762,23 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     ] {
         let scheme = f64_bool.clone();
         engine.export_native(name, scheme, 2, move |engine, _, args| {
-            let a = f64::from_pointer(&engine.heap, &args[0])?;
-            let b = f64::from_pointer(&engine.heap, &args[1])?;
+            let a = f64::from_pointer(engine.heap(), &args[0])?;
+            let b = f64::from_pointer(engine.heap(), &args[1])?;
             let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                 expected: "f64".into(),
                 got: "nan".into(),
             })?;
-            engine.heap.alloc_bool(pred(ord))
+            engine.heap().alloc_ptr_bool(pred(ord))
         })?;
     }
     engine.export_native("prim_cmp", f64_cmp, 2, |engine, _, args| {
-        let a = f64::from_pointer(&engine.heap, &args[0])?;
-        let b = f64::from_pointer(&engine.heap, &args[1])?;
+        let a = f64::from_pointer(engine.heap(), &args[0])?;
+        let b = f64::from_pointer(engine.heap(), &args[1])?;
         let ord = a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
             expected: "f64".into(),
             got: "nan".into(),
         })?;
-        engine.heap.alloc_i32(cmp_to_i32(ord))
+        engine.heap().alloc_ptr_i32(cmp_to_i32(ord))
     })?;
 
     Ok(())
@@ -917,9 +917,9 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
                     Type::fun(Type::builtin(BuiltinTypeId::F64), Type::option($dst_ty)),
                 );
                 engine.export_native($name, scheme, 1, move |engine, _t, args| {
-                    let x = f64::from_pointer(&engine.heap, &args[0])?;
+                    let x = f64::from_pointer(engine.heap(), &args[0])?;
                     let converted: Option<Pointer> = $convert(&engine, x)?;
-                    option_from_pointer(&engine.heap, converted)
+                    option_from_pointer(engine.heap(), converted)
                 })?;
             }};
         }
@@ -927,9 +927,9 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u8",
             Type::builtin(BuiltinTypeId::U8),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u8::MIN as f64 && x <= u8::MAX as f64 {
-                    Ok(Some(engine.heap.alloc_u8(x as u8)?))
+                    Ok(Some(engine.heap().alloc_ptr_u8(x as u8)?))
                 } else {
                     Ok(None)
                 }
@@ -938,10 +938,10 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u16",
             Type::builtin(BuiltinTypeId::U16),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u16::MIN as f64 && x <= u16::MAX as f64
                 {
-                    Ok(Some(engine.heap.alloc_u16(x as u16)?))
+                    Ok(Some(engine.heap().alloc_ptr_u16(x as u16)?))
                 } else {
                     Ok(None)
                 }
@@ -950,10 +950,10 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u32",
             Type::builtin(BuiltinTypeId::U32),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u32::MIN as f64 && x <= u32::MAX as f64
                 {
-                    Ok(Some(engine.heap.alloc_u32(x as u32)?))
+                    Ok(Some(engine.heap().alloc_ptr_u32(x as u32)?))
                 } else {
                     Ok(None)
                 }
@@ -962,10 +962,10 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_u64",
             Type::builtin(BuiltinTypeId::U64),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= u64::MIN as f64 && x <= u64::MAX as f64
                 {
-                    Ok(Some(engine.heap.alloc_u64(x as u64)?))
+                    Ok(Some(engine.heap().alloc_ptr_u64(x as u64)?))
                 } else {
                     Ok(None)
                 }
@@ -974,9 +974,9 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i8",
             Type::builtin(BuiltinTypeId::I8),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i8::MIN as f64 && x <= i8::MAX as f64 {
-                    Ok(Some(engine.heap.alloc_i8(x as i8)?))
+                    Ok(Some(engine.heap().alloc_ptr_i8(x as i8)?))
                 } else {
                     Ok(None)
                 }
@@ -985,10 +985,10 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i16",
             Type::builtin(BuiltinTypeId::I16),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i16::MIN as f64 && x <= i16::MAX as f64
                 {
-                    Ok(Some(engine.heap.alloc_i16(x as i16)?))
+                    Ok(Some(engine.heap().alloc_ptr_i16(x as i16)?))
                 } else {
                     Ok(None)
                 }
@@ -997,10 +997,10 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i32",
             Type::builtin(BuiltinTypeId::I32),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i32::MIN as f64 && x <= i32::MAX as f64
                 {
-                    Ok(Some(engine.heap.alloc_i32(x as i32)?))
+                    Ok(Some(engine.heap().alloc_ptr_i32(x as i32)?))
                 } else {
                     Ok(None)
                 }
@@ -1009,10 +1009,10 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_i64",
             Type::builtin(BuiltinTypeId::I64),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x.fract() == 0.0 && x >= i64::MIN as f64 && x <= i64::MAX as f64
                 {
-                    Ok(Some(engine.heap.alloc_i64(x as i64)?))
+                    Ok(Some(engine.heap().alloc_ptr_i64(x as i64)?))
                 } else {
                     Ok(None)
                 }
@@ -1021,9 +1021,9 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
         inject_f64_to!(
             "prim_f64_to_f32",
             Type::builtin(BuiltinTypeId::F32),
-            |engine: &RuntimeSnapshot<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
+            |engine: &crate::EvaluatorRef<State>, x: f64| -> Result<Option<Pointer>, EngineError> {
                 if x.is_finite() && x >= f32::MIN as f64 && x <= f32::MAX as f64 {
-                    Ok(Some(engine.heap.alloc_f32(x as f32)?))
+                    Ok(Some(engine.heap().alloc_ptr_f32(x as f32)?))
                 } else {
                     Ok(None)
                 }
@@ -1054,13 +1054,13 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             list_to_array_scheme.clone(),
             1,
             |engine, _, args| {
-                let values = expect_list(&engine.heap, &args[0])?;
-                engine.heap.alloc_array(values)
+                let values = expect_list(engine.heap(), &args[0])?;
+                engine.heap().alloc_ptr_array(values)
             },
         )?;
         engine.export_native("to_array", list_to_array_scheme, 1, |engine, _, args| {
-            let values = expect_list(&engine.heap, &args[0])?;
-            engine.heap.alloc_array(values)
+            let values = expect_list(engine.heap(), &args[0])?;
+            engine.heap().alloc_ptr_array(values)
         })?;
 
         let array_to_list_scheme = Scheme::new(vec![a_tv], vec![], Type::fun(array_a, list_a));
@@ -1069,13 +1069,13 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             array_to_list_scheme.clone(),
             1,
             |engine, _, args| {
-                let values = expect_array(&engine.heap, &args[0])?;
-                list_from_pointers(&engine.heap, values)
+                let values = expect_array(engine.heap(), &args[0])?;
+                list_from_pointers(engine.heap(), values)
             },
         )?;
         engine.export_native("to_list", array_to_list_scheme, 1, |engine, _, args| {
-            let values = expect_array(&engine.heap, &args[0])?;
-            list_from_pointers(&engine.heap, values)
+            let values = expect_array(engine.heap(), &args[0])?;
+            list_from_pointers(engine.heap(), values)
         })?;
     }
 
@@ -1100,7 +1100,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let dict_ty = arg_tys[1].clone();
             let elem_ty = dict_elem_type(&dict_ty)?;
-            let map = engine.heap.pointer_as_dict(&args[1])?;
+            let map = engine.heap().pointer_as_dict(&args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::DictMap(
                 NativeDictMap {
                     func: args[0],
@@ -1140,7 +1140,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
-                let map = engine.heap.pointer_as_dict(&args[1])?;
+                let map = engine.heap().pointer_as_dict(&args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::DictTraverseResult(
                     NativeDictTraverseResult {
                         func: args[0],
@@ -1165,12 +1165,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             Type::fun(string_ty.clone(), Type::option(uuid_ty)),
         );
         engine.export_native("prim_parse_uuid", scheme, 1, |engine, _, args| {
-            let s = String::from_pointer(&engine.heap, &args[0])?;
+            let s = String::from_pointer(engine.heap(), &args[0])?;
             let parsed = Uuid::parse_str(&s)
                 .ok()
-                .map(|uuid| engine.heap.alloc_uuid(uuid))
+                .map(|uuid| engine.heap().alloc_ptr_uuid(uuid))
                 .transpose()?;
-            option_from_pointer(&engine.heap, parsed)
+            option_from_pointer(engine.heap(), parsed)
         })?;
     }
 
@@ -1183,13 +1183,13 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             Type::fun(string_ty.clone(), Type::option(dt_ty)),
         );
         engine.export_native("prim_parse_datetime", scheme, 1, |engine, _, args| {
-            let s = String::from_pointer(&engine.heap, &args[0])?;
+            let s = String::from_pointer(engine.heap(), &args[0])?;
             let parsed = DateTime::parse_from_rfc3339(&s)
                 .ok()
                 .map(|dt| dt.with_timezone(&Utc))
-                .map(|dt| engine.heap.alloc_datetime(dt))
+                .map(|dt| engine.heap().alloc_ptr_datetime(dt))
                 .transpose()?;
-            option_from_pointer(&engine.heap, parsed)
+            option_from_pointer(engine.heap(), parsed)
         })?;
     }
 
@@ -1221,41 +1221,41 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             object: sym("Object"),
         };
 
-        fn to_serde_json(heap: &Heap, v: &Value, tags: &Tags) -> Option<serde_json::Value> {
+        fn to_serde_json(heap: &Heap, v: &Cell, tags: &Tags) -> Option<serde_json::Value> {
             match v {
-                Value::Adt(tag, _) if tag == &tags.null => Some(serde_json::Value::Null),
-                Value::Adt(tag, args) if tag == &tags.bool_ => match args.as_slice() {
+                Cell::Adt(tag, _) if tag == &tags.null => Some(serde_json::Value::Null),
+                Cell::Adt(tag, args) if tag == &tags.bool_ => match args.as_slice() {
                     [arg] => heap
                         .get(arg)
                         .ok()?
                         .as_ref()
-                        .value_as_bool()
+                        .cell_as_bool()
                         .ok()
                         .map(serde_json::Value::Bool),
                     _ => None,
                 },
-                Value::Adt(tag, args) if tag == &tags.string => match args.as_slice() {
+                Cell::Adt(tag, args) if tag == &tags.string => match args.as_slice() {
                     [arg] => heap
                         .get(arg)
                         .ok()?
                         .as_ref()
-                        .value_as_string()
+                        .cell_as_string()
                         .ok()
                         .map(serde_json::Value::String),
                     _ => None,
                 },
-                Value::Adt(tag, args) if tag == &tags.number => match args.as_slice() {
+                Cell::Adt(tag, args) if tag == &tags.number => match args.as_slice() {
                     [arg] => {
-                        let n = heap.get(arg).ok()?.as_ref().value_as_f64().ok()?;
+                        let n = heap.get(arg).ok()?.as_ref().cell_as_f64().ok()?;
                         serde_json::Number::from_f64(n)
                             .map(serde_json::Value::Number)
                             .or(Some(serde_json::Value::Null))
                     }
                     _ => None,
                 },
-                Value::Adt(tag, args) if tag == &tags.array => match args.as_slice() {
+                Cell::Adt(tag, args) if tag == &tags.array => match args.as_slice() {
                     [arg] => {
-                        let xs = heap.get(arg).ok()?.as_ref().value_as_array().ok()?;
+                        let xs = heap.get(arg).ok()?.as_ref().cell_as_array().ok()?;
                         let mut out = Vec::with_capacity(xs.len());
                         for x in &xs {
                             let x_value = heap.get(x).ok()?;
@@ -1265,9 +1265,9 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                     }
                     _ => None,
                 },
-                Value::Adt(tag, args) if tag == &tags.object => match args.as_slice() {
+                Cell::Adt(tag, args) if tag == &tags.object => match args.as_slice() {
                     [arg] => {
-                        let map = heap.get(arg).ok()?.as_ref().value_as_dict().ok()?;
+                        let map = heap.get(arg).ok()?.as_ref().cell_as_dict().ok()?;
                         let mut out = serde_json::Map::with_capacity(map.len());
                         for (k, v) in &map {
                             let v_value = heap.get(v).ok()?;
@@ -1285,11 +1285,13 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         engine.export_native("prim_json_stringify", scheme, 1, move |engine, _, args| {
-            let value = engine.heap.get(&args[0])?;
-            let Some(json) = to_serde_json(&engine.heap, value.as_ref(), &tags) else {
-                return engine.heap.alloc_string("<non-std.json.Value>".into());
+            let value = engine.heap().get(&args[0])?;
+            let Some(json) = to_serde_json(engine.heap(), value.as_ref(), &tags) else {
+                return engine
+                    .heap()
+                    .alloc_ptr_string("<non-std.json.Value>".into());
             };
-            engine.heap.alloc_string(json.to_string())
+            engine.heap().alloc_ptr_string(json.to_string())
         })?;
     }
 
@@ -1331,14 +1333,14 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             heap: &Heap,
         ) -> Result<Pointer, EngineError> {
             match v {
-                serde_json::Value::Null => heap.alloc_adt(tags.null.clone(), vec![]),
+                serde_json::Value::Null => heap.alloc_ptr_adt(tags.null.clone(), vec![]),
                 serde_json::Value::Bool(b) => {
-                    let value = heap.alloc_bool(*b)?;
-                    heap.alloc_adt(tags.bool_.clone(), vec![value])
+                    let value = heap.alloc_ptr_bool(*b)?;
+                    heap.alloc_ptr_adt(tags.bool_.clone(), vec![value])
                 }
                 serde_json::Value::String(s) => {
-                    let value = heap.alloc_string(s.clone())?;
-                    heap.alloc_adt(tags.string.clone(), vec![value])
+                    let value = heap.alloc_ptr_string(s.clone())?;
+                    heap.alloc_ptr_adt(tags.string.clone(), vec![value])
                 }
                 serde_json::Value::Number(n) => {
                     let Some(f) = n.as_f64() else {
@@ -1346,16 +1348,16 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                             "expected JSON number representable as f64".into(),
                         ));
                     };
-                    let value = heap.alloc_f64(f)?;
-                    heap.alloc_adt(tags.number.clone(), vec![value])
+                    let value = heap.alloc_ptr_f64(f)?;
+                    heap.alloc_ptr_adt(tags.number.clone(), vec![value])
                 }
                 serde_json::Value::Array(xs) => {
                     let mut out = Vec::with_capacity(xs.len());
                     for x in xs {
                         out.push(to_json_value(x, tags, heap)?);
                     }
-                    let array = heap.alloc_array(out)?;
-                    heap.alloc_adt(tags.array.clone(), vec![array])
+                    let array = heap.alloc_ptr_array(out)?;
+                    heap.alloc_ptr_adt(tags.array.clone(), vec![array])
                 }
                 serde_json::Value::Object(obj) => {
                     let mut out = BTreeMap::new();
@@ -1363,30 +1365,30 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                         let value = to_json_value(v, tags, heap)?;
                         out.insert(intern(k.as_str()), value);
                     }
-                    let dict = heap.alloc_dict(out)?;
-                    heap.alloc_adt(tags.object.clone(), vec![dict])
+                    let dict = heap.alloc_ptr_dict(out)?;
+                    heap.alloc_ptr_adt(tags.object.clone(), vec![dict])
                 }
             }
         }
 
         fn result_ok(heap: &Heap, v: Pointer) -> Result<Pointer, EngineError> {
-            heap.alloc_adt(sym("Ok"), vec![v])
+            heap.alloc_ptr_adt(sym("Ok"), vec![v])
         }
 
         fn result_err(heap: &Heap, msg: String) -> Result<Pointer, EngineError> {
-            let msg = heap.alloc_string(msg)?;
-            heap.alloc_adt(sym("Err"), vec![msg])
+            let msg = heap.alloc_ptr_string(msg)?;
+            heap.alloc_ptr_adt(sym("Err"), vec![msg])
         }
 
         engine.export_native("prim_json_parse", scheme, 1, move |engine, _, args| {
-            let s = String::from_pointer(&engine.heap, &args[0])?;
+            let s = String::from_pointer(engine.heap(), &args[0])?;
             let parsed: serde_json::Value = match serde_json::from_str(&s) {
                 Ok(v) => v,
-                Err(e) => return result_err(&engine.heap, e.to_string()),
+                Err(e) => return result_err(engine.heap(), e.to_string()),
             };
-            match to_json_value(&parsed, &tags, &engine.heap) {
-                Ok(v) => result_ok(&engine.heap, v),
-                Err(err) => result_err(&engine.heap, err.to_string()),
+            match to_json_value(&parsed, &tags, engine.heap()) {
+                Ok(v) => result_ok(engine.heap(), v),
+                Err(err) => result_err(engine.heap(), err.to_string()),
             }
         })?;
     }
@@ -1417,7 +1419,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(&engine.heap, &args[1])?;
+            let values = expect_list(engine.heap(), &args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
                 NativeSequenceMap {
                     func: args[0],
@@ -1452,7 +1454,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let array_ty = arg_tys[1].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[1])?;
+            let values = expect_array(engine.heap(), &args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceMap(
                 NativeSequenceMap {
                     func: args[0],
@@ -1474,7 +1476,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, array_a));
         engine.export_native("prim_array_singleton", scheme, 1, |engine, _, args| {
             let ptr = args[0];
-            engine.heap.alloc_array(vec![ptr])
+            engine.heap().alloc_ptr_array(vec![ptr])
         })?;
     }
 
@@ -1498,7 +1500,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(&engine.heap, &args[1])? {
+            match option_value(engine.heap(), &args[1])? {
                 Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
                     NativeUnaryMap {
                         func: args[0],
@@ -1509,7 +1511,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     },
                 ))),
                 None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                    &engine.heap,
+                    engine.heap(),
                     None,
                 )?)),
             }
@@ -1538,7 +1540,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let result_ty = arg_tys[1].clone();
             let (ok_ty, _err_ty) = result_types(&result_ty)?;
-            match result_value(&engine.heap, &args[1])? {
+            match result_value(engine.heap(), &args[1])? {
                 Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryMap(
                     NativeUnaryMap {
                         func: args[0],
@@ -1549,7 +1551,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     },
                 ))),
                 Err(err) => Ok(SchedulerNativeResult::Ready(result_from_pointer(
-                    &engine.heap,
+                    engine.heap(),
                     Err(err),
                 )?)),
             }
@@ -1582,7 +1584,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(&engine.heap, &args[2])?;
+            let values = expect_list(engine.heap(), &args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1624,7 +1626,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[2])?;
+            let values = expect_array(engine.heap(), &args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1666,7 +1668,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(&engine.heap, &args[2])?.into_iter().collect();
+            let values = option_value(engine.heap(), &args[2])?.into_iter().collect();
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1708,7 +1710,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let mut values = expect_list(&engine.heap, &args[2])?;
+            let mut values = expect_list(engine.heap(), &args[2])?;
             values.reverse();
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
@@ -1751,7 +1753,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = array_elem_type(&array_ty)?;
-            let mut values = expect_array(&engine.heap, &args[2])?;
+            let mut values = expect_array(engine.heap(), &args[2])?;
             values.reverse();
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
@@ -1794,7 +1796,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(&engine.heap, &args[2])?.into_iter().collect();
+            let values = option_value(engine.heap(), &args[2])?.into_iter().collect();
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1836,7 +1838,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(&engine.heap, &args[2])?;
+            let values = expect_list(engine.heap(), &args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1878,7 +1880,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[2])?;
+            let values = expect_array(engine.heap(), &args[2])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1920,7 +1922,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 });
             }
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(&engine.heap, &args[2])?.into_iter().collect();
+            let values = option_value(engine.heap(), &args[2])?.into_iter().collect();
             Ok(SchedulerNativeResult::Task(NativeTask::Fold(NativeFold {
                 func: args[0],
                 func_type: func_ty,
@@ -1953,7 +1955,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(&engine.heap, &args[1])?;
+            let values = expect_list(engine.heap(), &args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
                 NativeSequenceFilter {
                     func: args[0],
@@ -1985,7 +1987,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let array_ty = arg_tys[1].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[1])?;
+            let values = expect_array(engine.heap(), &args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilter(
                 NativeSequenceFilter {
                     func: args[0],
@@ -2017,7 +2019,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(&engine.heap, &args[1])? {
+            match option_value(engine.heap(), &args[1])? {
                 Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilter(
                     NativeUnaryFilter {
                         func: args[0],
@@ -2028,7 +2030,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     },
                 ))),
                 None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                    &engine.heap,
+                    engine.heap(),
                     None,
                 )?)),
             }
@@ -2059,7 +2061,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let list_ty = arg_tys[1].clone();
                 let elem_ty = list_elem_type(&list_ty)?;
-                let values = expect_list(&engine.heap, &args[1])?;
+                let values = expect_list(engine.heap(), &args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilterMap(
                     NativeSequenceFilterMap {
                         func: args[0],
@@ -2099,7 +2101,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let array_ty = arg_tys[1].clone();
                 let elem_ty = array_elem_type(&array_ty)?;
-                let values = expect_array(&engine.heap, &args[1])?;
+                let values = expect_array(engine.heap(), &args[1])?;
                 Ok(SchedulerNativeResult::Task(NativeTask::SequenceFilterMap(
                     NativeSequenceFilterMap {
                         func: args[0],
@@ -2139,7 +2141,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                 let func_ty = arg_tys[0].clone();
                 let opt_ty = arg_tys[1].clone();
                 let elem_ty = option_elem_type(&opt_ty)?;
-                match option_value(&engine.heap, &args[1])? {
+                match option_value(engine.heap(), &args[1])? {
                     Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFilterMap(
                         NativeUnaryFilterMap {
                             func: args[0],
@@ -2149,7 +2151,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         },
                     ))),
                     None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                        &engine.heap,
+                        engine.heap(),
                         None,
                     )?)),
                 }
@@ -2177,7 +2179,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(&engine.heap, &args[1])?;
+            let values = expect_list(engine.heap(), &args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
                 NativeSequenceFlatMap {
                     func: args[0],
@@ -2212,7 +2214,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let array_ty = arg_tys[1].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[1])?;
+            let values = expect_array(engine.heap(), &args[1])?;
             Ok(SchedulerNativeResult::Task(NativeTask::SequenceFlatMap(
                 NativeSequenceFlatMap {
                     func: args[0],
@@ -2247,7 +2249,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(&engine.heap, &args[1])? {
+            match option_value(engine.heap(), &args[1])? {
                 Some(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
                     NativeUnaryFlatMap {
                         func: args[0],
@@ -2258,7 +2260,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     },
                 ))),
                 None => Ok(SchedulerNativeResult::Ready(option_from_pointer(
-                    &engine.heap,
+                    engine.heap(),
                     None,
                 )?)),
             }
@@ -2287,7 +2289,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let func_ty = arg_tys[0].clone();
             let result_ty = arg_tys[1].clone();
             let (ok_ty, _err_ty) = result_types(&result_ty)?;
-            match result_value(&engine.heap, &args[1])? {
+            match result_value(engine.heap(), &args[1])? {
                 Ok(value) => Ok(SchedulerNativeResult::Task(NativeTask::UnaryFlatMap(
                     NativeUnaryFlatMap {
                         func: args[0],
@@ -2298,7 +2300,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     },
                 ))),
                 Err(err) => Ok(SchedulerNativeResult::Ready(result_from_pointer(
-                    &engine.heap,
+                    engine.heap(),
                     Err(err),
                 )?)),
             }
@@ -2321,7 +2323,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
             let func_ty = arg_tys[0].clone();
             let list_ty = arg_tys[1].clone();
-            if !expect_list(&engine.heap, &args[1])?.is_empty() {
+            if !expect_list(engine.heap(), &args[1])?.is_empty() {
                 return Ok(SchedulerNativeResult::Ready(args[1]));
             }
             Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
@@ -2351,7 +2353,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
             let func_ty = arg_tys[0].clone();
             let array_ty = arg_tys[1].clone();
-            if !expect_array(&engine.heap, &args[1])?.is_empty() {
+            if !expect_array(engine.heap(), &args[1])?.is_empty() {
                 return Ok(SchedulerNativeResult::Ready(args[1]));
             }
             Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
@@ -2381,7 +2383,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
             let func_ty = arg_tys[0].clone();
             let opt_ty = arg_tys[1].clone();
-            if option_value(&engine.heap, &args[1])?.is_some() {
+            if option_value(engine.heap(), &args[1])?.is_some() {
                 return Ok(SchedulerNativeResult::Ready(args[1]));
             }
             Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
@@ -2413,7 +2415,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
             let func_ty = arg_tys[0].clone();
             let result_ty = arg_tys[1].clone();
-            if result_value(&engine.heap, &args[1])?.is_ok() {
+            if result_value(engine.heap(), &args[1])?.is_ok() {
                 return Ok(SchedulerNativeResult::Ready(args[1]));
             }
             Ok(SchedulerNativeResult::Task(NativeTask::ApplyUnary(
@@ -2440,7 +2442,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(&engine.heap, &args[0])?;
+            let values = expect_list(engine.heap(), &args[0])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2465,7 +2467,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[0])?;
+            let values = expect_array(engine.heap(), &args[0])?;
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2490,7 +2492,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = option_value(&engine.heap, &args[0])?.into_iter().collect();
+            let values = option_value(engine.heap(), &args[0])?.into_iter().collect();
             Ok(SchedulerNativeResult::Task(NativeTask::Sum(NativeSum {
                 elem_type: elem_ty,
                 values,
@@ -2515,7 +2517,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let values = expect_list(&engine.heap, &args[0])?;
+            let values = expect_list(engine.heap(), &args[0])?;
             if values.is_empty() {
                 return Err(EngineError::EmptySequence);
             }
@@ -2545,7 +2547,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[0])?;
+            let values = expect_array(engine.heap(), &args[0])?;
             if values.is_empty() {
                 return Err(EngineError::EmptySequence);
             }
@@ -2575,7 +2577,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let elem_ty = option_elem_type(&opt_ty)?;
-            let values = match option_value(&engine.heap, &args[0])? {
+            let values = match option_value(engine.heap(), &args[0])? {
                 Some(value) => vec![value],
                 None => return Err(EngineError::EmptySequence),
             };
@@ -2603,8 +2605,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
-                .heap
-                .alloc_i32(expect_list(&engine.heap, &args[0])?.len() as i32)
+                .heap()
+                .alloc_ptr_i32(expect_list(engine.heap(), &args[0])?.len() as i32)
         })?;
     }
 
@@ -2619,8 +2621,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
-                .heap
-                .alloc_i32(expect_array(&engine.heap, &args[0])?.len() as i32)
+                .heap()
+                .alloc_ptr_i32(expect_array(engine.heap(), &args[0])?.len() as i32)
         })?;
     }
 
@@ -2635,8 +2637,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
-                .heap
-                .alloc_i32(option_value(&engine.heap, &args[0])?.is_some() as i32)
+                .heap()
+                .alloc_ptr_i32(option_value(engine.heap(), &args[0])?.is_some() as i32)
         })?;
     }
 
@@ -2654,10 +2656,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
+            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_list(&engine.heap, &args[1])?;
-            list_from_pointers(&engine.heap, xs.into_iter().take(n).collect())
+            let xs = expect_list(engine.heap(), &args[1])?;
+            list_from_pointers(engine.heap(), xs.into_iter().take(n).collect())
         })?;
     }
 
@@ -2675,11 +2677,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
+            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_array(&engine.heap, &args[1])?;
-            let ptrs = values_to_ptrs(&engine.heap, xs.into_iter().take(n).collect())?;
-            engine.heap.alloc_array(ptrs)
+            let xs = expect_array(engine.heap(), &args[1])?;
+            let ptrs = values_to_ptrs(engine.heap(), xs.into_iter().take(n).collect())?;
+            engine.heap().alloc_ptr_array(ptrs)
         })?;
     }
 
@@ -2697,10 +2699,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
+            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_list(&engine.heap, &args[1])?;
-            list_from_pointers(&engine.heap, xs.into_iter().skip(n).collect())
+            let xs = expect_list(engine.heap(), &args[1])?;
+            list_from_pointers(engine.heap(), xs.into_iter().skip(n).collect())
         })?;
     }
 
@@ -2718,11 +2720,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n_ptr = args[0];
-            let n = i32::from_pointer(&engine.heap, &n_ptr)?;
+            let n = i32::from_pointer(engine.heap(), &n_ptr)?;
             let n = as_nonneg_usize(n);
-            let xs = expect_array(&engine.heap, &args[1])?;
-            let ptrs = values_to_ptrs(&engine.heap, xs.into_iter().skip(n).collect())?;
-            engine.heap.alloc_array(ptrs)
+            let xs = expect_array(engine.heap(), &args[1])?;
+            let ptrs = values_to_ptrs(engine.heap(), xs.into_iter().skip(n).collect())?;
+            engine.heap().alloc_ptr_array(ptrs)
         })?;
     }
 
@@ -2743,8 +2745,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let list_ty = arg_tys[1].clone();
             let _elem_ty = list_elem_type(&list_ty)?;
             let idx_ptr = args[0];
-            let idx = i32::from_pointer(&engine.heap, &idx_ptr)?;
-            let xs = expect_list(&engine.heap, &args[1])?;
+            let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
+            let xs = expect_list(engine.heap(), &args[1])?;
             let idx = checked_index(sym("prim_get"), idx, xs.len())?;
             Ok(xs[idx])
         })?;
@@ -2767,8 +2769,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let array_ty = arg_tys[1].clone();
             let _elem_ty = array_elem_type(&array_ty)?;
             let idx_ptr = args[0];
-            let idx = i32::from_pointer(&engine.heap, &idx_ptr)?;
-            let xs = expect_array(&engine.heap, &args[1])?;
+            let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
+            let xs = expect_array(engine.heap(), &args[1])?;
             let idx = checked_index(sym("prim_get"), idx, xs.len())?;
             Ok(xs[idx])
         })?;
@@ -2791,9 +2793,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let tuple_ty = arg_tys[1].clone();
             let _elem_ty = tuple_elem_type(&tuple_ty)?;
             let idx_ptr = args[0];
-            let idx = i32::from_pointer(&engine.heap, &idx_ptr)?;
+            let idx = i32::from_pointer(engine.heap(), &idx_ptr)?;
             let idx_usize = checked_index(sym("prim_get"), idx, size)?;
-            let xs = engine.heap.pointer_as_tuple(&args[1])?;
+            let xs = engine.heap().pointer_as_tuple(&args[1])?;
             if xs.len() != size {
                 return Err(EngineError::NativeType {
                     expected: format!("tuple{}", size),
@@ -2818,10 +2820,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(list_a.clone(), Type::fun(list_b.clone(), list_pair)),
         );
         engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
-            let xs = expect_list(&engine.heap, &args[0])?;
-            let ys = expect_list(&engine.heap, &args[1])?;
-            let zipped = zip_tuple2(&engine.heap, xs, ys)?;
-            list_from_pointers(&engine.heap, zipped)
+            let xs = expect_list(engine.heap(), &args[0])?;
+            let ys = expect_list(engine.heap(), &args[1])?;
+            let zipped = zip_tuple2(engine.heap(), xs, ys)?;
+            list_from_pointers(engine.heap(), zipped)
         })?;
     }
 
@@ -2839,11 +2841,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(array_a.clone(), Type::fun(array_b.clone(), array_pair)),
         );
         engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
-            let xs = expect_array(&engine.heap, &args[0])?;
-            let ys = expect_array(&engine.heap, &args[1])?;
-            let zipped = zip_tuple2(&engine.heap, xs, ys)?;
-            let ptrs = values_to_ptrs(&engine.heap, zipped)?;
-            engine.heap.alloc_array(ptrs)
+            let xs = expect_array(engine.heap(), &args[0])?;
+            let ys = expect_array(engine.heap(), &args[1])?;
+            let zipped = zip_tuple2(engine.heap(), xs, ys)?;
+            let ptrs = values_to_ptrs(engine.heap(), zipped)?;
+            engine.heap().alloc_ptr_array(ptrs)
         })?;
     }
 
@@ -2861,11 +2863,11 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(list_pair.clone(), Type::tuple(vec![list_a, list_b])),
         );
         engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
-            let pairs = expect_list(&engine.heap, &args[0])?;
-            let (left, right) = unzip_tuple2(&engine.heap, pairs)?;
-            let left = list_from_pointers(&engine.heap, left)?;
-            let right = list_from_pointers(&engine.heap, right)?;
-            engine.heap.alloc_tuple(vec![left, right])
+            let pairs = expect_list(engine.heap(), &args[0])?;
+            let (left, right) = unzip_tuple2(engine.heap(), pairs)?;
+            let left = list_from_pointers(engine.heap(), left)?;
+            let right = list_from_pointers(engine.heap(), right)?;
+            engine.heap().alloc_ptr_tuple(vec![left, right])
         })?;
     }
 
@@ -2883,15 +2885,15 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             Type::fun(array_pair.clone(), Type::tuple(vec![array_a, array_b])),
         );
         engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
-            let pairs = expect_array(&engine.heap, &args[0])?;
-            let (left, right) = unzip_tuple2(&engine.heap, pairs)?;
+            let pairs = expect_array(engine.heap(), &args[0])?;
+            let (left, right) = unzip_tuple2(engine.heap(), pairs)?;
             let left = engine
-                .heap
-                .alloc_array(values_to_ptrs(&engine.heap, left)?)?;
+                .heap()
+                .alloc_ptr_array(values_to_ptrs(engine.heap(), left)?)?;
             let right = engine
-                .heap
-                .alloc_array(values_to_ptrs(&engine.heap, right)?)?;
-            engine.heap.alloc_tuple(vec![left, right])
+                .heap()
+                .alloc_ptr_array(values_to_ptrs(engine.heap(), right)?)?;
+            engine.heap().alloc_ptr_tuple(vec![left, right])
         })?;
     }
 
@@ -2908,10 +2910,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let list = engine.heap.get(&args[0])?;
-            let values = list_to_vec(&engine.heap, list.as_ref())?;
+            let list = engine.heap().get(&args[0])?;
+            let values = list_to_vec(engine.heap(), list.as_ref())?;
             extremum_by_type(
-                &engine.heap,
+                engine.heap(),
                 "min",
                 &elem_ty,
                 values,
@@ -2933,9 +2935,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[0])?;
+            let values = expect_array(engine.heap(), &args[0])?;
             extremum_by_type(
-                &engine.heap,
+                engine.heap(),
                 "min",
                 &elem_ty,
                 values,
@@ -2957,7 +2959,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let _elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(&engine.heap, &args[0])? {
+            match option_value(engine.heap(), &args[0])? {
                 Some(v) => Ok(v),
                 None => Err(EngineError::EmptySequence),
             }
@@ -2977,10 +2979,10 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let list = engine.heap.get(&args[0])?;
-            let values = list_to_vec(&engine.heap, list.as_ref())?;
+            let list = engine.heap().get(&args[0])?;
+            let values = list_to_vec(engine.heap(), list.as_ref())?;
             extremum_by_type(
-                &engine.heap,
+                engine.heap(),
                 "max",
                 &elem_ty,
                 values,
@@ -3002,9 +3004,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let array_ty = arg_tys[0].clone();
             let elem_ty = array_elem_type(&array_ty)?;
-            let values = expect_array(&engine.heap, &args[0])?;
+            let values = expect_array(engine.heap(), &args[0])?;
             extremum_by_type(
-                &engine.heap,
+                engine.heap(),
                 "max",
                 &elem_ty,
                 values,
@@ -3026,7 +3028,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let opt_ty = arg_tys[0].clone();
             let _elem_ty = option_elem_type(&opt_ty)?;
-            match option_value(&engine.heap, &args[0])? {
+            match option_value(engine.heap(), &args[0])? {
                 Some(v) => Ok(v),
                 None => Err(EngineError::EmptySequence),
             }
@@ -3052,7 +3054,7 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
             TypeKind::Fun(arg_ty, _) if matches!(arg_ty.as_ref(), TypeKind::App(head, _) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option"))) =>
             {
                 engine.export_native("unwrap", scheme, 1, |engine, _, args| match option_value(
-                    &engine.heap,
+                    engine.heap(),
                     &args[0],
                 )? {
                     Some(value) => Ok(value),
@@ -3062,7 +3064,7 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
             TypeKind::Fun(arg_ty, _) if matches!(arg_ty.as_ref(), TypeKind::App(head, _) if matches!(head.as_ref(), TypeKind::App(head2, _) if matches!(head2.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Result")))) =>
             {
                 engine.export_native("unwrap", scheme, 1, |engine, _, args| match result_value(
-                    &engine.heap,
+                    engine.heap(),
                     &args[0],
                 )? {
                     Ok(value) => Ok(value),
@@ -3077,30 +3079,30 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
     let is_some_scheme = engine.lookup_scheme(&is_some)?;
     engine.export_native("is_some", is_some_scheme, 1, |engine, _, args| {
         engine
-            .heap
-            .alloc_bool(option_value(&engine.heap, &args[0])?.is_some())
+            .heap()
+            .alloc_ptr_bool(option_value(engine.heap(), &args[0])?.is_some())
     })?;
     let is_none = sym("is_none");
     let is_none_scheme = engine.lookup_scheme(&is_none)?;
     engine.export_native("is_none", is_none_scheme, 1, |engine, _, args| {
         engine
-            .heap
-            .alloc_bool(option_value(&engine.heap, &args[0])?.is_none())
+            .heap()
+            .alloc_ptr_bool(option_value(engine.heap(), &args[0])?.is_none())
     })?;
 
     let is_ok = sym("is_ok");
     let is_ok_scheme = engine.lookup_scheme(&is_ok)?;
     engine.export_native("is_ok", is_ok_scheme, 1, |engine, _, args| {
         engine
-            .heap
-            .alloc_bool(result_value(&engine.heap, &args[0])?.is_ok())
+            .heap()
+            .alloc_ptr_bool(result_value(engine.heap(), &args[0])?.is_ok())
     })?;
     let is_err = sym("is_err");
     let is_err_scheme = engine.lookup_scheme(&is_err)?;
     engine.export_native("is_err", is_err_scheme, 1, |engine, _, args| {
         engine
-            .heap
-            .alloc_bool(result_value(&engine.heap, &args[0])?.is_err())
+            .heap()
+            .alloc_ptr_bool(result_value(engine.heap(), &args[0])?.is_err())
     })?;
     Ok(())
 }

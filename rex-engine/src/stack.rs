@@ -7,8 +7,6 @@ use rex_typesystem::types::{Type, TypedExpr};
 use crate::env::Environment;
 use crate::value::Pointer;
 
-pub const DEFAULT_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
     Bool(FrBool),
@@ -62,60 +60,6 @@ impl Frame {
             Frame::NativeAsync(frame) => &frame.parent,
         }
     }
-
-    pub fn expr(&self) -> &Arc<TypedExpr> {
-        match self {
-            Frame::Bool(frame) => &frame.expr,
-            Frame::Uint(frame) => &frame.expr,
-            Frame::Int(frame) => &frame.expr,
-            Frame::Float(frame) => &frame.expr,
-            Frame::String(frame) => &frame.expr,
-            Frame::Uuid(frame) => &frame.expr,
-            Frame::DateTime(frame) => &frame.expr,
-            Frame::Hole(frame) => &frame.expr,
-            Frame::Tuple(frame) => &frame.expr,
-            Frame::List(frame) => &frame.expr,
-            Frame::Dict(frame) => &frame.expr,
-            Frame::RecordUpdate(frame) => &frame.expr,
-            Frame::Var(frame) => &frame.expr,
-            Frame::App(frame) => &frame.expr,
-            Frame::Project(frame) => &frame.expr,
-            Frame::Lam(frame) => &frame.expr,
-            Frame::Let(frame) => &frame.expr,
-            Frame::LetRec(frame) => &frame.expr,
-            Frame::Ite(frame) => &frame.expr,
-            Frame::Match(frame) => &frame.expr,
-            Frame::NativeCall(_) => panic!("native call frames do not carry typed expressions"),
-            Frame::NativeAsync(_) => panic!("native async frames do not carry typed expressions"),
-        }
-    }
-
-    pub fn env(&self) -> &Environment {
-        match self {
-            Frame::Bool(frame) => &frame.env,
-            Frame::Uint(frame) => &frame.env,
-            Frame::Int(frame) => &frame.env,
-            Frame::Float(frame) => &frame.env,
-            Frame::String(frame) => &frame.env,
-            Frame::Uuid(frame) => &frame.env,
-            Frame::DateTime(frame) => &frame.env,
-            Frame::Hole(frame) => &frame.env,
-            Frame::Tuple(frame) => &frame.env,
-            Frame::List(frame) => &frame.env,
-            Frame::Dict(frame) => &frame.env,
-            Frame::RecordUpdate(frame) => &frame.env,
-            Frame::Var(frame) => &frame.env,
-            Frame::App(frame) => &frame.env,
-            Frame::Project(frame) => &frame.env,
-            Frame::Lam(frame) => &frame.env,
-            Frame::Let(frame) => &frame.env,
-            Frame::LetRec(frame) => &frame.env,
-            Frame::Ite(frame) => &frame.env,
-            Frame::Match(frame) => &frame.env,
-            Frame::NativeCall(_) => panic!("native call frames do not carry environments"),
-            Frame::NativeAsync(_) => panic!("native async frames do not carry environments"),
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,7 +103,6 @@ pub enum FrLetState {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrLetRecState {
     Enter,
-    AllocateSlots,
     EvalBinding,
     EvalBody,
     Complete,
@@ -231,7 +174,6 @@ pub enum NativeArrayEqState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NativeTask {
-    EvalExpr(NativeEvalExpr),
     ApplyUnary(NativeApplyUnary),
     SequenceMap(NativeSequenceMap),
     SequenceFilter(NativeSequenceFilter),
@@ -248,12 +190,6 @@ pub enum NativeTask {
     Sum(NativeSum),
     Mean(NativeMean),
     LogShow(NativeLogShow),
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeEvalExpr {
-    pub expr: Arc<TypedExpr>,
-    pub env: Environment,
 }
 
 #[derive(Clone, Debug, PartialEq)]

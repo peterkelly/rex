@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use rex::virtual_export_name;
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Expr, FromPointer, Heap, IntoPointer, Module, Parser,
-    Pointer, Rex, RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
+    BuiltinTypeId, Engine, EngineError, Expr, FromRex, Handle, Heap, IntoRex, Module, Parser, Rex,
+    RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
 };
 use uuid::Uuid;
 
@@ -87,26 +87,24 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
             correctness_ty,
         ])
     );
-    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 4);
     assert_eq!(
-        engine.heap.pointer_as_string(&items[0]).unwrap(),
+        items[0].to_rust::<String>().unwrap(),
         format!("{:<12}", "left")
     );
     assert_eq!(
-        engine.heap.pointer_as_string(&items[1]).unwrap(),
+        items[1].to_rust::<String>().unwrap(),
         format!("{:>12}", "right")
     );
-    let right = engine.heap.get(&items[2]).unwrap();
-    match right.as_ref() {
+    match items[2].value().unwrap() {
         Value::Adt(tag, args) => {
             assert_eq!(tag.as_ref(), "Right");
             assert!(args.is_empty());
         }
         _ => panic!("expected ADT value for Correctness.Right"),
     }
-    let wrong = engine.heap.get(&items[3]).unwrap();
-    match wrong.as_ref() {
+    match items[3].value().unwrap() {
         Value::Adt(tag, args) => {
             assert_eq!(tag.as_ref(), "Wrong");
             assert!(args.is_empty());
@@ -143,7 +141,7 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
 
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     assert_eq!(
-        engine.heap.pointer_as_string(&value).unwrap(),
+        value.to_rust::<String>().unwrap(),
         format!("{:<12}", "left")
     );
 }
@@ -228,7 +226,7 @@ impl Entity2 {
 }
 
 impl RexDefault<HostState> for Entity1 {
-    fn rex_default(engine: &Engine<HostState>) -> Result<Pointer, EngineError> {
+    fn rex_default(engine: &Engine<HostState>) -> Result<Handle, EngineError> {
         let entity = Entity1 {
             account_id: engine.state.account_id,
             project_id: engine.state.project_id,
@@ -237,7 +235,7 @@ impl RexDefault<HostState> for Entity1 {
             tags: None,
             numbers: vec![],
         };
-        entity.into_pointer(&engine.heap)
+        entity.into_rex(&engine.heap)
     }
 }
 
@@ -273,7 +271,14 @@ fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap().expr
 }
-fn list_from_pointers(heap: &Heap, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
+fn tuple_items(value: &Handle) -> Vec<Handle> {
+    let Value::Tuple(items) = value.value().unwrap() else {
+        panic!("expected tuple, got {}", value.type_name().unwrap());
+    };
+    items
+}
+
+fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineError> {
     let mut list = heap.alloc_adt(sym("Empty"), vec![])?;
     for value in values.into_iter().rev() {
         list = heap.alloc_adt(sym("Cons"), vec![value, list])?;
@@ -281,22 +286,27 @@ fn list_from_pointers(heap: &Heap, values: Vec<Pointer>) -> Result<Pointer, Engi
     Ok(list)
 }
 
-fn pointer_as_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
+fn handle_as_list(handle: &Handle) -> Result<Vec<Handle>, EngineError> {
     let mut out = Vec::new();
-    let mut cursor = *pointer;
+    let mut cursor = handle.clone();
     loop {
-        let (tag, args) = heap.pointer_as_adt(&cursor)?;
+        let Value::Adt(tag, args) = cursor.value()? else {
+            return Err(EngineError::NativeType {
+                expected: "List a".into(),
+                got: cursor.type_name()?.into(),
+            });
+        };
         if tag == sym("Empty") {
             return Ok(out);
         }
         if tag == sym("Cons") && args.len() == 2 {
-            out.push(args[0]);
-            cursor = args[1];
+            out.push(args[0].clone());
+            cursor = args[1].clone();
             continue;
         }
         return Err(EngineError::NativeType {
             expected: "List a".into(),
-            got: heap.type_name(&cursor)?.into(),
+            got: cursor.type_name()?.into(),
         });
     }
 }
@@ -374,13 +384,13 @@ async fn injected_functions_can_read_shared_state_fields() {
         ])
     );
 
-    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 5);
-    assert_eq!(engine.heap.pointer_as_uuid(&items[0]).unwrap(), account_id);
-    assert_eq!(engine.heap.pointer_as_uuid(&items[1]).unwrap(), project_id);
-    assert!(engine.heap.pointer_as_bool(&items[2]).unwrap());
-    assert!(engine.heap.pointer_as_bool(&items[3]).unwrap());
-    assert!(!engine.heap.pointer_as_bool(&items[4]).unwrap());
+    assert_eq!(items[0].to_rust::<Uuid>().unwrap(), account_id);
+    assert_eq!(items[1].to_rust::<Uuid>().unwrap(), project_id);
+    assert!(items[2].to_rust::<bool>().unwrap());
+    assert!(items[3].to_rust::<bool>().unwrap());
+    assert!(!items[4].to_rust::<bool>().unwrap());
 }
 
 #[tokio::test]
@@ -407,7 +417,7 @@ async fn derived_rex_default_can_read_host_state() {
     .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
-    let decoded = Entity1::from_pointer(&engine.heap, &value).unwrap();
+    let decoded = Entity1::from_rex(&value).unwrap();
     assert_eq!(
         decoded,
         Entity1 {
@@ -447,7 +457,7 @@ async fn derived_rex_default_record_update_can_override_fields() {
     .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
-    let decoded = Entity1::from_pointer(&engine.heap, &value).unwrap();
+    let decoded = Entity1::from_rex(&value).unwrap();
     assert_eq!(
         decoded,
         Entity1 {
@@ -485,7 +495,7 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
     .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
-    let decoded = Entity2::from_pointer(&engine.heap, &value).unwrap();
+    let decoded = Entity2::from_rex(&value).unwrap();
     assert_eq!(
         decoded,
         Entity2 {
@@ -531,7 +541,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
     .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
-    let decoded = Entity2::from_pointer(&engine.heap, &value).unwrap();
+    let decoded = Entity2::from_rex(&value).unwrap();
     assert_eq!(
         decoded,
         Entity2 {
@@ -578,10 +588,10 @@ async fn async_injected_functions_can_read_shared_state_fields() {
         ])
     );
 
-    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 2);
-    assert!(engine.heap.pointer_as_bool(&items[0]).unwrap());
-    assert!(!engine.heap.pointer_as_bool(&items[1]).unwrap());
+    assert!(items[0].to_rust::<bool>().unwrap());
+    assert!(!items[1].to_rust::<bool>().unwrap());
 }
 
 #[tokio::test]
@@ -602,10 +612,10 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
     );
     inject_globals(&mut engine, |module| {
         module.export_native("repeat_value", scheme, 2, |engine, _, args| {
-            let value = args[0];
-            let len = engine.heap.pointer_as_i32(&args[1])?;
-            let copies = (0..len.max(0)).map(|_| value).collect();
-            list_from_pointers(&engine.heap, copies)
+            let value = args[0].clone();
+            let len = args[1].to_rust::<i32>()?;
+            let copies = (0..len.max(0)).map(|_| value.clone()).collect();
+            list_from_handles(engine.heap(), copies)
         })
     })
     .unwrap();
@@ -626,26 +636,17 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
         ])
     );
 
-    let items = engine.heap.pointer_as_tuple(&value).unwrap();
-    let repeated_strings = pointer_as_list(&engine.heap, &items[0]).unwrap();
+    let items = tuple_items(&value);
+    let repeated_strings = handle_as_list(&items[0]).unwrap();
     assert_eq!(repeated_strings.len(), 3);
-    assert_eq!(
-        engine.heap.pointer_as_string(&repeated_strings[0]).unwrap(),
-        "rex"
-    );
-    assert_eq!(
-        engine.heap.pointer_as_string(&repeated_strings[1]).unwrap(),
-        "rex"
-    );
-    assert_eq!(
-        engine.heap.pointer_as_string(&repeated_strings[2]).unwrap(),
-        "rex"
-    );
+    assert_eq!(repeated_strings[0].to_rust::<String>().unwrap(), "rex");
+    assert_eq!(repeated_strings[1].to_rust::<String>().unwrap(), "rex");
+    assert_eq!(repeated_strings[2].to_rust::<String>().unwrap(), "rex");
 
-    let repeated_bools = pointer_as_list(&engine.heap, &items[1]).unwrap();
+    let repeated_bools = handle_as_list(&items[1]).unwrap();
     assert_eq!(repeated_bools.len(), 2);
-    assert!(engine.heap.pointer_as_bool(&repeated_bools[0]).unwrap());
-    assert!(engine.heap.pointer_as_bool(&repeated_bools[1]).unwrap());
+    assert!(repeated_bools[0].to_rust::<bool>().unwrap());
+    assert!(repeated_bools[1].to_rust::<bool>().unwrap());
 }
 
 #[tokio::test]
@@ -665,7 +666,9 @@ async fn generic_export_can_swap_two_values_of_different_types() {
     );
     inject_globals(&mut engine, |module| {
         module.export_native("swap_pair", scheme, 2, |engine, _, args| {
-            engine.heap.alloc_tuple(vec![args[1], args[0]])
+            engine
+                .heap()
+                .alloc_tuple(vec![args[1].clone(), args[0].clone()])
         })
     })
     .unwrap();
@@ -692,21 +695,15 @@ async fn generic_export_can_swap_two_values_of_different_types() {
         ])
     );
 
-    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
 
-    let first_swap = engine.heap.pointer_as_tuple(&items[0]).unwrap();
-    assert_eq!(engine.heap.pointer_as_i32(&first_swap[0]).unwrap(), 7);
-    assert_eq!(
-        engine.heap.pointer_as_string(&first_swap[1]).unwrap(),
-        "left"
-    );
+    let first_swap = tuple_items(&items[0]);
+    assert_eq!(first_swap[0].to_rust::<i32>().unwrap(), 7);
+    assert_eq!(first_swap[1].to_rust::<String>().unwrap(), "left");
 
-    let second_swap = engine.heap.pointer_as_tuple(&items[1]).unwrap();
-    assert_eq!(
-        engine.heap.pointer_as_string(&second_swap[0]).unwrap(),
-        "right"
-    );
-    assert!(engine.heap.pointer_as_bool(&second_swap[1]).unwrap());
+    let second_swap = tuple_items(&items[1]);
+    assert_eq!(second_swap[0].to_rust::<String>().unwrap(), "right");
+    assert!(second_swap[1].to_rust::<bool>().unwrap());
 }
 
 #[tokio::test]
@@ -763,20 +760,14 @@ async fn overloaded_exports_types_and_values() {
     let (value, ty) = value.unwrap();
     assert_overload_tuple_type_shape(&ty);
 
-    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 6);
-    assert_eq!(engine.heap.pointer_as_i32(&items[0]).unwrap(), 42);
-    assert_eq!(
-        engine.heap.pointer_as_string(&items[1]).unwrap(),
-        "bool:true"
-    );
-    assert!(!engine.heap.pointer_as_bool(&items[2]).unwrap());
-    assert_eq!(engine.heap.pointer_as_i32(&items[3]).unwrap(), 6);
-    assert!(engine.heap.pointer_as_bool(&items[4]).unwrap());
-    assert_eq!(
-        engine.heap.pointer_as_string(&items[5]).unwrap(),
-        "records:1:2:3"
-    );
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 42);
+    assert_eq!(items[1].to_rust::<String>().unwrap(), "bool:true");
+    assert!(!items[2].to_rust::<bool>().unwrap());
+    assert_eq!(items[3].to_rust::<i32>().unwrap(), 6);
+    assert!(items[4].to_rust::<bool>().unwrap());
+    assert_eq!(items[5].to_rust::<String>().unwrap(), "records:1:2:3");
 }
 
 #[tokio::test]
@@ -839,18 +830,12 @@ async fn overloaded_async_exports_types_and_values() {
     let (value, ty) = value.unwrap();
     assert_overload_tuple_type_shape(&ty);
 
-    let items = engine.heap.pointer_as_tuple(&value).unwrap();
+    let items = tuple_items(&value);
     assert_eq!(items.len(), 6);
-    assert_eq!(engine.heap.pointer_as_i32(&items[0]).unwrap(), 42);
-    assert_eq!(
-        engine.heap.pointer_as_string(&items[1]).unwrap(),
-        "bool:true"
-    );
-    assert!(!engine.heap.pointer_as_bool(&items[2]).unwrap());
-    assert_eq!(engine.heap.pointer_as_i32(&items[3]).unwrap(), 6);
-    assert!(engine.heap.pointer_as_bool(&items[4]).unwrap());
-    assert_eq!(
-        engine.heap.pointer_as_string(&items[5]).unwrap(),
-        "records:1:2:3"
-    );
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 42);
+    assert_eq!(items[1].to_rust::<String>().unwrap(), "bool:true");
+    assert!(!items[2].to_rust::<bool>().unwrap());
+    assert_eq!(items[3].to_rust::<i32>().unwrap(), 6);
+    assert!(items[4].to_rust::<bool>().unwrap());
+    assert_eq!(items[5].to_rust::<String>().unwrap(), "records:1:2:3");
 }

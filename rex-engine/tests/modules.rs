@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::FutureExt;
 use rex_ast::expr::sym;
 use rex_engine::{
-    Engine, EngineError, EngineOptions, EvaluatorRef, Module, Pointer, PreludeMode, RexAdt,
-    RexType, Value, pointer_display,
+    Engine, EngineError, EngineOptions, EvaluatorRef, Handle, Module, PreludeMode, RexAdt, RexType,
+    Value,
 };
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind},
@@ -93,7 +93,7 @@ async fn prelude_module_can_be_imported_explicitly() {
             Type::builtin(BuiltinTypeId::I32)
         )
     );
-    let rendered = pointer_display(&engine.heap, &value_ptr).unwrap();
+    let rendered = value_ptr.display().unwrap();
     assert_eq!(rendered, "[2, 3]");
 }
 
@@ -117,7 +117,7 @@ async fn engine_options_can_disable_prelude() {
 async fn eval_module_file<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     path: &Path,
-) -> Result<(Pointer, Type), rex_engine::EngineError> {
+) -> Result<(Handle, Type), rex_engine::EngineError> {
     let source = fs::read_to_string(path).unwrap();
     eval_snippet_at(engine, &source, path).await
 }
@@ -125,7 +125,7 @@ async fn eval_module_file<State: Clone + Send + Sync + 'static>(
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
-) -> Result<(Pointer, Type), rex_engine::EngineError> {
+) -> Result<(Handle, Type), rex_engine::EngineError> {
     rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
@@ -139,7 +139,7 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
-) -> Result<(Pointer, Type), rex_engine::EngineError> {
+) -> Result<(Handle, Type), rex_engine::EngineError> {
     rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
@@ -153,17 +153,8 @@ macro_rules! pvals {
     ($engine:expr, $vals:expr) => {
         $vals
             .iter()
-            .map(|pointer| {
-                (
-                    pointer.clone(),
-                    $engine
-                        .heap
-                        .get(pointer)
-                        .map(|value| value.as_ref().clone())
-                        .unwrap(),
-                )
-            })
-            .collect::<Vec<(Pointer, Value)>>()
+            .map(|handle| (handle.clone(), handle.value().unwrap()))
+            .collect::<Vec<(Handle, Value)>>()
     };
 }
 
@@ -193,17 +184,10 @@ async fn module_import_local_pub() {
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 3),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
     }
 }
 
@@ -229,8 +213,8 @@ async fn eval_module_file_reloads_when_local_file_changes() {
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 1),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 1),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 
@@ -248,8 +232,8 @@ async fn eval_module_file_reloads_when_local_file_changes() {
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 2),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 2),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 }
@@ -269,8 +253,8 @@ async fn snippet_import_reloads_when_local_module_changes() {
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 1),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 1),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 
@@ -281,8 +265,8 @@ async fn snippet_import_reloads_when_local_module_changes() {
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 2),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 2),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 }
@@ -323,12 +307,12 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
     .await
     .unwrap();
 
-    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
+    let value = value_ptr.value().unwrap();
     match value {
         Value::Adt(_, fields) => {
             assert_eq!(fields.len(), 1);
-            match engine.heap.get(&fields[0]).unwrap().as_ref() {
-                Value::I32(v) => assert_eq!(*v, 1),
+            match fields[0].value().unwrap() {
+                Value::I32(v) => assert_eq!(v, 1),
                 other => panic!("expected i32 field, got {}", other.value_type_name()),
             }
         }
@@ -370,8 +354,8 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
     .unwrap();
 
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 7),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 7),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 }
@@ -406,8 +390,8 @@ async fn module_import_selected_clause_can_import_class_exports() {
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 7),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 7),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 }
@@ -443,8 +427,8 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
     .unwrap();
 
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 0),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 0),
         other => panic!("expected i32 value, got {}", other.value_type_name()),
     }
 }
@@ -484,9 +468,9 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine.heap.get(&value_ptr).unwrap();
-    match value.as_ref() {
-        Value::I32(v) => assert_eq!(*v, 0),
+    let value = value_ptr.value().unwrap();
+    match value {
+        Value::I32(v) => assert_eq!(v, 0),
         _ => panic!("expected i32"),
     }
 }
@@ -518,17 +502,10 @@ async fn module_injected_from_rust_sync_and_async_exports() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 41),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
     }
 }
 
@@ -543,8 +520,8 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "pick",
             i32_binop_scheme(),
             2,
-            |engine: EvaluatorRef<bool>, _: &Type, args: &[Pointer]| {
-                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+            |engine: EvaluatorRef<bool>, _: &Type, args: &[Handle]| {
+                let idx = if *engine.state() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
                     .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
@@ -556,7 +533,10 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "heap_i32",
             i32_value_scheme(),
             0,
-            |engine: EvaluatorRef<bool>, _: &Type, _args| engine.heap.alloc_i32(123),
+            |engine: EvaluatorRef<bool>, _: &Type, _args| {
+                assert!(engine.type_system().adts.contains_key(&sym("Option")));
+                engine.heap().alloc_i32(123)
+            },
         )
         .unwrap();
 
@@ -565,11 +545,11 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     module
         .export_native("pick_typed", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: EvaluatorRef<bool>, typ: &Type, args: &[Pointer]| {
+            move |engine: EvaluatorRef<bool>, typ: &Type, args: &[Handle]| {
                 if typ == &expected_type {
                     typed_called.store(true, Ordering::Relaxed);
                 }
-                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+                let idx = if *engine.state() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
                     .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
@@ -597,22 +577,16 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
         ])
     );
 
-    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
+    let value = value_ptr.value().unwrap();
     let Value::Tuple(xs) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
     let xs = pvals!(engine, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {
             Value::I32(n) => n,
-            _ => panic!(
-                "expected i32, got {}",
-                engine.heap.type_name(&pointer).unwrap()
-            ),
+            _ => panic!("expected i32, got {}", pointer.type_name().unwrap()),
         })
         .collect();
     assert_eq!(got, vec![42, 99, 123]);
@@ -648,28 +622,19 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     );
     assert_eq!(items[1], Type::builtin(BuiltinTypeId::String));
 
-    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
+    let value = value_ptr.value().unwrap();
     let Value::Tuple(xs) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
     let xs = pvals!(engine, xs);
     assert_eq!(xs.len(), 2);
     match &xs[0].1 {
         Value::I32(n) => assert_eq!(*n, 7),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&xs[0].0).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", xs[0].0.type_name().unwrap()),
     }
     match &xs[1].1 {
         Value::String(s) => assert_eq!(s, "ok"),
-        _ => panic!(
-            "expected string, got {}",
-            engine.heap.type_name(&xs[1].0).unwrap()
-        ),
+        _ => panic!("expected string, got {}", xs[1].0.type_name().unwrap()),
     }
 }
 
@@ -685,8 +650,8 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
             "make_run_spec",
             Scheme::new(vec![], vec![], LocalRunSpec::rex_type()),
             0,
-            |engine: EvaluatorRef<()>, _typ: &Type, _args: &[Pointer]| {
-                engine.heap.alloc_adt(sym("Pending"), vec![])
+            |engine: EvaluatorRef<()>, _typ: &Type, _args: &[Handle]| {
+                engine.heap().alloc_adt(sym("Pending"), vec![])
             },
         )
         .unwrap();
@@ -717,8 +682,8 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "pick_async",
             i32_binop_scheme(),
             2,
-            |engine: EvaluatorRef<bool>, _: Type, args: Vec<Pointer>| {
-                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+            |engine: EvaluatorRef<bool>, _: Type, args: Vec<Handle>| {
+                let idx = if *engine.state() { 1 } else { 0 };
                 async move {
                     args.get(idx)
                         .cloned()
@@ -733,8 +698,8 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "heap_i32_async",
             i32_value_scheme(),
             0,
-            |engine: EvaluatorRef<bool>, _: Type, _args: Vec<Pointer>| {
-                async move { engine.heap.alloc_i32(77) }.boxed()
+            |engine: EvaluatorRef<bool>, _: Type, _args: Vec<Handle>| {
+                async move { engine.heap().alloc_i32(77) }.boxed()
             },
         )
         .unwrap();
@@ -744,9 +709,9 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     module
         .export_native_async("pick_typed_async", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: EvaluatorRef<bool>, typ: Type, args: Vec<Pointer>| {
+            move |engine: EvaluatorRef<bool>, typ: Type, args: Vec<Handle>| {
                 let type_match = typ == expected_type;
-                let idx = if *engine.state.as_ref() { 1 } else { 0 };
+                let idx = if *engine.state() { 1 } else { 0 };
                 let typed_called = Arc::clone(&typed_called);
                 async move {
                     if type_match {
@@ -781,22 +746,16 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
         ])
     );
 
-    let value = engine.heap.get(&value_ptr).unwrap().as_ref().clone();
+    let value = value_ptr.value().unwrap();
     let Value::Tuple(xs) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
     let xs = pvals!(engine, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {
             Value::I32(n) => n,
-            _ => panic!(
-                "expected i32, got {}",
-                engine.heap.type_name(&pointer).unwrap()
-            ),
+            _ => panic!("expected i32, got {}", pointer.type_name().unwrap()),
         })
         .collect();
     assert_eq!(got, vec![21, 2, 77]);
@@ -813,7 +772,7 @@ fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<()>, _: &Type, _args: &[Pointer]| {
+            |_engine: EvaluatorRef<()>, _: &Type, _args: &[Handle]| {
                 Err(rex_engine::EngineError::Internal("unused".into()))
             },
         )
@@ -835,7 +794,7 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad_async",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<()>, _: Type, _args: Vec<Pointer>| {
+            |_engine: EvaluatorRef<()>, _: Type, _args: Vec<Handle>| {
                 async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed()
             },
         )
@@ -871,17 +830,10 @@ async fn module_injected_from_rust_wildcard_import() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 32),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
     }
 }
 
@@ -960,17 +912,10 @@ async fn module_import_include_roots() {
     engine.add_include_resolver(&include_root).unwrap();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 42),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
     }
 }
 
@@ -999,18 +944,11 @@ async fn snippet_can_import_with_explicit_base() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
 
     match value {
         Value::I32(v) => assert_eq!(v, 42),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
     }
 }
 
@@ -1041,17 +979,10 @@ async fn module_import_wildcard_clause() {
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 32),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
     }
 }
 
@@ -1081,17 +1012,10 @@ async fn module_import_selected_clause_with_alias() {
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
     match value {
         Value::I32(v) => assert_eq!(v, 32),
-        _ => panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        ),
+        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
     }
 }
 
@@ -1152,7 +1076,7 @@ async fn module_import_selected_clause_can_import_type_exports() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+    match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
             assert!(fields.is_empty());
@@ -1187,11 +1111,11 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+    match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
             assert_eq!(fields.len(), 1);
-            match engine.heap.get(&fields[0]).unwrap().as_ref() {
+            match fields[0].value().unwrap() {
                 Value::Tuple(items) => assert!(items.is_empty()),
                 other => panic!("expected unit payload, got {}", other.value_type_name()),
             }
@@ -1226,11 +1150,11 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+    match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
             assert_eq!(fields.len(), 1);
-            match engine.heap.get(&fields[0]).unwrap().as_ref() {
+            match fields[0].value().unwrap() {
                 Value::Tuple(items) => assert!(items.is_empty()),
                 other => panic!("expected unit payload, got {}", other.value_type_name()),
             }
@@ -1265,7 +1189,7 @@ async fn module_import_wildcard_clause_imports_type_exports_too() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+    match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
             assert!(fields.is_empty());
@@ -1304,8 +1228,8 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 11),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 11),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 }
@@ -1342,12 +1266,12 @@ async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
         panic!("expected tuple type, got {ty}");
     };
     assert_eq!(items.len(), 2);
-    let Value::Tuple(vals) = engine.heap.get(&value_ptr).unwrap().as_ref().clone() else {
+    let Value::Tuple(vals) = value_ptr.value().unwrap() else {
         panic!("expected tuple value");
     };
     assert_eq!(vals.len(), 2);
     for pointer in vals {
-        match engine.heap.get(&pointer).unwrap().as_ref() {
+        match pointer.value().unwrap() {
             Value::Adt(tag, fields) => {
                 assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
                 assert!(fields.is_empty());
@@ -1436,7 +1360,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
             Scheme::new(vec![], vec![], Type::con("RunSpec", 0)),
             0,
             |engine: EvaluatorRef<()>, _: &Type, _args| {
-                engine.heap.alloc_adt(sym("Pending"), vec![])
+                engine.heap().alloc_adt(sym("Pending"), vec![])
             },
         )
         .unwrap();
@@ -1452,7 +1376,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
     )
     .await
     .unwrap();
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
+    match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert_eq!(tag.as_ref(), "Pending");
             assert!(fields.is_empty());
@@ -1743,8 +1667,8 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 0),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 0),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 }
@@ -1777,8 +1701,8 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match engine.heap.get(&value_ptr).unwrap().as_ref() {
-        Value::I32(v) => assert_eq!(*v, 0),
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 0),
         other => panic!("expected i32, got {}", other.value_type_name()),
     }
 }
@@ -1911,7 +1835,7 @@ async fn std_json_encode_decode_smoke() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = engine.heap.pointer_as_i32(&value_ptr).unwrap();
+    let value = value_ptr.to_rust::<i32>().unwrap();
     assert_eq!(value, 1);
 }
 
@@ -1957,27 +1881,17 @@ async fn std_json_roundtrip_nested() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
 
     let Value::Tuple(xs) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
     let xs = pvals!(engine, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {
             Value::I32(n) => n,
-            _ => panic!(
-                "expected i32, got {}",
-                engine.heap.type_name(&pointer).unwrap()
-            ),
+            _ => panic!("expected i32, got {}", pointer.type_name().unwrap()),
         })
         .collect();
     assert_eq!(got, vec![1, 1]);
@@ -2033,27 +1947,17 @@ async fn std_json_decode_errors_have_useful_messages() {
             Type::builtin(BuiltinTypeId::String),
         ])
     );
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
 
     let Value::Tuple(parts) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
     let parts = pvals!(engine, parts);
     let got: Vec<String> = parts
         .into_iter()
         .map(|(pointer, v)| match v {
             Value::String(s) => s,
-            _ => panic!(
-                "expected string, got {}",
-                engine.heap.type_name(&pointer).unwrap()
-            ),
+            _ => panic!("expected string, got {}", pointer.type_name().unwrap()),
         })
         .collect();
 
@@ -2095,27 +1999,17 @@ async fn std_json_numeric_decode_errors() {
             Type::builtin(BuiltinTypeId::String)
         ])
     );
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
 
     let Value::Tuple(parts) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
     let parts = pvals!(engine, parts);
     let got: Vec<String> = parts
         .into_iter()
         .map(|(pointer, v)| match v {
             Value::String(s) => s,
-            _ => panic!(
-                "expected string, got {}",
-                engine.heap.type_name(&pointer).unwrap()
-            ),
+            _ => panic!("expected string, got {}", pointer.type_name().unwrap()),
         })
         .collect();
 
@@ -2151,17 +2045,10 @@ async fn std_json_show_renders_valid_json() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
 
     let Value::String(rendered) = value else {
-        panic!(
-            "expected string, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected string, got {}", value_ptr.type_name().unwrap());
     };
 
     let parsed: serde_json::Value = serde_json::from_str(&rendered).unwrap();
@@ -2235,27 +2122,17 @@ async fn std_json_parse_and_from_string_roundtrip() {
             Type::builtin(BuiltinTypeId::I32),
         ])
     );
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
+    let value = value_ptr.value().unwrap();
 
     let Value::Tuple(xs) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+        panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
     let xs = pvals!(engine, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {
             Value::I32(n) => n,
-            _ => panic!(
-                "expected i32, got {}",
-                engine.heap.type_name(&pointer).unwrap()
-            ),
+            _ => panic!("expected i32, got {}", pointer.type_name().unwrap()),
         })
         .collect();
     assert_eq!(got, vec![1, 1, 1]);

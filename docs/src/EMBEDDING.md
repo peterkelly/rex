@@ -5,7 +5,7 @@ Rex is designed as a small pipeline you can embed at whatever stage you need:
 1. `rex-lexer`: source → `Tokens`
 2. `rex-parser`: tokens → `Program { decls, expr }`
 3. `rex-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
-4. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Value`
+4. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Handle`
 
 This document focuses on common embedding patterns.
 
@@ -302,7 +302,7 @@ If you need to construct exports separately (for example to build a module from 
 you can use:
 
 - `Export::from_handler` / `Export::from_async_handler` (typed handlers)
-- `Export::from_native` / `Export::from_native_async` (runtime pointer handlers)
+- `Export::from_native` / `Export::from_native_async` (handle-based native handlers)
 
 Then add them via `Module::add_export`, or push them into `Module::exports` directly if you are
 assembling the module programmatically.
@@ -364,7 +364,7 @@ In that example:
 - `Left` and `Right` are imported as constructor values.
 - `render_label` is imported as a value.
 
-### 3a) Runtime-Defined Signatures (`Pointer` APIs)
+### 3a) Runtime-Defined Signatures (`Handle` APIs)
 
 If your host determines function signatures/behavior at runtime, use the native module export
 APIs and provide an explicit `Scheme` + arity:
@@ -374,8 +374,8 @@ APIs and provide an explicit `Scheme` + arity:
 
 These callbacks receive `EvaluatorRef<State>` (not just `&State`), so they can:
 
-- read state via `engine.state`
-- allocate new values via `engine.heap`
+- read state via `engine.state()`
+- allocate new values via `engine.heap()`
 - inspect typed call information via the explicit `&Type` / `Type` callback parameter
 
 Async native callbacks receive owned argument vectors and return `Send + 'static` futures so the
@@ -383,7 +383,7 @@ runtime can suspend them as explicit pending evaluation frames.
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{Engine, EvaluatorRef, Module, Pointer};
+use rex_engine::{Engine, EvaluatorRef, Handle, Module};
 use rex::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
@@ -392,12 +392,12 @@ engine.add_default_resolvers();
 let mut m = Module::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
-m.export_native("id_ptr", scheme.clone(), 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Pointer]| {
+m.export_native("id_handle", scheme.clone(), 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Handle]| {
     Ok(args[0].clone())
 })?;
 
-m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: EvaluatorRef<()>, _typ: Type, _args: Vec<Pointer>| {
-    async move { engine.heap.alloc_i32(42) }.boxed()
+m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: EvaluatorRef<()>, _typ: Type, _args: Vec<Handle>| {
+    async move { engine.heap().alloc_i32(42) }.boxed()
 })?;
 
 engine.inject_module(m)?;
@@ -438,9 +438,9 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
 - Use `Engine::with_prelude(())?` if you do not need host state.
 - If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
 - `export` / `export_async` callbacks receive `&State` as their first parameter.
-- Pointer-level APIs (`export_native*`) receive
+- Handle-based native APIs (`export_native*`) receive
   `EvaluatorRef<State>` so
-  they can use heap/runtime internals and read `engine.state`.
+  they can allocate public handles through the heap and read `engine.state()`.
 
 ```rust
 use rex_engine::Engine;
@@ -711,7 +711,7 @@ The derive:
 - declares an ADT in the Rex type system
 - injects runtime constructors (so Rex can *build* values)
 - discovers and registers the full acyclic ADT family needed by the root type
-- implements `FromPointer`/`IntoPointer` for converting Rust ↔ Rex
+- implements `FromRex`/`IntoRex` for converting Rust ↔ Rex
 
 Fields of type `Vec<T>` are exposed as `Array T` and convert to/from Rex
 runtime arrays. When constructing or updating derived records from Rex code, use
@@ -722,12 +722,12 @@ not need to manually register dependencies in topological order. Cyclic ADT fami
 supported by this registration path.
 
 If a field uses a Rust type that participates in Rex value conversion but is not itself a Rex ADT
-(for example a leaf type with manual `RexType` / `IntoPointer` / `FromPointer` impls), no extra
+(for example a leaf type with manual `RexType` / `IntoRex` / `FromRex` impls), no extra
 field annotation is required. Such leaf types inherit the default no-op family collection from
 `RexType`, so derived ADTs can contain them without trying to register them as ADTs.
 
 ```rust
-use rex::{Engine, FromPointer, IntoPointer, Pointer, Rex, RexType, Type};
+use rex::{Engine, FromRex, Handle, IntoRex, Rex, RexType, Type};
 
 #[derive(Debug, PartialEq)]
 struct AtomRef(i32);
@@ -738,15 +738,15 @@ impl RexType for AtomRef {
     }
 }
 
-impl IntoPointer for AtomRef {
-    fn into_pointer(self, heap: &rex::Heap) -> Result<Pointer, rex::EngineError> {
-        self.0.into_pointer(heap)
+impl IntoRex for AtomRef {
+    fn into_rex(self, heap: &rex::Heap) -> Result<Handle, rex::EngineError> {
+        self.0.into_rex(heap)
     }
 }
 
-impl FromPointer for AtomRef {
-    fn from_pointer(heap: &rex::Heap, pointer: &Pointer) -> Result<Self, rex::EngineError> {
-        Ok(Self(i32::from_pointer(heap, pointer)?))
+impl FromRex for AtomRef {
+    fn from_rex(handle: &Handle) -> Result<Self, rex::EngineError> {
+        Ok(Self(i32::from_rex(handle)?))
     }
 }
 
@@ -758,7 +758,7 @@ Fragment::inject_rex(&mut engine)?;
 ```
 
 ```rust
-use rex::{Engine, FromPointer, Parser, Token, Rex};
+use rex::{Engine, FromRex, Parser, Token, Rex};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -774,7 +774,7 @@ let expr = Parser::new(Token::tokenize("Just 1")?)
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .expr;
 let (v, _ty) = engine.eval(expr.as_ref()).await?;
-assert_eq!(Maybe::<i32>::from_pointer(&engine.heap, &v)?, Maybe::Just(1));
+assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));
 ```
 
 ## Register ADTs Without Derive
@@ -802,7 +802,7 @@ globals.add_adt_decl(adt)?;
 engine.inject_module(globals)?;
 ```
 
-If you have a Rust type with manual `RexType`/`IntoPointer`/`FromPointer` impls, implement
+If you have a Rust type with manual `RexType`/`IntoRex`/`FromRex` impls, implement
 `RexAdt` and provide `rex_adt_decl()`. Then `RexAdt::inject_rex(...)` gives the same
 registration workflow as derived types.
 

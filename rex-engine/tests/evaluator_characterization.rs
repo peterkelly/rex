@@ -1,9 +1,7 @@
-use rex_engine::{
-    Compiler, Engine, EngineError, Evaluator, Pointer, RuntimeEnv, assert_pointer_eq,
-};
+use rex_engine::{Compiler, Engine, EngineError, Evaluator, Handle, RuntimeEnv};
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind};
 
-async fn eval_snippet(engine: &mut Engine, source: &str) -> Result<(Pointer, Type), EngineError> {
+async fn eval_snippet(engine: &mut Engine, source: &str) -> Result<(Handle, Type), EngineError> {
     Evaluator::new_with_compiler(
         RuntimeEnv::new(engine.clone()),
         Compiler::new(engine.clone()),
@@ -41,5 +39,5 @@ async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
             || matches!(ty.as_ref(), TypeKind::Var(_)),
         "expected i32-compatible result type, got {ty}"
     );
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(24).unwrap());
+    assert_eq!(value.to_rust::<i32>().unwrap(), 24);
 }

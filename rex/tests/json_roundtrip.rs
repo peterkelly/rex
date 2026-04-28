@@ -1,6 +1,6 @@
 #![allow(clippy::disallowed_names)]
 
-use rex::{Engine, JsonOptions, Module, Type, rex_to_json};
+use rex::{Engine, Handle, JsonOptions, Module, Type, rex_to_json};
 use serde::{Deserialize, Serialize};
 
 fn engine_with_prelude() -> Engine {
@@ -9,7 +9,7 @@ fn engine_with_prelude() -> Engine {
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
-) -> Result<(rex::Pointer, Type), rex::EngineError> {
+) -> Result<(Handle, Type), rex::EngineError> {
     rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
@@ -49,7 +49,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_handle, ty) = eval_snippet(
         &mut engine,
         r#"
         import echo (EchoEnum, EchoRecord, Foo, BAR, echo)
@@ -79,8 +79,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     .unwrap();
 
     let parsed = rex_to_json(
-        &engine.heap,
-        &value_ptr,
+        &value_handle,
         &ty,
         &engine.type_system,
         &JsonOptions::default(),

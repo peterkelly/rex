@@ -1,6 +1,5 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Heap, Module, Parser, Pointer, Token, Type, TypeError,
-    Value,
+    BuiltinTypeId, Engine, EngineError, Handle, Heap, Module, Parser, Token, Type, TypeError, Value,
 };
 
 fn strip_type_span(mut err: TypeError) -> TypeError {
@@ -10,7 +9,7 @@ fn strip_type_span(mut err: TypeError) -> TypeError {
     err
 }
 
-async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
+async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
@@ -18,7 +17,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let (pointer, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -26,7 +25,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     .await
     .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();
-    Ok((heap, pointer, ty))
+    Ok((heap, handle, ty))
 }
 
 #[tokio::test]
@@ -97,97 +96,95 @@ pick
 async fn spec_defaulting_picks_a_concrete_type_for_numeric_classes() {
     // `zero` has type `a` with an `AdditiveMonoid a` constraint.
     // With no other type hints, the engine defaults the ambiguous type.
-    let (heap, pointer, ty) = eval("zero").await.unwrap();
+    let (_heap, handle, ty) = eval("zero").await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
-    let value = heap.get(&pointer).unwrap();
-    assert!(matches!(value.as_ref(), Value::F32(_)));
+    assert!(matches!(handle.value().unwrap(), Value::F32(_)));
 }
 
 #[tokio::test]
 async fn spec_integer_literals_unify_with_integral_context() {
-    let (heap, pointer, ty) = eval("let x: u64 = 4 in x").await.unwrap();
+    let (_heap, handle, ty) = eval("let x: u64 = 4 in x").await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::U64));
-    let value = heap.get(&pointer).unwrap();
-    match value.as_ref() {
-        Value::U64(n) => assert_eq!(*n, 4),
-        _ => panic!("expected u64, got {}", heap.type_name(&pointer).unwrap()),
+    match handle.value().unwrap() {
+        Value::U64(n) => assert_eq!(n, 4),
+        _ => panic!("expected u64, got {}", handle.type_name().unwrap()),
     }
 }
 
 #[tokio::test]
 async fn test_let_tuple_destructuring() {
-    let (heap, pointer, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in x")
+    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in x")
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match heap.get(&pointer).unwrap().as_ref() {
-        Value::I32(n) => assert_eq!(*n, 1),
-        _ => panic!("expected i32, got {}", heap.type_name(&pointer).unwrap()),
+    match handle.value().unwrap() {
+        Value::I32(n) => assert_eq!(n, 1),
+        _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
     }
-    let (heap, pointer, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in y")
+    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in y")
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    match heap.get(&pointer).unwrap().as_ref() {
+    match handle.value().unwrap() {
         Value::String(s) => assert_eq!(s, "Hello"),
-        _ => panic!("expected string, got {}", heap.type_name(&pointer).unwrap()),
+        _ => panic!("expected string, got {}", handle.type_name().unwrap()),
     }
-    let (heap, pointer, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in z")
+    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in z")
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
-    match heap.get(&pointer).unwrap().as_ref() {
-        Value::Bool(b) => assert!(*b),
-        _ => panic!("expected bool, got {}", heap.type_name(&pointer).unwrap()),
+    match handle.value().unwrap() {
+        Value::Bool(b) => assert!(b),
+        _ => panic!("expected bool, got {}", handle.type_name().unwrap()),
     }
 }
 
 #[tokio::test]
 async fn test_match_tuple_destructuring() {
-    let (heap, pointer, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> x")
+    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> x")
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match heap.get(&pointer).unwrap().as_ref() {
-        Value::I32(n) => assert_eq!(*n, 1),
-        _ => panic!("expected i32, got {}", heap.type_name(&pointer).unwrap()),
+    match handle.value().unwrap() {
+        Value::I32(n) => assert_eq!(n, 1),
+        _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
     }
-    let (heap, pointer, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> y")
+    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> y")
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    match heap.get(&pointer).unwrap().as_ref() {
+    match handle.value().unwrap() {
         Value::String(s) => assert_eq!(s, "Hello"),
-        _ => panic!("expected string, got {}", heap.type_name(&pointer).unwrap()),
+        _ => panic!("expected string, got {}", handle.type_name().unwrap()),
     }
-    let (heap, pointer, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> z")
+    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> z")
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
-    match heap.get(&pointer).unwrap().as_ref() {
-        Value::Bool(b) => assert!(*b),
-        _ => panic!("expected bool, got {}", heap.type_name(&pointer).unwrap()),
+    match handle.value().unwrap() {
+        Value::Bool(b) => assert!(b),
+        _ => panic!("expected bool, got {}", handle.type_name().unwrap()),
     }
 }
 
 #[tokio::test]
 async fn test_tuple_projection() {
-    let (heap, pointer, ty) = eval("let t = (4, \"Hello\", true) in t.0").await.unwrap();
+    let (_heap, handle, ty) = eval("let t = (4, \"Hello\", true) in t.0").await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match heap.get(&pointer).unwrap().as_ref() {
-        Value::I32(n) => assert_eq!(*n, 4),
-        _ => panic!("expected i32, got {}", heap.type_name(&pointer).unwrap()),
+    match handle.value().unwrap() {
+        Value::I32(n) => assert_eq!(n, 4),
+        _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
     }
-    let (heap, pointer, ty) = eval("let t = (4, \"Hello\", true) in t.1").await.unwrap();
+    let (_heap, handle, ty) = eval("let t = (4, \"Hello\", true) in t.1").await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    match heap.get(&pointer).unwrap().as_ref() {
+    match handle.value().unwrap() {
         Value::String(s) => assert_eq!(s, "Hello"),
-        _ => panic!("expected string, got {}", heap.type_name(&pointer).unwrap()),
+        _ => panic!("expected string, got {}", handle.type_name().unwrap()),
     }
-    let (heap, pointer, ty) = eval("let t = (4, \"Hello\", true) in t.2").await.unwrap();
+    let (_heap, handle, ty) = eval("let t = (4, \"Hello\", true) in t.2").await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
-    match heap.get(&pointer).unwrap().as_ref() {
-        Value::Bool(b) => assert!(*b),
-        _ => panic!("expected bool, got {}", heap.type_name(&pointer).unwrap()),
+    match handle.value().unwrap() {
+        Value::Bool(b) => assert!(b),
+        _ => panic!("expected bool, got {}", handle.type_name().unwrap()),
     }
 }

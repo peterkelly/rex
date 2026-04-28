@@ -1,9 +1,8 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Heap, Module, Parser, Pointer, Token, Type, TypeKind,
-    Value, assert_pointer_eq,
+    BuiltinTypeId, Engine, EngineError, Handle, Heap, Module, Parser, Token, Type, TypeKind, Value,
 };
 
-async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
+async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
@@ -11,7 +10,7 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let (pointer, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -19,7 +18,36 @@ async fn eval(code: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     .await
     .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();
-    Ok((heap, pointer, ty))
+    Ok((heap, handle, ty))
+}
+
+trait HandleRef {
+    fn handle_ref(&self) -> &Handle;
+}
+
+impl HandleRef for Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+impl HandleRef for &Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+macro_rules! assert_handle_eq {
+    ($lhs:expr, $rhs:expr) => {{
+        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
+        let rhs: Handle = HandleRef::handle_ref(&$rhs).clone();
+        assert!(
+            lhs.value_eq(&rhs).unwrap(),
+            "left: {}, right: {}",
+            lhs.display().unwrap(),
+            rhs.display().unwrap()
+        );
+    }};
 }
 
 fn assert_i32_or_var(ty: &Type) {
@@ -32,7 +60,7 @@ fn assert_i32_or_var(ty: &Type) {
 
 #[tokio::test]
 async fn let_rec_self_recursive_factorial() {
-    let (heap, pointer, ty) = eval(
+    let (heap, handle, ty) = eval(
         r#"
         let rec
             fact = \n ->
@@ -49,12 +77,12 @@ async fn let_rec_self_recursive_factorial() {
     .unwrap();
     assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(720).unwrap();
-    assert_pointer_eq!(&heap, &pointer, &expected);
+    assert_handle_eq!(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_self_recursive_fibonacci() {
-    let (heap, pointer, ty) = eval(
+    let (heap, handle, ty) = eval(
         r#"
         let rec
             fib = \n ->
@@ -70,12 +98,12 @@ async fn let_rec_self_recursive_fibonacci() {
     .unwrap();
     assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(21).unwrap();
-    assert_pointer_eq!(&heap, &pointer, &expected);
+    assert_handle_eq!(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_mutual_even_odd() {
-    let (heap, pointer, ty) = eval(
+    let (heap, handle, ty) = eval(
         r#"
         let rec
             even = \n -> if n == 0 then true else odd (n - 1),
@@ -101,12 +129,12 @@ async fn let_rec_mutual_even_odd() {
     let t2 = heap.alloc_bool(false).unwrap();
     let t3 = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
-    assert_pointer_eq!(&heap, &pointer, &expected);
+    assert_handle_eq!(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_mutual_three_function_group() {
-    let (heap, pointer, ty) = eval(
+    let (heap, handle, ty) = eval(
         r#"
         let rec
             step0 = \n -> if n == 0 then 0 else step1 (n - 1),
@@ -130,12 +158,12 @@ async fn let_rec_mutual_three_function_group() {
     let b = heap.alloc_i32(1).unwrap();
     let c = heap.alloc_i32(2).unwrap();
     let expected = heap.alloc_tuple(vec![a, b, c]).unwrap();
-    assert_pointer_eq!(&heap, &pointer, &expected);
+    assert_handle_eq!(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_function_is_still_polymorphic() {
-    let (heap, pointer, ty) = eval(
+    let (heap, handle, ty) = eval(
         r#"
         let rec
             id = \x -> x
@@ -154,12 +182,12 @@ async fn let_rec_function_is_still_polymorphic() {
     let one = heap.alloc_i32(1).unwrap();
     let tru = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![one, tru]).unwrap();
-    assert_pointer_eq!(&heap, &pointer, &expected);
+    assert_handle_eq!(&handle, &expected);
 }
 
 #[tokio::test]
 async fn let_rec_allows_self_referential_data_cycles() {
-    let (heap, pointer, ty) = eval(
+    let (_heap, handle, ty) = eval(
         r#"
         let rec
             xs = Cons 1 xs
@@ -170,21 +198,20 @@ async fn let_rec_allows_self_referential_data_cycles() {
     .await
     .unwrap();
     assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
-    let value = heap.get(&pointer).unwrap();
-    let Value::Adt(tag, args) = value.as_ref() else {
+    let Value::Adt(tag, args) = handle.value().unwrap() else {
         panic!(
             "expected list constructor, got {}",
-            heap.type_name(&pointer).unwrap()
+            handle.type_name().unwrap()
         );
     };
     assert_eq!(tag.as_ref(), "Cons");
     assert_eq!(args.len(), 2);
-    assert_pointer_eq!(&heap, &pointer, &args[1]);
+    assert_handle_eq!(&handle, &args[1]);
 }
 
 #[tokio::test]
 async fn let_rec_allows_mutual_data_cycles() {
-    let (heap, pointer, ty) = eval(
+    let (_heap, handle, ty) = eval(
         r#"
         let rec
             a = Cons 1 b,
@@ -202,31 +229,28 @@ async fn let_rec_allows_mutual_data_cycles() {
             Type::list(Type::builtin(BuiltinTypeId::I32)),
         ])
     );
-    let tuple = heap.get(&pointer).unwrap();
-    let Value::Tuple(items) = tuple.as_ref() else {
-        panic!("expected tuple, got {}", heap.type_name(&pointer).unwrap());
+    let Value::Tuple(items) = handle.value().unwrap() else {
+        panic!("expected tuple, got {}", handle.type_name().unwrap());
     };
     assert_eq!(items.len(), 2);
-    let a_ptr = items[0];
-    let b_ptr = items[1];
+    let a_handle = items[0].clone();
+    let b_handle = items[1].clone();
 
-    let a_val = heap.get(&a_ptr).unwrap();
-    let Value::Adt(_, a_args) = a_val.as_ref() else {
+    let Value::Adt(_, a_args) = a_handle.value().unwrap() else {
         panic!(
             "expected list constructor, got {}",
-            heap.type_name(&a_ptr).unwrap()
+            a_handle.type_name().unwrap()
         );
     };
     assert_eq!(a_args.len(), 2);
 
-    let b_val = heap.get(&b_ptr).unwrap();
-    let Value::Adt(_, b_args) = b_val.as_ref() else {
+    let Value::Adt(_, b_args) = b_handle.value().unwrap() else {
         panic!(
             "expected list constructor, got {}",
-            heap.type_name(&b_ptr).unwrap()
+            b_handle.type_name().unwrap()
         );
     };
     assert_eq!(b_args.len(), 2);
-    assert_pointer_eq!(&heap, &a_args[1], &b_ptr);
-    assert_pointer_eq!(&heap, &b_args[1], &a_ptr);
+    assert_handle_eq!(&a_args[1], &b_handle);
+    assert_handle_eq!(&b_args[1], &a_handle);
 }

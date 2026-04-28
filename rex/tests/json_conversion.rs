@@ -1,6 +1,6 @@
 use rex::{
-    AdtDecl, BuiltinTypeId, Engine, EngineError, EnumPatch, Heap, JsonOptions, Parser, Pointer,
-    Program, ReplState, Rex, Token, Type, TypeSystem, TypeVarSupply, intern, json_to_rex,
+    AdtDecl, BuiltinTypeId, Engine, EngineError, EnumPatch, Handle, Heap, JsonOptions, Parser,
+    Program, ReplState, Rex, Token, Type, TypeSystem, TypeVarSupply, Value, intern, json_to_rex,
     rex_to_json, sym,
 };
 use serde::Serialize;
@@ -50,20 +50,8 @@ struct EvalJsonRecord {
     values: Vec<i32>,
 }
 
-fn assert_eval_json(
-    engine: &Engine<()>,
-    pointer: &Pointer,
-    typ: &Type,
-    expected: serde_json::Value,
-) {
-    let actual = rex_to_json(
-        &engine.heap,
-        pointer,
-        typ,
-        &engine.type_system,
-        &JsonOptions::default(),
-    )
-    .unwrap();
+fn assert_eval_json(engine: &Engine<()>, handle: &Handle, typ: &Type, expected: serde_json::Value) {
+    let actual = rex_to_json(handle, typ, &engine.type_system, &JsonOptions::default()).unwrap();
     assert_eq!(actual, expected);
 }
 
@@ -80,8 +68,8 @@ fn primitive_roundtrip() {
     ];
 
     for (ty, expected_json) in cases {
-        let ptr = json_to_rex(&heap, &expected_json, &ty, &ts, &opts).unwrap();
-        let actual_json = rex_to_json(&heap, &ptr, &ty, &ts, &opts).unwrap();
+        let handle = json_to_rex(&heap, &expected_json, &ty, &ts, &opts).unwrap();
+        let actual_json = rex_to_json(&handle, &ty, &ts, &opts).unwrap();
         assert_eq!(actual_json, expected_json);
     }
 }
@@ -96,14 +84,14 @@ fn option_and_result_roundtrip() {
     let some = json!(9);
     let none = serde_json::Value::Null;
 
-    let some_ptr = json_to_rex(&heap, &some, &opt_ty, &ts, &opts).unwrap();
-    let none_ptr = json_to_rex(&heap, &none, &opt_ty, &ts, &opts).unwrap();
+    let some_handle = json_to_rex(&heap, &some, &opt_ty, &ts, &opts).unwrap();
+    let none_handle = json_to_rex(&heap, &none, &opt_ty, &ts, &opts).unwrap();
     assert_eq!(
-        rex_to_json(&heap, &some_ptr, &opt_ty, &ts, &opts).unwrap(),
+        rex_to_json(&some_handle, &opt_ty, &ts, &opts).unwrap(),
         some
     );
     assert_eq!(
-        rex_to_json(&heap, &none_ptr, &opt_ty, &ts, &opts).unwrap(),
+        rex_to_json(&none_handle, &opt_ty, &ts, &opts).unwrap(),
         none
     );
 
@@ -113,14 +101,14 @@ fn option_and_result_roundtrip() {
     );
     let ok_json = json!({ "Ok": 1 });
     let err_json = json!({ "Err": "bad" });
-    let ok_ptr = json_to_rex(&heap, &ok_json, &res_ty, &ts, &opts).unwrap();
-    let err_ptr = json_to_rex(&heap, &err_json, &res_ty, &ts, &opts).unwrap();
+    let ok_handle = json_to_rex(&heap, &ok_json, &res_ty, &ts, &opts).unwrap();
+    let err_handle = json_to_rex(&heap, &err_json, &res_ty, &ts, &opts).unwrap();
     assert_eq!(
-        rex_to_json(&heap, &ok_ptr, &res_ty, &ts, &opts).unwrap(),
+        rex_to_json(&ok_handle, &res_ty, &ts, &opts).unwrap(),
         ok_json
     );
     assert_eq!(
-        rex_to_json(&heap, &err_ptr, &res_ty, &ts, &opts).unwrap(),
+        rex_to_json(&err_handle, &res_ty, &ts, &opts).unwrap(),
         err_json
     );
 }
@@ -133,13 +121,15 @@ fn promise_roundtrip_from_json() {
     let promise_ty = Type::promise(Type::builtin(BuiltinTypeId::I32));
     let promise_json = json!(fixed_uuid());
 
-    let promise_ptr = json_to_rex(&heap, &promise_json, &promise_ty, &ts, &opts).unwrap();
-    let (tag, args) = heap.pointer_as_adt(&promise_ptr).unwrap();
+    let promise_handle = json_to_rex(&heap, &promise_json, &promise_ty, &ts, &opts).unwrap();
+    let Value::Adt(tag, args) = promise_handle.value().unwrap() else {
+        panic!("expected Promise ADT");
+    };
     assert_eq!(tag.as_ref(), "Promise");
     assert_eq!(args.len(), 1);
-    assert_eq!(heap.pointer_as_uuid(&args[0]).unwrap(), fixed_uuid());
+    assert_eq!(args[0].to_rust::<Uuid>().unwrap(), fixed_uuid());
     assert_eq!(
-        rex_to_json(&heap, &promise_ptr, &promise_ty, &ts, &opts).unwrap(),
+        rex_to_json(&promise_handle, &promise_ty, &ts, &opts).unwrap(),
         promise_json
     );
 }
@@ -151,16 +141,18 @@ fn promise_roundtrip_from_runtime_value() {
     let opts = JsonOptions::default();
     let promise_ty = Type::promise(Type::builtin(BuiltinTypeId::String));
     let promise_id = heap.alloc_uuid(fixed_uuid()).unwrap();
-    let promise_ptr = heap.alloc_adt(sym("Promise"), vec![promise_id]).unwrap();
+    let promise_handle = heap.alloc_adt(sym("Promise"), vec![promise_id]).unwrap();
 
-    let promise_json = rex_to_json(&heap, &promise_ptr, &promise_ty, &ts, &opts).unwrap();
+    let promise_json = rex_to_json(&promise_handle, &promise_ty, &ts, &opts).unwrap();
     assert_eq!(promise_json, json!(fixed_uuid()));
 
-    let roundtrip_ptr = json_to_rex(&heap, &promise_json, &promise_ty, &ts, &opts).unwrap();
-    let (tag, args) = heap.pointer_as_adt(&roundtrip_ptr).unwrap();
+    let roundtrip_handle = json_to_rex(&heap, &promise_json, &promise_ty, &ts, &opts).unwrap();
+    let Value::Adt(tag, args) = roundtrip_handle.value().unwrap() else {
+        panic!("expected Promise ADT");
+    };
     assert_eq!(tag.as_ref(), "Promise");
     assert_eq!(args.len(), 1);
-    assert_eq!(heap.pointer_as_uuid(&args[0]).unwrap(), fixed_uuid());
+    assert_eq!(args[0].to_rust::<Uuid>().unwrap(), fixed_uuid());
 }
 
 #[test]
@@ -171,17 +163,21 @@ fn json_array_maps_to_array_not_list() {
     let array_json = json!([1, 2, 3]);
 
     let array_ty = Type::array(Type::builtin(BuiltinTypeId::I32));
-    let array_ptr = json_to_rex(&heap, &array_json, &array_ty, &ts, &opts).unwrap();
-    let items = heap.pointer_as_array(&array_ptr).unwrap();
+    let array_handle = json_to_rex(&heap, &array_json, &array_ty, &ts, &opts).unwrap();
+    let Value::Array(items) = array_handle.value().unwrap() else {
+        panic!("expected array");
+    };
     assert_eq!(items.len(), 3);
     assert_eq!(
-        rex_to_json(&heap, &array_ptr, &array_ty, &ts, &opts).unwrap(),
+        rex_to_json(&array_handle, &array_ty, &ts, &opts).unwrap(),
         array_json
     );
 
     let list_ty = Type::list(Type::builtin(BuiltinTypeId::I32));
-    let list_ptr = json_to_rex(&heap, &array_json, &list_ty, &ts, &opts).unwrap();
-    let (tag, _args) = heap.pointer_as_adt(&list_ptr).unwrap();
+    let list_handle = json_to_rex(&heap, &array_json, &list_ty, &ts, &opts).unwrap();
+    let Value::Adt(tag, _args) = list_handle.value().unwrap() else {
+        panic!("expected list ADT");
+    };
     assert_eq!(tag.as_ref(), "Cons");
 }
 
@@ -205,12 +201,14 @@ fn struct_like_single_variant_adt_roundtrip() {
     let foo_ty = Type::con("Foo", 0);
     let foo_json = json!({ "a": 42, "b": "Hello" });
 
-    let foo_ptr = json_to_rex(&heap, &foo_json, &foo_ty, &ts, &opts).unwrap();
-    let (tag, args) = heap.pointer_as_adt(&foo_ptr).unwrap();
+    let foo_handle = json_to_rex(&heap, &foo_json, &foo_ty, &ts, &opts).unwrap();
+    let Value::Adt(tag, args) = foo_handle.value().unwrap() else {
+        panic!("expected Foo ADT");
+    };
     assert_eq!(tag.as_ref(), "Foo");
     assert_eq!(args.len(), 1);
     assert_eq!(
-        rex_to_json(&heap, &foo_ptr, &foo_ty, &ts, &opts).unwrap(),
+        rex_to_json(&foo_handle, &foo_ty, &ts, &opts).unwrap(),
         foo_json
     );
 }
@@ -226,8 +224,8 @@ fn unit_enum_string_roundtrip() {
     let color_ty = Type::con("Color", 0);
 
     for v in [json!("Red"), json!("Green"), json!("Blue")] {
-        let ptr = json_to_rex(&heap, &v, &color_ty, &ts, &opts).unwrap();
-        let actual = rex_to_json(&heap, &ptr, &color_ty, &ts, &opts).unwrap();
+        let handle = json_to_rex(&heap, &v, &color_ty, &ts, &opts).unwrap();
+        let actual = rex_to_json(&handle, &color_ty, &ts, &opts).unwrap();
         assert_eq!(actual, v);
     }
 }
@@ -246,21 +244,17 @@ fn unit_enum_integer_roundtrip_with_patches() {
     let red = heap.alloc_adt(sym("Red"), vec![]).unwrap();
     let green = heap.alloc_adt(sym("Green"), vec![]).unwrap();
     let blue = heap.alloc_adt(sym("Blue"), vec![]).unwrap();
+    assert_eq!(rex_to_json(&red, &color_ty, &ts, &opts).unwrap(), json!(0));
     assert_eq!(
-        rex_to_json(&heap, &red, &color_ty, &ts, &opts).unwrap(),
-        json!(0)
-    );
-    assert_eq!(
-        rex_to_json(&heap, &green, &color_ty, &ts, &opts).unwrap(),
+        rex_to_json(&green, &color_ty, &ts, &opts).unwrap(),
         json!(1)
     );
-    assert_eq!(
-        rex_to_json(&heap, &blue, &color_ty, &ts, &opts).unwrap(),
-        json!(2)
-    );
+    assert_eq!(rex_to_json(&blue, &color_ty, &ts, &opts).unwrap(), json!(2));
 
-    let ptr = json_to_rex(&heap, &json!(2), &color_ty, &ts, &opts).unwrap();
-    let (tag, args) = heap.pointer_as_adt(&ptr).unwrap();
+    let handle = json_to_rex(&heap, &json!(2), &color_ty, &ts, &opts).unwrap();
+    let Value::Adt(tag, args) = handle.value().unwrap() else {
+        panic!("expected enum ADT");
+    };
     assert_eq!(tag.as_ref(), "Blue");
     assert!(args.is_empty());
 
@@ -278,21 +272,20 @@ fn unit_enum_integer_roundtrip_with_patches() {
         ],
     );
 
+    assert_eq!(rex_to_json(&red, &color_ty, &ts, &opts).unwrap(), json!(10));
     assert_eq!(
-        rex_to_json(&heap, &red, &color_ty, &ts, &opts).unwrap(),
-        json!(10)
-    );
-    assert_eq!(
-        rex_to_json(&heap, &green, &color_ty, &ts, &opts).unwrap(),
+        rex_to_json(&green, &color_ty, &ts, &opts).unwrap(),
         json!(1)
     );
     assert_eq!(
-        rex_to_json(&heap, &blue, &color_ty, &ts, &opts).unwrap(),
+        rex_to_json(&blue, &color_ty, &ts, &opts).unwrap(),
         json!(42)
     );
 
     let blue_from_patch = json_to_rex(&heap, &json!(42), &color_ty, &ts, &opts).unwrap();
-    let (tag, args) = heap.pointer_as_adt(&blue_from_patch).unwrap();
+    let Value::Adt(tag, args) = blue_from_patch.value().unwrap() else {
+        panic!("expected enum ADT");
+    };
     assert_eq!(tag.as_ref(), "Blue");
     assert!(args.is_empty());
 }
@@ -333,27 +326,27 @@ async fn eval_entry_points_return_type_for_json_eval() {
         expected_json
     );
     let expr_program = parse_program(rex_code);
-    let (ptr_eval, ty_eval) = rex::Evaluator::new_with_compiler(
+    let (handle_eval, ty_eval) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
     .eval(expr_program.expr.as_ref())
     .await
     .unwrap();
-    assert_eval_json(&engine, &ptr_eval, &ty_eval, expected_json.clone());
-    let (ptr_snippet, ty_snippet) = rex::Evaluator::new_with_compiler(
+    assert_eval_json(&engine, &handle_eval, &ty_eval, expected_json.clone());
+    let (handle_snippet, ty_snippet) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
     .eval_snippet(rex_code)
     .await
     .unwrap();
-    assert_eval_json(&engine, &ptr_snippet, &ty_snippet, expected_json.clone());
+    assert_eval_json(&engine, &handle_snippet, &ty_snippet, expected_json.clone());
 
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let (ptr_snippet_at, ty_snippet_at) = rex::Evaluator::new_with_compiler(
+    let (handle_snippet_at, ty_snippet_at) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -362,19 +355,19 @@ async fn eval_entry_points_return_type_for_json_eval() {
     .unwrap();
     assert_eval_json(
         &engine,
-        &ptr_snippet_at,
+        &handle_snippet_at,
         &ty_snippet_at,
         expected_json.clone(),
     );
 
     let repl_program = parse_program(rex_code);
     let mut repl_state = ReplState::new();
-    let (ptr_repl, ty_repl) = rex::Evaluator::new_with_compiler(
+    let (handle_repl, ty_repl) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
     .eval_repl_program(&repl_program, &mut repl_state)
     .await
     .unwrap();
-    assert_eval_json(&engine, &ptr_repl, &ty_repl, expected_json);
+    assert_eval_json(&engine, &handle_repl, &ty_repl, expected_json);
 }

@@ -1,7 +1,4 @@
-use rex::{
-    BuiltinTypeId, Engine, Module, Parser, Token, Type, TypeKind, ValueDisplayOptions,
-    pointer_display_with,
-};
+use rex::{BuiltinTypeId, Engine, Module, Parser, Token, Type, TypeKind, ValueDisplayOptions};
 
 fn type_compatible(actual: &Type, expected: &Type) -> bool {
     match (actual.as_ref(), expected.as_ref()) {
@@ -34,7 +31,7 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).map_err(|e| format!("{e}"))?;
-    let (pointer, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -49,7 +46,7 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
         include_numeric_suffixes: true,
         ..ValueDisplayOptions::default()
     };
-    pointer_display_with(&engine.heap, &pointer, opts).map_err(|e| format!("{e}"))
+    handle.display_with(opts).map_err(|e| format!("{e}"))
 }
 
 async fn assert_eval(code: &str, expected: &str, expected_ty: Type) {

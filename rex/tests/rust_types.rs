@@ -1,6 +1,6 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, FromPointer, Heap, Module, Parser, Pointer, Rex, RexType,
-    Token, Type, assert_pointer_eq, sym,
+    BuiltinTypeId, Engine, EngineError, FromRex, Handle, Heap, Module, Parser, Rex, RexType, Token,
+    Type, Value, sym,
 };
 use serde_json::json;
 
@@ -13,8 +13,8 @@ fn inject_globals(
     engine.inject_module(module).unwrap();
 }
 
-/// Helper to evaluate a Rex expression and return the result pointer
-async fn eval_expr(engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
+/// Helper to evaluate a Rex expression and return the result handle.
+async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
     let (value, ty) = rex::Evaluator::new_with_compiler(
@@ -26,6 +26,35 @@ async fn eval_expr(engine: Engine<()>, expr: &str) -> (Pointer, Heap, Type) {
     .unwrap();
     let heap = engine.into_heap();
     (value, heap, ty)
+}
+
+trait HandleRef {
+    fn handle_ref(&self) -> &Handle;
+}
+
+impl HandleRef for Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+impl HandleRef for &Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+macro_rules! assert_handle_eq {
+    ($lhs:expr, $rhs:expr $(,)?) => {{
+        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
+        let rhs: Handle = HandleRef::handle_ref(&$rhs).clone();
+        assert!(
+            lhs.value_eq(&rhs).unwrap(),
+            "left: {}, right: {}",
+            lhs.display().unwrap(),
+            rhs.display().unwrap()
+        );
+    }};
 }
 
 /// Helper to infer the type of a Rex expression
@@ -48,8 +77,7 @@ async fn vec_from_value() {
     let (result, heap, ty) =
         eval_expr(engine, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_string("accept_vec: [1, 2, 3]".to_string())
             .unwrap(),
@@ -69,8 +97,7 @@ async fn vec_from_value_accepts_list_literal_without_conversion() {
 
     let (result, heap, ty) = eval_expr(engine, r#"accept_vec [1, 2, 3]"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_string("accept_vec: [1, 2, 3]".to_string())
             .unwrap(),
@@ -90,8 +117,7 @@ async fn vec_to_value() {
 
     let (result, heap, ty) = eval_expr(engine, r#"return_vec "hello""#).await;
     assert_eq!(ty, Type::array(Type::builtin(BuiltinTypeId::I32)));
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_array(vec![
             heap.alloc_i32(0).unwrap(),
@@ -144,7 +170,7 @@ async fn to_list_allows_pattern_matching_host_arrays() {
     )
     .await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&heap, result, heap.alloc_i32(0).unwrap());
+    assert_handle_eq!(result, heap.alloc_i32(0).unwrap());
 }
 
 #[tokio::test]
@@ -162,8 +188,7 @@ async fn option_prelude() {
             Type::option(Type::builtin(BuiltinTypeId::I32)),
         ])
     );
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(4).unwrap()])
@@ -192,8 +217,7 @@ async fn option_from_value() {
             Type::builtin(BuiltinTypeId::String)
         ])
     );
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_opt: Some(4)".to_string())
@@ -226,8 +250,7 @@ async fn option_into_value() {
             Type::option(Type::builtin(BuiltinTypeId::I32)),
         ])
     );
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(5).unwrap()])
@@ -284,8 +307,7 @@ async fn result_prelude() {
             ),
         ])
     );
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Ok"), vec![heap.alloc_i32(42).unwrap()])
@@ -322,8 +344,7 @@ async fn result_from_value_primitives() {
             Type::builtin(BuiltinTypeId::String)
         ])
     );
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_result: Ok(42)".to_string())
@@ -357,8 +378,7 @@ async fn result_from_value_different_primitives() {
             Type::builtin(BuiltinTypeId::String)
         ])
     );
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("accept_result: Ok(3.14)".to_string())
@@ -399,8 +419,7 @@ async fn result_into_value_primitives() {
             ),
         ])
     );
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_adt(sym("Ok"), vec![heap.alloc_i32(5).unwrap()])
@@ -487,8 +506,7 @@ async fn result_from_value_custom_types() {
         ])
     );
 
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
             heap.alloc_string("Ok: Point(10, 20)".to_string()).unwrap(),
@@ -519,7 +537,7 @@ async fn result_into_value_custom_types() {
         module.export("return_result", return_result)
     });
 
-    let (result, heap, ty) =
+    let (result, _heap, ty) =
         eval_expr(engine, r#"(return_result true, return_result false)"#).await;
     assert_eq!(
         ty,
@@ -529,11 +547,13 @@ async fn result_into_value_custom_types() {
         ])
     );
 
-    let tuple_ptrs = heap.pointer_as_tuple(&result).unwrap();
-    assert_eq!(tuple_ptrs.len(), 2);
+    let Value::Tuple(tuple_values) = result.value().unwrap() else {
+        panic!("expected tuple");
+    };
+    assert_eq!(tuple_values.len(), 2);
 
-    let ok_result = <Result<Point, ErrorInfo>>::from_pointer(&heap, &tuple_ptrs[0]).unwrap();
-    let err_result = <Result<Point, ErrorInfo>>::from_pointer(&heap, &tuple_ptrs[1]).unwrap();
+    let ok_result = <Result<Point, ErrorInfo>>::from_rex(&tuple_values[0]).unwrap();
+    let err_result = <Result<Point, ErrorInfo>>::from_rex(&tuple_values[1]).unwrap();
 
     assert_eq!(ok_result, Ok(Point { x: 100, y: 200 }));
     assert_eq!(
@@ -546,7 +566,7 @@ async fn result_into_value_custom_types() {
 }
 
 #[tokio::test]
-async fn serde_json_value_into_pointer() {
+async fn serde_json_value_into_rex() {
     fn return_json(_state: &(), key: String) -> Result<serde_json::Value, EngineError> {
         Ok(json!({
             "key": key,
@@ -563,21 +583,23 @@ async fn serde_json_value_into_pointer() {
         module.export("return_json", return_json)
     });
 
-    let (result, heap, ty) = eval_expr(engine, r#"return_json "test_key""#).await;
+    let (result, _heap, ty) = eval_expr(engine, r#"return_json "test_key""#).await;
     assert_eq!(ty, Type::con("serde_json::Value", 0));
 
-    let (tag, args) = heap.pointer_as_adt(&result).unwrap();
+    let Value::Adt(tag, args) = result.value().unwrap() else {
+        panic!("expected serde_json::Value ADT");
+    };
     assert_eq!(tag.as_ref(), "serde_json::Value");
     assert_eq!(args.len(), 1);
 
-    let json_string = heap.pointer_as_string(&args[0]).unwrap();
+    let json_string = args[0].to_rust::<String>().unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_string).unwrap();
     assert_eq!(parsed["key"], "test_key");
     assert_eq!(parsed["count"], 42);
 }
 
 #[tokio::test]
-async fn serde_json_value_from_pointer() {
+async fn serde_json_value_from_rex() {
     fn accept_json(_state: &(), value: serde_json::Value) -> Result<String, EngineError> {
         Ok(format!(
             "key={}, count={}",
@@ -595,8 +617,7 @@ async fn serde_json_value_from_pointer() {
     let (result, heap, ty) = eval_expr(engine, r#"accept_json test_json"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
 
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_string("key=manual_key, count=99".to_string())
             .unwrap(),
@@ -625,10 +646,10 @@ async fn serde_json_value_roundtrip() {
         module.export_value("test_json", original.clone())
     });
 
-    let (result, heap, ty) = eval_expr(engine, r#"roundtrip test_json"#).await;
+    let (result, _heap, ty) = eval_expr(engine, r#"roundtrip test_json"#).await;
     assert_eq!(ty, Type::con("serde_json::Value", 0));
 
-    let result_value = serde_json::Value::from_pointer(&heap, &result).unwrap();
+    let result_value = serde_json::Value::from_rex(&result).unwrap();
     assert_eq!(result_value, original);
 }
 
@@ -682,8 +703,7 @@ async fn serde_json_value_primitives() {
     .await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
 
-    assert_pointer_eq!(
-        &heap,
+    assert_handle_eq!(
         result,
         heap.alloc_string("null=true, bool=true, num=42, str=hello".to_string())
             .unwrap(),

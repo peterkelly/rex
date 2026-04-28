@@ -8,7 +8,7 @@ use std::io::{self, BufRead, Read, Write};
 use clap::{Args, Parser, Subcommand};
 use rex::{
     Engine, Parser as RexParser, ParserErr, ParserLimits, Program, ReplState, Token,
-    ValueDisplayOptions, pointer_display_with,
+    ValueDisplayOptions,
 };
 use serde_json::json;
 
@@ -301,9 +301,9 @@ async fn repl_loop(include: Vec<String>, parser_limits: ParserLimits) -> Result<
         .await
         {
             Ok((v, _)) => {
-                let rendered =
-                    pointer_display_with(&engine.heap, &v, ValueDisplayOptions::unsanitized())
-                        .unwrap_or_else(|e| format!("<display error: {e}>"));
+                let rendered = v
+                    .display_with(ValueDisplayOptions::unsanitized())
+                    .unwrap_or_else(|e| format!("<display error: {e}>"));
                 println!("{rendered}");
             }
             Err(e) => eprintln!("error: {e}"),
@@ -387,7 +387,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         rex::Compiler::new(engine.clone()),
     );
 
-    let (pointer, _) = if let Some(path) = file {
+    let (value, _) = if let Some(path) = file {
         if snippet {
             evaluator
                 .eval_snippet_at(source, &path)
@@ -405,7 +405,8 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
             .await
             .map_err(|e| format!("{e}"))?
     };
-    let rendered = pointer_display_with(&engine.heap, &pointer, ValueDisplayOptions::unsanitized())
+    let rendered = value
+        .display_with(ValueDisplayOptions::unsanitized())
         .unwrap_or_else(|e| format!("<display error: {e}>"));
     println!("{rendered}");
     Ok(())

@@ -24,7 +24,7 @@ async fn record_update_end_to_end() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let (value_ptr, ty) = rex::Evaluator::new_with_compiler(
+    let (value_handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -38,36 +38,19 @@ async fn record_update_end_to_end() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let value = engine
-        .heap
-        .get(&value_ptr)
-        .map(|value| value.as_ref().clone())
-        .unwrap();
-
-    let Value::Tuple(items) = value else {
-        panic!(
-            "expected tuple, got {}",
-            engine.heap.type_name(&value_ptr).unwrap()
-        );
+    let Value::Tuple(items) = value_handle.value().unwrap() else {
+        panic!("expected tuple, got {}", value_handle.type_name().unwrap());
     };
     assert_eq!(items.len(), 2);
 
-    let a_ptr = &items[0];
-    let a_value = engine.heap.get(a_ptr).unwrap();
-    let Value::I32(a) = a_value.as_ref() else {
-        panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(a_ptr).unwrap()
-        );
+    let a_handle = &items[0];
+    let Value::I32(a) = a_handle.value().unwrap() else {
+        panic!("expected i32, got {}", a_handle.type_name().unwrap());
     };
-    let b_ptr = &items[1];
-    let b_value = engine.heap.get(b_ptr).unwrap();
-    let Value::I32(b) = b_value.as_ref() else {
-        panic!(
-            "expected i32, got {}",
-            engine.heap.type_name(b_ptr).unwrap()
-        );
+    let b_handle = &items[1];
+    let Value::I32(b) = b_handle.value().unwrap() else {
+        panic!("expected i32, got {}", b_handle.type_name().unwrap());
     };
-    assert_eq!(*a, 6);
-    assert_eq!(*b, 2);
+    assert_eq!(a, 6);
+    assert_eq!(b, 2);
 }

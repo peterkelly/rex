@@ -4,7 +4,7 @@ use lsp_types::{
 };
 use rex::{Engine, Parser, Token};
 use rex_ast::expr::{Decl, Expr, TypeExpr};
-use rex_engine::{ValueDisplayOptions, pointer_display_with};
+use rex_engine::ValueDisplayOptions;
 use rex_lsp::server::*;
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -59,22 +59,19 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     let mut module = rex_engine::Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).expect("inject decls");
-    let (ptr, ty) = rex_engine::Evaluator::new_with_compiler(
+    let (handle, ty) = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
     .expect("evaluate source");
-    let display = pointer_display_with(
-        &engine.heap,
-        &ptr,
-        ValueDisplayOptions {
+    let display = handle
+        .display_with(ValueDisplayOptions {
             include_numeric_suffixes: true,
             ..ValueDisplayOptions::default()
-        },
-    )
-    .expect("display value");
+        })
+        .expect("display value");
     (display, ty.to_string())
 }
 

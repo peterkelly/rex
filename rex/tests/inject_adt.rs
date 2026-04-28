@@ -1,9 +1,22 @@
 use std::collections::BTreeMap;
 
 use rex::{
-    AdtDecl, BuiltinTypeId, Engine, EngineError, FromPointer, Heap, IntoPointer, Parser, Pointer,
-    Rex, RexAdt, RexType, Token, Type, TypeVarSupply, assert_pointer_eq, sym,
+    AdtDecl, BuiltinTypeId, Engine, EngineError, FromRex, Handle, Heap, IntoRex, Parser, Rex,
+    RexAdt, RexType, Token, Type, TypeVarSupply, Value, sym,
 };
+
+macro_rules! assert_handle_eq {
+    ($lhs:expr, $rhs:expr) => {{
+        let lhs: Handle = ($lhs).clone();
+        let rhs: Handle = ($rhs).clone();
+        assert!(
+            lhs.value_eq(&rhs).unwrap(),
+            "left: {}, right: {}",
+            lhs.display().unwrap(),
+            rhs.display().unwrap()
+        );
+    }};
+}
 
 #[derive(Debug, Clone, PartialEq)]
 struct ManualRecord {
@@ -45,41 +58,51 @@ impl RexType for ManualRecord {
     }
 }
 
-impl IntoPointer for ManualRecord {
-    fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
+impl IntoRex for ManualRecord {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         let mut fields = BTreeMap::new();
-        fields.insert(sym("enabled"), self.enabled.into_pointer(heap)?);
-        fields.insert(sym("count"), self.count.into_pointer(heap)?);
+        fields.insert(sym("enabled"), self.enabled.into_rex(heap)?);
+        fields.insert(sym("count"), self.count.into_rex(heap)?);
         let dict = heap.alloc_dict(fields)?;
         heap.alloc_adt(sym("ManualRecord"), vec![dict])
     }
 }
 
-impl FromPointer for ManualRecord {
-    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        let (tag, args) = heap.pointer_as_adt(pointer)?;
+impl FromRex for ManualRecord {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        let Value::Adt(tag, args) = handle.value()? else {
+            return Err(EngineError::NativeType {
+                expected: "ManualRecord".into(),
+                got: handle.type_name()?.into(),
+            });
+        };
         if tag.as_ref() != "ManualRecord" || args.len() != 1 {
             return Err(EngineError::NativeType {
                 expected: "ManualRecord".into(),
-                got: heap.type_name(pointer)?.into(),
+                got: handle.type_name()?.into(),
             });
         }
 
-        let fields = heap.pointer_as_dict(&args[0])?;
+        let Value::Dict(fields) = args[0].value()? else {
+            return Err(EngineError::NativeType {
+                expected: "dict".into(),
+                got: args[0].type_name()?.into(),
+            });
+        };
         let enabled = fields
             .get(&sym("enabled"))
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `enabled`".into(),
                 got: "dict".into(),
             })
-            .and_then(|p| bool::from_pointer(heap, p))?;
+            .and_then(bool::from_rex)?;
         let count = fields
             .get(&sym("count"))
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `count`".into(),
                 got: "dict".into(),
             })
-            .and_then(|p| i32::from_pointer(heap, p))?;
+            .and_then(i32::from_rex)?;
 
         Ok(Self { enabled, count })
     }
@@ -96,34 +119,39 @@ impl RexType for ManualEnum {
     }
 }
 
-impl IntoPointer for ManualEnum {
-    fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
+impl IntoRex for ManualEnum {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         match self {
             Self::Flag(value) => {
-                let value = value.into_pointer(heap)?;
+                let value = value.into_rex(heap)?;
                 heap.alloc_adt(sym("Flag"), vec![value])
             }
             Self::Count(value) => {
-                let value = value.into_pointer(heap)?;
+                let value = value.into_rex(heap)?;
                 heap.alloc_adt(sym("Count"), vec![value])
             }
         }
     }
 }
 
-impl FromPointer for ManualEnum {
-    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        let (tag, args) = heap.pointer_as_adt(pointer)?;
+impl FromRex for ManualEnum {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        let Value::Adt(tag, args) = handle.value()? else {
+            return Err(EngineError::NativeType {
+                expected: "ManualEnum".into(),
+                got: handle.type_name()?.into(),
+            });
+        };
         if tag.as_ref() == "Flag" && args.len() == 1 {
-            return Ok(Self::Flag(bool::from_pointer(heap, &args[0])?));
+            return Ok(Self::Flag(bool::from_rex(&args[0])?));
         }
         if tag.as_ref() == "Count" && args.len() == 1 {
-            return Ok(Self::Count(i32::from_pointer(heap, &args[0])?));
+            return Ok(Self::Count(i32::from_rex(&args[0])?));
         }
 
         Err(EngineError::NativeType {
             expected: "ManualEnum".into(),
-            got: heap.type_name(pointer)?.into(),
+            got: handle.type_name()?.into(),
         })
     }
 }
@@ -159,7 +187,7 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let tokens = Token::tokenize("ManualRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (ptr, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -167,7 +195,7 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     .await
     .unwrap();
     assert_eq!(ty, ManualRecord::rex_type());
-    let decoded = ManualRecord::from_pointer(&engine.heap, &ptr).unwrap();
+    let decoded = ManualRecord::from_rex(&handle).unwrap();
     assert_eq!(
         decoded,
         ManualRecord {
@@ -185,7 +213,7 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     let tokens = Token::tokenize("DerivedRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (ptr, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -193,7 +221,7 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     .await
     .unwrap();
     assert_eq!(ty, DerivedRecord::rex_type());
-    let decoded = DerivedRecord::from_pointer(&engine.heap, &ptr).unwrap();
+    let decoded = DerivedRecord::from_rex(&handle).unwrap();
     assert_eq!(
         decoded,
         DerivedRecord {
@@ -218,7 +246,7 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (ptr, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -226,7 +254,7 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
+    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
 }
 
 #[tokio::test]
@@ -244,7 +272,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (ptr, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -252,7 +280,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
+    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
 }
 
 #[test]
@@ -347,7 +375,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (ptr, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -355,7 +383,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
+    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
 }
 
 #[tokio::test]
@@ -379,7 +407,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (ptr, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -387,5 +415,5 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, ptr, engine.heap.alloc_i32(10).unwrap());
+    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
 }

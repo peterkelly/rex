@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use rex_ast::expr::{Expr, Program, sym};
-use rex_engine::{Engine, EngineError, Module, ReplState, Value, assert_pointer_eq};
+use rex_engine::{Engine, EngineError, Module, ReplState, Value};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -135,7 +135,7 @@ async fn repl_persists_function_definitions() {
         .await
         .unwrap();
     assert_eq!(t1, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, v1, engine.heap.alloc_i32(2).unwrap());
+    assert_eq!(v1.to_rust::<i32>().unwrap(), 2);
 
     let program2 = parse_program("inc 2");
     let (v2, t2) = evaluator
@@ -143,7 +143,7 @@ async fn repl_persists_function_definitions() {
         .await
         .unwrap();
     assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, v2, engine.heap.alloc_i32(3).unwrap());
+    assert_eq!(v2.to_rust::<i32>().unwrap(), 3);
 }
 
 #[tokio::test]
@@ -165,7 +165,10 @@ async fn repl_persists_import_aliases() {
         .await
         .unwrap();
     assert_eq!(t1, Type::tuple(vec![]));
-    assert_pointer_eq!(&engine.heap, v1, engine.heap.alloc_tuple(vec![]).unwrap());
+    assert!(
+        v1.value_eq(&engine.heap.alloc_tuple(vec![]).unwrap())
+            .unwrap()
+    );
 
     let program2 = parse_program("Bar.triple 10");
     let (v2, t2) = evaluator
@@ -173,7 +176,7 @@ async fn repl_persists_import_aliases() {
         .await
         .unwrap();
     assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, v2, engine.heap.alloc_i32(30).unwrap());
+    assert_eq!(v2.to_rust::<i32>().unwrap(), 30);
 }
 
 #[tokio::test]
@@ -195,7 +198,10 @@ async fn repl_persists_imported_values() {
         .await
         .unwrap();
     assert_eq!(t1, Type::tuple(vec![]));
-    assert_pointer_eq!(&engine.heap, v1, engine.heap.alloc_tuple(vec![]).unwrap());
+    assert!(
+        v1.value_eq(&engine.heap.alloc_tuple(vec![]).unwrap())
+            .unwrap()
+    );
 
     let program2 = parse_program("t 10");
     let (v2, t2) = evaluator
@@ -203,7 +209,7 @@ async fn repl_persists_imported_values() {
         .await
         .unwrap();
     assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, v2, engine.heap.alloc_i32(30).unwrap());
+    assert_eq!(v2.to_rust::<i32>().unwrap(), 30);
 }
 
 #[tokio::test]
@@ -230,8 +236,7 @@ async fn injected_module_can_define_pub_adt_declarations() {
     .await
     .unwrap();
 
-    let v = engine.heap.get(&value).unwrap();
-    match v.as_ref() {
+    match value.value().unwrap() {
         Value::Adt(tag, args) => {
             assert_eq!(tag.as_ref(), "Failed");
             assert_eq!(args.len(), 1);
@@ -241,12 +246,10 @@ async fn injected_module_can_define_pub_adt_declarations() {
 }
 
 #[tokio::test]
-async fn export_value_typed_registers_global_value() {
+async fn export_value_registers_global_value() {
     let expr = parse("answer");
     let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
-        module.export_value_typed("answer", Type::builtin(BuiltinTypeId::I32), Value::I32(42))
-    });
+    inject_globals(&mut engine, |module| module.export_value("answer", 42i32));
     let (value, ty) = rex_engine::Evaluator::new_with_compiler(
         rex_engine::RuntimeEnv::new(engine.clone()),
         rex_engine::Compiler::new(engine.clone()),
@@ -255,7 +258,7 @@ async fn export_value_typed_registers_global_value() {
     .await
     .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
+    assert_eq!(value.to_rust::<i32>().unwrap(), 42);
 }
 
 #[tokio::test]

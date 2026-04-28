@@ -1,7 +1,7 @@
 //! Core value representation for Rex.
 
 use std::collections::{BTreeMap, HashSet};
-use std::ops::Deref;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -19,18 +19,302 @@ use crate::stack::Frame;
 struct HeapState {
     slots: Vec<HeapSlot>,
     free_list: Vec<u32>,
+    root_slots: Vec<RootSlot>,
+    free_root_list: Vec<u64>,
 }
 
 #[derive(Clone)]
 struct HeapSlot {
     generation: u32,
-    value: Option<Arc<Value>>,
+    cell: Option<Arc<Cell>>,
+}
+
+#[derive(Clone)]
+struct RootSlot {
+    generation: u64,
+    pointer: Option<Pointer>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct RootId {
+    heap_id: u64,
+    index: u64,
+    generation: u64,
 }
 
 #[derive(Clone)]
 pub struct Heap {
     id: u64,
     state: Arc<Mutex<HeapState>>,
+}
+
+#[derive(Clone)]
+pub struct Handle {
+    root: Arc<HandleRoot>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Value {
+    Bool(bool),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+    String(String),
+    Uuid(Uuid),
+    DateTime(DateTime<Utc>),
+    Tuple(Vec<Handle>),
+    Array(Vec<Handle>),
+    Dict(BTreeMap<Symbol, Handle>),
+    Adt(Symbol, Vec<Handle>),
+    Uninitialized(Symbol),
+    Frame,
+    Closure,
+    Native,
+    Overloaded,
+}
+
+impl Value {
+    pub fn value_type_name(&self) -> &'static str {
+        match self {
+            Value::Bool(..) => "bool",
+            Value::U8(..) => "u8",
+            Value::U16(..) => "u16",
+            Value::U32(..) => "u32",
+            Value::U64(..) => "u64",
+            Value::I8(..) => "i8",
+            Value::I16(..) => "i16",
+            Value::I32(..) => "i32",
+            Value::I64(..) => "i64",
+            Value::F32(..) => "f32",
+            Value::F64(..) => "f64",
+            Value::String(..) => "string",
+            Value::Uuid(..) => "uuid",
+            Value::DateTime(..) => "datetime",
+            Value::Tuple(..) => "tuple",
+            Value::Array(..) => "array",
+            Value::Dict(..) => "dict",
+            Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
+            Value::Adt(..) => "adt",
+            Value::Uninitialized(..) => "uninitialized",
+            Value::Frame => "frame",
+            Value::Closure => "closure",
+            Value::Native => "native",
+            Value::Overloaded => "overloaded",
+        }
+    }
+}
+
+struct HandleRoot {
+    heap: Heap,
+    pointer: Pointer,
+    root_id: RootId,
+}
+
+impl Drop for HandleRoot {
+    fn drop(&mut self) {
+        let _ = self.heap.unregister_external_root(self.root_id);
+    }
+}
+
+impl fmt::Debug for Handle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.display() {
+            Ok(value) => f.debug_tuple("Handle").field(&value).finish(),
+            Err(_) => f.write_str("Handle(<invalid>)"),
+        }
+    }
+}
+
+impl Handle {
+    pub fn type_name(&self) -> Result<&'static str, EngineError> {
+        self.root.heap.type_name(&self.root.pointer)
+    }
+
+    pub fn value(&self) -> Result<Value, EngineError> {
+        self.heap().view(&self.pointer())
+    }
+
+    pub fn as_bool(&self) -> Result<bool, EngineError> {
+        match self.value()? {
+            Value::Bool(value) => Ok(value),
+            _ => Err(self.type_error("bool")),
+        }
+    }
+
+    pub fn as_u8(&self) -> Result<u8, EngineError> {
+        match self.value()? {
+            Value::U8(value) => Ok(value),
+            _ => Err(self.type_error("u8")),
+        }
+    }
+
+    pub fn as_u16(&self) -> Result<u16, EngineError> {
+        match self.value()? {
+            Value::U16(value) => Ok(value),
+            _ => Err(self.type_error("u16")),
+        }
+    }
+
+    pub fn as_u32(&self) -> Result<u32, EngineError> {
+        match self.value()? {
+            Value::U32(value) => Ok(value),
+            _ => Err(self.type_error("u32")),
+        }
+    }
+
+    pub fn as_u64(&self) -> Result<u64, EngineError> {
+        match self.value()? {
+            Value::U64(value) => Ok(value),
+            _ => Err(self.type_error("u64")),
+        }
+    }
+
+    pub fn as_i8(&self) -> Result<i8, EngineError> {
+        match self.value()? {
+            Value::I8(value) => Ok(value),
+            _ => Err(self.type_error("i8")),
+        }
+    }
+
+    pub fn as_i16(&self) -> Result<i16, EngineError> {
+        match self.value()? {
+            Value::I16(value) => Ok(value),
+            _ => Err(self.type_error("i16")),
+        }
+    }
+
+    pub fn as_i32(&self) -> Result<i32, EngineError> {
+        match self.value()? {
+            Value::I32(value) => Ok(value),
+            _ => Err(self.type_error("i32")),
+        }
+    }
+
+    pub fn as_i64(&self) -> Result<i64, EngineError> {
+        match self.value()? {
+            Value::I64(value) => Ok(value),
+            _ => Err(self.type_error("i64")),
+        }
+    }
+
+    pub fn as_f32(&self) -> Result<f32, EngineError> {
+        match self.value()? {
+            Value::F32(value) => Ok(value),
+            _ => Err(self.type_error("f32")),
+        }
+    }
+
+    pub fn as_f64(&self) -> Result<f64, EngineError> {
+        match self.value()? {
+            Value::F64(value) => Ok(value),
+            _ => Err(self.type_error("f64")),
+        }
+    }
+
+    pub fn as_string(&self) -> Result<String, EngineError> {
+        match self.value()? {
+            Value::String(value) => Ok(value),
+            _ => Err(self.type_error("string")),
+        }
+    }
+
+    pub fn as_uuid(&self) -> Result<Uuid, EngineError> {
+        match self.value()? {
+            Value::Uuid(value) => Ok(value),
+            _ => Err(self.type_error("uuid")),
+        }
+    }
+
+    pub fn as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
+        match self.value()? {
+            Value::DateTime(value) => Ok(value),
+            _ => Err(self.type_error("datetime")),
+        }
+    }
+
+    pub fn as_tuple(&self) -> Result<Vec<Handle>, EngineError> {
+        match self.value()? {
+            Value::Tuple(values) => Ok(values),
+            _ => Err(self.type_error("tuple")),
+        }
+    }
+
+    pub fn as_array(&self) -> Result<Vec<Handle>, EngineError> {
+        match self.value()? {
+            Value::Array(values) => Ok(values),
+            _ => Err(self.type_error("array")),
+        }
+    }
+
+    pub fn as_dict(&self) -> Result<BTreeMap<Symbol, Handle>, EngineError> {
+        match self.value()? {
+            Value::Dict(values) => Ok(values),
+            _ => Err(self.type_error("dict")),
+        }
+    }
+
+    pub fn as_adt(&self) -> Result<(Symbol, Vec<Handle>), EngineError> {
+        match self.value()? {
+            Value::Adt(tag, args) => Ok((tag, args)),
+            _ => Err(self.type_error("adt")),
+        }
+    }
+
+    pub fn to_rust<T: FromRex>(&self) -> Result<T, EngineError> {
+        T::from_rex(self)
+    }
+
+    pub fn display(&self) -> Result<String, EngineError> {
+        self.display_with(ValueDisplayOptions::default())
+    }
+
+    pub fn display_with(&self, opts: ValueDisplayOptions) -> Result<String, EngineError> {
+        pointer_display_with(self.heap(), &self.pointer(), opts)
+    }
+
+    pub fn debug(&self) -> Result<String, EngineError> {
+        pointer_debug(self.heap(), &self.pointer())
+    }
+
+    pub fn value_eq(&self, other: &Handle) -> Result<bool, EngineError> {
+        let pointer = other.pointer_for_heap(self.heap())?;
+        pointer_eq(self.heap(), &self.pointer(), &pointer)
+    }
+
+    fn type_error(&self, expected: &'static str) -> EngineError {
+        EngineError::NativeType {
+            expected: expected.to_string(),
+            got: self.type_name().unwrap_or("<invalid handle>").to_string(),
+        }
+    }
+
+    fn heap(&self) -> &Heap {
+        &self.root.heap
+    }
+
+    pub(crate) fn pointer(&self) -> Pointer {
+        self.root.pointer
+    }
+
+    pub(crate) fn pointer_for_heap(&self, heap: &Heap) -> Result<Pointer, EngineError> {
+        let pointer = self.pointer();
+        if pointer.heap_id != heap.id {
+            return Err(Heap::wrong_heap_pointer(
+                pointer.heap_id,
+                heap.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+        Ok(pointer)
+    }
 }
 
 impl Default for Heap {
@@ -74,8 +358,143 @@ impl Heap {
         ))
     }
 
-    fn alloc_slot(&self, value: Value) -> Result<Pointer, EngineError> {
-        let (index, generation) = self.alloc_slot_raw(value)?;
+    fn invalid_root(root_id: RootId) -> EngineError {
+        EngineError::Internal(format!(
+            "invalid heap root (heap_id={}, index={}, generation={})",
+            root_id.heap_id, root_id.index, root_id.generation
+        ))
+    }
+
+    pub(crate) fn handle(&self, pointer: Pointer) -> Result<Handle, EngineError> {
+        self.get(&pointer)?;
+        let root_id = self.register_external_root(pointer)?;
+        Ok(Handle {
+            root: Arc::new(HandleRoot {
+                heap: self.clone(),
+                pointer,
+                root_id,
+            }),
+        })
+    }
+
+    pub fn alloc_bool(&self, value: bool) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_bool(value)?)
+    }
+
+    pub fn alloc_u8(&self, value: u8) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_u8(value)?)
+    }
+
+    pub fn alloc_u16(&self, value: u16) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_u16(value)?)
+    }
+
+    pub fn alloc_u32(&self, value: u32) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_u32(value)?)
+    }
+
+    pub fn alloc_u64(&self, value: u64) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_u64(value)?)
+    }
+
+    pub fn alloc_i8(&self, value: i8) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_i8(value)?)
+    }
+
+    pub fn alloc_i16(&self, value: i16) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_i16(value)?)
+    }
+
+    pub fn alloc_i32(&self, value: i32) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_i32(value)?)
+    }
+
+    pub fn alloc_i64(&self, value: i64) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_i64(value)?)
+    }
+
+    pub fn alloc_f32(&self, value: f32) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_f32(value)?)
+    }
+
+    pub fn alloc_f64(&self, value: f64) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_f64(value)?)
+    }
+
+    pub fn alloc_string(&self, value: String) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_string(value)?)
+    }
+
+    pub fn alloc_uuid(&self, value: Uuid) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_uuid(value)?)
+    }
+
+    pub fn alloc_datetime(&self, value: DateTime<Utc>) -> Result<Handle, EngineError> {
+        handle_from_pointer(self, self.alloc_ptr_datetime(value)?)
+    }
+
+    pub fn alloc_tuple(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
+        let pointers = self.pointers_from_handles(values)?;
+        handle_from_pointer(self, self.alloc_ptr_tuple(pointers)?)
+    }
+
+    pub fn alloc_array(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
+        let pointers = self.pointers_from_handles(values)?;
+        handle_from_pointer(self, self.alloc_ptr_array(pointers)?)
+    }
+
+    pub fn alloc_dict(&self, values: BTreeMap<Symbol, Handle>) -> Result<Handle, EngineError> {
+        let mut pointers = BTreeMap::new();
+        for (name, handle) in values {
+            pointers.insert(name, handle.pointer_for_heap(self)?);
+        }
+        handle_from_pointer(self, self.alloc_ptr_dict(pointers)?)
+    }
+
+    pub fn alloc_adt(&self, name: Symbol, args: Vec<Handle>) -> Result<Handle, EngineError> {
+        let pointers = self.pointers_from_handles(args)?;
+        handle_from_pointer(self, self.alloc_ptr_adt(name, pointers)?)
+    }
+
+    pub fn alloc_value(&self, value: Value) -> Result<Handle, EngineError> {
+        match value {
+            Value::Bool(value) => self.alloc_bool(value),
+            Value::U8(value) => self.alloc_u8(value),
+            Value::U16(value) => self.alloc_u16(value),
+            Value::U32(value) => self.alloc_u32(value),
+            Value::U64(value) => self.alloc_u64(value),
+            Value::I8(value) => self.alloc_i8(value),
+            Value::I16(value) => self.alloc_i16(value),
+            Value::I32(value) => self.alloc_i32(value),
+            Value::I64(value) => self.alloc_i64(value),
+            Value::F32(value) => self.alloc_f32(value),
+            Value::F64(value) => self.alloc_f64(value),
+            Value::String(value) => self.alloc_string(value),
+            Value::Uuid(value) => self.alloc_uuid(value),
+            Value::DateTime(value) => self.alloc_datetime(value),
+            Value::Tuple(values) => self.alloc_tuple(values),
+            Value::Array(values) => self.alloc_array(values),
+            Value::Dict(values) => self.alloc_dict(values),
+            Value::Adt(name, args) => self.alloc_adt(name, args),
+            Value::Uninitialized(_)
+            | Value::Frame
+            | Value::Closure
+            | Value::Native
+            | Value::Overloaded => Err(EngineError::Internal(
+                "cannot allocate internal runtime value through public API".into(),
+            )),
+        }
+    }
+
+    fn pointers_from_handles(&self, values: Vec<Handle>) -> Result<Vec<Pointer>, EngineError> {
+        values
+            .iter()
+            .map(|handle| handle.pointer_for_heap(self))
+            .collect()
+    }
+
+    fn alloc_slot(&self, cell: Cell) -> Result<Pointer, EngineError> {
+        let (index, generation) = self.alloc_slot_raw(cell)?;
         Ok(Pointer {
             heap_id: self.id,
             index,
@@ -83,7 +502,7 @@ impl Heap {
         })
     }
 
-    pub fn get(&self, pointer: &Pointer) -> Result<ValueRef, EngineError> {
+    pub(crate) fn get(&self, pointer: &Pointer) -> Result<CellRef, EngineError> {
         if pointer.heap_id != self.id {
             return Err(Self::wrong_heap_pointer(
                 pointer.heap_id,
@@ -93,218 +512,250 @@ impl Heap {
             ));
         }
         self.read_slot(pointer.index, pointer.generation)
-            .map(ValueRef::from_arc)
+            .map(CellRef::from_arc)
     }
 
-    pub fn type_name(&self, pointer: &Pointer) -> Result<&'static str, EngineError> {
+    pub(crate) fn type_name(&self, pointer: &Pointer) -> Result<&'static str, EngineError> {
         self.get(pointer)
-            .map(|value| self.type_name_of_value(value.as_ref()))
+            .map(|cell| self.type_name_of_cell(cell.as_ref()))
     }
 
-    pub(crate) fn type_name_of_value(&self, value: &Value) -> &'static str {
-        value.value_type_name()
+    pub(crate) fn view(&self, pointer: &Pointer) -> Result<Value, EngineError> {
+        let cell = self.get(pointer)?;
+        self.view_cell(cell.as_ref())
     }
 
-    pub fn pointer_as_bool(&self, pointer: &Pointer) -> Result<bool, EngineError> {
-        self.get(pointer)?.as_ref().value_as_bool()
+    fn view_cell(&self, cell: &Cell) -> Result<Value, EngineError> {
+        Ok(match cell {
+            Cell::Bool(value) => Value::Bool(*value),
+            Cell::U8(value) => Value::U8(*value),
+            Cell::U16(value) => Value::U16(*value),
+            Cell::U32(value) => Value::U32(*value),
+            Cell::U64(value) => Value::U64(*value),
+            Cell::I8(value) => Value::I8(*value),
+            Cell::I16(value) => Value::I16(*value),
+            Cell::I32(value) => Value::I32(*value),
+            Cell::I64(value) => Value::I64(*value),
+            Cell::F32(value) => Value::F32(*value),
+            Cell::F64(value) => Value::F64(*value),
+            Cell::String(value) => Value::String(value.clone()),
+            Cell::Uuid(value) => Value::Uuid(*value),
+            Cell::DateTime(value) => Value::DateTime(*value),
+            Cell::Tuple(values) => Value::Tuple(self.handles_from_pointers(values)?),
+            Cell::Array(values) => Value::Array(self.handles_from_pointers(values)?),
+            Cell::Dict(values) => {
+                let mut out = BTreeMap::new();
+                for (name, pointer) in values {
+                    out.insert(name.clone(), self.handle(*pointer)?);
+                }
+                Value::Dict(out)
+            }
+            Cell::Adt(name, args) => Value::Adt(name.clone(), self.handles_from_pointers(args)?),
+            Cell::Uninitialized(name) => Value::Uninitialized(name.clone()),
+            Cell::Frame(_) => Value::Frame,
+            Cell::Closure(_) => Value::Closure,
+            Cell::Native(_) => Value::Native,
+            Cell::Overloaded(_) => Value::Overloaded,
+        })
     }
 
-    pub fn pointer_as_u8(&self, pointer: &Pointer) -> Result<u8, EngineError> {
-        self.get(pointer)?.as_ref().value_as_u8()
+    fn handles_from_pointers(&self, values: &[Pointer]) -> Result<Vec<Handle>, EngineError> {
+        values
+            .iter()
+            .map(|pointer| self.handle(*pointer))
+            .collect::<Result<Vec<_>, _>>()
     }
 
-    pub fn pointer_as_u16(&self, pointer: &Pointer) -> Result<u16, EngineError> {
-        self.get(pointer)?.as_ref().value_as_u16()
+    pub(crate) fn type_name_of_cell(&self, cell: &Cell) -> &'static str {
+        cell.cell_type_name()
     }
 
-    pub fn pointer_as_u32(&self, pointer: &Pointer) -> Result<u32, EngineError> {
-        self.get(pointer)?.as_ref().value_as_u32()
+    pub(crate) fn pointer_as_bool(&self, pointer: &Pointer) -> Result<bool, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_bool()
     }
 
-    pub fn pointer_as_u64(&self, pointer: &Pointer) -> Result<u64, EngineError> {
-        self.get(pointer)?.as_ref().value_as_u64()
+    pub(crate) fn pointer_as_u8(&self, pointer: &Pointer) -> Result<u8, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_u8()
     }
 
-    pub fn pointer_as_i8(&self, pointer: &Pointer) -> Result<i8, EngineError> {
-        self.get(pointer)?.as_ref().value_as_i8()
+    pub(crate) fn pointer_as_u16(&self, pointer: &Pointer) -> Result<u16, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_u16()
     }
 
-    pub fn pointer_as_i16(&self, pointer: &Pointer) -> Result<i16, EngineError> {
-        self.get(pointer)?.as_ref().value_as_i16()
+    pub(crate) fn pointer_as_u32(&self, pointer: &Pointer) -> Result<u32, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_u32()
     }
 
-    pub fn pointer_as_i32(&self, pointer: &Pointer) -> Result<i32, EngineError> {
-        self.get(pointer)?.as_ref().value_as_i32()
+    pub(crate) fn pointer_as_u64(&self, pointer: &Pointer) -> Result<u64, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_u64()
     }
 
-    pub fn pointer_as_i64(&self, pointer: &Pointer) -> Result<i64, EngineError> {
-        self.get(pointer)?.as_ref().value_as_i64()
+    pub(crate) fn pointer_as_i8(&self, pointer: &Pointer) -> Result<i8, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_i8()
     }
 
-    pub fn pointer_as_f32(&self, pointer: &Pointer) -> Result<f32, EngineError> {
-        self.get(pointer)?.as_ref().value_as_f32()
+    pub(crate) fn pointer_as_i16(&self, pointer: &Pointer) -> Result<i16, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_i16()
     }
 
-    pub fn pointer_as_f64(&self, pointer: &Pointer) -> Result<f64, EngineError> {
-        self.get(pointer)?.as_ref().value_as_f64()
+    pub(crate) fn pointer_as_i32(&self, pointer: &Pointer) -> Result<i32, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_i32()
     }
 
-    pub fn pointer_as_string(&self, pointer: &Pointer) -> Result<String, EngineError> {
-        self.get(pointer)?.as_ref().value_as_string()
+    pub(crate) fn pointer_as_i64(&self, pointer: &Pointer) -> Result<i64, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_i64()
     }
 
-    pub fn pointer_as_uuid(&self, pointer: &Pointer) -> Result<Uuid, EngineError> {
-        self.get(pointer)?.as_ref().value_as_uuid()
+    pub(crate) fn pointer_as_f32(&self, pointer: &Pointer) -> Result<f32, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_f32()
     }
 
-    pub fn pointer_as_datetime(&self, pointer: &Pointer) -> Result<DateTime<Utc>, EngineError> {
-        self.get(pointer)?.as_ref().value_as_datetime()
+    pub(crate) fn pointer_as_f64(&self, pointer: &Pointer) -> Result<f64, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_f64()
     }
 
-    pub fn pointer_as_tuple(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        self.get(pointer)?.as_ref().value_as_tuple()
+    pub(crate) fn pointer_as_string(&self, pointer: &Pointer) -> Result<String, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_string()
     }
 
-    pub fn pointer_as_array(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        self.get(pointer)?.as_ref().value_as_array()
+    pub(crate) fn pointer_as_uuid(&self, pointer: &Pointer) -> Result<Uuid, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_uuid()
     }
 
-    pub fn pointer_as_dict(
+    pub(crate) fn pointer_as_datetime(
+        &self,
+        pointer: &Pointer,
+    ) -> Result<DateTime<Utc>, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_datetime()
+    }
+
+    pub(crate) fn pointer_as_tuple(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_tuple()
+    }
+
+    pub(crate) fn pointer_as_array(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_array()
+    }
+
+    pub(crate) fn pointer_as_dict(
         &self,
         pointer: &Pointer,
     ) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
-        self.get(pointer)?.as_ref().value_as_dict()
+        self.get(pointer)?.as_ref().cell_as_dict()
     }
 
-    pub fn pointer_as_adt(&self, pointer: &Pointer) -> Result<(Symbol, Vec<Pointer>), EngineError> {
-        self.get(pointer)?.as_ref().value_as_adt()
-    }
-
-    pub fn pointer_as_uninitialized(&self, pointer: &Pointer) -> Result<Symbol, EngineError> {
-        self.get(pointer)?.as_ref().value_as_uninitialized()
-    }
-
-    pub fn pointer_as_closure(&self, pointer: &Pointer) -> Result<Closure, EngineError> {
-        self.get(pointer)?.as_ref().value_as_closure()
-    }
-
-    pub fn pointer_as_native(&self, pointer: &Pointer) -> Result<NativeFn, EngineError> {
-        self.get(pointer)?.as_ref().value_as_native()
-    }
-
-    pub fn pointer_as_overloaded(&self, pointer: &Pointer) -> Result<OverloadedFn, EngineError> {
-        self.get(pointer)?.as_ref().value_as_overloaded()
-    }
-
-    pub fn pointer_as_frame(&self, pointer: &Pointer) -> Result<Frame, EngineError> {
-        self.get(pointer)?.as_ref().value_as_frame()
-    }
-
-    pub fn alloc_bool(&self, value: bool) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Bool(value))
-    }
-
-    pub fn alloc_u8(&self, value: u8) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::U8(value))
-    }
-
-    pub fn alloc_u16(&self, value: u16) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::U16(value))
-    }
-
-    pub fn alloc_u32(&self, value: u32) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::U32(value))
-    }
-
-    pub fn alloc_u64(&self, value: u64) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::U64(value))
-    }
-
-    pub fn alloc_i8(&self, value: i8) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::I8(value))
-    }
-
-    pub fn alloc_i16(&self, value: i16) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::I16(value))
-    }
-
-    pub fn alloc_i32(&self, value: i32) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::I32(value))
-    }
-
-    pub fn alloc_i64(&self, value: i64) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::I64(value))
-    }
-
-    pub fn alloc_f32(&self, value: f32) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::F32(value))
-    }
-
-    pub fn alloc_f64(&self, value: f64) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::F64(value))
-    }
-
-    pub fn alloc_string(&self, value: String) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::String(value))
-    }
-
-    pub fn alloc_uuid(&self, value: Uuid) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Uuid(value))
-    }
-
-    pub fn alloc_datetime(&self, value: DateTime<Utc>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::DateTime(value))
-    }
-
-    pub fn alloc_value(&self, value: Value) -> Result<Pointer, EngineError> {
-        self.alloc_slot(value)
-    }
-
-    pub(crate) fn alloc_uninitialized(&self, name: Symbol) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Uninitialized(name))
-    }
-
-    pub fn alloc_frame(&self, frame: Frame) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Frame(frame))
-    }
-
-    pub fn alloc_root_frame_parent(&self) -> Result<Pointer, EngineError> {
-        self.alloc_u64(0)
-    }
-
-    pub fn replace_frame(&self, pointer: &Pointer, frame: Frame) -> Result<(), EngineError> {
-        self.pointer_as_frame(pointer)?;
-        self.overwrite(pointer, Value::Frame(frame))
-    }
-
-    pub fn update_frame<R>(
+    pub(crate) fn pointer_as_adt(
         &self,
         pointer: &Pointer,
-        update: impl FnOnce(&mut Frame) -> Result<R, EngineError>,
-    ) -> Result<R, EngineError> {
-        let mut frame = self.pointer_as_frame(pointer)?;
-        let result = update(&mut frame)?;
-        self.replace_frame(pointer, frame)?;
-        Ok(result)
+    ) -> Result<(Symbol, Vec<Pointer>), EngineError> {
+        self.get(pointer)?.as_ref().cell_as_adt()
     }
 
-    pub fn alloc_tuple(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Tuple(values))
+    pub(crate) fn pointer_as_frame(&self, pointer: &Pointer) -> Result<Frame, EngineError> {
+        self.get(pointer)?.as_ref().cell_as_frame()
     }
 
-    pub fn alloc_array(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Array(values))
+    pub(crate) fn alloc_ptr_bool(&self, value: bool) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Bool(value))
     }
 
-    pub fn alloc_dict(&self, values: BTreeMap<Symbol, Pointer>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Dict(values))
+    pub(crate) fn alloc_ptr_u8(&self, value: u8) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::U8(value))
     }
 
-    pub fn alloc_adt(&self, name: Symbol, args: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Adt(name, args))
+    pub(crate) fn alloc_ptr_u16(&self, value: u16) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::U16(value))
     }
 
-    pub fn alloc_closure(
+    pub(crate) fn alloc_ptr_u32(&self, value: u32) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::U32(value))
+    }
+
+    pub(crate) fn alloc_ptr_u64(&self, value: u64) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::U64(value))
+    }
+
+    pub(crate) fn alloc_ptr_i8(&self, value: i8) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::I8(value))
+    }
+
+    pub(crate) fn alloc_ptr_i16(&self, value: i16) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::I16(value))
+    }
+
+    pub(crate) fn alloc_ptr_i32(&self, value: i32) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::I32(value))
+    }
+
+    pub(crate) fn alloc_ptr_i64(&self, value: i64) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::I64(value))
+    }
+
+    pub(crate) fn alloc_ptr_f32(&self, value: f32) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::F32(value))
+    }
+
+    pub(crate) fn alloc_ptr_f64(&self, value: f64) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::F64(value))
+    }
+
+    pub(crate) fn alloc_ptr_string(&self, value: String) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::String(value))
+    }
+
+    pub(crate) fn alloc_ptr_uuid(&self, value: Uuid) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Uuid(value))
+    }
+
+    pub(crate) fn alloc_ptr_datetime(&self, value: DateTime<Utc>) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::DateTime(value))
+    }
+
+    pub(crate) fn alloc_ptr_cell(&self, cell: Cell) -> Result<Pointer, EngineError> {
+        self.alloc_slot(cell)
+    }
+
+    pub(crate) fn alloc_ptr_uninitialized(&self, name: Symbol) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Uninitialized(name))
+    }
+
+    pub(crate) fn alloc_ptr_frame(&self, frame: Frame) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Frame(frame))
+    }
+
+    pub(crate) fn alloc_ptr_root_frame_parent(&self) -> Result<Pointer, EngineError> {
+        self.alloc_ptr_u64(0)
+    }
+
+    pub(crate) fn replace_frame(&self, pointer: &Pointer, frame: Frame) -> Result<(), EngineError> {
+        self.pointer_as_frame(pointer)?;
+        self.overwrite(pointer, Cell::Frame(frame))
+    }
+
+    pub(crate) fn alloc_ptr_tuple(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Tuple(values))
+    }
+
+    pub(crate) fn alloc_ptr_array(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Array(values))
+    }
+
+    pub(crate) fn alloc_ptr_dict(
+        &self,
+        values: BTreeMap<Symbol, Pointer>,
+    ) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Dict(values))
+    }
+
+    pub(crate) fn alloc_ptr_adt(
+        &self,
+        name: Symbol,
+        args: Vec<Pointer>,
+    ) -> Result<Pointer, EngineError> {
+        self.alloc_slot(Cell::Adt(name, args))
+    }
+
+    pub(crate) fn alloc_ptr_closure(
         &self,
         env: Environment,
         param: Symbol,
@@ -312,7 +763,7 @@ impl Heap {
         typ: Type,
         body: Arc<TypedExpr>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Closure(Closure {
+        self.alloc_slot(Cell::Closure(Closure {
             env,
             param,
             param_ty,
@@ -321,7 +772,7 @@ impl Heap {
         }))
     }
 
-    pub(crate) fn alloc_native(
+    pub(crate) fn alloc_ptr_native(
         &self,
         native_id: u64,
         name: Symbol,
@@ -330,7 +781,7 @@ impl Heap {
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Native(NativeFn::from_parts(
+        self.alloc_slot(Cell::Native(NativeFn::from_parts(
             native_id,
             name,
             arity,
@@ -340,14 +791,14 @@ impl Heap {
         )))
     }
 
-    pub fn alloc_overloaded(
+    pub(crate) fn alloc_ptr_overloaded(
         &self,
         name: Symbol,
         typ: Type,
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Value::Overloaded(OverloadedFn::from_parts(
+        self.alloc_slot(Cell::Overloaded(OverloadedFn::from_parts(
             name,
             typ,
             applied,
@@ -355,7 +806,7 @@ impl Heap {
         )))
     }
 
-    pub(crate) fn overwrite(&self, pointer: &Pointer, value: Value) -> Result<(), EngineError> {
+    pub(crate) fn overwrite(&self, pointer: &Pointer, cell: Cell) -> Result<(), EngineError> {
         if pointer.heap_id != self.id {
             return Err(Self::wrong_heap_pointer(
                 pointer.heap_id,
@@ -380,11 +831,100 @@ impl Heap {
                 pointer.generation,
             ));
         }
-        slot.value = Some(Arc::new(value));
+        slot.cell = Some(Arc::new(cell));
         Ok(())
     }
 
-    fn alloc_slot_raw(&self, value: Value) -> Result<(u32, u32), EngineError> {
+    fn register_external_root(&self, pointer: Pointer) -> Result<RootId, EngineError> {
+        if pointer.heap_id != self.id {
+            return Err(Self::wrong_heap_pointer(
+                pointer.heap_id,
+                self.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+
+        if let Some(index) = state.free_root_list.pop() {
+            let slot_index = usize::try_from(index)
+                .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
+            let slot = state
+                .root_slots
+                .get_mut(slot_index)
+                .ok_or_else(|| EngineError::Internal("heap root free-list corruption".into()))?;
+            if slot.pointer.is_some() {
+                return Err(EngineError::Internal(
+                    "heap root free-list referenced a live root".into(),
+                ));
+            }
+            slot.pointer = Some(pointer);
+            return Ok(RootId {
+                heap_id: self.id,
+                index,
+                generation: slot.generation,
+            });
+        }
+
+        let index = u64::try_from(state.root_slots.len())
+            .map_err(|_| EngineError::Internal("heap exhausted: too many root slots".into()))?;
+        state.root_slots.push(RootSlot {
+            generation: 0,
+            pointer: Some(pointer),
+        });
+        Ok(RootId {
+            heap_id: self.id,
+            index,
+            generation: 0,
+        })
+    }
+
+    fn unregister_external_root(&self, root_id: RootId) -> Result<(), EngineError> {
+        if root_id.heap_id != self.id {
+            return Err(Self::invalid_root(root_id));
+        }
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        let slot_index = usize::try_from(root_id.index)
+            .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
+        let slot = state
+            .root_slots
+            .get_mut(slot_index)
+            .ok_or_else(|| Self::invalid_root(root_id))?;
+        if slot.generation != root_id.generation || slot.pointer.is_none() {
+            return Err(Self::invalid_root(root_id));
+        }
+        let next_generation = slot
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("heap root generation exhausted".into()))?;
+        slot.pointer = None;
+        slot.generation = next_generation;
+        state.free_root_list.push(root_id.index);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn external_root_count(&self) -> Result<usize, EngineError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        Ok(state
+            .root_slots
+            .iter()
+            .filter(|slot| slot.pointer.is_some())
+            .count())
+    }
+
+    fn alloc_slot_raw(&self, cell: Cell) -> Result<(u32, u32), EngineError> {
         let mut state = self
             .state
             .lock()
@@ -395,7 +935,7 @@ impl Heap {
                 .slots
                 .get_mut(index as usize)
                 .ok_or_else(|| EngineError::Internal("heap free-list corruption".into()))?;
-            slot.value = Some(Arc::new(value));
+            slot.cell = Some(Arc::new(cell));
             return Ok((index, slot.generation));
         }
 
@@ -403,12 +943,12 @@ impl Heap {
             .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
         state.slots.push(HeapSlot {
             generation: 0,
-            value: Some(Arc::new(value)),
+            cell: Some(Arc::new(cell)),
         });
         Ok((index, 0))
     }
 
-    fn read_slot(&self, index: u32, generation: u32) -> Result<Arc<Value>, EngineError> {
+    fn read_slot(&self, index: u32, generation: u32) -> Result<Arc<Cell>, EngineError> {
         let state = self
             .state
             .lock()
@@ -420,7 +960,7 @@ impl Heap {
         if slot.generation != generation {
             return Err(Heap::invalid_pointer(self.id, index, generation));
         }
-        slot.value
+        slot.cell
             .as_ref()
             .cloned()
             .ok_or_else(|| Heap::invalid_pointer(self.id, index, generation))
@@ -428,32 +968,24 @@ impl Heap {
 }
 
 #[derive(Clone)]
-pub struct ValueRef {
-    value: Arc<Value>,
+pub(crate) struct CellRef {
+    cell: Arc<Cell>,
 }
 
-impl ValueRef {
-    fn from_arc(value: Arc<Value>) -> Self {
-        Self { value }
+impl CellRef {
+    fn from_arc(cell: Arc<Cell>) -> Self {
+        Self { cell }
     }
 }
 
-impl AsRef<Value> for ValueRef {
-    fn as_ref(&self) -> &Value {
-        self.value.as_ref()
-    }
-}
-
-impl Deref for ValueRef {
-    type Target = Value;
-
-    fn deref(&self) -> &Self::Target {
-        self.value.as_ref()
+impl AsRef<Cell> for CellRef {
+    fn as_ref(&self) -> &Cell {
+        self.cell.as_ref()
     }
 }
 
 #[derive(Clone)]
-pub struct Closure {
+pub(crate) struct Closure {
     pub env: Environment,
     pub param: Symbol,
     pub param_ty: Type,
@@ -462,14 +994,14 @@ pub struct Closure {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Pointer {
+pub(crate) struct Pointer {
     heap_id: u64,
     index: u32,
     generation: u32,
 }
 
 #[derive(Clone)]
-pub enum Value {
+pub(crate) enum Cell {
     Bool(bool),
     U8(u8),
     U16(u16),
@@ -495,201 +1027,173 @@ pub enum Value {
     Overloaded(OverloadedFn),
 }
 
-impl Value {
-    pub fn value_type_name(&self) -> &'static str {
+impl Cell {
+    pub(crate) fn cell_type_name(&self) -> &'static str {
         match self {
-            Value::Bool(..) => "bool",
-            Value::U8(..) => "u8",
-            Value::U16(..) => "u16",
-            Value::U32(..) => "u32",
-            Value::U64(..) => "u64",
-            Value::I8(..) => "i8",
-            Value::I16(..) => "i16",
-            Value::I32(..) => "i32",
-            Value::I64(..) => "i64",
-            Value::F32(..) => "f32",
-            Value::F64(..) => "f64",
-            Value::String(..) => "string",
-            Value::Uuid(..) => "uuid",
-            Value::DateTime(..) => "datetime",
-            Value::Tuple(..) => "tuple",
-            Value::Array(..) => "array",
-            Value::Dict(..) => "dict",
-            Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
-            Value::Adt(..) => "adt",
-            Value::Uninitialized(..) => "uninitialized",
-            Value::Frame(..) => "frame",
-            Value::Closure(..) => "closure",
-            Value::Native(..) => "native",
-            Value::Overloaded(..) => "overloaded",
+            Cell::Bool(..) => "bool",
+            Cell::U8(..) => "u8",
+            Cell::U16(..) => "u16",
+            Cell::U32(..) => "u32",
+            Cell::U64(..) => "u64",
+            Cell::I8(..) => "i8",
+            Cell::I16(..) => "i16",
+            Cell::I32(..) => "i32",
+            Cell::I64(..) => "i64",
+            Cell::F32(..) => "f32",
+            Cell::F64(..) => "f64",
+            Cell::String(..) => "string",
+            Cell::Uuid(..) => "uuid",
+            Cell::DateTime(..) => "datetime",
+            Cell::Tuple(..) => "tuple",
+            Cell::Array(..) => "array",
+            Cell::Dict(..) => "dict",
+            Cell::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
+            Cell::Adt(..) => "adt",
+            Cell::Uninitialized(..) => "uninitialized",
+            Cell::Frame(..) => "frame",
+            Cell::Closure(..) => "closure",
+            Cell::Native(..) => "native",
+            Cell::Overloaded(..) => "overloaded",
         }
     }
 
-    fn value_type_error(&self, expected: &'static str) -> EngineError {
+    fn cell_type_error(&self, expected: &'static str) -> EngineError {
         EngineError::NativeType {
             expected: expected.to_string(),
-            got: self.value_type_name().to_string(),
+            got: self.cell_type_name().to_string(),
         }
     }
 
-    pub fn value_as_bool(&self) -> Result<bool, EngineError> {
+    pub(crate) fn cell_as_bool(&self) -> Result<bool, EngineError> {
         match self {
-            Value::Bool(v) => Ok(*v),
-            _ => Err(self.value_type_error("bool")),
+            Cell::Bool(v) => Ok(*v),
+            _ => Err(self.cell_type_error("bool")),
         }
     }
 
-    pub fn value_as_u8(&self) -> Result<u8, EngineError> {
+    pub(crate) fn cell_as_u8(&self) -> Result<u8, EngineError> {
         match self {
-            Value::U8(v) => Ok(*v),
-            _ => Err(self.value_type_error("u8")),
+            Cell::U8(v) => Ok(*v),
+            _ => Err(self.cell_type_error("u8")),
         }
     }
 
-    pub fn value_as_u16(&self) -> Result<u16, EngineError> {
+    pub(crate) fn cell_as_u16(&self) -> Result<u16, EngineError> {
         match self {
-            Value::U16(v) => Ok(*v),
-            _ => Err(self.value_type_error("u16")),
+            Cell::U16(v) => Ok(*v),
+            _ => Err(self.cell_type_error("u16")),
         }
     }
 
-    pub fn value_as_u32(&self) -> Result<u32, EngineError> {
+    pub(crate) fn cell_as_u32(&self) -> Result<u32, EngineError> {
         match self {
-            Value::U32(v) => Ok(*v),
-            _ => Err(self.value_type_error("u32")),
+            Cell::U32(v) => Ok(*v),
+            _ => Err(self.cell_type_error("u32")),
         }
     }
 
-    pub fn value_as_u64(&self) -> Result<u64, EngineError> {
+    pub(crate) fn cell_as_u64(&self) -> Result<u64, EngineError> {
         match self {
-            Value::U64(v) => Ok(*v),
-            _ => Err(self.value_type_error("u64")),
+            Cell::U64(v) => Ok(*v),
+            _ => Err(self.cell_type_error("u64")),
         }
     }
 
-    pub fn value_as_i8(&self) -> Result<i8, EngineError> {
+    pub(crate) fn cell_as_i8(&self) -> Result<i8, EngineError> {
         match self {
-            Value::I8(v) => Ok(*v),
-            _ => Err(self.value_type_error("i8")),
+            Cell::I8(v) => Ok(*v),
+            _ => Err(self.cell_type_error("i8")),
         }
     }
 
-    pub fn value_as_i16(&self) -> Result<i16, EngineError> {
+    pub(crate) fn cell_as_i16(&self) -> Result<i16, EngineError> {
         match self {
-            Value::I16(v) => Ok(*v),
-            _ => Err(self.value_type_error("i16")),
+            Cell::I16(v) => Ok(*v),
+            _ => Err(self.cell_type_error("i16")),
         }
     }
 
-    pub fn value_as_i32(&self) -> Result<i32, EngineError> {
+    pub(crate) fn cell_as_i32(&self) -> Result<i32, EngineError> {
         match self {
-            Value::I32(v) => Ok(*v),
-            _ => Err(self.value_type_error("i32")),
+            Cell::I32(v) => Ok(*v),
+            _ => Err(self.cell_type_error("i32")),
         }
     }
 
-    pub fn value_as_i64(&self) -> Result<i64, EngineError> {
+    pub(crate) fn cell_as_i64(&self) -> Result<i64, EngineError> {
         match self {
-            Value::I64(v) => Ok(*v),
-            _ => Err(self.value_type_error("i64")),
+            Cell::I64(v) => Ok(*v),
+            _ => Err(self.cell_type_error("i64")),
         }
     }
 
-    pub fn value_as_f32(&self) -> Result<f32, EngineError> {
+    pub(crate) fn cell_as_f32(&self) -> Result<f32, EngineError> {
         match self {
-            Value::F32(v) => Ok(*v),
-            _ => Err(self.value_type_error("f32")),
+            Cell::F32(v) => Ok(*v),
+            _ => Err(self.cell_type_error("f32")),
         }
     }
 
-    pub fn value_as_f64(&self) -> Result<f64, EngineError> {
+    pub(crate) fn cell_as_f64(&self) -> Result<f64, EngineError> {
         match self {
-            Value::F64(v) => Ok(*v),
-            _ => Err(self.value_type_error("f64")),
+            Cell::F64(v) => Ok(*v),
+            _ => Err(self.cell_type_error("f64")),
         }
     }
 
-    pub fn value_as_string(&self) -> Result<String, EngineError> {
+    pub(crate) fn cell_as_string(&self) -> Result<String, EngineError> {
         match self {
-            Value::String(v) => Ok(v.clone()),
-            _ => Err(self.value_type_error("string")),
+            Cell::String(v) => Ok(v.clone()),
+            _ => Err(self.cell_type_error("string")),
         }
     }
 
-    pub fn value_as_uuid(&self) -> Result<Uuid, EngineError> {
+    pub(crate) fn cell_as_uuid(&self) -> Result<Uuid, EngineError> {
         match self {
-            Value::Uuid(v) => Ok(*v),
-            _ => Err(self.value_type_error("uuid")),
+            Cell::Uuid(v) => Ok(*v),
+            _ => Err(self.cell_type_error("uuid")),
         }
     }
 
-    pub fn value_as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
+    pub(crate) fn cell_as_datetime(&self) -> Result<DateTime<Utc>, EngineError> {
         match self {
-            Value::DateTime(v) => Ok(*v),
-            _ => Err(self.value_type_error("datetime")),
+            Cell::DateTime(v) => Ok(*v),
+            _ => Err(self.cell_type_error("datetime")),
         }
     }
 
-    pub fn value_as_tuple(&self) -> Result<Vec<Pointer>, EngineError> {
+    pub(crate) fn cell_as_tuple(&self) -> Result<Vec<Pointer>, EngineError> {
         match self {
-            Value::Tuple(v) => Ok(v.clone()),
-            _ => Err(self.value_type_error("tuple")),
+            Cell::Tuple(v) => Ok(v.clone()),
+            _ => Err(self.cell_type_error("tuple")),
         }
     }
 
-    pub fn value_as_array(&self) -> Result<Vec<Pointer>, EngineError> {
+    pub(crate) fn cell_as_array(&self) -> Result<Vec<Pointer>, EngineError> {
         match self {
-            Value::Array(v) => Ok(v.clone()),
-            _ => Err(self.value_type_error("array")),
+            Cell::Array(v) => Ok(v.clone()),
+            _ => Err(self.cell_type_error("array")),
         }
     }
 
-    pub fn value_as_dict(&self) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
+    pub(crate) fn cell_as_dict(&self) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
         match self {
-            Value::Dict(v) => Ok(v.clone()),
-            _ => Err(self.value_type_error("dict")),
+            Cell::Dict(v) => Ok(v.clone()),
+            _ => Err(self.cell_type_error("dict")),
         }
     }
 
-    pub fn value_as_adt(&self) -> Result<(Symbol, Vec<Pointer>), EngineError> {
+    pub(crate) fn cell_as_adt(&self) -> Result<(Symbol, Vec<Pointer>), EngineError> {
         match self {
-            Value::Adt(name, args) => Ok((name.clone(), args.clone())),
-            _ => Err(self.value_type_error("adt")),
+            Cell::Adt(name, args) => Ok((name.clone(), args.clone())),
+            _ => Err(self.cell_type_error("adt")),
         }
     }
 
-    pub fn value_as_uninitialized(&self) -> Result<Symbol, EngineError> {
+    pub(crate) fn cell_as_frame(&self) -> Result<Frame, EngineError> {
         match self {
-            Value::Uninitialized(name) => Ok(name.clone()),
-            _ => Err(self.value_type_error("uninitialized")),
-        }
-    }
-
-    pub fn value_as_frame(&self) -> Result<Frame, EngineError> {
-        match self {
-            Value::Frame(frame) => Ok(frame.clone()),
-            _ => Err(self.value_type_error("frame")),
-        }
-    }
-
-    pub fn value_as_closure(&self) -> Result<Closure, EngineError> {
-        match self {
-            Value::Closure(v) => Ok(v.clone()),
-            _ => Err(self.value_type_error("closure")),
-        }
-    }
-
-    pub fn value_as_native(&self) -> Result<NativeFn, EngineError> {
-        match self {
-            Value::Native(v) => Ok(v.clone()),
-            _ => Err(self.value_type_error("native")),
-        }
-    }
-
-    pub fn value_as_overloaded(&self) -> Result<OverloadedFn, EngineError> {
-        match self {
-            Value::Overloaded(v) => Ok(v.clone()),
-            _ => Err(self.value_type_error("overloaded")),
+            Cell::Frame(frame) => Ok(frame.clone()),
+            _ => Err(self.cell_type_error("frame")),
         }
     }
 }
@@ -752,8 +1256,8 @@ fn pointer_debug_inner(
     if !active.insert(key) {
         return Ok(format!("<cycle:{}:{}>", pointer.index, pointer.generation));
     }
-    let value = heap.get(pointer)?;
-    let out = value_debug_inner(heap, &value, active);
+    let cell = heap.get(pointer)?;
+    let out = cell_debug_inner(heap, cell.as_ref(), active);
     active.remove(&key);
     out
 }
@@ -768,8 +1272,8 @@ fn pointer_display_inner(
     if !active.insert(key) {
         return Ok(format!("<cycle:{}:{}>", pointer.index, pointer.generation));
     }
-    let value = heap.get(pointer)?;
-    let out = value_display_inner(heap, &value, active, opts);
+    let cell = heap.get(pointer)?;
+    let out = cell_display_inner(heap, cell.as_ref(), active, opts);
     active.remove(&key);
     out
 }
@@ -816,41 +1320,41 @@ fn closure_debug_inner(
     ))
 }
 
-fn value_debug_inner(
+fn cell_debug_inner(
     heap: &Heap,
-    value: &Value,
+    cell: &Cell,
     active: &mut HashSet<PointerKey>,
 ) -> Result<String, EngineError> {
-    Ok(match value {
-        Value::Bool(v) => v.to_string(),
-        Value::U8(v) => format!("{v}u8"),
-        Value::U16(v) => format!("{v}u16"),
-        Value::U32(v) => format!("{v}u32"),
-        Value::U64(v) => format!("{v}u64"),
-        Value::I8(v) => format!("{v}i8"),
-        Value::I16(v) => format!("{v}i16"),
-        Value::I32(v) => format!("{v}i32"),
-        Value::I64(v) => format!("{v}i64"),
-        Value::F32(v) => format!("{v}f32"),
-        Value::F64(v) => format!("{v}f64"),
-        Value::String(v) => format!("{v:?}"),
-        Value::Uuid(v) => v.to_string(),
-        Value::DateTime(v) => v.to_string(),
-        Value::Tuple(values) => {
+    Ok(match cell {
+        Cell::Bool(v) => v.to_string(),
+        Cell::U8(v) => format!("{v}u8"),
+        Cell::U16(v) => format!("{v}u16"),
+        Cell::U32(v) => format!("{v}u32"),
+        Cell::U64(v) => format!("{v}u64"),
+        Cell::I8(v) => format!("{v}i8"),
+        Cell::I16(v) => format!("{v}i16"),
+        Cell::I32(v) => format!("{v}i32"),
+        Cell::I64(v) => format!("{v}i64"),
+        Cell::F32(v) => format!("{v}f32"),
+        Cell::F64(v) => format!("{v}f64"),
+        Cell::String(v) => format!("{v:?}"),
+        Cell::Uuid(v) => v.to_string(),
+        Cell::DateTime(v) => v.to_string(),
+        Cell::Tuple(values) => {
             let items = values
                 .iter()
                 .map(|pointer| pointer_debug_inner(heap, pointer, active))
                 .collect::<Result<Vec<_>, _>>()?;
             format!("({})", items.join(", "))
         }
-        Value::Array(values) => {
+        Cell::Array(values) => {
             let items = values
                 .iter()
                 .map(|pointer| pointer_debug_inner(heap, pointer, active))
                 .collect::<Result<Vec<_>, _>>()?;
             format!("<array {}>", items.join(", "))
         }
-        Value::Dict(values) => {
+        Cell::Dict(values) => {
             let mut items = values.iter().collect::<Vec<_>>();
             items.sort_by(|(lhs, _), (rhs, _)| lhs.as_ref().cmp(rhs.as_ref()));
             let items = items
@@ -865,8 +1369,8 @@ fn value_debug_inner(
                 .collect::<Result<Vec<_>, EngineError>>()?;
             format!("{{{}}}", items.join(", "))
         }
-        Value::Adt(name, args) => {
-            if let Some(values) = list_to_vec_opt(heap, value)? {
+        Cell::Adt(name, args) => {
+            if let Some(values) = list_to_vec_opt(heap, cell)? {
                 let items = values
                     .iter()
                     .map(|pointer| pointer_debug_inner(heap, pointer, active))
@@ -880,110 +1384,110 @@ fn value_debug_inner(
                 rendered.join(" ")
             }
         }
-        Value::Uninitialized(name) => format!("<uninitialized:{name}>"),
-        Value::Frame(frame) => format!("<frame:{frame:?}>"),
-        Value::Closure(closure) => closure_debug_inner(heap, closure, active)?,
-        Value::Native(native) => format!("<native:{}>", native.name()),
-        Value::Overloaded(over) => format!("<overloaded:{}>", over.name()),
+        Cell::Uninitialized(name) => format!("<uninitialized:{name}>"),
+        Cell::Frame(frame) => format!("<frame:{frame:?}>"),
+        Cell::Closure(closure) => closure_debug_inner(heap, closure, active)?,
+        Cell::Native(native) => format!("<native:{}>", native.name()),
+        Cell::Overloaded(over) => format!("<overloaded:{}>", over.name()),
     })
 }
 
-fn value_display_inner(
+fn cell_display_inner(
     heap: &Heap,
-    value: &Value,
+    cell: &Cell,
     active: &mut HashSet<PointerKey>,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
-    Ok(match value {
-        Value::Bool(v) => v.to_string(),
-        Value::U8(v) => {
+    Ok(match cell {
+        Cell::Bool(v) => v.to_string(),
+        Cell::U8(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}u8")
             } else {
                 v.to_string()
             }
         }
-        Value::U16(v) => {
+        Cell::U16(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}u16")
             } else {
                 v.to_string()
             }
         }
-        Value::U32(v) => {
+        Cell::U32(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}u32")
             } else {
                 v.to_string()
             }
         }
-        Value::U64(v) => {
+        Cell::U64(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}u64")
             } else {
                 v.to_string()
             }
         }
-        Value::I8(v) => {
+        Cell::I8(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}i8")
             } else {
                 v.to_string()
             }
         }
-        Value::I16(v) => {
+        Cell::I16(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}i16")
             } else {
                 v.to_string()
             }
         }
-        Value::I32(v) => {
+        Cell::I32(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}i32")
             } else {
                 v.to_string()
             }
         }
-        Value::I64(v) => {
+        Cell::I64(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}i64")
             } else {
                 v.to_string()
             }
         }
-        Value::F32(v) => {
+        Cell::F32(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}f32")
             } else {
                 v.to_string()
             }
         }
-        Value::F64(v) => {
+        Cell::F64(v) => {
             if opts.include_numeric_suffixes {
                 format!("{v}f64")
             } else {
                 v.to_string()
             }
         }
-        Value::String(v) => format!("{v:?}"),
-        Value::Uuid(v) => v.to_string(),
-        Value::DateTime(v) => v.to_string(),
-        Value::Tuple(values) => {
+        Cell::String(v) => format!("{v:?}"),
+        Cell::Uuid(v) => v.to_string(),
+        Cell::DateTime(v) => v.to_string(),
+        Cell::Tuple(values) => {
             let items = values
                 .iter()
                 .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
                 .collect::<Result<Vec<_>, _>>()?;
             format!("({})", items.join(", "))
         }
-        Value::Array(values) => {
+        Cell::Array(values) => {
             let items = values
                 .iter()
                 .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
                 .collect::<Result<Vec<_>, _>>()?;
             format!("<array {}>", items.join(", "))
         }
-        Value::Dict(values) => {
+        Cell::Dict(values) => {
             let mut items = values.iter().collect::<Vec<_>>();
             items.sort_by(|(lhs, _), (rhs, _)| lhs.as_ref().cmp(rhs.as_ref()));
             let items = items
@@ -998,8 +1502,8 @@ fn value_display_inner(
                 .collect::<Result<Vec<_>, EngineError>>()?;
             format!("{{{}}}", items.join(", "))
         }
-        Value::Adt(name, args) => {
-            if let Some(values) = list_to_vec_opt(heap, value)? {
+        Cell::Adt(name, args) => {
+            if let Some(values) = list_to_vec_opt(heap, cell)? {
                 let items = values
                     .iter()
                     .map(|pointer| pointer_display_inner(heap, pointer, active, opts))
@@ -1013,35 +1517,26 @@ fn value_display_inner(
                 rendered.join(" ")
             }
         }
-        Value::Uninitialized(name) => format!("<uninitialized:{name}>"),
-        Value::Frame(frame) => format!("<frame:{frame:?}>"),
-        Value::Closure(..) => "<closure>".to_string(),
-        Value::Native(native) => format!("<native:{}>", native.name()),
-        Value::Overloaded(over) => format!("<overloaded:{}>", over.name()),
+        Cell::Uninitialized(name) => format!("<uninitialized:{name}>"),
+        Cell::Frame(frame) => format!("<frame:{frame:?}>"),
+        Cell::Closure(..) => "<closure>".to_string(),
+        Cell::Native(native) => format!("<native:{}>", native.name()),
+        Cell::Overloaded(over) => format!("<overloaded:{}>", over.name()),
     })
 }
 
-pub fn value_debug(heap: &Heap, value: &Value) -> Result<String, EngineError> {
+pub(crate) fn pointer_debug(heap: &Heap, pointer: &Pointer) -> Result<String, EngineError> {
     let mut active = HashSet::new();
-    value_debug_inner(heap, value, &mut active)
+    pointer_debug_inner(heap, pointer, &mut active)
 }
 
-pub fn pointer_display(heap: &Heap, pointer: &Pointer) -> Result<String, EngineError> {
-    pointer_display_with(heap, pointer, ValueDisplayOptions::default())
-}
-
-pub fn pointer_display_with(
+pub(crate) fn pointer_display_with(
     heap: &Heap,
     pointer: &Pointer,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
     let mut active = HashSet::new();
     pointer_display_inner(heap, pointer, &mut active, opts)
-}
-
-pub fn closure_debug(heap: &Heap, closure: &Closure) -> Result<String, EngineError> {
-    let mut active = HashSet::new();
-    closure_debug_inner(heap, closure, &mut active)
 }
 
 fn pointer_eq_inner(
@@ -1059,9 +1554,9 @@ fn pointer_eq_inner(
     if !seen.insert(pair) {
         return Ok(true);
     }
-    let lhs_value = heap.get(lhs)?;
-    let rhs_value = heap.get(rhs)?;
-    value_eq_inner(heap, &lhs_value, &rhs_value, seen)
+    let lhs_cell = heap.get(lhs)?;
+    let rhs_cell = heap.get(rhs)?;
+    cell_eq_inner(heap, lhs_cell.as_ref(), rhs_cell.as_ref(), seen)
 }
 
 fn env_eq_inner(
@@ -1104,28 +1599,28 @@ fn closure_eq_inner(
     env_eq_inner(heap, &lhs.env, &rhs.env, seen)
 }
 
-fn value_eq_inner(
+fn cell_eq_inner(
     heap: &Heap,
-    lhs: &Value,
-    rhs: &Value,
+    lhs: &Cell,
+    rhs: &Cell,
     seen: &mut HashSet<PointerPairKey>,
 ) -> Result<bool, EngineError> {
     match (lhs, rhs) {
-        (Value::Bool(lhs), Value::Bool(rhs)) => Ok(lhs == rhs),
-        (Value::U8(lhs), Value::U8(rhs)) => Ok(lhs == rhs),
-        (Value::U16(lhs), Value::U16(rhs)) => Ok(lhs == rhs),
-        (Value::U32(lhs), Value::U32(rhs)) => Ok(lhs == rhs),
-        (Value::U64(lhs), Value::U64(rhs)) => Ok(lhs == rhs),
-        (Value::I8(lhs), Value::I8(rhs)) => Ok(lhs == rhs),
-        (Value::I16(lhs), Value::I16(rhs)) => Ok(lhs == rhs),
-        (Value::I32(lhs), Value::I32(rhs)) => Ok(lhs == rhs),
-        (Value::I64(lhs), Value::I64(rhs)) => Ok(lhs == rhs),
-        (Value::F32(lhs), Value::F32(rhs)) => Ok(lhs == rhs),
-        (Value::F64(lhs), Value::F64(rhs)) => Ok(lhs == rhs),
-        (Value::String(lhs), Value::String(rhs)) => Ok(lhs == rhs),
-        (Value::Uuid(lhs), Value::Uuid(rhs)) => Ok(lhs == rhs),
-        (Value::DateTime(lhs), Value::DateTime(rhs)) => Ok(lhs == rhs),
-        (Value::Tuple(lhs), Value::Tuple(rhs)) | (Value::Array(lhs), Value::Array(rhs)) => {
+        (Cell::Bool(lhs), Cell::Bool(rhs)) => Ok(lhs == rhs),
+        (Cell::U8(lhs), Cell::U8(rhs)) => Ok(lhs == rhs),
+        (Cell::U16(lhs), Cell::U16(rhs)) => Ok(lhs == rhs),
+        (Cell::U32(lhs), Cell::U32(rhs)) => Ok(lhs == rhs),
+        (Cell::U64(lhs), Cell::U64(rhs)) => Ok(lhs == rhs),
+        (Cell::I8(lhs), Cell::I8(rhs)) => Ok(lhs == rhs),
+        (Cell::I16(lhs), Cell::I16(rhs)) => Ok(lhs == rhs),
+        (Cell::I32(lhs), Cell::I32(rhs)) => Ok(lhs == rhs),
+        (Cell::I64(lhs), Cell::I64(rhs)) => Ok(lhs == rhs),
+        (Cell::F32(lhs), Cell::F32(rhs)) => Ok(lhs == rhs),
+        (Cell::F64(lhs), Cell::F64(rhs)) => Ok(lhs == rhs),
+        (Cell::String(lhs), Cell::String(rhs)) => Ok(lhs == rhs),
+        (Cell::Uuid(lhs), Cell::Uuid(rhs)) => Ok(lhs == rhs),
+        (Cell::DateTime(lhs), Cell::DateTime(rhs)) => Ok(lhs == rhs),
+        (Cell::Tuple(lhs), Cell::Tuple(rhs)) | (Cell::Array(lhs), Cell::Array(rhs)) => {
             if lhs.len() != rhs.len() {
                 return Ok(false);
             }
@@ -1136,7 +1631,7 @@ fn value_eq_inner(
             }
             Ok(true)
         }
-        (Value::Dict(lhs), Value::Dict(rhs)) => {
+        (Cell::Dict(lhs), Cell::Dict(rhs)) => {
             if lhs.len() != rhs.len() {
                 return Ok(false);
             }
@@ -1150,7 +1645,7 @@ fn value_eq_inner(
             }
             Ok(true)
         }
-        (Value::Adt(lhs_name, lhs_args), Value::Adt(rhs_name, rhs_args)) => {
+        (Cell::Adt(lhs_name, lhs_args), Cell::Adt(rhs_name, rhs_args)) => {
             if lhs_name != rhs_name || lhs_args.len() != rhs_args.len() {
                 return Ok(false);
             }
@@ -1161,38 +1656,28 @@ fn value_eq_inner(
             }
             Ok(true)
         }
-        (Value::Uninitialized(lhs), Value::Uninitialized(rhs)) => Ok(lhs == rhs),
-        (Value::Frame(lhs), Value::Frame(rhs)) => Ok(lhs == rhs),
-        (Value::Closure(lhs), Value::Closure(rhs)) => closure_eq_inner(heap, lhs, rhs, seen),
-        (Value::Native(lhs), Value::Native(rhs)) => Ok(lhs == rhs),
-        (Value::Overloaded(lhs), Value::Overloaded(rhs)) => Ok(lhs == rhs),
+        (Cell::Uninitialized(lhs), Cell::Uninitialized(rhs)) => Ok(lhs == rhs),
+        (Cell::Frame(lhs), Cell::Frame(rhs)) => Ok(lhs == rhs),
+        (Cell::Closure(lhs), Cell::Closure(rhs)) => closure_eq_inner(heap, lhs, rhs, seen),
+        (Cell::Native(lhs), Cell::Native(rhs)) => Ok(lhs == rhs),
+        (Cell::Overloaded(lhs), Cell::Overloaded(rhs)) => Ok(lhs == rhs),
         _ => Ok(false),
     }
 }
 
-pub fn value_eq(heap: &Heap, lhs: &Value, rhs: &Value) -> Result<bool, EngineError> {
-    let mut seen = HashSet::new();
-    value_eq_inner(heap, lhs, rhs, &mut seen)
-}
-
-pub fn pointer_eq(heap: &Heap, lhs: &Pointer, rhs: &Pointer) -> Result<bool, EngineError> {
+pub(crate) fn pointer_eq(heap: &Heap, lhs: &Pointer, rhs: &Pointer) -> Result<bool, EngineError> {
     let mut seen = HashSet::new();
     pointer_eq_inner(heap, lhs, rhs, &mut seen)
 }
 
-pub fn closure_eq(heap: &Heap, lhs: &Closure, rhs: &Closure) -> Result<bool, EngineError> {
-    let mut seen = HashSet::new();
-    closure_eq_inner(heap, lhs, rhs, &mut seen)
-}
-
-fn list_to_vec_opt(heap: &Heap, value: &Value) -> Result<Option<Vec<Pointer>>, EngineError> {
+fn list_to_vec_opt(heap: &Heap, cell: &Cell) -> Result<Option<Vec<Pointer>>, EngineError> {
     enum Cursor<'a> {
-        Borrowed(&'a Value),
-        Owned(ValueRef),
+        Borrowed(&'a Cell),
+        Owned(CellRef),
     }
 
     let mut out = Vec::new();
-    let mut cursor = Cursor::Borrowed(value);
+    let mut cursor = Cursor::Borrowed(cell);
     loop {
         let cur = match &cursor {
             Cursor::Borrowed(v) => *v,
@@ -1200,10 +1685,10 @@ fn list_to_vec_opt(heap: &Heap, value: &Value) -> Result<Option<Vec<Pointer>>, E
         };
 
         match cur {
-            Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => {
+            Cell::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => {
                 return Ok(Some(out));
             }
-            Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
+            Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0]);
                 cursor = Cursor::Owned(heap.get(&args[1])?);
             }
@@ -1212,14 +1697,14 @@ fn list_to_vec_opt(heap: &Heap, value: &Value) -> Result<Option<Vec<Pointer>>, E
     }
 }
 
-pub(crate) fn list_to_vec(heap: &Heap, value: &Value) -> Result<Vec<Pointer>, EngineError> {
+pub(crate) fn list_to_vec(heap: &Heap, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
     enum Cursor<'a> {
-        Borrowed(&'a Value),
-        Owned(ValueRef),
+        Borrowed(&'a Cell),
+        Owned(CellRef),
     }
 
     let mut out = Vec::new();
-    let mut cursor = Cursor::Borrowed(value);
+    let mut cursor = Cursor::Borrowed(cell);
     loop {
         let cur = match &cursor {
             Cursor::Borrowed(v) => *v,
@@ -1227,27 +1712,35 @@ pub(crate) fn list_to_vec(heap: &Heap, value: &Value) -> Result<Vec<Pointer>, En
         };
 
         match cur {
-            Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Ok(out),
-            Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
+            Cell::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Ok(out),
+            Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0]);
                 cursor = Cursor::Owned(heap.get(&args[1])?);
             }
             _ => {
                 return Err(EngineError::NativeType {
                     expected: "list".into(),
-                    got: heap.type_name_of_value(cur).into(),
+                    got: heap.type_name_of_cell(cur).into(),
                 });
             }
         }
     }
 }
 
-pub trait IntoPointer {
+pub(crate) trait IntoPointer {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError>;
 }
 
-pub trait FromPointer: Sized {
+pub(crate) trait FromPointer: Sized {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError>;
+}
+
+pub trait IntoRex {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError>;
+}
+
+pub trait FromRex: Sized {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError>;
 }
 
 pub trait RexType {
@@ -1258,15 +1751,15 @@ pub trait RexType {
     }
 }
 
-impl IntoPointer for Value {
+impl IntoPointer for Cell {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_value(self)
+        heap.alloc_ptr_cell(self)
     }
 }
 
-impl IntoPointer for &Value {
+impl IntoPointer for &Cell {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_value(self.clone())
+        heap.alloc_ptr_cell(self.clone())
     }
 }
 
@@ -1284,79 +1777,79 @@ impl IntoPointer for &Pointer {
 
 impl IntoPointer for bool {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_bool(self)
+        heap.alloc_ptr_bool(self)
     }
 }
 
 impl IntoPointer for u8 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_u8(self)
+        heap.alloc_ptr_u8(self)
     }
 }
 
 impl IntoPointer for u16 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_u16(self)
+        heap.alloc_ptr_u16(self)
     }
 }
 
 impl IntoPointer for u32 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_u32(self)
+        heap.alloc_ptr_u32(self)
     }
 }
 
 impl IntoPointer for u64 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_u64(self)
+        heap.alloc_ptr_u64(self)
     }
 }
 
 impl IntoPointer for i8 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_i8(self)
+        heap.alloc_ptr_i8(self)
     }
 }
 
 impl IntoPointer for i16 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_i16(self)
+        heap.alloc_ptr_i16(self)
     }
 }
 
 impl IntoPointer for i32 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_i32(self)
+        heap.alloc_ptr_i32(self)
     }
 }
 
 impl IntoPointer for i64 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_i64(self)
+        heap.alloc_ptr_i64(self)
     }
 }
 
 impl IntoPointer for f32 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_f32(self)
+        heap.alloc_ptr_f32(self)
     }
 }
 
 impl IntoPointer for f64 {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_f64(self)
+        heap.alloc_ptr_f64(self)
     }
 }
 
 impl IntoPointer for String {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_string(self)
+        heap.alloc_ptr_string(self)
     }
 }
 
 impl IntoPointer for &str {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_string(self.to_string())
+        heap.alloc_ptr_string(self.to_string())
     }
 }
 
@@ -1366,7 +1859,7 @@ impl<T: IntoPointer> IntoPointer for Vec<T> {
             .into_iter()
             .map(|v| v.into_pointer(heap))
             .collect::<Result<Vec<_>, _>>()?;
-        heap.alloc_array(ptrs)
+        heap.alloc_ptr_array(ptrs)
     }
 }
 
@@ -1375,22 +1868,141 @@ impl<T: IntoPointer> IntoPointer for Option<T> {
         match self {
             Some(v) => {
                 let ptr = v.into_pointer(heap)?;
-                heap.alloc_adt(sym("Some"), vec![ptr])
+                heap.alloc_ptr_adt(sym("Some"), vec![ptr])
             }
-            None => heap.alloc_adt(sym("None"), vec![]),
+            None => heap.alloc_ptr_adt(sym("None"), vec![]),
         }
+    }
+}
+
+fn handle_from_pointer(heap: &Heap, pointer: Pointer) -> Result<Handle, EngineError> {
+    heap.handle(pointer)
+}
+
+impl IntoRex for Handle {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        let pointer = self.pointer();
+        if pointer.heap_id != heap.id {
+            return Err(Heap::wrong_heap_pointer(
+                pointer.heap_id,
+                heap.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+        Ok(self)
+    }
+}
+
+impl FromRex for Handle {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        Ok(handle.clone())
+    }
+}
+
+macro_rules! impl_rex_via_pointer {
+    ($t:ty) => {
+        impl IntoRex for $t {
+            fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+                handle_from_pointer(heap, self.into_pointer(heap)?)
+            }
+        }
+
+        impl FromRex for $t {
+            fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+                Self::from_pointer(handle.heap(), &handle.pointer())
+            }
+        }
+    };
+}
+
+impl_rex_via_pointer!(bool);
+impl_rex_via_pointer!(u8);
+impl_rex_via_pointer!(u16);
+impl_rex_via_pointer!(u32);
+impl_rex_via_pointer!(u64);
+impl_rex_via_pointer!(i8);
+impl_rex_via_pointer!(i16);
+impl_rex_via_pointer!(i32);
+impl_rex_via_pointer!(i64);
+impl_rex_via_pointer!(f32);
+impl_rex_via_pointer!(f64);
+impl_rex_via_pointer!(String);
+impl_rex_via_pointer!(Uuid);
+impl_rex_via_pointer!(DateTime<Utc>);
+
+impl IntoRex for &str {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        handle_from_pointer(heap, self.into_pointer(heap)?)
+    }
+}
+
+impl<T: IntoRex> IntoRex for Vec<T> {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        let values = self
+            .into_iter()
+            .map(|value| value.into_rex(heap))
+            .collect::<Result<Vec<_>, _>>()?;
+        let pointers = values.iter().map(Handle::pointer).collect();
+        handle_from_pointer(heap, heap.alloc_ptr_array(pointers)?)
+    }
+}
+
+impl<T: FromRex> FromRex for Vec<T> {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        let heap = handle.heap();
+        let pointers = heap.pointer_as_array(&handle.pointer())?;
+        let mut out = Vec::with_capacity(pointers.len());
+        for pointer in pointers {
+            let child = heap.handle(pointer)?;
+            out.push(T::from_rex(&child)?);
+        }
+        Ok(out)
+    }
+}
+
+impl<T: IntoRex> IntoRex for Option<T> {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        match self {
+            Some(value) => {
+                let value = value.into_rex(heap)?;
+                handle_from_pointer(
+                    heap,
+                    heap.alloc_ptr_adt(sym("Some"), vec![value.pointer()])?,
+                )
+            }
+            None => handle_from_pointer(heap, heap.alloc_ptr_adt(sym("None"), vec![])?),
+        }
+    }
+}
+
+impl<T: FromRex> FromRex for Option<T> {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        let heap = handle.heap();
+        let (tag, args) = heap.pointer_as_adt(&handle.pointer())?;
+        if sym_eq(&tag, "Some") && args.len() == 1 {
+            let value = heap.handle(args[0])?;
+            return Ok(Some(T::from_rex(&value)?));
+        }
+        if sym_eq(&tag, "None") && args.is_empty() {
+            return Ok(None);
+        }
+        Err(EngineError::NativeType {
+            expected: "option".into(),
+            got: handle.type_name()?.into(),
+        })
     }
 }
 
 impl IntoPointer for Uuid {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_uuid(self)
+        heap.alloc_ptr_uuid(self)
     }
 }
 
 impl IntoPointer for DateTime<Utc> {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_datetime(self)
+        heap.alloc_ptr_datetime(self)
     }
 }
 
@@ -1541,9 +2153,9 @@ impl FromPointer for DateTime<Utc> {
     }
 }
 
-impl FromPointer for Value {
+impl FromPointer for Cell {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        heap.get(pointer).map(|value| value.as_ref().clone())
+        heap.get(pointer).map(|cell| cell.as_ref().clone())
     }
 }
 
@@ -1585,11 +2197,11 @@ impl<T: IntoPointer, E: IntoPointer> IntoPointer for Result<T, E> {
         match self {
             Ok(v) => {
                 let ptr = v.into_pointer(heap)?;
-                heap.alloc_adt(sym("Ok"), vec![ptr])
+                heap.alloc_ptr_adt(sym("Ok"), vec![ptr])
             }
             Err(e) => {
                 let ptr = e.into_pointer(heap)?;
-                heap.alloc_adt(sym("Err"), vec![ptr])
+                heap.alloc_ptr_adt(sym("Err"), vec![ptr])
             }
         }
     }
@@ -1624,6 +2236,40 @@ where
     }
 }
 
+impl<T: IntoRex, E: IntoRex> IntoRex for Result<T, E> {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        match self {
+            Ok(value) => {
+                let value = value.into_rex(heap)?;
+                handle_from_pointer(heap, heap.alloc_ptr_adt(sym("Ok"), vec![value.pointer()])?)
+            }
+            Err(error) => {
+                let error = error.into_rex(heap)?;
+                handle_from_pointer(heap, heap.alloc_ptr_adt(sym("Err"), vec![error.pointer()])?)
+            }
+        }
+    }
+}
+
+impl<T: FromRex, E: FromRex> FromRex for Result<T, E> {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        let heap = handle.heap();
+        let (tag, args) = heap.pointer_as_adt(&handle.pointer())?;
+        if sym_eq(&tag, "Ok") && args.len() == 1 {
+            let value = heap.handle(args[0])?;
+            return Ok(Ok(T::from_rex(&value)?));
+        }
+        if sym_eq(&tag, "Err") && args.len() == 1 {
+            let error = heap.handle(args[0])?;
+            return Ok(Err(E::from_rex(&error)?));
+        }
+        Err(EngineError::NativeType {
+            expected: "result".into(),
+            got: handle.type_name()?.into(),
+        })
+    }
+}
+
 impl RexType for () {
     fn rex_type() -> Type {
         Type::tuple(vec![])
@@ -1632,7 +2278,7 @@ impl RexType for () {
 
 impl IntoPointer for () {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        heap.alloc_tuple(vec![])
+        heap.alloc_ptr_tuple(vec![])
     }
 }
 
@@ -1650,6 +2296,18 @@ impl FromPointer for () {
     }
 }
 
+impl IntoRex for () {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+        handle_from_pointer(heap, self.into_pointer(heap)?)
+    }
+}
+
+impl FromRex for () {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+        Self::from_pointer(handle.heap(), &handle.pointer())
+    }
+}
+
 macro_rules! impl_tuple_traits {
     ($($name:ident),+) => {
         impl<$($name: RexType),+> RexType for ($($name,)+) {
@@ -1663,7 +2321,7 @@ macro_rules! impl_tuple_traits {
             fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
                 let ($($name,)+) = self;
                 let ptrs = vec![$($name.into_pointer(heap)?),+];
-                heap.alloc_tuple(ptrs)
+                heap.alloc_ptr_tuple(ptrs)
             }
         }
 
@@ -1678,6 +2336,34 @@ macro_rules! impl_tuple_traits {
                     _ => Err(EngineError::NativeType {
                         expected: "tuple".into(),
                         got: heap.type_name(pointer)?.into(),
+                    }),
+                }
+            }
+        }
+
+        impl<$($name: IntoRex),+> IntoRex for ($($name,)+) {
+            #[allow(non_snake_case)]
+            fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
+                let ($($name,)+) = self;
+                $(let $name = $name.into_rex(heap)?;)+
+                let ptrs = vec![$($name.pointer()),+];
+                handle_from_pointer(heap, heap.alloc_ptr_tuple(ptrs)?)
+            }
+        }
+
+        impl<$($name: FromRex),+> FromRex for ($($name,)+) {
+            #[allow(non_snake_case)]
+            fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
+                let heap = handle.heap();
+                let items = heap.pointer_as_tuple(&handle.pointer())?;
+                match items.as_slice() {
+                    [$($name),+] => {
+                        $(let $name = heap.handle(*$name)?;)+
+                        Ok(($(<$name as FromRex>::from_rex(&$name)?),+,))
+                    }
+                    _ => Err(EngineError::NativeType {
+                        expected: "tuple".into(),
+                        got: handle.type_name()?.into(),
                     }),
                 }
             }
@@ -1704,8 +2390,8 @@ impl IntoPointer for serde_json::Value {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
         let json_string = serde_json::to_string(&self)
             .map_err(|e| EngineError::Internal(format!("failed to serialize JSON: {}", e)))?;
-        let string_ptr = heap.alloc_string(json_string)?;
-        heap.alloc_adt(sym("serde_json::Value"), vec![string_ptr])
+        let string_ptr = heap.alloc_ptr_string(json_string)?;
+        heap.alloc_ptr_adt(sym("serde_json::Value"), vec![string_ptr])
     }
 }
 
@@ -1727,5 +2413,247 @@ impl FromPointer for serde_json::Value {
         let json_string = heap.pointer_as_string(&args[0])?;
         serde_json::from_str(&json_string)
             .map_err(|e| EngineError::Internal(format!("failed to deserialize JSON: {}", e)))
+    }
+}
+
+impl_rex_via_pointer!(serde_json::Value);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn handle_roots_value_until_last_clone_drops() {
+        let heap = Heap::new();
+        let pointer = heap.alloc_ptr_i32(42).expect("alloc_i32 should succeed");
+        assert_eq!(heap.external_root_count().expect("root count"), 0);
+
+        let handle = heap.handle(pointer).expect("handle should root pointer");
+        assert_eq!(handle.type_name().expect("handle type name"), "i32");
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        let clone = handle.clone();
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        drop(handle);
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        drop(clone);
+        assert_eq!(heap.external_root_count().expect("root count"), 0);
+    }
+
+    #[test]
+    fn handle_root_ids_are_reused_with_generation_bump() {
+        let heap = Heap::new();
+        let first_pointer = heap.alloc_ptr_i32(1).expect("alloc_i32 should succeed");
+        let first = heap
+            .handle(first_pointer)
+            .expect("handle should root pointer");
+        let first_root_id = first.root.root_id;
+        drop(first);
+
+        let second_pointer = heap.alloc_ptr_i32(2).expect("alloc_i32 should succeed");
+        let second = heap
+            .handle(second_pointer)
+            .expect("handle should reuse root slot");
+        let second_root_id = second.root.root_id;
+
+        assert_eq!(second_root_id.index, first_root_id.index);
+        assert_eq!(second_root_id.generation, first_root_id.generation + 1);
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+    }
+
+    #[test]
+    fn handle_rejects_pointer_from_different_heap() {
+        let heap_a = Heap::new();
+        let heap_b = Heap::new();
+        let pointer = heap_a.alloc_ptr_i32(42).expect("alloc_i32 should succeed");
+
+        let err = match heap_b.handle(pointer) {
+            Ok(_) => panic!("cross-heap pointer should not be rootable"),
+            Err(err) => err,
+        };
+        let EngineError::Internal(msg) = err else {
+            panic!("expected internal error for cross-heap pointer");
+        };
+        assert!(msg.contains("different heap"), "unexpected error: {msg}");
+        assert_eq!(heap_b.external_root_count().expect("root count"), 0);
+    }
+
+    #[test]
+    fn handle_value_reports_scalar_variants() {
+        let heap = Heap::new();
+
+        let number = 42u64.into_rex(&heap).expect("u64 should convert");
+        let Value::U64(value) = number.value().expect("u64 value") else {
+            panic!("expected u64 value");
+        };
+        assert_eq!(value, 42);
+        assert_eq!(number.as_u64().expect("u64 handle"), 42);
+
+        let text = "hello".into_rex(&heap).expect("str should convert");
+        let Value::String(value) = text.value().expect("string value") else {
+            panic!("expected string value");
+        };
+        assert_eq!(value, "hello");
+        assert_eq!(text.as_string().expect("string handle"), "hello");
+    }
+
+    #[test]
+    fn handle_value_roots_composite_children() {
+        let heap = Heap::new();
+        let first = heap.alloc_ptr_i32(1).expect("alloc_i32 should succeed");
+        let second = heap
+            .alloc_ptr_string("two".into())
+            .expect("alloc_string should succeed");
+        let tuple = heap
+            .handle(
+                heap.alloc_ptr_tuple(vec![first, second])
+                    .expect("alloc_tuple should succeed"),
+            )
+            .expect("tuple should be rootable");
+
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        let view = tuple.value().expect("tuple value");
+        let Value::Tuple(items) = &view else {
+            panic!("expected tuple value");
+        };
+        assert_eq!(heap.external_root_count().expect("root count"), 3);
+        assert_eq!(items.len(), 2);
+        assert_eq!(i32::from_rex(&items[0]).expect("i32 should decode"), 1);
+        assert_eq!(
+            String::from_rex(&items[1]).expect("string should decode"),
+            "two"
+        );
+
+        drop(view);
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        let items = tuple.as_tuple().expect("tuple handle");
+        assert_eq!(heap.external_root_count().expect("root count"), 3);
+        assert_eq!(items.len(), 2);
+    }
+
+    #[test]
+    fn handle_value_reports_named_composites() {
+        let heap = Heap::new();
+        let payload = heap
+            .alloc_ptr_bool(true)
+            .expect("alloc_bool should succeed");
+
+        let mut fields = BTreeMap::new();
+        fields.insert(sym("ready"), payload);
+        let dict = heap
+            .handle(
+                heap.alloc_ptr_dict(fields)
+                    .expect("alloc_dict should succeed"),
+            )
+            .expect("dict should be rootable");
+        let Value::Dict(fields) = dict.value().expect("dict value") else {
+            panic!("expected dict value");
+        };
+        assert!(
+            bool::from_rex(fields.get(&sym("ready")).expect("ready field"))
+                .expect("bool should decode")
+        );
+        assert!(
+            dict.as_dict()
+                .expect("dict handle")
+                .get(&sym("ready"))
+                .expect("ready field")
+                .as_bool()
+                .expect("bool handle")
+        );
+
+        let option = heap
+            .handle(
+                heap.alloc_ptr_adt(sym("Some"), vec![payload])
+                    .expect("alloc_adt should succeed"),
+            )
+            .expect("adt should be rootable");
+        let Value::Adt(tag, args) = option.value().expect("adt value") else {
+            panic!("expected adt value");
+        };
+        assert!(sym_eq(&tag, "Some"));
+        assert_eq!(args.len(), 1);
+        assert!(bool::from_rex(&args[0]).expect("bool should decode"));
+        let (tag, args) = option.as_adt().expect("adt handle");
+        assert!(sym_eq(&tag, "Some"));
+        assert_eq!(args.len(), 1);
+        assert!(args[0].as_bool().expect("bool handle"));
+    }
+
+    #[test]
+    fn rex_traits_roundtrip_owned_scalars() {
+        let heap = Heap::new();
+
+        let number = 42u64.into_rex(&heap).expect("u64 should convert");
+        assert_eq!(u64::from_rex(&number).expect("u64 should decode"), 42);
+
+        let text = "hello".into_rex(&heap).expect("str should convert");
+        assert_eq!(
+            String::from_rex(&text).expect("string should decode"),
+            "hello"
+        );
+
+        assert_eq!(heap.external_root_count().expect("root count"), 2);
+    }
+
+    #[test]
+    fn rex_traits_roundtrip_containers() {
+        let heap = Heap::new();
+
+        let array = vec![1i32, 2, 3]
+            .into_rex(&heap)
+            .expect("vec should convert");
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+        assert_eq!(
+            Vec::<i32>::from_rex(&array).expect("vec should decode"),
+            vec![1, 2, 3]
+        );
+
+        let option = Some("value".to_string())
+            .into_rex(&heap)
+            .expect("option should convert");
+        assert_eq!(
+            Option::<String>::from_rex(&option).expect("option should decode"),
+            Some("value".to_string())
+        );
+
+        let result = Result::<u32, String>::Err("nope".to_string())
+            .into_rex(&heap)
+            .expect("result should convert");
+        assert_eq!(
+            Result::<u32, String>::from_rex(&result).expect("result should decode"),
+            Err("nope".to_string())
+        );
+
+        let tuple = (true, 9i64, "nine".to_string())
+            .into_rex(&heap)
+            .expect("tuple should convert");
+        assert_eq!(
+            <(bool, i64, String)>::from_rex(&tuple).expect("tuple should decode"),
+            (true, 9, "nine".to_string())
+        );
+    }
+
+    #[test]
+    fn rex_traits_keep_handle_on_one_root() {
+        let heap = Heap::new();
+        let handle = 7i32.into_rex(&heap).expect("i32 should convert");
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        let cloned = Handle::from_rex(&handle).expect("handle should clone");
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        let returned = cloned.into_rex(&heap).expect("handle should convert");
+        assert_eq!(i32::from_rex(&returned).expect("i32 should decode"), 7);
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+
+        drop(handle);
+        assert_eq!(heap.external_root_count().expect("root count"), 1);
+        drop(returned);
+        assert_eq!(heap.external_root_count().expect("root count"), 0);
     }
 }

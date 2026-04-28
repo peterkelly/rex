@@ -1,9 +1,8 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Heap, Module, Parser, Pointer, Token, Type, TypeKind,
-    assert_pointer_eq,
+    BuiltinTypeId, Engine, EngineError, Handle, Heap, Module, Parser, Token, Type, TypeKind,
 };
 
-async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
+async fn eval(source: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
@@ -11,7 +10,7 @@ async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let (pointer, ty) = rex::Evaluator::new_with_compiler(
+    let (handle, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
         rex::Compiler::new(engine.clone()),
     )
@@ -19,18 +18,47 @@ async fn eval(source: &str) -> Result<(Heap, Pointer, Type), EngineError> {
     .await
     .map_err(|err| err.into_engine_error())?;
     let heap = engine.into_heap();
-    Ok((heap, pointer, ty))
+    Ok((heap, handle, ty))
+}
+
+trait HandleRef {
+    fn handle_ref(&self) -> &Handle;
+}
+
+impl HandleRef for Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+impl HandleRef for &Handle {
+    fn handle_ref(&self) -> &Handle {
+        self
+    }
+}
+
+macro_rules! assert_handle_eq {
+    ($lhs:expr, $rhs:expr) => {{
+        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
+        let rhs: Handle = HandleRef::handle_ref(&$rhs).clone();
+        assert!(
+            lhs.value_eq(&rhs).unwrap(),
+            "left: {}, right: {}",
+            lhs.display().unwrap(),
+            rhs.display().unwrap()
+        );
+    }};
 }
 
 async fn assert_i32_result(source: &str, expected: i32) {
-    let (heap, pointer, ty) = eval(source).await.unwrap();
+    let (heap, handle, ty) = eval(source).await.unwrap();
     assert!(
         matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
             || matches!(ty.as_ref(), TypeKind::Var(_)),
         "eval returned unexpected type for: {source}"
     );
     let expected = heap.alloc_i32(expected).unwrap();
-    assert_pointer_eq!(&heap, &pointer, &expected);
+    assert_handle_eq!(&handle, &expected);
 }
 
 async fn assert_even_odd_tuple(source: &str) {
@@ -41,7 +69,7 @@ async fn assert_even_odd_tuple(source: &str) {
         bool_ty.clone(),
         bool_ty,
     ]);
-    let (heap, pointer, ty) = eval(source).await.unwrap();
+    let (heap, handle, ty) = eval(source).await.unwrap();
     assert_eq!(
         ty, expected_ty,
         "eval returned unexpected type for: {source}"
@@ -51,7 +79,7 @@ async fn assert_even_odd_tuple(source: &str) {
     let t2 = heap.alloc_bool(false).unwrap();
     let t3 = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
-    assert_pointer_eq!(&heap, &pointer, &expected);
+    assert_handle_eq!(&handle, &expected);
 }
 
 #[tokio::test]

@@ -10,7 +10,7 @@ use crate::engine::{
     Export, HostFnAsync, HostFnSync, NativeFuture, SchedulerNativeResult, order_adt_family,
 };
 use crate::stack::{NativeLogShow, NativeTask};
-use crate::{Engine, EngineError, IntoPointer, Pointer, ROOT_MODULE_NAME, RexType, Value};
+use crate::{Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME, RexType};
 
 /// A staged host module that you build up in Rust and later inject into an [`Engine`].
 ///
@@ -18,7 +18,7 @@ use crate::{Engine, EngineError, IntoPointer, Pointer, ROOT_MODULE_NAME, RexType
 ///
 /// - Rex declarations such as `pub type ...`
 /// - typed Rust handlers via [`Module::export`] / [`Module::export_async`]
-/// - pointer-level native handlers via [`Module::export_native`] /
+/// - handle-based dynamic native handlers via [`Module::export_native`] /
 ///   [`Module::export_native_async`]
 ///
 /// Once the module is assembled, pass it to [`Engine::inject_module`] to make it importable
@@ -445,10 +445,10 @@ where
         Ok(())
     }
 
-    /// Stage a pointer-level synchronous native export with an explicit Rex type scheme.
+    /// Stage a handle-based synchronous native export with an explicit Rex type scheme.
     ///
     /// This lower-level API is intended for dynamic or runtime-defined integrations where the
-    /// handler needs access to the engine heap or where the Rex type cannot be inferred from an
+    /// handler needs dynamic Rex values or where the Rex type cannot be inferred from an
     /// ordinary Rust function signature alone.
     ///
     /// `scheme` describes the Rex-visible type, and `arity` must match the number of arguments the
@@ -457,7 +457,7 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{EvaluatorRef, Module, Pointer};
+    /// use rex_engine::{EvaluatorRef, Handle, Module};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut module = Module::<()>::new("acme.dynamic");
@@ -468,7 +468,7 @@ where
     /// );
     ///
     /// module
-    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Pointer]| {
+    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Handle]| {
     ///         Ok(args[0].clone())
     ///     })
     ///     .unwrap();
@@ -481,7 +481,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
             + Send
             + Sync
             + 'static,
@@ -491,7 +491,7 @@ where
         Ok(())
     }
 
-    /// Stage a pointer-level asynchronous native export with an explicit Rex type scheme.
+    /// Stage a handle-based asynchronous native export with an explicit Rex type scheme.
     ///
     /// This is the async counterpart to [`Module::export_native`]. Use it when the export needs
     /// both direct engine access and asynchronous execution.
@@ -500,7 +500,7 @@ where
     ///
     /// ```rust,ignore
     /// use futures::FutureExt;
-    /// use rex_engine::{EvaluatorRef, Module, Pointer};
+    /// use rex_engine::{EvaluatorRef, Module};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut module = Module::<()>::new("acme.dynamic");
@@ -511,8 +511,8 @@ where
     ///         "answer_async",
     ///         scheme,
     ///         0,
-    ///         |engine: EvaluatorRef<()>, _typ: Type, _args: Vec<Pointer>| {
-    ///             async move { engine.heap.alloc_i32(42) }.boxed()
+    ///         |engine: EvaluatorRef<()>, _typ: Type, _args| {
+    ///             async move { engine.heap().alloc_i32(42) }.boxed()
     ///         },
     ///     )
     ///     .unwrap();
@@ -525,7 +525,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeFuture + Send + Sync + 'static,
+        F: Fn(EvaluatorRef<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static,
     {
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);
@@ -534,20 +534,9 @@ where
 
     pub fn export_value<V>(&mut self, name: impl Into<String>, value: V) -> Result<(), EngineError>
     where
-        V: IntoPointer + RexType + Clone + Send + Sync + 'static,
+        V: IntoRex + RexType + Clone + Send + Sync + 'static,
     {
         self.exports.push(Export::from_value(name, value)?);
-        Ok(())
-    }
-
-    pub fn export_value_typed(
-        &mut self,
-        name: impl Into<String>,
-        typ: Type,
-        value: Value,
-    ) -> Result<(), EngineError> {
-        self.exports
-            .push(Export::from_value_typed(name, typ, value)?);
         Ok(())
     }
 }

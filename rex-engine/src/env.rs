@@ -19,7 +19,7 @@ impl Environment {
         Environment(Arc::new(EnvEntry::default()))
     }
 
-    pub fn extend(&self, name: Symbol, value: Pointer) -> Self {
+    pub(crate) fn extend(&self, name: Symbol, value: Pointer) -> Self {
         let mut bindings = BTreeMap::new();
         bindings.insert(name, value);
         Environment(Arc::new(EnvEntry {
@@ -28,14 +28,14 @@ impl Environment {
         }))
     }
 
-    pub fn extend_many(&self, bindings: BTreeMap<Symbol, Pointer>) -> Self {
+    pub(crate) fn extend_many(&self, bindings: BTreeMap<Symbol, Pointer>) -> Self {
         Environment(Arc::new(EnvEntry {
             parent: Some(self.clone()),
             bindings,
         }))
     }
 
-    pub fn get(&self, name: &Symbol) -> Option<Pointer> {
+    pub(crate) fn get(&self, name: &Symbol) -> Option<Pointer> {
         let mut current: Option<&Environment> = Some(self);
         while let Some(env) = current {
             if let Some(v) = env.0.bindings.get(name) {

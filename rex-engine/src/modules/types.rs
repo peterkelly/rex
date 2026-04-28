@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use rex_ast::expr::{Program, Symbol, intern};
 use rex_typesystem::types::Type;
 
-use crate::Pointer;
+use crate::Handle;
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ModuleId {
@@ -217,7 +217,7 @@ impl ReplState {
 pub struct ModuleInstance {
     pub id: ModuleId,
     pub exports: ModuleExports,
-    pub init_value: Pointer,
+    pub init_value: Handle,
     pub init_type: Type,
     pub source_fingerprint: Option<String>,
 }
