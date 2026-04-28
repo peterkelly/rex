@@ -544,10 +544,7 @@ fn rex_type_expr(
                     };
                     let inner = rex_type_expr(inner, adt_params)?;
                     Ok(quote! {
-                        ::rex::Type::app(
-                            ::rex::Type::builtin(::rex::BuiltinTypeId::List),
-                            #inner
-                        )
+                        ::rex::Type::array(#inner)
                     })
                 }
                 "HashMap" | "BTreeMap" => {
@@ -648,16 +645,11 @@ fn into_value_expr(expr: TokenStream2, ty: &Type) -> Result<TokenStream2, Error>
                     };
                     let inner_encode = into_value_expr(quote!(item), inner)?;
                     Ok(quote! {{
-                        let mut out =
-                            heap.alloc_adt(::rex::intern("Empty"), ::std::vec::Vec::new())?;
-                        for item in #expr.into_iter().rev() {
-                            out = heap
-                                .alloc_adt(
-                                    ::rex::intern("Cons"),
-                                    ::std::vec![#inner_encode, out],
-                                )?;
+                        let mut out = ::std::vec::Vec::new();
+                        for item in #expr.into_iter() {
+                            out.push(#inner_encode);
                         }
-                        out
+                        heap.alloc_array(out)?
                     }})
                 }
                 "HashMap" | "BTreeMap" => {
@@ -776,29 +768,25 @@ fn from_value_expr(
                         return Err(Error::new(seg.span(), "expected `Vec<T>`"));
                     };
                     let inner_decode = from_value_expr(
-                        quote!(&heap.get(&args[0])?.as_ref().clone()),
+                        quote!(&heap.get(item)?.as_ref().clone()),
                         inner,
                         name_expr.clone(),
                     )?;
                     Ok(quote! {{
-                        let mut out = ::std::vec::Vec::new();
-                        let mut cur = (#value_expr).clone();
-                        loop {
-                            match &cur {
-                                ::rex::Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
-                                    break Ok(out);
-                                }
-                                ::rex::Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
+                        match #value_expr {
+                            ::rex::Value::Array(items) => {
+                                let mut out = ::std::vec::Vec::with_capacity(items.len());
+                                for item in items {
                                     let v = #inner_decode?;
                                     out.push(v);
-                                    cur = heap.get(&args[1])?.as_ref().clone();
                                 }
-                                other => {
-                                    break Err(::rex::EngineError::NativeType { expected: "list".into(),
-                                        got: ::rex::value_debug(heap, &other)
-                                            .unwrap_or_else(|err| format!("<display error: {err}>")),
-                                    });
-                                }
+                                Ok(out)
+                            }
+                            other => {
+                                Err(::rex::EngineError::NativeType { expected: "array".into(),
+                                    got: ::rex::value_debug(heap, &other)
+                                        .unwrap_or_else(|err| format!("<display error: {err}>")),
+                                })
                             }
                         }
                     }})

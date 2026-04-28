@@ -319,7 +319,7 @@ fn unit_enum_integer_unknown_discriminant_errors() {
 async fn eval_entry_points_return_type_for_json_eval() {
     let mut engine = Engine::with_prelude(()).unwrap();
     EvalJsonRecord::inject_rex(&mut engine).unwrap();
-    let rex_code = "EvalJsonRecord { id = 7, values = [1, 2, 3, 5, 8] }";
+    let rex_code = "EvalJsonRecord { id = 7, values = to_array [1, 2, 3, 5, 8] }";
     let expected_json = json!({
         "id": 7,
         "values": [1, 2, 3, 5, 8]

@@ -116,6 +116,11 @@ impl FromPointer for AtomRef {
 #[derive(Rex, Debug, PartialEq)]
 struct Fragment(Vec<AtomRef>);
 
+#[derive(Rex, Debug, PartialEq)]
+struct VecFieldSnapshot {
+    values: Vec<i32>,
+}
+
 #[derive(Debug, PartialEq, Clone)]
 struct Xyzf32([f32; 3]);
 
@@ -151,7 +156,7 @@ async fn derive_struct_roundtrip_value() {
         MyStruct {
             x = true,
             y = 42,
-            tags = ["a", "b", "c"],
+            tags = to_array ["a", "b", "c"],
             props = { a = 1, b = 2 },
             inner = MyInnerStruct { x = false, y = 7 },
             pair = (1, "hi", true),
@@ -192,7 +197,7 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
         MyStruct {
             x = true,
             y = 42,
-            tags = ["a", "b", "c"],
+            tags = to_array ["a", "b", "c"],
             props = { a = 1, b = 2 },
             inner = MyInnerStruct { x = false, y = 7 },
             pair = (1, "hi", true),
@@ -364,7 +369,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         bump_y (MyStruct {
             x = true,
             y = 42,
-            tags = ["a", "b", "c"],
+            tags = to_array ["a", "b", "c"],
             props = { a = 1, b = 2 },
             inner = MyInnerStruct { x = false, y = 7 },
             pair = (1, "hi", true),
@@ -632,6 +637,66 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
             },
         }
     );
+}
+
+#[test]
+fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
+    fn array_from_values(heap: &Heap, values: &[i32]) -> Pointer {
+        let items = values
+            .iter()
+            .map(|value| heap.alloc_i32(*value).unwrap())
+            .collect();
+        heap.alloc_array(items).unwrap()
+    }
+
+    fn assert_values(values: Vec<i32>, expected: &[i32]) {
+        let heap = Heap::new();
+        let adt = VecFieldSnapshot::rex_adt_decl().unwrap();
+        assert_eq!(
+            adt.variants[0].args,
+            vec![Type::record(vec![(
+                rex::intern("values"),
+                Type::array(Type::builtin(BuiltinTypeId::I32)),
+            )])]
+        );
+
+        let pointer = VecFieldSnapshot {
+            values: values.clone(),
+        }
+        .into_pointer(&heap)
+        .unwrap();
+        let (tag, args) = heap.pointer_as_adt(&pointer).unwrap();
+        assert_eq!(tag.as_ref(), "VecFieldSnapshot");
+        assert_eq!(args.len(), 1);
+
+        let fields = heap.pointer_as_dict(&args[0]).unwrap();
+        let array_pointer = fields
+            .get(&rex::intern("values"))
+            .expect("expected `values` field");
+        let actual = heap
+            .pointer_as_array(array_pointer)
+            .unwrap()
+            .iter()
+            .map(|item| heap.pointer_as_i32(item).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, expected);
+
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert(rex::intern("values"), array_from_values(&heap, expected));
+        let pointer = heap
+            .alloc_adt(
+                rex::intern("VecFieldSnapshot"),
+                vec![heap.alloc_dict(fields).unwrap()],
+            )
+            .unwrap();
+        let decoded = VecFieldSnapshot::from_pointer(&heap, &pointer).unwrap();
+        assert_eq!(decoded, VecFieldSnapshot { values });
+    }
+
+    assert_values(vec![], &[]);
+    assert_values(vec![7], &[7]);
+    assert_values(vec![1, 2, 3], &[1, 2, 3]);
 }
 
 #[tokio::test]

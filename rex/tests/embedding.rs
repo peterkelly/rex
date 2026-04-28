@@ -436,7 +436,7 @@ async fn derived_rex_default_record_update_can_override_fields() {
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
     let expr = parse(
-        r#"let e: Entity1 = { default with { name = "sample", tags = Some ["x", "y"], numbers = [7, 11] } } in e"#,
+        r#"let e: Entity1 = { default with { name = "sample", tags = Some (to_array ["x", "y"]), numbers = to_array [7, 11] } } in e"#,
     );
     let (value, ty) = rex::Evaluator::new_with_compiler(
         rex::RuntimeEnv::new(engine.clone()),
@@ -518,7 +518,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
             (Entity2 "sample" [7, 11])
             with {
                 description = Some "desc",
-                tags = Some ["x", "y"]
+                tags = Some (to_array ["x", "y"])
             }
         }"#,
     );

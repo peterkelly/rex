@@ -10,6 +10,8 @@ The derive generates:
 - ADT-family discovery so `inject_rex` registers all reachable acyclic derived dependencies
 - `IntoPointer` / `FromPointer` implementations to convert between Rust values and Rex runtime values
 
+Derived fields of type `Vec<T>` are represented as `Array T` and convert to/from Rex runtime arrays.
+
 In practice this means injecting the top-level derived Rust type is enough for acyclic families of
 derived ADTs; manual dependency ordering is no longer required. Cyclic ADT families are still
 rejected at registration time.

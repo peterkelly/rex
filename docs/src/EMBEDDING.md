@@ -713,6 +713,10 @@ The derive:
 - discovers and registers the full acyclic ADT family needed by the root type
 - implements `FromPointer`/`IntoPointer` for converting Rust ↔ Rex
 
+Fields of type `Vec<T>` are exposed as `Array T` and convert to/from Rex
+runtime arrays. When constructing or updating derived records from Rex code, use
+`to_array [...]` for these fields.
+
 That means `MyType::inject_rex(&mut engine)?` is enough for acyclic graphs of derived ADTs. You do
 not need to manually register dependencies in topological order. Cyclic ADT families are still not
 supported by this registration path.
