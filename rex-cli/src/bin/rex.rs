@@ -54,6 +54,10 @@ struct RunArgs {
     #[arg(long = "stdin", required_unless_present_any = ["file", "code"])]
     stdin: bool,
 
+    /// Treat the input file as a snippet instead of a module.
+    #[arg(long = "snippet", requires = "file")]
+    snippet: bool,
+
     /// Print the parsed AST as JSON and exit.
     #[arg(long = "emit-ast")]
     emit_ast: bool,
@@ -147,6 +151,7 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
         file,
         code,
         stdin,
+        snippet,
         emit_ast,
         emit_type,
         include,
@@ -183,6 +188,7 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
         &source,
         RunSourceOpts {
             file,
+            snippet,
             include,
             emit_ast,
             emit_type,
@@ -326,6 +332,7 @@ fn is_imports_only(buffer: &str) -> bool {
 
 struct RunSourceOpts {
     file: Option<String>,
+    snippet: bool,
     include: Vec<String>,
     emit_ast: bool,
     emit_type: bool,
@@ -348,6 +355,7 @@ fn init_engine(include: &[String]) -> Result<Engine, String> {
 async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     let RunSourceOpts {
         file,
+        snippet,
         include,
         emit_ast,
         emit_type,
@@ -363,7 +371,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     if emit_ast || emit_type {
         let type_json = if emit_type {
-            Some(infer_type_json(source, file.as_deref(), &include)?)
+            Some(infer_type_json(source, file.as_deref(), snippet, &include)?)
         } else {
             None
         };
@@ -374,22 +382,28 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let engine = init_engine(&include)?;
 
+    let mut evaluator = rex::Evaluator::new_with_compiler(
+        rex::RuntimeEnv::new(engine.clone()),
+        rex::Compiler::new(engine.clone()),
+    );
+
     let (pointer, _) = if let Some(path) = file {
-        rex::Evaluator::new_with_compiler(
-            rex::RuntimeEnv::new(engine.clone()),
-            rex::Compiler::new(engine.clone()),
-        )
-        .eval_module_file(&path)
-        .await
-        .map_err(|e| format!("{e}"))?
+        if snippet {
+            evaluator
+                .eval_snippet_at(source, &path)
+                .await
+                .map_err(|e| format!("{e}"))?
+        } else {
+            evaluator
+                .eval_module_file(&path)
+                .await
+                .map_err(|e| format!("{e}"))?
+        }
     } else {
-        rex::Evaluator::new_with_compiler(
-            rex::RuntimeEnv::new(engine.clone()),
-            rex::Compiler::new(engine.clone()),
-        )
-        .eval_snippet(source)
-        .await
-        .map_err(|e| format!("{e}"))?
+        evaluator
+            .eval_snippet(source)
+            .await
+            .map_err(|e| format!("{e}"))?
     };
     let rendered = pointer_display_with(&engine.heap, &pointer, ValueDisplayOptions::unsanitized())
         .unwrap_or_else(|e| format!("<display error: {e}>"));
@@ -419,12 +433,19 @@ fn emit_json(
 fn infer_type_json(
     source: &str,
     file: Option<&str>,
+    snippet: bool,
     include: &[String],
 ) -> Result<serde_json::Value, String> {
     let mut engine = init_engine(include)?;
 
     let (preds, ty) = if let Some(path) = file {
-        engine.infer_module_file(path).map_err(|e| format!("{e}"))?
+        if snippet {
+            engine
+                .infer_snippet_at(source, path)
+                .map_err(|e| format!("{e}"))?
+        } else {
+            engine.infer_module_file(path).map_err(|e| format!("{e}"))?
+        }
     } else {
         engine.infer_snippet(source).map_err(|e| format!("{e}"))?
     };
@@ -472,7 +493,7 @@ mod tests {
 
         let program = parser.parse_program().expect("parse");
 
-        let ty_json = infer_type_json(source, None, &[]).expect("infer");
+        let ty_json = infer_type_json(source, None, false, &[]).expect("infer");
         let ast_out = emit_json(&program, true, None).expect("emit ast");
         let type_out = emit_json(&program, false, Some(ty_json.clone())).expect("emit type");
         let both_out = emit_json(&program, true, Some(ty_json)).expect("emit both");
@@ -505,7 +526,44 @@ mod tests {
             bar.add (bar.triple 10) 2
         "#;
         let include = vec![root.to_string_lossy().to_string()];
-        let json = infer_type_json(source, None, &include).expect("infer");
+        let json = infer_type_json(source, None, false, &include).expect("infer");
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
+    }
+
+    #[test]
+    fn emit_type_file_snippet_uses_file_as_import_base() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock is before unix epoch")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("rex-file-snippet-test-{nonce}"));
+        std::fs::create_dir_all(root.join("foo")).expect("create temp module dir");
+
+        std::fs::write(
+            root.join("foo/bar.rex"),
+            r#"
+                pub fn inc : i32 -> i32 = \x -> x + 1
+            "#,
+        )
+        .expect("write bar.rex");
+
+        let main = root.join("main.rex");
+        let source = r#"
+            import foo.bar as Bar
+
+            Bar.inc 41
+        "#;
+        std::fs::write(&main, source).expect("write main.rex");
+        let main = main.to_string_lossy().to_string();
+
+        let module_err = infer_type_json(source, Some(&main), false, &[]).expect_err("module");
+        assert!(
+            module_err.contains("declaration-only"),
+            "unexpected error: {module_err}"
+        );
+
+        let json = infer_type_json(source, Some(&main), true, &[]).expect("infer snippet file");
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
     }
