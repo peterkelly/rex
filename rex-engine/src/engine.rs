@@ -567,7 +567,7 @@ where
             let stored = value.clone();
             let func: SyncNativePointerCallable<State> =
                 Arc::new(move |engine, _: &Type, _args: &[Pointer]| {
-                    Ok(stored.clone().into_rex(engine.heap())?.pointer())
+                    stored.clone().into_rex(engine.heap())?.pointer()
                 });
             let registration =
                 NativeRegistration::sync(Scheme::new(vec![], vec![], typ.clone()), 0, func);
@@ -944,7 +944,7 @@ macro_rules! define_handler_impl {
                             });
                         }
                         let value = self(engine.state())?;
-                        Ok(value.into_rex(engine.heap())?.pointer())
+                        value.into_rex(engine.heap())?.pointer()
                     },
                 );
                 let scheme = Scheme::new(vec![], vec![], R::rex_type());
@@ -988,7 +988,7 @@ macro_rules! define_handler_impl {
                             $arg_ty::from_rex(&handle)?
                         };)*
                         let value = self(engine.state(), $($arg_name),+)?;
-                        Ok(value.into_rex(engine.heap())?.pointer())
+                        value.into_rex(engine.heap())?.pointer()
                     },
                 );
                 let typ = native_fn_type!($($arg_ty),+ ; R);
@@ -1062,7 +1062,7 @@ macro_rules! define_async_handler_impl {
                                 });
                             }
                             let value = f(engine.state()).await?;
-                            Ok(value.into_rex(engine.heap())?.pointer())
+                            value.into_rex(engine.heap())?.pointer()
                         }
                         .boxed()
                     },
@@ -1112,7 +1112,7 @@ macro_rules! define_async_handler_impl {
                                 $arg_ty::from_rex(&handle)?
                             };)*
                             let value = f(engine.state(), $($arg_name),+).await?;
-                            Ok(value.into_rex(engine.heap())?.pointer())
+                            value.into_rex(engine.heap())?.pointer()
                         }
                         .boxed()
                     },
@@ -2686,7 +2686,7 @@ where
         let typ = V::rex_type();
         let value = value.into_rex(&self.heap)?;
         let func: SyncNativePointerCallable<State> =
-            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| Ok(value.pointer()));
+            Arc::new(move |_engine, _: &Type, _args: &[Pointer]| value.pointer());
         let scheme = Scheme::new(vec![], vec![], typ);
         let registration = NativeRegistration::sync(scheme, 0, func);
         self.register_native_registration(ROOT_MODULE_NAME, name, registration)

@@ -113,7 +113,6 @@ impl Value {
 
 struct HandleRoot {
     heap: Heap,
-    pointer: Pointer,
     root_id: RootId,
 }
 
@@ -134,11 +133,13 @@ impl fmt::Debug for Handle {
 
 impl Handle {
     pub fn type_name(&self) -> Result<&'static str, EngineError> {
-        self.root.heap.type_name(&self.root.pointer)
+        let pointer = self.pointer()?;
+        self.heap().type_name(&pointer)
     }
 
     pub fn value(&self) -> Result<Value, EngineError> {
-        self.heap().view(&self.pointer())
+        let pointer = self.pointer()?;
+        self.heap().view(&pointer)
     }
 
     pub fn as_bool(&self) -> Result<bool, EngineError> {
@@ -276,16 +277,19 @@ impl Handle {
     }
 
     pub fn display_with(&self, opts: ValueDisplayOptions) -> Result<String, EngineError> {
-        pointer_display_with(self.heap(), &self.pointer(), opts)
+        let pointer = self.pointer()?;
+        pointer_display_with(self.heap(), &pointer, opts)
     }
 
     pub fn debug(&self) -> Result<String, EngineError> {
-        pointer_debug(self.heap(), &self.pointer())
+        let pointer = self.pointer()?;
+        pointer_debug(self.heap(), &pointer)
     }
 
     pub fn value_eq(&self, other: &Handle) -> Result<bool, EngineError> {
+        let self_pointer = self.pointer()?;
         let pointer = other.pointer_for_heap(self.heap())?;
-        pointer_eq(self.heap(), &self.pointer(), &pointer)
+        pointer_eq(self.heap(), &self_pointer, &pointer)
     }
 
     fn type_error(&self, expected: &'static str) -> EngineError {
@@ -299,12 +303,12 @@ impl Handle {
         &self.root.heap
     }
 
-    pub(crate) fn pointer(&self) -> Pointer {
-        self.root.pointer
+    pub(crate) fn pointer(&self) -> Result<Pointer, EngineError> {
+        self.root.heap.resolve_external_root(self.root.root_id)
     }
 
     pub(crate) fn pointer_for_heap(&self, heap: &Heap) -> Result<Pointer, EngineError> {
-        let pointer = self.pointer();
+        let pointer = self.pointer()?;
         if pointer.heap_id != heap.id {
             return Err(Heap::wrong_heap_pointer(
                 pointer.heap_id,
@@ -371,7 +375,6 @@ impl Heap {
         Ok(Handle {
             root: Arc::new(HandleRoot {
                 heap: self.clone(),
-                pointer,
                 root_id,
             }),
         })
@@ -909,6 +912,27 @@ impl Heap {
         slot.generation = next_generation;
         state.free_root_list.push(root_id.index);
         Ok(())
+    }
+
+    fn resolve_external_root(&self, root_id: RootId) -> Result<Pointer, EngineError> {
+        if root_id.heap_id != self.id {
+            return Err(Self::invalid_root(root_id));
+        }
+
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        let slot_index = usize::try_from(root_id.index)
+            .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
+        let slot = state
+            .root_slots
+            .get(slot_index)
+            .ok_or_else(|| Self::invalid_root(root_id))?;
+        if slot.generation != root_id.generation {
+            return Err(Self::invalid_root(root_id));
+        }
+        slot.pointer.ok_or_else(|| Self::invalid_root(root_id))
     }
 
     #[cfg(test)]
@@ -1881,7 +1905,7 @@ fn handle_from_pointer(heap: &Heap, pointer: Pointer) -> Result<Handle, EngineEr
 
 impl IntoRex for Handle {
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
-        let pointer = self.pointer();
+        let pointer = self.pointer()?;
         if pointer.heap_id != heap.id {
             return Err(Heap::wrong_heap_pointer(
                 pointer.heap_id,
@@ -1910,7 +1934,8 @@ macro_rules! impl_rex_via_pointer {
 
         impl FromRex for $t {
             fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-                Self::from_pointer(handle.heap(), &handle.pointer())
+                let pointer = handle.pointer()?;
+                Self::from_pointer(handle.heap(), &pointer)
             }
         }
     };
@@ -1943,7 +1968,10 @@ impl<T: IntoRex> IntoRex for Vec<T> {
             .into_iter()
             .map(|value| value.into_rex(heap))
             .collect::<Result<Vec<_>, _>>()?;
-        let pointers = values.iter().map(Handle::pointer).collect();
+        let pointers = values
+            .iter()
+            .map(Handle::pointer)
+            .collect::<Result<Vec<_>, _>>()?;
         handle_from_pointer(heap, heap.alloc_ptr_array(pointers)?)
     }
 }
@@ -1951,7 +1979,8 @@ impl<T: IntoRex> IntoRex for Vec<T> {
 impl<T: FromRex> FromRex for Vec<T> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
         let heap = handle.heap();
-        let pointers = heap.pointer_as_array(&handle.pointer())?;
+        let pointer = handle.pointer()?;
+        let pointers = heap.pointer_as_array(&pointer)?;
         let mut out = Vec::with_capacity(pointers.len());
         for pointer in pointers {
             let child = heap.handle(pointer)?;
@@ -1968,7 +1997,7 @@ impl<T: IntoRex> IntoRex for Option<T> {
                 let value = value.into_rex(heap)?;
                 handle_from_pointer(
                     heap,
-                    heap.alloc_ptr_adt(sym("Some"), vec![value.pointer()])?,
+                    heap.alloc_ptr_adt(sym("Some"), vec![value.pointer()?])?,
                 )
             }
             None => handle_from_pointer(heap, heap.alloc_ptr_adt(sym("None"), vec![])?),
@@ -1979,7 +2008,8 @@ impl<T: IntoRex> IntoRex for Option<T> {
 impl<T: FromRex> FromRex for Option<T> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
         let heap = handle.heap();
-        let (tag, args) = heap.pointer_as_adt(&handle.pointer())?;
+        let pointer = handle.pointer()?;
+        let (tag, args) = heap.pointer_as_adt(&pointer)?;
         if sym_eq(&tag, "Some") && args.len() == 1 {
             let value = heap.handle(args[0])?;
             return Ok(Some(T::from_rex(&value)?));
@@ -2241,11 +2271,14 @@ impl<T: IntoRex, E: IntoRex> IntoRex for Result<T, E> {
         match self {
             Ok(value) => {
                 let value = value.into_rex(heap)?;
-                handle_from_pointer(heap, heap.alloc_ptr_adt(sym("Ok"), vec![value.pointer()])?)
+                handle_from_pointer(heap, heap.alloc_ptr_adt(sym("Ok"), vec![value.pointer()?])?)
             }
             Err(error) => {
                 let error = error.into_rex(heap)?;
-                handle_from_pointer(heap, heap.alloc_ptr_adt(sym("Err"), vec![error.pointer()])?)
+                handle_from_pointer(
+                    heap,
+                    heap.alloc_ptr_adt(sym("Err"), vec![error.pointer()?])?,
+                )
             }
         }
     }
@@ -2254,7 +2287,8 @@ impl<T: IntoRex, E: IntoRex> IntoRex for Result<T, E> {
 impl<T: FromRex, E: FromRex> FromRex for Result<T, E> {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
         let heap = handle.heap();
-        let (tag, args) = heap.pointer_as_adt(&handle.pointer())?;
+        let pointer = handle.pointer()?;
+        let (tag, args) = heap.pointer_as_adt(&pointer)?;
         if sym_eq(&tag, "Ok") && args.len() == 1 {
             let value = heap.handle(args[0])?;
             return Ok(Ok(T::from_rex(&value)?));
@@ -2304,7 +2338,8 @@ impl IntoRex for () {
 
 impl FromRex for () {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
-        Self::from_pointer(handle.heap(), &handle.pointer())
+        let pointer = handle.pointer()?;
+        Self::from_pointer(handle.heap(), &pointer)
     }
 }
 
@@ -2346,7 +2381,7 @@ macro_rules! impl_tuple_traits {
             fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
                 let ($($name,)+) = self;
                 $(let $name = $name.into_rex(heap)?;)+
-                let ptrs = vec![$($name.pointer()),+];
+                let ptrs = vec![$($name.pointer()?),+];
                 handle_from_pointer(heap, heap.alloc_ptr_tuple(ptrs)?)
             }
         }
@@ -2355,7 +2390,8 @@ macro_rules! impl_tuple_traits {
             #[allow(non_snake_case)]
             fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
                 let heap = handle.heap();
-                let items = heap.pointer_as_tuple(&handle.pointer())?;
+                let pointer = handle.pointer()?;
+                let items = heap.pointer_as_tuple(&pointer)?;
                 match items.as_slice() {
                     [$($name),+] => {
                         $(let $name = heap.handle(*$name)?;)+
@@ -2461,6 +2497,28 @@ mod tests {
         assert_eq!(second_root_id.index, first_root_id.index);
         assert_eq!(second_root_id.generation, first_root_id.generation + 1);
         assert_eq!(heap.external_root_count().expect("root count"), 1);
+    }
+
+    #[test]
+    fn handle_resolves_pointer_from_root_slot() {
+        let heap = Heap::new();
+        let first_pointer = heap.alloc_ptr_i32(1).expect("alloc_i32 should succeed");
+        let second_pointer = heap.alloc_ptr_i32(2).expect("alloc_i32 should succeed");
+        let handle = heap
+            .handle(first_pointer)
+            .expect("handle should root pointer");
+
+        {
+            let mut state = heap.state.lock().expect("heap state lock");
+            let slot = state
+                .root_slots
+                .get_mut(handle.root.root_id.index as usize)
+                .expect("root slot should exist");
+            assert_eq!(slot.pointer, Some(first_pointer));
+            slot.pointer = Some(second_pointer);
+        }
+
+        assert_eq!(handle.as_i32().expect("handle should follow root slot"), 2);
     }
 
     #[test]
