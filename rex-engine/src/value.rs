@@ -1,6 +1,6 @@
 //! Core value representation for Rex.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,12 +15,30 @@ use crate::Environment;
 use crate::engine::{NativeFn, OverloadedFn};
 use crate::stack::Frame;
 
-#[derive(Default)]
 struct HeapState {
     slots: Vec<HeapSlot>,
     free_list: Vec<u32>,
     root_slots: Vec<RootSlot>,
     free_root_list: Vec<u64>,
+    next_gc_slot_count: usize,
+    collect_on_every_alloc: bool,
+    collections: u64,
+}
+
+const DEFAULT_GC_SLOT_THRESHOLD: usize = 1_048_576;
+
+impl Default for HeapState {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            free_list: Vec::new(),
+            root_slots: Vec::new(),
+            free_root_list: Vec::new(),
+            next_gc_slot_count: DEFAULT_GC_SLOT_THRESHOLD,
+            collect_on_every_alloc: false,
+            collections: 0,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -51,6 +69,11 @@ pub struct Heap {
 pub(crate) struct HeapAccess<'a> {
     heap: Heap,
     state: &'a mut HeapState,
+}
+
+pub(crate) struct TempRoots {
+    heap: Heap,
+    root_ids: Vec<RootId>,
 }
 
 #[derive(Clone)]
@@ -119,6 +142,28 @@ impl Value {
 struct HandleRoot {
     heap: Heap,
     root_id: RootId,
+}
+
+impl Drop for TempRoots {
+    fn drop(&mut self) {
+        for root_id in self.root_ids.drain(..) {
+            let _ = self.heap.unregister_external_root(root_id);
+        }
+    }
+}
+
+impl TempRoots {
+    pub(crate) fn len(&self) -> usize {
+        self.root_ids.len()
+    }
+
+    pub(crate) fn get(&self, index: usize) -> Result<Pointer, EngineError> {
+        let root_id = *self
+            .root_ids
+            .get(index)
+            .ok_or_else(|| EngineError::Internal("temporary root index out of bounds".into()))?;
+        self.heap.resolve_external_root(root_id)
+    }
 }
 
 impl Drop for HandleRoot {
@@ -257,6 +302,15 @@ impl Handle {
             Value::Array(values) => Ok(values),
             _ => Err(self.type_error("array")),
         }
+    }
+
+    pub fn as_list(&self) -> Result<Vec<Handle>, EngineError> {
+        let pointer = self.pointer()?;
+        self.heap()
+            .pointer_as_list(&pointer)?
+            .into_iter()
+            .map(|pointer| self.heap().handle(pointer))
+            .collect()
     }
 
     pub fn as_dict(&self) -> Result<BTreeMap<Symbol, Handle>, EngineError> {
@@ -450,46 +504,7 @@ impl HeapAccess<'_> {
     }
 
     fn register_external_root(&mut self, pointer: Pointer) -> Result<RootId, EngineError> {
-        if pointer.heap_id != self.heap.id {
-            return Err(Heap::wrong_heap_pointer(
-                pointer.heap_id,
-                self.heap.id,
-                pointer.index,
-                pointer.generation,
-            ));
-        }
-
-        if let Some(index) = self.state.free_root_list.pop() {
-            let slot_index = usize::try_from(index)
-                .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
-            let slot =
-                self.state.root_slots.get_mut(slot_index).ok_or_else(|| {
-                    EngineError::Internal("heap root free-list corruption".into())
-                })?;
-            if slot.pointer.is_some() {
-                return Err(EngineError::Internal(
-                    "heap root free-list referenced a live root".into(),
-                ));
-            }
-            slot.pointer = Some(pointer);
-            return Ok(RootId {
-                heap_id: self.heap.id,
-                index,
-                generation: slot.generation,
-            });
-        }
-
-        let index = u64::try_from(self.state.root_slots.len())
-            .map_err(|_| EngineError::Internal("heap exhausted: too many root slots".into()))?;
-        self.state.root_slots.push(RootSlot {
-            generation: 0,
-            pointer: Some(pointer),
-        });
-        Ok(RootId {
-            heap_id: self.heap.id,
-            index,
-            generation: 0,
-        })
+        Heap::register_root_locked(self.heap.id, self.state, pointer)
     }
 }
 
@@ -551,6 +566,135 @@ impl Heap {
         ))
     }
 
+    fn get_slot_checked<'a>(
+        heap_id: u64,
+        state: &'a HeapState,
+        pointer: &Pointer,
+    ) -> Result<&'a HeapSlot, EngineError> {
+        if pointer.heap_id != heap_id {
+            return Err(Self::wrong_heap_pointer(
+                pointer.heap_id,
+                heap_id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+        let slot = state
+            .slots
+            .get(pointer.index as usize)
+            .ok_or_else(|| Self::invalid_pointer(heap_id, pointer.index, pointer.generation))?;
+        if slot.generation != pointer.generation || slot.cell.is_none() {
+            return Err(Self::invalid_pointer(
+                heap_id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+        Ok(slot)
+    }
+
+    fn register_root_locked(
+        heap_id: u64,
+        state: &mut HeapState,
+        pointer: Pointer,
+    ) -> Result<RootId, EngineError> {
+        Self::get_slot_checked(heap_id, state, &pointer)?;
+
+        if let Some(index) = state.free_root_list.pop() {
+            let slot_index = usize::try_from(index)
+                .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
+            let slot = state
+                .root_slots
+                .get_mut(slot_index)
+                .ok_or_else(|| EngineError::Internal("heap root free-list corruption".into()))?;
+            if slot.pointer.is_some() {
+                return Err(EngineError::Internal(
+                    "heap root free-list referenced a live root".into(),
+                ));
+            }
+            slot.pointer = Some(pointer);
+            return Ok(RootId {
+                heap_id,
+                index,
+                generation: slot.generation,
+            });
+        }
+
+        let index = u64::try_from(state.root_slots.len())
+            .map_err(|_| EngineError::Internal("heap exhausted: too many root slots".into()))?;
+        state.root_slots.push(RootSlot {
+            generation: 0,
+            pointer: Some(pointer),
+        });
+        Ok(RootId {
+            heap_id,
+            index,
+            generation: 0,
+        })
+    }
+
+    fn unregister_root_locked(
+        heap_id: u64,
+        state: &mut HeapState,
+        root_id: RootId,
+    ) -> Result<(), EngineError> {
+        if root_id.heap_id != heap_id {
+            return Err(Self::invalid_root(root_id));
+        }
+        let slot_index = usize::try_from(root_id.index)
+            .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
+        let slot = state
+            .root_slots
+            .get_mut(slot_index)
+            .ok_or_else(|| Self::invalid_root(root_id))?;
+        if slot.generation != root_id.generation || slot.pointer.is_none() {
+            return Err(Self::invalid_root(root_id));
+        }
+        let next_generation = slot
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("heap root generation exhausted".into()))?;
+        slot.pointer = None;
+        slot.generation = next_generation;
+        state.free_root_list.push(root_id.index);
+        Ok(())
+    }
+
+    fn resolve_root_locked(
+        heap_id: u64,
+        state: &HeapState,
+        root_id: RootId,
+    ) -> Result<Pointer, EngineError> {
+        if root_id.heap_id != heap_id {
+            return Err(Self::invalid_root(root_id));
+        }
+        let slot_index = usize::try_from(root_id.index)
+            .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
+        let slot = state
+            .root_slots
+            .get(slot_index)
+            .ok_or_else(|| Self::invalid_root(root_id))?;
+        if slot.generation != root_id.generation {
+            return Err(Self::invalid_root(root_id));
+        }
+        slot.pointer.ok_or_else(|| Self::invalid_root(root_id))
+    }
+
+    pub(crate) fn temp_roots(&self, pointers: Vec<Pointer>) -> Result<TempRoots, EngineError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        let mut root_ids = Vec::with_capacity(pointers.len());
+        for pointer in pointers {
+            root_ids.push(Self::register_root_locked(self.id, &mut state, pointer)?);
+        }
+        Ok(TempRoots {
+            heap: self.clone(),
+            root_ids,
+        })
+    }
+
     pub(crate) fn handle(&self, pointer: Pointer) -> Result<Handle, EngineError> {
         let root_id = self.with_access(|heap| {
             heap.get(&pointer)?;
@@ -562,6 +706,15 @@ impl Heap {
                 root_id,
             }),
         })
+    }
+
+    pub fn set_collect_on_every_alloc(&self, enabled: bool) -> Result<(), EngineError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        state.collect_on_every_alloc = enabled;
+        Ok(())
     }
 
     pub fn alloc_bool(&self, value: bool) -> Result<Handle, EngineError> {
@@ -628,6 +781,11 @@ impl Heap {
     pub fn alloc_array(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
         let pointers = self.pointers_from_handles(values)?;
         handle_from_pointer(self, self.alloc_ptr_array(pointers)?)
+    }
+
+    pub fn alloc_list(&self, values: Vec<Handle>) -> Result<Handle, EngineError> {
+        let pointers = self.pointers_from_handles(values)?;
+        handle_from_pointer(self, self.alloc_ptr_list(pointers)?)
     }
 
     pub fn alloc_dict(&self, values: BTreeMap<Symbol, Handle>) -> Result<Handle, EngineError> {
@@ -935,6 +1093,16 @@ impl Heap {
         self.alloc_slot(Cell::Adt(name, args))
     }
 
+    pub(crate) fn alloc_ptr_list(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
+        let roots = self.temp_roots(values)?;
+        let mut list = self.alloc_ptr_adt(sym("Empty"), vec![])?;
+        for index in (0..roots.len()).rev() {
+            let value = roots.get(index)?;
+            list = self.alloc_ptr_adt(sym("Cons"), vec![value, list])?;
+        }
+        Ok(list)
+    }
+
     pub(crate) fn alloc_ptr_closure(
         &self,
         env: Environment,
@@ -991,52 +1159,19 @@ impl Heap {
     }
 
     fn unregister_external_root(&self, root_id: RootId) -> Result<(), EngineError> {
-        if root_id.heap_id != self.id {
-            return Err(Self::invalid_root(root_id));
-        }
-
         let mut state = self
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        let slot_index = usize::try_from(root_id.index)
-            .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
-        let slot = state
-            .root_slots
-            .get_mut(slot_index)
-            .ok_or_else(|| Self::invalid_root(root_id))?;
-        if slot.generation != root_id.generation || slot.pointer.is_none() {
-            return Err(Self::invalid_root(root_id));
-        }
-        let next_generation = slot
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| EngineError::Internal("heap root generation exhausted".into()))?;
-        slot.pointer = None;
-        slot.generation = next_generation;
-        state.free_root_list.push(root_id.index);
-        Ok(())
+        Self::unregister_root_locked(self.id, &mut state, root_id)
     }
 
     fn resolve_external_root(&self, root_id: RootId) -> Result<Pointer, EngineError> {
-        if root_id.heap_id != self.id {
-            return Err(Self::invalid_root(root_id));
-        }
-
         let state = self
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        let slot_index = usize::try_from(root_id.index)
-            .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
-        let slot = state
-            .root_slots
-            .get(slot_index)
-            .ok_or_else(|| Self::invalid_root(root_id))?;
-        if slot.generation != root_id.generation {
-            return Err(Self::invalid_root(root_id));
-        }
-        slot.pointer.ok_or_else(|| Self::invalid_root(root_id))
+        Self::resolve_root_locked(self.id, &state, root_id)
     }
 
     #[cfg(test)]
@@ -1052,11 +1187,171 @@ impl Heap {
             .count())
     }
 
-    fn alloc_slot_raw(&self, cell: Cell) -> Result<(u32, u64), EngineError> {
+    #[cfg(test)]
+    fn set_gc_slot_threshold(&self, threshold: usize) -> Result<(), EngineError> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        state.next_gc_slot_count = threshold.max(1);
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn collection_count(&self) -> Result<u64, EngineError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        Ok(state.collections)
+    }
+
+    #[cfg(test)]
+    fn collect_now(&self) -> Result<(), EngineError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        self.collect_locked(&mut state)
+    }
+
+    fn collect_if_needed_locked(&self, state: &mut HeapState) -> Result<(), EngineError> {
+        if state.collect_on_every_alloc || state.slots.len() >= state.next_gc_slot_count {
+            self.collect_locked(state)?;
+        }
+        Ok(())
+    }
+
+    fn collect_locked(&self, state: &mut HeapState) -> Result<(), EngineError> {
+        let mut forwarding = HashMap::new();
+        let mut new_slots = Vec::new();
+        let mut work = VecDeque::new();
+
+        let root_indices = state
+            .root_slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| slot.pointer.map(|pointer| (index, pointer)))
+            .collect::<Vec<_>>();
+
+        for (index, pointer) in root_indices {
+            let relocated =
+                self.copy_for_gc(state, pointer, &mut new_slots, &mut forwarding, &mut work)?;
+            state.root_slots[index].pointer = Some(relocated);
+        }
+
+        while let Some(old_pointer) = work.pop_front() {
+            let new_pointer = *forwarding.get(&pointer_key(&old_pointer)).ok_or_else(|| {
+                EngineError::Internal("copying GC forwarding table missing object".into())
+            })?;
+            let mut cell = new_slots
+                .get_mut(new_pointer.index as usize)
+                .and_then(|slot| slot.cell.take())
+                .ok_or_else(|| EngineError::Internal("copying GC copied slot missing".into()))?;
+            rewrite_cell_pointers(&mut cell, &mut |child| {
+                self.copy_for_gc(state, child, &mut new_slots, &mut forwarding, &mut work)
+            })?;
+            new_slots[new_pointer.index as usize].cell = Some(cell);
+        }
+
+        state.slots = new_slots;
+        state.free_list.clear();
+        state.collections = state
+            .collections
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("heap collection count exhausted".into()))?;
+        Self::update_next_gc_slot_count(state);
+        Ok(())
+    }
+
+    fn copy_for_gc(
+        &self,
+        state: &HeapState,
+        pointer: Pointer,
+        new_slots: &mut Vec<HeapSlot>,
+        forwarding: &mut HashMap<PointerKey, Pointer>,
+        work: &mut VecDeque<Pointer>,
+    ) -> Result<Pointer, EngineError> {
+        let key = pointer_key(&pointer);
+        if let Some(relocated) = forwarding.get(&key) {
+            return Ok(*relocated);
+        }
+
+        let slot = Self::get_slot_checked(self.id, state, &pointer)?;
+        let cell = slot
+            .cell
+            .as_ref()
+            .ok_or_else(|| Self::invalid_pointer(self.id, pointer.index, pointer.generation))?
+            .clone();
+        let index = u32::try_from(new_slots.len())
+            .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
+        let generation = slot
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("heap object generation exhausted".into()))?;
+        let relocated = Pointer {
+            heap_id: self.id,
+            index,
+            generation,
+        };
+        forwarding.insert(key, relocated);
+        new_slots.push(HeapSlot {
+            generation,
+            cell: Some(cell),
+        });
+        work.push_back(pointer);
+        Ok(relocated)
+    }
+
+    fn update_next_gc_slot_count(state: &mut HeapState) {
+        let live = state.slots.len();
+        let doubled = live.saturating_mul(2);
+        let with_slack = live.saturating_add(DEFAULT_GC_SLOT_THRESHOLD);
+        state.next_gc_slot_count = doubled.max(with_slack).max(DEFAULT_GC_SLOT_THRESHOLD);
+    }
+
+    fn alloc_slot_raw(&self, mut cell: Cell) -> Result<(u32, u64), EngineError> {
+        let mut protected = Vec::new();
+        trace_cell_pointers(&cell, &mut protected);
+
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+
+        let mut root_ids = Vec::with_capacity(protected.len());
+        for pointer in protected {
+            match Self::register_root_locked(self.id, &mut state, pointer) {
+                Ok(root_id) => root_ids.push(root_id),
+                Err(err) => {
+                    for root_id in root_ids {
+                        let _ = Self::unregister_root_locked(self.id, &mut state, root_id);
+                    }
+                    return Err(err);
+                }
+            }
+        }
+
+        self.collect_if_needed_locked(&mut state)?;
+
+        let mut relocated = Vec::with_capacity(root_ids.len());
+        for root_id in &root_ids {
+            relocated.push(Self::resolve_root_locked(self.id, &state, *root_id)?);
+        }
+        for root_id in root_ids {
+            Self::unregister_root_locked(self.id, &mut state, root_id)?;
+        }
+        let mut relocated = relocated.into_iter();
+        rewrite_cell_pointers(&mut cell, &mut |_| {
+            relocated.next().ok_or_else(|| {
+                EngineError::Internal("temporary allocation root count mismatch".into())
+            })
+        })?;
+        if relocated.next().is_some() {
+            return Err(EngineError::Internal(
+                "temporary allocation roots were not fully consumed".into(),
+            ));
+        }
 
         if let Some(index) = state.free_list.pop() {
             let slot = state
@@ -1288,6 +1583,73 @@ impl Cell {
             Cell::Frame(frame) => Ok(frame.clone()),
             _ => Err(self.cell_type_error("frame")),
         }
+    }
+}
+
+fn trace_cell_pointers(cell: &Cell, out: &mut Vec<Pointer>) {
+    match cell {
+        Cell::Tuple(values) | Cell::Array(values) | Cell::Adt(_, values) => {
+            out.extend(values.iter().copied());
+        }
+        Cell::Dict(values) => out.extend(values.values().copied()),
+        Cell::Frame(frame) => frame.trace_pointers(out),
+        Cell::Closure(closure) => closure.env.trace_pointers(out),
+        Cell::Native(native) => native.trace_pointers(out),
+        Cell::Overloaded(overloaded) => overloaded.trace_pointers(out),
+        Cell::Bool(_)
+        | Cell::U8(_)
+        | Cell::U16(_)
+        | Cell::U32(_)
+        | Cell::U64(_)
+        | Cell::I8(_)
+        | Cell::I16(_)
+        | Cell::I32(_)
+        | Cell::I64(_)
+        | Cell::F32(_)
+        | Cell::F64(_)
+        | Cell::String(_)
+        | Cell::Uuid(_)
+        | Cell::DateTime(_)
+        | Cell::Uninitialized(_) => {}
+    }
+}
+
+fn rewrite_cell_pointers(
+    cell: &mut Cell,
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    match cell {
+        Cell::Tuple(values) | Cell::Array(values) | Cell::Adt(_, values) => {
+            for pointer in values {
+                *pointer = rewrite(*pointer)?;
+            }
+            Ok(())
+        }
+        Cell::Dict(values) => {
+            for pointer in values.values_mut() {
+                *pointer = rewrite(*pointer)?;
+            }
+            Ok(())
+        }
+        Cell::Frame(frame) => frame.rewrite_pointers(rewrite),
+        Cell::Closure(closure) => closure.env.rewrite_pointers(rewrite),
+        Cell::Native(native) => native.rewrite_pointers(rewrite),
+        Cell::Overloaded(overloaded) => overloaded.rewrite_pointers(rewrite),
+        Cell::Bool(_)
+        | Cell::U8(_)
+        | Cell::U16(_)
+        | Cell::U32(_)
+        | Cell::U64(_)
+        | Cell::I8(_)
+        | Cell::I16(_)
+        | Cell::I32(_)
+        | Cell::I64(_)
+        | Cell::F32(_)
+        | Cell::F64(_)
+        | Cell::String(_)
+        | Cell::Uuid(_)
+        | Cell::DateTime(_)
+        | Cell::Uninitialized(_) => Ok(()),
     }
 }
 
@@ -1937,9 +2299,14 @@ impl IntoPointer for &str {
 
 impl<T: IntoPointer> IntoPointer for Vec<T> {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        let ptrs = self
-            .into_iter()
-            .map(|v| v.into_pointer(heap))
+        let mut roots = Vec::new();
+        for value in self {
+            let pointer = value.into_pointer(heap)?;
+            roots.push(heap.temp_roots(vec![pointer])?);
+        }
+        let ptrs = roots
+            .iter()
+            .map(|root| root.get(0))
             .collect::<Result<Vec<_>, _>>()?;
         heap.alloc_ptr_array(ptrs)
     }
@@ -2413,7 +2780,14 @@ macro_rules! impl_tuple_traits {
             #[allow(non_snake_case)]
             fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
                 let ($($name,)+) = self;
-                let ptrs = vec![$($name.into_pointer(heap)?),+];
+                let roots = vec![$({
+                    let pointer = $name.into_pointer(heap)?;
+                    heap.temp_roots(vec![pointer])?
+                }),+];
+                let ptrs = roots
+                    .iter()
+                    .map(|root| root.get(0))
+                    .collect::<Result<Vec<_>, _>>()?;
                 heap.alloc_ptr_tuple(ptrs)
             }
         }
@@ -2594,6 +2968,96 @@ mod tests {
         };
         assert!(msg.contains("different heap"), "unexpected error: {msg}");
         assert_eq!(heap_b.external_root_count().expect("root count"), 0);
+    }
+
+    #[test]
+    fn copying_gc_updates_handles_and_rejects_stale_pointers() {
+        let heap = Heap::new();
+        let stale = heap.alloc_ptr_i32(42).expect("alloc_i32 should succeed");
+        let handle = heap.handle(stale).expect("handle should root pointer");
+
+        heap.collect_now().expect("collection should succeed");
+
+        assert_eq!(
+            handle.as_i32().expect("handle should follow moved value"),
+            42
+        );
+        assert!(
+            heap.pointer_as_i32(&stale).is_err(),
+            "raw pointer from before collection should be stale"
+        );
+    }
+
+    #[test]
+    fn alloc_triggers_collection_after_heap_growth() {
+        let heap = Heap::new();
+        let rooted = heap.alloc_i32(7).expect("alloc_i32 handle");
+        heap.set_gc_slot_threshold(1).expect("set threshold");
+
+        let _garbage = heap.alloc_ptr_i32(99).expect("alloc should trigger GC");
+
+        assert!(
+            heap.collection_count().expect("collection count") > 0,
+            "allocation should have triggered collection"
+        );
+        assert_eq!(rooted.as_i32().expect("rooted value"), 7);
+    }
+
+    #[test]
+    fn alloc_list_protects_inputs_across_collection() {
+        let heap = Heap::new();
+        heap.set_gc_slot_threshold(usize::MAX)
+            .expect("set threshold");
+        let values = (0..2048)
+            .map(|value| heap.alloc_ptr_i32(value).expect("alloc_i32 should succeed"))
+            .collect::<Vec<_>>();
+        heap.set_gc_slot_threshold(1).expect("set threshold");
+
+        let list = heap
+            .alloc_ptr_list(values)
+            .expect("list allocation should protect inputs");
+        let list = heap.handle(list).expect("list should be rootable");
+        let values = heap
+            .pointer_as_list(&list.pointer().expect("list pointer"))
+            .expect("list should decode");
+
+        assert_eq!(values.len(), 2048);
+        assert_eq!(
+            heap.pointer_as_i32(values.first().expect("first value"))
+                .expect("first i32"),
+            0
+        );
+        assert_eq!(
+            heap.pointer_as_i32(values.last().expect("last value"))
+                .expect("last i32"),
+            2047
+        );
+    }
+
+    #[test]
+    fn copying_gc_traces_deep_lists_iteratively() {
+        let heap = Heap::new();
+        heap.set_gc_slot_threshold(usize::MAX)
+            .expect("set threshold");
+        let values = (0..10_000)
+            .map(|value| heap.alloc_ptr_i32(value).expect("alloc_i32 should succeed"))
+            .collect::<Vec<_>>();
+        let list = heap
+            .handle(
+                heap.alloc_ptr_list(values)
+                    .expect("list allocation should succeed"),
+            )
+            .expect("list should be rootable");
+
+        heap.collect_now().expect("deep collection should succeed");
+
+        let pointer = list.pointer().expect("list pointer");
+        assert_eq!(
+            heap.pointer_as_list(&pointer)
+                .expect("list should decode after GC")
+                .len(),
+            10_000
+        );
     }
 
     #[test]

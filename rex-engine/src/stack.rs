@@ -4,6 +4,7 @@ use std::sync::Arc;
 use rex_ast::expr::{Pattern, Symbol};
 use rex_typesystem::types::{Type, TypedExpr};
 
+use crate::EngineError;
 use crate::env::Environment;
 use crate::value::Pointer;
 
@@ -60,6 +61,250 @@ impl Frame {
             Frame::NativeAsync(frame) => &frame.parent,
         }
     }
+
+    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        match self {
+            Frame::Bool(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Uint(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Int(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Float(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::String(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Uuid(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::DateTime(frame) => {
+                trace_value_frame(&frame.parent, &frame.env, frame.value, out)
+            }
+            Frame::Hole(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Var(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Project(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Lam(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
+            Frame::Tuple(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                out.extend(frame.values.iter().copied());
+            }
+            Frame::List(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                out.extend(frame.values.iter().copied());
+            }
+            Frame::Dict(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                out.extend(frame.values.values().copied());
+            }
+            Frame::RecordUpdate(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                trace_option(frame.base_value, out);
+                out.extend(frame.update_values.values().copied());
+            }
+            Frame::App(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                trace_option(frame.func, out);
+                trace_option(frame.arg, out);
+            }
+            Frame::Let(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                trace_option(frame.def_value, out);
+            }
+            Frame::LetRec(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                if let Some(env) = &frame.recursive_env {
+                    env.trace_pointers(out);
+                }
+                out.extend(frame.slots.iter().copied());
+                trace_option(frame.binding_value, out);
+            }
+            Frame::Ite(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                trace_option(frame.cond_value, out);
+            }
+            Frame::Match(frame) => {
+                out.push(frame.parent);
+                frame.env.trace_pointers(out);
+                trace_option(frame.scrutinee_value, out);
+                if let Some(env) = &frame.matched_env {
+                    env.trace_pointers(out);
+                }
+            }
+            Frame::NativeCall(frame) => {
+                out.push(frame.parent);
+                frame.task.trace_pointers(out);
+            }
+            Frame::NativeAsync(frame) => out.push(frame.parent),
+        }
+    }
+
+    pub(crate) fn rewrite_pointers(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+    ) -> Result<(), EngineError> {
+        match self {
+            Frame::Bool(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Uint(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Int(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Float(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::String(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Uuid(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::DateTime(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Hole(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Var(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Project(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Lam(frame) => {
+                rewrite_value_frame(&mut frame.parent, &mut frame.env, &mut frame.value, rewrite)
+            }
+            Frame::Tuple(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_slice(&mut frame.values, rewrite)
+            }
+            Frame::List(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_slice(&mut frame.values, rewrite)
+            }
+            Frame::Dict(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_map_values(&mut frame.values, rewrite)
+            }
+            Frame::RecordUpdate(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_option(&mut frame.base_value, rewrite)?;
+                rewrite_map_values(&mut frame.update_values, rewrite)
+            }
+            Frame::App(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_option(&mut frame.func, rewrite)?;
+                rewrite_option(&mut frame.arg, rewrite)
+            }
+            Frame::Let(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_option(&mut frame.def_value, rewrite)
+            }
+            Frame::LetRec(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                if let Some(env) = &mut frame.recursive_env {
+                    env.rewrite_pointers(rewrite)?;
+                }
+                rewrite_slice(&mut frame.slots, rewrite)?;
+                rewrite_option(&mut frame.binding_value, rewrite)
+            }
+            Frame::Ite(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_option(&mut frame.cond_value, rewrite)
+            }
+            Frame::Match(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.env.rewrite_pointers(rewrite)?;
+                rewrite_option(&mut frame.scrutinee_value, rewrite)?;
+                if let Some(env) = &mut frame.matched_env {
+                    env.rewrite_pointers(rewrite)?;
+                }
+                Ok(())
+            }
+            Frame::NativeCall(frame) => {
+                rewrite_pointer(&mut frame.parent, rewrite)?;
+                frame.task.rewrite_pointers(rewrite)
+            }
+            Frame::NativeAsync(frame) => rewrite_pointer(&mut frame.parent, rewrite),
+        }
+    }
+}
+
+fn trace_option(pointer: Option<Pointer>, out: &mut Vec<Pointer>) {
+    if let Some(pointer) = pointer {
+        out.push(pointer);
+    }
+}
+
+fn trace_value_frame(
+    parent: &Pointer,
+    env: &Environment,
+    value: Option<Pointer>,
+    out: &mut Vec<Pointer>,
+) {
+    out.push(*parent);
+    env.trace_pointers(out);
+    trace_option(value, out);
+}
+
+fn rewrite_pointer(
+    pointer: &mut Pointer,
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    *pointer = rewrite(*pointer)?;
+    Ok(())
+}
+
+fn rewrite_option(
+    pointer: &mut Option<Pointer>,
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    if let Some(value) = pointer {
+        rewrite_pointer(value, rewrite)?;
+    }
+    Ok(())
+}
+
+fn rewrite_slice(
+    pointers: &mut [Pointer],
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    for pointer in pointers {
+        rewrite_pointer(pointer, rewrite)?;
+    }
+    Ok(())
+}
+
+fn rewrite_map_values(
+    values: &mut BTreeMap<Symbol, Pointer>,
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    for pointer in values.values_mut() {
+        rewrite_pointer(pointer, rewrite)?;
+    }
+    Ok(())
+}
+
+fn rewrite_value_frame(
+    parent: &mut Pointer,
+    env: &mut Environment,
+    value: &mut Option<Pointer>,
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    rewrite_pointer(parent, rewrite)?;
+    env.rewrite_pointers(rewrite)?;
+    rewrite_option(value, rewrite)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -190,6 +435,179 @@ pub enum NativeTask {
     Sum(NativeSum),
     Mean(NativeMean),
     LogShow(NativeLogShow),
+}
+
+impl NativeTask {
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        match self {
+            NativeTask::ApplyUnary(task) => {
+                out.push(task.func);
+                out.push(task.arg);
+            }
+            NativeTask::SequenceMap(task) => {
+                out.push(task.func);
+                out.extend(task.values.iter().copied());
+                out.extend(task.output.iter().copied());
+            }
+            NativeTask::SequenceFilter(task) => {
+                out.push(task.func);
+                out.extend(task.values.iter().copied());
+                out.extend(task.output.iter().copied());
+            }
+            NativeTask::SequenceFilterMap(task) => {
+                out.push(task.func);
+                out.extend(task.values.iter().copied());
+                out.extend(task.output.iter().copied());
+            }
+            NativeTask::SequenceFlatMap(task) => {
+                out.push(task.func);
+                out.extend(task.values.iter().copied());
+                out.extend(task.output.iter().copied());
+            }
+            NativeTask::UnaryMap(task) => {
+                out.push(task.func);
+                out.push(task.value);
+            }
+            NativeTask::UnaryFilter(task) => {
+                out.push(task.func);
+                out.push(task.value);
+                out.push(task.original);
+            }
+            NativeTask::UnaryFilterMap(task) => {
+                out.push(task.func);
+                out.push(task.value);
+            }
+            NativeTask::UnaryFlatMap(task) => {
+                out.push(task.func);
+                out.push(task.value);
+            }
+            NativeTask::Fold(task) => {
+                out.push(task.func);
+                out.extend(task.values.iter().copied());
+                out.push(task.acc);
+                trace_option(task.step, out);
+            }
+            NativeTask::DictMap(task) => {
+                out.push(task.func);
+                out.extend(task.entries.iter().map(|(_, pointer)| *pointer));
+                out.extend(task.output.values().copied());
+            }
+            NativeTask::DictTraverseResult(task) => {
+                out.push(task.func);
+                out.extend(task.entries.iter().map(|(_, pointer)| *pointer));
+                out.extend(task.output.values().copied());
+            }
+            NativeTask::ArrayEq(task) => {
+                out.extend(task.xs.iter().copied());
+                out.extend(task.ys.iter().copied());
+                trace_option(task.step, out);
+            }
+            NativeTask::Sum(task) => {
+                out.extend(task.values.iter().copied());
+                trace_option(task.acc, out);
+                trace_option(task.step, out);
+            }
+            NativeTask::Mean(task) => {
+                out.extend(task.values.iter().copied());
+                trace_option(task.acc, out);
+                trace_option(task.step, out);
+                trace_option(task.len_value, out);
+            }
+            NativeTask::LogShow(task) => out.push(task.arg),
+        }
+    }
+
+    fn rewrite_pointers(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+    ) -> Result<(), EngineError> {
+        match self {
+            NativeTask::ApplyUnary(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_pointer(&mut task.arg, rewrite)
+            }
+            NativeTask::SequenceMap(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_slice(&mut task.values, rewrite)?;
+                rewrite_slice(&mut task.output, rewrite)
+            }
+            NativeTask::SequenceFilter(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_slice(&mut task.values, rewrite)?;
+                rewrite_slice(&mut task.output, rewrite)
+            }
+            NativeTask::SequenceFilterMap(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_slice(&mut task.values, rewrite)?;
+                rewrite_slice(&mut task.output, rewrite)
+            }
+            NativeTask::SequenceFlatMap(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_slice(&mut task.values, rewrite)?;
+                rewrite_slice(&mut task.output, rewrite)
+            }
+            NativeTask::UnaryMap(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_pointer(&mut task.value, rewrite)
+            }
+            NativeTask::UnaryFilter(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_pointer(&mut task.value, rewrite)?;
+                rewrite_pointer(&mut task.original, rewrite)
+            }
+            NativeTask::UnaryFilterMap(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_pointer(&mut task.value, rewrite)
+            }
+            NativeTask::UnaryFlatMap(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_pointer(&mut task.value, rewrite)
+            }
+            NativeTask::Fold(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_slice(&mut task.values, rewrite)?;
+                rewrite_pointer(&mut task.acc, rewrite)?;
+                rewrite_option(&mut task.step, rewrite)
+            }
+            NativeTask::DictMap(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_entries(&mut task.entries, rewrite)?;
+                rewrite_map_values(&mut task.output, rewrite)
+            }
+            NativeTask::DictTraverseResult(task) => {
+                rewrite_pointer(&mut task.func, rewrite)?;
+                rewrite_entries(&mut task.entries, rewrite)?;
+                rewrite_map_values(&mut task.output, rewrite)
+            }
+            NativeTask::ArrayEq(task) => {
+                rewrite_slice(&mut task.xs, rewrite)?;
+                rewrite_slice(&mut task.ys, rewrite)?;
+                rewrite_option(&mut task.step, rewrite)
+            }
+            NativeTask::Sum(task) => {
+                rewrite_slice(&mut task.values, rewrite)?;
+                rewrite_option(&mut task.acc, rewrite)?;
+                rewrite_option(&mut task.step, rewrite)
+            }
+            NativeTask::Mean(task) => {
+                rewrite_slice(&mut task.values, rewrite)?;
+                rewrite_option(&mut task.acc, rewrite)?;
+                rewrite_option(&mut task.step, rewrite)?;
+                rewrite_option(&mut task.len_value, rewrite)
+            }
+            NativeTask::LogShow(task) => rewrite_pointer(&mut task.arg, rewrite),
+        }
+    }
+}
+
+fn rewrite_entries(
+    entries: &mut [(Symbol, Pointer)],
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    for (_, pointer) in entries {
+        rewrite_pointer(pointer, rewrite)?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -1,6 +1,6 @@
 //! Core engine implementation for Rex.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -48,7 +48,7 @@ use crate::stack::{
     NativeUnaryMap, NativeUnaryShape,
 };
 use crate::value::FromPointer;
-use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, list_to_vec};
+use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec};
 use crate::{
     EngineError, Environment, FromRex, IntoRex, RexType,
     evaluator::{EvalContext, EvaluatorRef},
@@ -539,8 +539,9 @@ where
             let handler = Arc::clone(&handler);
             let func: AsyncNativePointerCallable<State> = Arc::new(move |engine, typ, args| {
                 let handler = Arc::clone(&handler);
+                let handles = engine.handles_from_pointers(&args);
                 async move {
-                    let handles = engine.handles_from_pointers(&args)?;
+                    let handles = handles?;
                     let value = handler(engine.clone(), typ, handles).await?;
                     value.pointer_for_heap(engine.heap())
                 }
@@ -983,8 +984,9 @@ macro_rules! define_handler_impl {
                                 got: args.len(),
                             });
                         }
+                        let handles = engine.handles_from_pointers(args)?;
                         $(let $arg_name = {
-                            let handle = engine.heap().handle(args[$idx])?;
+                            let handle = &handles[$idx];
                             $arg_ty::from_rex(&handle)?
                         };)*
                         let value = self(engine.state(), $($arg_name),+)?;
@@ -1053,7 +1055,7 @@ macro_rules! define_async_handler_impl {
                     move |engine, _: Type, args: Vec<Pointer>| -> NativePointerFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
-                        async move {
+                        let args = (|| {
                             if args.len() != $arity {
                                 return Err(EngineError::NativeArity {
                                     name: name_sym.clone(),
@@ -1061,6 +1063,10 @@ macro_rules! define_async_handler_impl {
                                     got: args.len(),
                                 });
                             }
+                            Ok(())
+                        })();
+                        async move {
+                            args?;
                             let value = f(engine.state()).await?;
                             value.into_rex(engine.heap())?.pointer()
                         }
@@ -1099,7 +1105,7 @@ macro_rules! define_async_handler_impl {
                     move |engine, _: Type, args: Vec<Pointer>| -> NativePointerFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
-                        async move {
+                        let args = (|| {
                             if args.len() != $arity {
                                 return Err(EngineError::NativeArity {
                                     name: name_sym.clone(),
@@ -1107,14 +1113,24 @@ macro_rules! define_async_handler_impl {
                                     got: args.len(),
                                 });
                             }
+                            let handles = engine.handles_from_pointers(&args)?;
                             $(let $arg_name = {
-                                let handle = engine.heap().handle(args[$idx])?;
+                                let handle = &handles[$idx];
                                 $arg_ty::from_rex(&handle)?
                             };)*
-                            let value = f(engine.state(), $($arg_name),+).await?;
-                            value.into_rex(engine.heap())?.pointer()
+                            Ok(($($arg_name,)+))
+                        })();
+                        match args {
+                            Ok(($($arg_name,)+)) => {
+                                let future = f(engine.state(), $($arg_name),+);
+                                async move {
+                                    let value = future.await?;
+                                    value.into_rex(engine.heap())?.pointer()
+                                }
+                                .boxed()
+                            }
+                            Err(err) => async move { Err(err) }.boxed(),
                         }
-                        .boxed()
                     },
                 );
                 let typ = native_fn_type!($($arg_ty),+ ; R);
@@ -1149,8 +1165,9 @@ where
         validate_native_export_scheme(&scheme, arity)?;
         let pointer_func: AsyncNativePointerCallable<State> = Arc::new(move |engine, typ, args| {
             let func = Arc::clone(&func);
+            let handles = engine.handles_from_pointers(&args);
             async move {
-                let handles = engine.handles_from_pointers(&args)?;
+                let handles = handles?;
                 let value = func(engine.clone(), typ, handles).await?;
                 value.pointer_for_heap(engine.heap())
             }
@@ -1278,6 +1295,20 @@ impl NativeFn {
         &self.name
     }
 
+    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        out.extend(self.applied.iter().copied());
+    }
+
+    pub(crate) fn rewrite_pointers(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+    ) -> Result<(), EngineError> {
+        for pointer in &mut self.applied {
+            *pointer = rewrite(*pointer)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn call_zero_with_context<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeSnapshot<State>,
@@ -1399,6 +1430,20 @@ impl OverloadedFn {
 
     pub(crate) fn name(&self) -> &Symbol {
         &self.name
+    }
+
+    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        out.extend(self.applied.iter().copied());
+    }
+
+    pub(crate) fn rewrite_pointers(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+    ) -> Result<(), EngineError> {
+        for pointer in &mut self.applied {
+            *pointer = rewrite(*pointer)?;
+        }
+        Ok(())
     }
 
     pub(crate) fn into_parts(self) -> (Symbol, Type, Vec<Pointer>, Vec<Type>) {
@@ -1558,6 +1603,26 @@ impl TypeclassRegistry {
                 typ: param_type.to_string(),
             }),
         }
+    }
+
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        for instances in self.entries.values() {
+            for instance in instances {
+                instance.def_env.trace_pointers(out);
+            }
+        }
+    }
+
+    fn rewrite_pointers(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+    ) -> Result<(), EngineError> {
+        for instances in self.entries.values_mut() {
+            for instance in instances {
+                instance.def_env.rewrite_pointers(rewrite)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1787,6 +1852,42 @@ where
     pub type_system: TypeSystem,
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
     pub heap: Heap,
+}
+
+impl<State> RuntimeSnapshot<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) -> Result<(), EngineError> {
+        self.typeclasses.trace_pointers(out);
+        let cache = self
+            .typeclass_cache
+            .lock()
+            .map_err(|_| EngineError::Internal("typeclass cache poisoned".into()))?;
+        out.extend(cache.values().copied());
+        Ok(())
+    }
+
+    fn refresh_from_roots(
+        &mut self,
+        roots: &TempRoots,
+        cursor: &mut usize,
+    ) -> Result<(), EngineError> {
+        self.typeclasses.rewrite_pointers(&mut |_| {
+            let pointer = roots.get(*cursor)?;
+            *cursor += 1;
+            Ok(pointer)
+        })?;
+        let mut cache = self
+            .typeclass_cache
+            .lock()
+            .map_err(|_| EngineError::Internal("typeclass cache poisoned".into()))?;
+        for pointer in cache.values_mut() {
+            *pointer = roots.get(*cursor)?;
+            *cursor += 1;
+        }
+        Ok(())
+    }
 }
 
 impl<State> Clone for Engine<State>
@@ -2570,7 +2671,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
             + Send
             + Sync
             + 'static,
@@ -2579,7 +2680,11 @@ where
         let name = name.into();
         let handler = Arc::new(handler);
         let func: SyncNativePointerCallable<State> =
-            Arc::new(move |engine, typ: &Type, args: &[Pointer]| handler(engine, typ, args));
+            Arc::new(move |engine, typ: &Type, args: &[Pointer]| {
+                let handles = engine.handles_from_pointers(args)?;
+                let value = handler(engine.clone(), typ, &handles)?;
+                value.pointer_for_heap(engine.heap())
+            });
         let registration = NativeRegistration::sync(scheme, arity, func);
         self.register_native_registration(ROOT_MODULE_NAME, &name, registration)
     }
@@ -2622,8 +2727,7 @@ where
             0,
             move |engine, _, _| {
                 let _ = engine;
-                let value = T::rex_default(&engine_for_default)?;
-                value.pointer_for_heap(&engine_for_default.heap)
+                T::rex_default(&engine_for_default)
             },
         )?;
 
@@ -4189,6 +4293,27 @@ impl EvalWorkItem {
             returned: Some(value),
         }
     }
+
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        out.push(self.frame);
+        if let Some(returned) = self.returned {
+            out.push(returned);
+        }
+    }
+
+    fn refresh_from_roots(
+        &mut self,
+        roots: &TempRoots,
+        cursor: &mut usize,
+    ) -> Result<(), EngineError> {
+        self.frame = roots.get(*cursor)?;
+        *cursor += 1;
+        if self.returned.is_some() {
+            self.returned = Some(roots.get(*cursor)?);
+            *cursor += 1;
+        }
+        Ok(())
+    }
 }
 
 struct EvalScheduler {
@@ -4208,6 +4333,23 @@ impl EvalScheduler {
 
     fn pop_next(&mut self) -> Option<EvalWorkItem> {
         self.ready.pop_front()
+    }
+
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        for item in &self.ready {
+            item.trace_pointers(out);
+        }
+    }
+
+    fn refresh_from_roots(
+        &mut self,
+        roots: &TempRoots,
+        cursor: &mut usize,
+    ) -> Result<(), EngineError> {
+        for item in &mut self.ready {
+            item.refresh_from_roots(roots, cursor)?;
+        }
+        Ok(())
     }
 }
 
@@ -4240,6 +4382,7 @@ pub(crate) async fn eval_typed_expr_from_parent<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
+    let mut runtime = runtime.clone();
     let root_expr = Arc::new(expr.clone());
     let root_frame =
         runtime
@@ -4248,31 +4391,53 @@ where
     let mut scheduler = EvalScheduler::new(root_frame);
 
     loop {
-        let item = scheduler
+        let mut item = scheduler
             .pop_next()
             .ok_or_else(|| EngineError::Internal("eval scheduler ran out of ready work".into()))?;
+        let mut protected = Vec::new();
+        item.trace_pointers(&mut protected);
+        scheduler.trace_pointers(&mut protected);
+        runtime.trace_pointers(&mut protected)?;
+        let roots = runtime.heap.temp_roots(protected)?;
+
+        let mut cursor = 0;
+        item.refresh_from_roots(&roots, &mut cursor)?;
+        scheduler.refresh_from_roots(&roots, &mut cursor)?;
+        runtime.refresh_from_roots(&roots, &mut cursor)?;
+
         let frame = runtime.heap.pointer_as_frame(&item.frame)?;
         let control = match item.returned {
-            Some(value) => eval_receive(runtime, item.frame, frame, value)?,
-            None => eval_enter(runtime, item.frame, frame)?,
+            Some(value) => eval_receive(&runtime, item.frame, frame, value)?,
+            None => eval_enter(&runtime, item.frame, frame)?,
         };
+
+        let mut cursor = 0;
+        item.refresh_from_roots(&roots, &mut cursor)?;
+        scheduler.refresh_from_roots(&roots, &mut cursor)?;
+        runtime.refresh_from_roots(&roots, &mut cursor)?;
 
         match control {
             EvalControl::Push { expr, env } => {
                 let child = runtime
                     .heap
                     .alloc_ptr_frame(frame_for_expr(item.frame, expr, env))?;
+                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::PushFrame(frame) => {
                 let child = runtime.heap.alloc_ptr_frame(frame)?;
+                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::AwaitNative(future) => {
                 let child = runtime
                     .heap
                     .alloc_ptr_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
+                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
+                let child_root = runtime.heap.temp_roots(vec![child])?;
                 let value = future.await?;
+                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
+                let child = child_root.get(0)?;
                 scheduler.schedule_next(EvalWorkItem::receive(child, value));
             }
             EvalControl::Return(value) => {
@@ -4301,6 +4466,21 @@ where
             }
         }
     }
+}
+
+fn refresh_eval_roots<State>(
+    runtime: &mut RuntimeSnapshot<State>,
+    item: &mut EvalWorkItem,
+    scheduler: &mut EvalScheduler,
+    roots: &TempRoots,
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let mut cursor = 0;
+    item.refresh_from_roots(roots, &mut cursor)?;
+    scheduler.refresh_from_roots(roots, &mut cursor)?;
+    runtime.refresh_from_roots(roots, &mut cursor)
 }
 
 fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Frame {
@@ -4664,14 +4844,30 @@ where
             runtime.heap.replace_frame(&frame_ptr, Frame::Let(frame))?;
             Ok(EvalControl::Push { expr: def, env })
         }
-        Frame::LetRec(mut frame) => {
+        Frame::LetRec(frame) => {
             let TypedExprKind::LetRec { bindings, body } = frame.expr.kind.as_ref() else {
+                return frame_kind_error("let rec");
+            };
+            let bindings = bindings.clone();
+            let body = Arc::clone(body);
+            let mut protected = vec![frame_ptr];
+            Frame::LetRec(frame.clone()).trace_pointers(&mut protected);
+            let frame_roots = runtime.heap.temp_roots(protected.clone())?;
+            let mut slot_roots = Vec::with_capacity(bindings.len());
+            for (name, _) in &bindings {
+                let placeholder = runtime.heap.alloc_ptr_uninitialized(name.clone())?;
+                slot_roots.push(runtime.heap.temp_roots(vec![placeholder])?);
+            }
+            let frame_ptr = frame_roots.get(0)?;
+            let mut wrapped = Frame::LetRec(frame);
+            refresh_frame_from_roots(&mut wrapped, &protected, &frame_roots, 1)?;
+            let Frame::LetRec(mut frame) = wrapped else {
                 return frame_kind_error("let rec");
             };
             let mut recursive_env = frame.env.clone();
             let mut slots = Vec::with_capacity(bindings.len());
-            for (name, _) in bindings {
-                let placeholder = runtime.heap.alloc_ptr_uninitialized(name.clone())?;
+            for ((name, _), root) in bindings.iter().zip(slot_roots.iter()) {
+                let placeholder = root.get(0)?;
                 recursive_env = recursive_env.extend(name.clone(), placeholder);
                 slots.push(placeholder);
             }
@@ -4679,7 +4875,6 @@ where
             frame.slots = slots;
             if bindings.is_empty() {
                 frame.state = FrLetRecState::EvalBody;
-                let body = Arc::clone(body);
                 runtime
                     .heap
                     .replace_frame(&frame_ptr, Frame::LetRec(frame))?;
@@ -4771,10 +4966,7 @@ where
             frame.values.push(value);
             frame.next_index += 1;
             if frame.next_index == elems.len() {
-                let mut list = runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?;
-                for value in frame.values.clone().into_iter().rev() {
-                    list = runtime.heap.alloc_ptr_adt(sym("Cons"), vec![value, list])?;
-                }
+                let list = runtime.heap.alloc_ptr_list(frame.values.clone())?;
                 return Ok(EvalControl::Return(list));
             }
             let expr = Arc::clone(&elems[frame.next_index]);
@@ -4873,39 +5065,38 @@ where
                 let func = frame.func.ok_or_else(|| {
                     EngineError::Internal("application frame missing function".into())
                 })?;
-                match eval_apply_arg(
+                frame.arg = Some(value);
+                frame.state = FrAppState::ApplyArg;
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
+                let roots = runtime.heap.temp_roots(vec![frame_ptr, func, value])?;
+                let apply_result = eval_apply_arg(
                     runtime,
                     frame_ptr,
                     func,
                     value,
                     Some(&arg_info.func_type),
                     Some(&arg_info.expr.typ),
-                )? {
+                )?;
+                let frame_ptr = roots.get(0)?;
+                let frame = match runtime.heap.pointer_as_frame(&frame_ptr)? {
+                    Frame::App(frame) => frame,
+                    _ => return frame_kind_error("application"),
+                };
+                match apply_result {
                     EvalApplyResult::Value(applied) => {
                         continue_app_after_apply(runtime, frame_ptr, frame, applied)
                     }
-                    EvalApplyResult::Push { expr, env } => {
-                        frame.arg = Some(value);
-                        frame.state = FrAppState::ApplyArg;
-                        runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-                        Ok(EvalControl::Push { expr, env })
-                    }
+                    EvalApplyResult::Push { expr, env } => Ok(EvalControl::Push { expr, env }),
                     EvalApplyResult::PushNative(task) => {
-                        frame.arg = Some(value);
-                        frame.state = FrAppState::ApplyArg;
-                        runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
                         Ok(EvalControl::PushFrame(Frame::NativeCall(FrNativeCall {
                             parent: frame_ptr,
                             state: FrNativeCallState::Enter,
                             task,
                         })))
                     }
-                    EvalApplyResult::AwaitNative(future) => {
-                        frame.arg = Some(value);
-                        frame.state = FrAppState::ApplyArg;
-                        runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-                        Ok(EvalControl::AwaitNative(future))
-                    }
+                    EvalApplyResult::AwaitNative(future) => Ok(EvalControl::AwaitNative(future)),
                 }
             }
             FrAppState::ApplyArg => continue_app_after_apply(runtime, frame_ptr, frame, value),
@@ -5051,7 +5242,12 @@ where
     if frame.state != FrNativeCallState::Enter {
         return unexpected_child_result("native call");
     }
+    let mut protected = vec![frame_ptr];
+    Frame::NativeCall(frame.clone()).trace_pointers(&mut protected);
+    let roots = runtime.heap.temp_roots(protected.clone())?;
     let step = native_task_enter(runtime, &mut frame.task)?;
+    let frame_ptr = roots.get(0)?;
+    refresh_native_frame_from_roots(&mut frame, &protected, &roots, 1)?;
     native_step_to_control(runtime, frame_ptr, frame, step)
 }
 
@@ -5067,8 +5263,43 @@ where
     if frame.state != FrNativeCallState::Waiting {
         return unexpected_child_result("native call");
     }
+    let mut protected = vec![frame_ptr, value];
+    Frame::NativeCall(frame.clone()).trace_pointers(&mut protected);
+    let roots = runtime.heap.temp_roots(protected.clone())?;
     let step = native_task_receive(runtime, &mut frame.task, value)?;
+    let frame_ptr = roots.get(0)?;
+    refresh_native_frame_from_roots(&mut frame, &protected, &roots, 1)?;
     native_step_to_control(runtime, frame_ptr, frame, step)
+}
+
+fn refresh_native_frame_from_roots(
+    frame: &mut FrNativeCall,
+    originals: &[Pointer],
+    roots: &TempRoots,
+    start: usize,
+) -> Result<(), EngineError> {
+    let mut wrapped = Frame::NativeCall(frame.clone());
+    refresh_frame_from_roots(&mut wrapped, originals, roots, start)?;
+    match wrapped {
+        Frame::NativeCall(rewritten) => {
+            *frame = rewritten;
+            Ok(())
+        }
+        _ => frame_kind_error("native call"),
+    }
+}
+
+fn refresh_frame_from_roots(
+    frame: &mut Frame,
+    originals: &[Pointer],
+    roots: &TempRoots,
+    start: usize,
+) -> Result<(), EngineError> {
+    let mut rewrites = HashMap::new();
+    for (idx, original) in originals.iter().enumerate().skip(start) {
+        rewrites.insert(*original, roots.get(idx)?);
+    }
+    frame.rewrite_pointers(&mut |pointer| Ok(rewrites.get(&pointer).copied().unwrap_or(pointer)))
 }
 
 fn native_step_to_control<State>(
@@ -5209,13 +5440,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match shape {
-        NativeSequenceShape::List => {
-            let mut list = runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?;
-            for value in values.into_iter().rev() {
-                list = runtime.heap.alloc_ptr_adt(sym("Cons"), vec![value, list])?;
-            }
-            Ok(list)
-        }
+        NativeSequenceShape::List => runtime.heap.alloc_ptr_list(values),
         NativeSequenceShape::Array => runtime.heap.alloc_ptr_array(values),
     }
 }
@@ -5823,8 +6048,11 @@ where
         task.elem_type.clone(),
         Type::fun(task.elem_type.clone(), bool_ty),
     );
+    let lhs = task.xs[task.next_index];
+    let roots = runtime.heap.temp_roots(vec![lhs])?;
     let eq = overloaded_pointer(runtime, "==", eq_ty.clone())?;
-    native_apply_step(eq, eq_ty, task.xs[task.next_index], task.elem_type.clone())
+    let lhs = roots.get(0)?;
+    native_apply_step(eq, eq_ty, lhs, task.elem_type.clone())
 }
 
 fn native_array_eq_apply_second(task: &NativeArrayEq) -> Result<NativeStep, EngineError> {
@@ -5909,10 +6137,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let plus_ty = binary_same_type(&task.elem_type);
-    let plus = overloaded_pointer(runtime, "+", plus_ty.clone())?;
     let acc = task
         .acc
         .ok_or_else(|| EngineError::Internal("native sum missing accumulator".into()))?;
+    let roots = runtime.heap.temp_roots(vec![acc])?;
+    let plus = overloaded_pointer(runtime, "+", plus_ty.clone())?;
+    let acc = roots.get(0)?;
     native_apply_step(plus, plus_ty, acc, task.elem_type.clone())
 }
 
@@ -5992,10 +6222,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let plus_ty = binary_same_type(&task.elem_type);
-    let plus = overloaded_pointer(runtime, "+", plus_ty.clone())?;
     let acc = task
         .acc
         .ok_or_else(|| EngineError::Internal("native mean missing accumulator".into()))?;
+    let roots = runtime.heap.temp_roots(vec![acc])?;
+    let plus = overloaded_pointer(runtime, "+", plus_ty.clone())?;
+    let acc = roots.get(0)?;
     native_apply_step(plus, plus_ty, acc, task.elem_type.clone())
 }
 
@@ -6020,10 +6252,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let div_ty = binary_same_type(&task.elem_type);
-    let div = overloaded_pointer(runtime, "/", div_ty.clone())?;
     let acc = task
         .acc
         .ok_or_else(|| EngineError::Internal("native mean missing accumulator".into()))?;
+    let acc_root = runtime.heap.temp_roots(vec![acc])?;
+    let div = overloaded_pointer(runtime, "/", div_ty.clone())?;
+    let div_root = runtime.heap.temp_roots(vec![div])?;
     if task.len_value.is_none() {
         task.len_value = Some(len_value_for_native_type(
             runtime,
@@ -6031,6 +6265,8 @@ where
             task.len,
         )?);
     }
+    let acc = acc_root.get(0)?;
+    let div = div_root.get(0)?;
     native_apply_step(div, div_ty, acc, task.elem_type.clone())
 }
 
@@ -6052,13 +6288,10 @@ fn native_log_show_enter<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
+    let roots = runtime.heap.temp_roots(vec![task.arg])?;
     let show = overloaded_pointer(runtime, "show", task.show_type.clone())?;
-    native_apply_step(
-        show,
-        task.show_type.clone(),
-        task.arg,
-        task.arg_type.clone(),
-    )
+    let arg = roots.get(0)?;
+    native_apply_step(show, task.show_type.clone(), arg, task.arg_type.clone())
 }
 
 fn native_log_show_receive<State>(
