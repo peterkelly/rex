@@ -48,7 +48,7 @@ use crate::stack::{
     NativeUnaryMap, NativeUnaryShape,
 };
 use crate::value::FromPointer;
-use crate::value::{Cell, Closure, Handle, Heap, Pointer, list_to_vec};
+use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, list_to_vec};
 use crate::{
     EngineError, Environment, FromRex, IntoRex, RexType,
     evaluator::{EvalContext, EvaluatorRef},
@@ -2875,8 +2875,8 @@ where
                     typed.typ.clone(),
                     Arc::new(body.as_ref().clone()),
                 )?;
-                let value = self.heap.get(&ptr)?;
-                self.heap.overwrite(slot, value.as_ref().clone())?;
+                let value = self.heap.clone_cell(&ptr)?;
+                self.heap.overwrite(slot, value)?;
             }
             Ok(())
         })();
@@ -3878,10 +3878,10 @@ pub(crate) fn class_method_capability_matches_requirement(
     capability.name == requirement.name && unify(&scheme_ty, &requirement.typ).is_ok()
 }
 
-fn cell_type(heap: &Heap, cell: &Cell) -> Result<Type, EngineError> {
+fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
     let pointer_type = |pointer: &Pointer| -> Result<Type, EngineError> {
         let cell = heap.get(pointer)?;
-        cell_type(heap, cell.as_ref())
+        cell_type(heap, cell)
     };
 
     match cell {
@@ -3983,14 +3983,16 @@ pub(crate) fn resolve_arg_type(
     arg: &Pointer,
 ) -> Result<Type, EngineError> {
     let infer_from_cell = |ty_hint: Option<&Type>| -> Result<Type, EngineError> {
-        let cell = heap.get(arg)?;
-        match ty_hint {
-            Some(ty) => match cell_type(heap, cell.as_ref()) {
-                Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),
-                _ => Ok(ty.clone()),
-            },
-            None => cell_type(heap, cell.as_ref()),
-        }
+        heap.with_access(|heap| {
+            let cell = heap.get(arg)?;
+            match ty_hint {
+                Some(ty) => match cell_type(heap, cell) {
+                    Ok(val_ty) if val_ty.ftv().is_empty() => Ok(val_ty),
+                    _ => Ok(ty.clone()),
+                },
+                None => cell_type(heap, cell),
+            }
+        })
     };
     match arg_type {
         Some(ty) if ty.ftv().is_empty() => Ok(ty.clone()),
@@ -4088,9 +4090,17 @@ pub(crate) fn binary_arg_types(typ: &Type) -> Result<(Type, Type), EngineError> 
 }
 
 fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Pointer, EngineError> {
+    heap.with_access(|heap| project_pointer_with_access(heap, field, pointer))
+}
+
+fn project_pointer_with_access(
+    heap: &HeapAccess<'_>,
+    field: &Symbol,
+    pointer: &Pointer,
+) -> Result<Pointer, EngineError> {
     let value = heap.get(pointer)?;
     if let Ok(index) = field.as_ref().parse::<usize>() {
-        return match value.as_ref() {
+        return match value {
             Cell::Tuple(items) => {
                 items
                     .get(index)
@@ -4106,10 +4116,10 @@ fn project_pointer(heap: &Heap, field: &Symbol, pointer: &Pointer) -> Result<Poi
             }),
         };
     }
-    match value.as_ref() {
+    match value {
         Cell::Adt(_, args) if args.len() == 1 => {
             let inner = heap.get(&args[0])?;
-            match inner.as_ref() {
+            match inner {
                 Cell::Dict(map) => {
                     map.get(field)
                         .cloned()
@@ -4933,8 +4943,8 @@ where
                 let slot = *frame.slots.get(idx).ok_or_else(|| {
                     EngineError::Internal("let rec frame slot index out of bounds".into())
                 })?;
-                let value_ref = runtime.heap.get(&value)?;
-                runtime.heap.overwrite(&slot, value_ref.as_ref().clone())?;
+                let cell = runtime.heap.clone_cell(&value)?;
+                runtime.heap.overwrite(&slot, cell)?;
                 frame.binding_value = Some(value);
                 frame.next_binding_index += 1;
                 let recursive_env = frame.recursive_env.clone().ok_or_else(|| {
@@ -5285,10 +5295,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match shape {
-        NativeSequenceShape::List => {
-            let value = runtime.heap.get(&pointer)?;
-            list_to_vec(&runtime.heap, value.as_ref())
-        }
+        NativeSequenceShape::List => runtime.heap.pointer_as_list(&pointer),
         NativeSequenceShape::Array => runtime.heap.pointer_as_array(&pointer),
     }
 }
@@ -6151,7 +6158,7 @@ fn eval_apply_arg<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let func_value = runtime.heap.get(&func)?.as_ref().clone();
+    let func_value = runtime.heap.clone_cell(&func)?;
     match func_value {
         Cell::Closure(Closure {
             env,
@@ -6234,15 +6241,19 @@ where
     State: Clone + Send + Sync + 'static,
 {
     if let Some(ptr) = env.get(name) {
-        let value = runtime.heap.get(&ptr)?;
-        match value.as_ref() {
+        let native = runtime.heap.with_access(|heap| match heap.get(&ptr)? {
             Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
-                    NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
-                    NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
-                }
+                Ok(Some(native.clone()))
             }
-            _ => Ok(EvalVarResult::Value(ptr)),
+            _ => Ok(None),
+        })?;
+        if let Some(native) = native {
+            match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
+                NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
+                NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
+            }
+        } else {
+            Ok(EvalVarResult::Value(ptr))
         }
     } else if runtime.type_system.class_methods.contains_key(name) {
         let evaluator = EvaluatorRef::new_with_parent(runtime, parent);
@@ -6259,14 +6270,19 @@ where
     } else {
         let value =
             EvaluatorRef::new_with_parent(runtime, parent).resolve_native(name.as_ref(), typ)?;
-        match runtime.heap.get(&value)?.as_ref() {
+        let native = runtime.heap.with_access(|heap| match heap.get(&value)? {
             Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
-                match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
-                    NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
-                    NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
-                }
+                Ok(Some(native.clone()))
             }
-            _ => Ok(EvalVarResult::Value(value)),
+            _ => Ok(None),
+        })?;
+        if let Some(native) = native {
+            match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
+                NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
+                NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
+            }
+        } else {
+            Ok(EvalVarResult::Value(value))
         }
     }
 }
@@ -6296,30 +6312,40 @@ fn apply_record_update_values<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let base_val = runtime.heap.get(&base_ptr)?;
-    match base_val.as_ref() {
-        Cell::Dict(map) => {
-            let mut map = map.clone();
+    enum RecordUpdateTarget {
+        Dict(BTreeMap<Symbol, Pointer>),
+        Adt(Symbol, BTreeMap<Symbol, Pointer>),
+    }
+
+    let target = runtime.heap.with_access(|heap| {
+        let base_val = heap.get(&base_ptr)?;
+        match base_val {
+            Cell::Dict(map) => Ok(RecordUpdateTarget::Dict(map.clone())),
+            Cell::Adt(tag, args) if args.len() == 1 => {
+                let inner = heap.get(&args[0])?;
+                match inner {
+                    Cell::Dict(map) => Ok(RecordUpdateTarget::Adt(tag.clone(), map.clone())),
+                    _ => Err(EngineError::UnsupportedExpr),
+                }
+            }
+            _ => Err(EngineError::UnsupportedExpr),
+        }
+    })?;
+
+    match target {
+        RecordUpdateTarget::Dict(mut map) => {
             for (key, value) in update_vals {
                 map.insert(key, value);
             }
             runtime.heap.alloc_ptr_dict(map)
         }
-        Cell::Adt(tag, args) if args.len() == 1 => {
-            let inner = runtime.heap.get(&args[0])?;
-            match inner.as_ref() {
-                Cell::Dict(map) => {
-                    let mut out = map.clone();
-                    for (key, value) in update_vals {
-                        out.insert(key, value);
-                    }
-                    let dict = runtime.heap.alloc_ptr_dict(out)?;
-                    runtime.heap.alloc_ptr_adt(tag.clone(), vec![dict])
-                }
-                _ => Err(EngineError::UnsupportedExpr),
+        RecordUpdateTarget::Adt(tag, mut map) => {
+            for (key, value) in update_vals {
+                map.insert(key, value);
             }
+            let dict = runtime.heap.alloc_ptr_dict(map)?;
+            runtime.heap.alloc_ptr_adt(tag, vec![dict])
         }
-        _ => Err(EngineError::UnsupportedExpr),
     }
 }
 
@@ -6384,15 +6410,14 @@ fn mark_frame_complete(frame: &mut Frame, value: Pointer) {
 }
 
 fn is_root_frame_parent(heap: &Heap, pointer: &Pointer) -> Result<bool, EngineError> {
-    let cell = heap.get(pointer)?;
-    match cell.as_ref() {
+    heap.with_access(|heap| match heap.get(pointer)? {
         Cell::U64(0) => Ok(true),
         Cell::Frame(_) => Ok(false),
         other => Err(EngineError::Internal(format!(
             "unexpected frame parent value {}",
             other.cell_type_name()
         ))),
-    }
+    })
 }
 
 fn frame_kind_error<T>(expected: &'static str) -> Result<T, EngineError> {
@@ -6412,6 +6437,16 @@ fn match_pattern_ptr(
     pat: &Pattern,
     value: &Pointer,
 ) -> Option<BTreeMap<Symbol, Pointer>> {
+    heap.with_access(|heap| Ok(match_pattern_ptr_with_access(heap, pat, value)))
+        .ok()
+        .flatten()
+}
+
+fn match_pattern_ptr_with_access(
+    heap: &HeapAccess<'_>,
+    pat: &Pattern,
+    value: &Pointer,
+) -> Option<BTreeMap<Symbol, Pointer>> {
     match pat {
         Pattern::Wildcard(..) => Some(BTreeMap::new()),
         Pattern::Var(var) => {
@@ -6421,38 +6456,38 @@ fn match_pattern_ptr(
         }
         Pattern::Named(_, name, ps) => {
             let v = heap.get(value).ok()?;
-            match v.as_ref() {
+            match v {
                 Cell::Adt(vname, args)
                     if runtime_ctor_matches(vname, &name.to_dotted_symbol())
                         && args.len() == ps.len() =>
                 {
-                    match_patterns(heap, ps, args)
+                    match_patterns_with_access(heap, ps, args)
                 }
                 _ => None,
             }
         }
         Pattern::Tuple(_, ps) => {
             let v = heap.get(value).ok()?;
-            match v.as_ref() {
-                Cell::Tuple(xs) if xs.len() == ps.len() => match_patterns(heap, ps, xs),
+            match v {
+                Cell::Tuple(xs) if xs.len() == ps.len() => match_patterns_with_access(heap, ps, xs),
                 _ => None,
             }
         }
         Pattern::List(_, ps) => {
             let v = heap.get(value).ok()?;
-            let values = list_to_vec(heap, v.as_ref()).ok()?;
+            let values = list_to_vec(heap, v).ok()?;
             if values.len() == ps.len() {
-                match_patterns(heap, ps, &values)
+                match_patterns_with_access(heap, ps, &values)
             } else {
                 None
             }
         }
         Pattern::Cons(_, head, tail) => {
             let v = heap.get(value).ok()?;
-            match v.as_ref() {
+            match v {
                 Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
-                    let mut left = match_pattern_ptr(heap, head, &args[0])?;
-                    let right = match_pattern_ptr(heap, tail, &args[1])?;
+                    let mut left = match_pattern_ptr_with_access(heap, head, &args[0])?;
+                    let right = match_pattern_ptr_with_access(heap, tail, &args[1])?;
                     left.extend(right);
                     Some(left)
                 }
@@ -6461,12 +6496,12 @@ fn match_pattern_ptr(
         }
         Pattern::Dict(_, fields) => {
             let v = heap.get(value).ok()?;
-            match v.as_ref() {
+            match v {
                 Cell::Dict(map) => {
                     let mut bindings = BTreeMap::new();
                     for (key, pat) in fields {
                         let v = map.get(key)?;
-                        let sub = match_pattern_ptr(heap, pat, v)?;
+                        let sub = match_pattern_ptr_with_access(heap, pat, v)?;
                         bindings.extend(sub);
                     }
                     Some(bindings)
@@ -6477,14 +6512,14 @@ fn match_pattern_ptr(
     }
 }
 
-fn match_patterns(
-    heap: &Heap,
+fn match_patterns_with_access(
+    heap: &HeapAccess<'_>,
     patterns: &[Pattern],
     values: &[Pointer],
 ) -> Option<BTreeMap<Symbol, Pointer>> {
     let mut bindings = BTreeMap::new();
     for (p, v) in patterns.iter().zip(values.iter()) {
-        let sub = match_pattern_ptr(heap, p, v)?;
+        let sub = match_pattern_ptr_with_access(heap, p, v)?;
         bindings.extend(sub);
     }
     Some(bindings)

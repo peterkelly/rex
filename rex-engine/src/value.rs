@@ -25,8 +25,8 @@ struct HeapState {
 
 #[derive(Clone)]
 struct HeapSlot {
-    generation: u32,
-    cell: Option<Arc<Cell>>,
+    generation: u64,
+    cell: Option<Cell>,
 }
 
 #[derive(Clone)]
@@ -46,6 +46,11 @@ struct RootId {
 pub struct Heap {
     id: u64,
     state: Arc<Mutex<HeapState>>,
+}
+
+pub(crate) struct HeapAccess<'a> {
+    heap: Heap,
+    state: &'a mut HeapState,
 }
 
 #[derive(Clone)]
@@ -327,6 +332,167 @@ impl Default for Heap {
     }
 }
 
+enum ValueSeed {
+    Bool(bool),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
+    String(String),
+    Uuid(Uuid),
+    DateTime(DateTime<Utc>),
+    Tuple(Vec<Pointer>),
+    Array(Vec<Pointer>),
+    Dict(BTreeMap<Symbol, Pointer>),
+    Adt(Symbol, Vec<Pointer>),
+    Uninitialized(Symbol),
+    Frame,
+    Closure,
+    Native,
+    Overloaded,
+}
+
+impl ValueSeed {
+    fn from_cell(cell: &Cell) -> Self {
+        match cell {
+            Cell::Bool(value) => Self::Bool(*value),
+            Cell::U8(value) => Self::U8(*value),
+            Cell::U16(value) => Self::U16(*value),
+            Cell::U32(value) => Self::U32(*value),
+            Cell::U64(value) => Self::U64(*value),
+            Cell::I8(value) => Self::I8(*value),
+            Cell::I16(value) => Self::I16(*value),
+            Cell::I32(value) => Self::I32(*value),
+            Cell::I64(value) => Self::I64(*value),
+            Cell::F32(value) => Self::F32(*value),
+            Cell::F64(value) => Self::F64(*value),
+            Cell::String(value) => Self::String(value.clone()),
+            Cell::Uuid(value) => Self::Uuid(*value),
+            Cell::DateTime(value) => Self::DateTime(*value),
+            Cell::Tuple(values) => Self::Tuple(values.clone()),
+            Cell::Array(values) => Self::Array(values.clone()),
+            Cell::Dict(values) => Self::Dict(values.clone()),
+            Cell::Adt(name, args) => Self::Adt(name.clone(), args.clone()),
+            Cell::Uninitialized(name) => Self::Uninitialized(name.clone()),
+            Cell::Frame(_) => Self::Frame,
+            Cell::Closure(_) => Self::Closure,
+            Cell::Native(_) => Self::Native,
+            Cell::Overloaded(_) => Self::Overloaded,
+        }
+    }
+}
+
+impl HeapAccess<'_> {
+    pub(crate) fn get(&self, pointer: &Pointer) -> Result<&Cell, EngineError> {
+        if pointer.heap_id != self.heap.id {
+            return Err(Heap::wrong_heap_pointer(
+                pointer.heap_id,
+                self.heap.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+        let slot = self
+            .state
+            .slots
+            .get(pointer.index as usize)
+            .ok_or_else(|| {
+                Heap::invalid_pointer(self.heap.id, pointer.index, pointer.generation)
+            })?;
+        if slot.generation != pointer.generation {
+            return Err(Heap::invalid_pointer(
+                self.heap.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+        slot.cell
+            .as_ref()
+            .ok_or_else(|| Heap::invalid_pointer(self.heap.id, pointer.index, pointer.generation))
+    }
+
+    pub(crate) fn type_name(&self, pointer: &Pointer) -> Result<&'static str, EngineError> {
+        self.get(pointer).map(Cell::cell_type_name)
+    }
+
+    pub(crate) fn overwrite(&mut self, pointer: &Pointer, cell: Cell) -> Result<(), EngineError> {
+        if pointer.heap_id != self.heap.id {
+            return Err(Heap::wrong_heap_pointer(
+                pointer.heap_id,
+                self.heap.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+
+        let slot = self
+            .state
+            .slots
+            .get_mut(pointer.index as usize)
+            .ok_or_else(|| {
+                Heap::invalid_pointer(self.heap.id, pointer.index, pointer.generation)
+            })?;
+        if slot.generation != pointer.generation {
+            return Err(Heap::invalid_pointer(
+                self.heap.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+        slot.cell = Some(cell);
+        Ok(())
+    }
+
+    fn register_external_root(&mut self, pointer: Pointer) -> Result<RootId, EngineError> {
+        if pointer.heap_id != self.heap.id {
+            return Err(Heap::wrong_heap_pointer(
+                pointer.heap_id,
+                self.heap.id,
+                pointer.index,
+                pointer.generation,
+            ));
+        }
+
+        if let Some(index) = self.state.free_root_list.pop() {
+            let slot_index = usize::try_from(index)
+                .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
+            let slot =
+                self.state.root_slots.get_mut(slot_index).ok_or_else(|| {
+                    EngineError::Internal("heap root free-list corruption".into())
+                })?;
+            if slot.pointer.is_some() {
+                return Err(EngineError::Internal(
+                    "heap root free-list referenced a live root".into(),
+                ));
+            }
+            slot.pointer = Some(pointer);
+            return Ok(RootId {
+                heap_id: self.heap.id,
+                index,
+                generation: slot.generation,
+            });
+        }
+
+        let index = u64::try_from(self.state.root_slots.len())
+            .map_err(|_| EngineError::Internal("heap exhausted: too many root slots".into()))?;
+        self.state.root_slots.push(RootSlot {
+            generation: 0,
+            pointer: Some(pointer),
+        });
+        Ok(RootId {
+            heap_id: self.heap.id,
+            index,
+            generation: 0,
+        })
+    }
+}
+
 impl Heap {
     /// Create a heap for a lexical scope.
     pub fn scoped<R>(f: impl FnOnce(&Heap) -> R) -> R {
@@ -343,7 +509,23 @@ impl Heap {
         }
     }
 
-    fn invalid_pointer(heap_id: u64, index: u32, generation: u32) -> EngineError {
+    pub(crate) fn with_access<R>(
+        &self,
+        f: impl FnOnce(&mut HeapAccess<'_>) -> Result<R, EngineError>,
+    ) -> Result<R, EngineError> {
+        // Keep all heap reads inside this access object while the lock is held.
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        let mut access = HeapAccess {
+            heap: self.clone(),
+            state: &mut state,
+        };
+        f(&mut access)
+    }
+
+    fn invalid_pointer(heap_id: u64, index: u32, generation: u64) -> EngineError {
         EngineError::Internal(format!(
             "invalid heap pointer (heap_id={}, index={}, generation={})",
             heap_id, index, generation
@@ -354,7 +536,7 @@ impl Heap {
         pointer_heap_id: u64,
         heap_id: u64,
         index: u32,
-        generation: u32,
+        generation: u64,
     ) -> EngineError {
         EngineError::Internal(format!(
             "heap pointer belongs to different heap (pointer_heap_id={}, heap_id={}, index={}, generation={})",
@@ -370,8 +552,10 @@ impl Heap {
     }
 
     pub(crate) fn handle(&self, pointer: Pointer) -> Result<Handle, EngineError> {
-        self.get(&pointer)?;
-        let root_id = self.register_external_root(pointer)?;
+        let root_id = self.with_access(|heap| {
+            heap.get(&pointer)?;
+            heap.register_external_root(pointer)
+        })?;
         Ok(Handle {
             root: Arc::new(HandleRoot {
                 heap: self.clone(),
@@ -505,60 +689,50 @@ impl Heap {
         })
     }
 
-    pub(crate) fn get(&self, pointer: &Pointer) -> Result<CellRef, EngineError> {
-        if pointer.heap_id != self.id {
-            return Err(Self::wrong_heap_pointer(
-                pointer.heap_id,
-                self.id,
-                pointer.index,
-                pointer.generation,
-            ));
-        }
-        self.read_slot(pointer.index, pointer.generation)
-            .map(CellRef::from_arc)
+    pub(crate) fn clone_cell(&self, pointer: &Pointer) -> Result<Cell, EngineError> {
+        self.with_access(|heap| Ok(heap.get(pointer)?.clone()))
     }
 
     pub(crate) fn type_name(&self, pointer: &Pointer) -> Result<&'static str, EngineError> {
-        self.get(pointer)
-            .map(|cell| self.type_name_of_cell(cell.as_ref()))
+        self.with_access(|heap| heap.type_name(pointer))
     }
 
     pub(crate) fn view(&self, pointer: &Pointer) -> Result<Value, EngineError> {
-        let cell = self.get(pointer)?;
-        self.view_cell(cell.as_ref())
+        let seed = self.with_access(|heap| Ok(ValueSeed::from_cell(heap.get(pointer)?)))?;
+        self.view_seed(seed)
     }
 
-    fn view_cell(&self, cell: &Cell) -> Result<Value, EngineError> {
-        Ok(match cell {
-            Cell::Bool(value) => Value::Bool(*value),
-            Cell::U8(value) => Value::U8(*value),
-            Cell::U16(value) => Value::U16(*value),
-            Cell::U32(value) => Value::U32(*value),
-            Cell::U64(value) => Value::U64(*value),
-            Cell::I8(value) => Value::I8(*value),
-            Cell::I16(value) => Value::I16(*value),
-            Cell::I32(value) => Value::I32(*value),
-            Cell::I64(value) => Value::I64(*value),
-            Cell::F32(value) => Value::F32(*value),
-            Cell::F64(value) => Value::F64(*value),
-            Cell::String(value) => Value::String(value.clone()),
-            Cell::Uuid(value) => Value::Uuid(*value),
-            Cell::DateTime(value) => Value::DateTime(*value),
-            Cell::Tuple(values) => Value::Tuple(self.handles_from_pointers(values)?),
-            Cell::Array(values) => Value::Array(self.handles_from_pointers(values)?),
-            Cell::Dict(values) => {
+    fn view_seed(&self, seed: ValueSeed) -> Result<Value, EngineError> {
+        Ok(match seed {
+            ValueSeed::Bool(value) => Value::Bool(value),
+            ValueSeed::U8(value) => Value::U8(value),
+            ValueSeed::U16(value) => Value::U16(value),
+            ValueSeed::U32(value) => Value::U32(value),
+            ValueSeed::U64(value) => Value::U64(value),
+            ValueSeed::I8(value) => Value::I8(value),
+            ValueSeed::I16(value) => Value::I16(value),
+            ValueSeed::I32(value) => Value::I32(value),
+            ValueSeed::I64(value) => Value::I64(value),
+            ValueSeed::F32(value) => Value::F32(value),
+            ValueSeed::F64(value) => Value::F64(value),
+            ValueSeed::String(value) => Value::String(value),
+            ValueSeed::Uuid(value) => Value::Uuid(value),
+            ValueSeed::DateTime(value) => Value::DateTime(value),
+            ValueSeed::Tuple(values) => Value::Tuple(self.handles_from_pointers(&values)?),
+            ValueSeed::Array(values) => Value::Array(self.handles_from_pointers(&values)?),
+            ValueSeed::Dict(values) => {
                 let mut out = BTreeMap::new();
                 for (name, pointer) in values {
-                    out.insert(name.clone(), self.handle(*pointer)?);
+                    out.insert(name, self.handle(pointer)?);
                 }
                 Value::Dict(out)
             }
-            Cell::Adt(name, args) => Value::Adt(name.clone(), self.handles_from_pointers(args)?),
-            Cell::Uninitialized(name) => Value::Uninitialized(name.clone()),
-            Cell::Frame(_) => Value::Frame,
-            Cell::Closure(_) => Value::Closure,
-            Cell::Native(_) => Value::Native,
-            Cell::Overloaded(_) => Value::Overloaded,
+            ValueSeed::Adt(name, args) => Value::Adt(name, self.handles_from_pointers(&args)?),
+            ValueSeed::Uninitialized(name) => Value::Uninitialized(name),
+            ValueSeed::Frame => Value::Frame,
+            ValueSeed::Closure => Value::Closure,
+            ValueSeed::Native => Value::Native,
+            ValueSeed::Overloaded => Value::Overloaded,
         })
     }
 
@@ -569,93 +743,96 @@ impl Heap {
             .collect::<Result<Vec<_>, _>>()
     }
 
-    pub(crate) fn type_name_of_cell(&self, cell: &Cell) -> &'static str {
-        cell.cell_type_name()
-    }
-
     pub(crate) fn pointer_as_bool(&self, pointer: &Pointer) -> Result<bool, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_bool()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_bool())
     }
 
     pub(crate) fn pointer_as_u8(&self, pointer: &Pointer) -> Result<u8, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_u8()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_u8())
     }
 
     pub(crate) fn pointer_as_u16(&self, pointer: &Pointer) -> Result<u16, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_u16()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_u16())
     }
 
     pub(crate) fn pointer_as_u32(&self, pointer: &Pointer) -> Result<u32, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_u32()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_u32())
     }
 
     pub(crate) fn pointer_as_u64(&self, pointer: &Pointer) -> Result<u64, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_u64()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_u64())
     }
 
     pub(crate) fn pointer_as_i8(&self, pointer: &Pointer) -> Result<i8, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_i8()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_i8())
     }
 
     pub(crate) fn pointer_as_i16(&self, pointer: &Pointer) -> Result<i16, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_i16()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_i16())
     }
 
     pub(crate) fn pointer_as_i32(&self, pointer: &Pointer) -> Result<i32, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_i32()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_i32())
     }
 
     pub(crate) fn pointer_as_i64(&self, pointer: &Pointer) -> Result<i64, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_i64()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_i64())
     }
 
     pub(crate) fn pointer_as_f32(&self, pointer: &Pointer) -> Result<f32, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_f32()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_f32())
     }
 
     pub(crate) fn pointer_as_f64(&self, pointer: &Pointer) -> Result<f64, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_f64()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_f64())
     }
 
     pub(crate) fn pointer_as_string(&self, pointer: &Pointer) -> Result<String, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_string()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_string())
     }
 
     pub(crate) fn pointer_as_uuid(&self, pointer: &Pointer) -> Result<Uuid, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_uuid()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_uuid())
     }
 
     pub(crate) fn pointer_as_datetime(
         &self,
         pointer: &Pointer,
     ) -> Result<DateTime<Utc>, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_datetime()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_datetime())
     }
 
     pub(crate) fn pointer_as_tuple(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_tuple()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_tuple())
     }
 
     pub(crate) fn pointer_as_array(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_array()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_array())
     }
 
     pub(crate) fn pointer_as_dict(
         &self,
         pointer: &Pointer,
     ) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_dict()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_dict())
     }
 
     pub(crate) fn pointer_as_adt(
         &self,
         pointer: &Pointer,
     ) -> Result<(Symbol, Vec<Pointer>), EngineError> {
-        self.get(pointer)?.as_ref().cell_as_adt()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_adt())
     }
 
     pub(crate) fn pointer_as_frame(&self, pointer: &Pointer) -> Result<Frame, EngineError> {
-        self.get(pointer)?.as_ref().cell_as_frame()
+        self.with_access(|heap| heap.get(pointer)?.cell_as_frame())
+    }
+
+    pub(crate) fn pointer_as_list(&self, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
+        self.with_access(|heap| {
+            let cell = heap.get(pointer)?;
+            list_to_vec(heap, cell)
+        })
     }
 
     pub(crate) fn alloc_ptr_bool(&self, value: bool) -> Result<Pointer, EngineError> {
@@ -810,80 +987,7 @@ impl Heap {
     }
 
     pub(crate) fn overwrite(&self, pointer: &Pointer, cell: Cell) -> Result<(), EngineError> {
-        if pointer.heap_id != self.id {
-            return Err(Self::wrong_heap_pointer(
-                pointer.heap_id,
-                self.id,
-                pointer.index,
-                pointer.generation,
-            ));
-        }
-
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        let slot = state
-            .slots
-            .get_mut(pointer.index as usize)
-            .ok_or_else(|| Heap::invalid_pointer(self.id, pointer.index, pointer.generation))?;
-        if slot.generation != pointer.generation {
-            return Err(Heap::invalid_pointer(
-                self.id,
-                pointer.index,
-                pointer.generation,
-            ));
-        }
-        slot.cell = Some(Arc::new(cell));
-        Ok(())
-    }
-
-    fn register_external_root(&self, pointer: Pointer) -> Result<RootId, EngineError> {
-        if pointer.heap_id != self.id {
-            return Err(Self::wrong_heap_pointer(
-                pointer.heap_id,
-                self.id,
-                pointer.index,
-                pointer.generation,
-            ));
-        }
-
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-
-        if let Some(index) = state.free_root_list.pop() {
-            let slot_index = usize::try_from(index)
-                .map_err(|_| EngineError::Internal("heap root index overflow".into()))?;
-            let slot = state
-                .root_slots
-                .get_mut(slot_index)
-                .ok_or_else(|| EngineError::Internal("heap root free-list corruption".into()))?;
-            if slot.pointer.is_some() {
-                return Err(EngineError::Internal(
-                    "heap root free-list referenced a live root".into(),
-                ));
-            }
-            slot.pointer = Some(pointer);
-            return Ok(RootId {
-                heap_id: self.id,
-                index,
-                generation: slot.generation,
-            });
-        }
-
-        let index = u64::try_from(state.root_slots.len())
-            .map_err(|_| EngineError::Internal("heap exhausted: too many root slots".into()))?;
-        state.root_slots.push(RootSlot {
-            generation: 0,
-            pointer: Some(pointer),
-        });
-        Ok(RootId {
-            heap_id: self.id,
-            index,
-            generation: 0,
-        })
+        self.with_access(|heap| heap.overwrite(pointer, cell))
     }
 
     fn unregister_external_root(&self, root_id: RootId) -> Result<(), EngineError> {
@@ -948,7 +1052,7 @@ impl Heap {
             .count())
     }
 
-    fn alloc_slot_raw(&self, cell: Cell) -> Result<(u32, u32), EngineError> {
+    fn alloc_slot_raw(&self, cell: Cell) -> Result<(u32, u64), EngineError> {
         let mut state = self
             .state
             .lock()
@@ -959,7 +1063,7 @@ impl Heap {
                 .slots
                 .get_mut(index as usize)
                 .ok_or_else(|| EngineError::Internal("heap free-list corruption".into()))?;
-            slot.cell = Some(Arc::new(cell));
+            slot.cell = Some(cell);
             return Ok((index, slot.generation));
         }
 
@@ -967,44 +1071,9 @@ impl Heap {
             .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
         state.slots.push(HeapSlot {
             generation: 0,
-            cell: Some(Arc::new(cell)),
+            cell: Some(cell),
         });
         Ok((index, 0))
-    }
-
-    fn read_slot(&self, index: u32, generation: u32) -> Result<Arc<Cell>, EngineError> {
-        let state = self
-            .state
-            .lock()
-            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        let slot = state
-            .slots
-            .get(index as usize)
-            .ok_or_else(|| Heap::invalid_pointer(self.id, index, generation))?;
-        if slot.generation != generation {
-            return Err(Heap::invalid_pointer(self.id, index, generation));
-        }
-        slot.cell
-            .as_ref()
-            .cloned()
-            .ok_or_else(|| Heap::invalid_pointer(self.id, index, generation))
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct CellRef {
-    cell: Arc<Cell>,
-}
-
-impl CellRef {
-    fn from_arc(cell: Arc<Cell>) -> Self {
-        Self { cell }
-    }
-}
-
-impl AsRef<Cell> for CellRef {
-    fn as_ref(&self) -> &Cell {
-        self.cell.as_ref()
     }
 }
 
@@ -1021,7 +1090,7 @@ pub(crate) struct Closure {
 pub(crate) struct Pointer {
     heap_id: u64,
     index: u32,
-    generation: u32,
+    generation: u64,
 }
 
 #[derive(Clone)]
@@ -1222,7 +1291,7 @@ impl Cell {
     }
 }
 
-type PointerKey = (u64, u32, u32);
+type PointerKey = (u64, u32, u64);
 type PointerPairKey = (PointerKey, PointerKey);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1272,7 +1341,7 @@ fn canonical_pointer_pair(lhs: PointerKey, rhs: PointerKey) -> PointerPairKey {
 }
 
 fn pointer_debug_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     pointer: &Pointer,
     active: &mut HashSet<PointerKey>,
 ) -> Result<String, EngineError> {
@@ -1281,13 +1350,13 @@ fn pointer_debug_inner(
         return Ok(format!("<cycle:{}:{}>", pointer.index, pointer.generation));
     }
     let cell = heap.get(pointer)?;
-    let out = cell_debug_inner(heap, cell.as_ref(), active);
+    let out = cell_debug_inner(heap, cell, active);
     active.remove(&key);
     out
 }
 
 fn pointer_display_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     pointer: &Pointer,
     active: &mut HashSet<PointerKey>,
     opts: ValueDisplayOptions,
@@ -1297,13 +1366,13 @@ fn pointer_display_inner(
         return Ok(format!("<cycle:{}:{}>", pointer.index, pointer.generation));
     }
     let cell = heap.get(pointer)?;
-    let out = cell_display_inner(heap, cell.as_ref(), active, opts);
+    let out = cell_display_inner(heap, cell, active, opts);
     active.remove(&key);
     out
 }
 
 fn env_debug_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     env: &Environment,
     active: &mut HashSet<PointerKey>,
 ) -> Result<String, EngineError> {
@@ -1330,7 +1399,7 @@ fn env_debug_inner(
 }
 
 fn closure_debug_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     closure: &Closure,
     active: &mut HashSet<PointerKey>,
 ) -> Result<String, EngineError> {
@@ -1345,7 +1414,7 @@ fn closure_debug_inner(
 }
 
 fn cell_debug_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     cell: &Cell,
     active: &mut HashSet<PointerKey>,
 ) -> Result<String, EngineError> {
@@ -1417,7 +1486,7 @@ fn cell_debug_inner(
 }
 
 fn cell_display_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     cell: &Cell,
     active: &mut HashSet<PointerKey>,
     opts: ValueDisplayOptions,
@@ -1550,8 +1619,10 @@ fn cell_display_inner(
 }
 
 pub(crate) fn pointer_debug(heap: &Heap, pointer: &Pointer) -> Result<String, EngineError> {
-    let mut active = HashSet::new();
-    pointer_debug_inner(heap, pointer, &mut active)
+    heap.with_access(|heap| {
+        let mut active = HashSet::new();
+        pointer_debug_inner(heap, pointer, &mut active)
+    })
 }
 
 pub(crate) fn pointer_display_with(
@@ -1559,12 +1630,14 @@ pub(crate) fn pointer_display_with(
     pointer: &Pointer,
     opts: ValueDisplayOptions,
 ) -> Result<String, EngineError> {
-    let mut active = HashSet::new();
-    pointer_display_inner(heap, pointer, &mut active, opts)
+    heap.with_access(|heap| {
+        let mut active = HashSet::new();
+        pointer_display_inner(heap, pointer, &mut active, opts)
+    })
 }
 
 fn pointer_eq_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     lhs: &Pointer,
     rhs: &Pointer,
     seen: &mut HashSet<PointerPairKey>,
@@ -1580,11 +1653,11 @@ fn pointer_eq_inner(
     }
     let lhs_cell = heap.get(lhs)?;
     let rhs_cell = heap.get(rhs)?;
-    cell_eq_inner(heap, lhs_cell.as_ref(), rhs_cell.as_ref(), seen)
+    cell_eq_inner(heap, lhs_cell, rhs_cell, seen)
 }
 
 fn env_eq_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     lhs: &Environment,
     rhs: &Environment,
     seen: &mut HashSet<PointerPairKey>,
@@ -1608,7 +1681,7 @@ fn env_eq_inner(
 }
 
 fn closure_eq_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     lhs: &Closure,
     rhs: &Closure,
     seen: &mut HashSet<PointerPairKey>,
@@ -1624,7 +1697,7 @@ fn closure_eq_inner(
 }
 
 fn cell_eq_inner(
-    heap: &Heap,
+    heap: &HeapAccess<'_>,
     lhs: &Cell,
     rhs: &Cell,
     seen: &mut HashSet<PointerPairKey>,
@@ -1690,61 +1763,46 @@ fn cell_eq_inner(
 }
 
 pub(crate) fn pointer_eq(heap: &Heap, lhs: &Pointer, rhs: &Pointer) -> Result<bool, EngineError> {
-    let mut seen = HashSet::new();
-    pointer_eq_inner(heap, lhs, rhs, &mut seen)
+    heap.with_access(|heap| {
+        let mut seen = HashSet::new();
+        pointer_eq_inner(heap, lhs, rhs, &mut seen)
+    })
 }
 
-fn list_to_vec_opt(heap: &Heap, cell: &Cell) -> Result<Option<Vec<Pointer>>, EngineError> {
-    enum Cursor<'a> {
-        Borrowed(&'a Cell),
-        Owned(CellRef),
-    }
-
+fn list_to_vec_opt(
+    heap: &HeapAccess<'_>,
+    cell: &Cell,
+) -> Result<Option<Vec<Pointer>>, EngineError> {
     let mut out = Vec::new();
-    let mut cursor = Cursor::Borrowed(cell);
+    let mut cursor = cell;
     loop {
-        let cur = match &cursor {
-            Cursor::Borrowed(v) => *v,
-            Cursor::Owned(v) => v.as_ref(),
-        };
-
-        match cur {
+        match cursor {
             Cell::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => {
                 return Ok(Some(out));
             }
             Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0]);
-                cursor = Cursor::Owned(heap.get(&args[1])?);
+                cursor = heap.get(&args[1])?;
             }
             _ => return Ok(None),
         }
     }
 }
 
-pub(crate) fn list_to_vec(heap: &Heap, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
-    enum Cursor<'a> {
-        Borrowed(&'a Cell),
-        Owned(CellRef),
-    }
-
+pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Pointer>, EngineError> {
     let mut out = Vec::new();
-    let mut cursor = Cursor::Borrowed(cell);
+    let mut cursor = cell;
     loop {
-        let cur = match &cursor {
-            Cursor::Borrowed(v) => *v,
-            Cursor::Owned(v) => v.as_ref(),
-        };
-
-        match cur {
+        match cursor {
             Cell::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Ok(out),
             Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
                 out.push(args[0]);
-                cursor = Cursor::Owned(heap.get(&args[1])?);
+                cursor = heap.get(&args[1])?;
             }
             _ => {
                 return Err(EngineError::NativeType {
                     expected: "list".into(),
-                    got: heap.type_name_of_cell(cur).into(),
+                    got: cursor.cell_type_name().into(),
                 });
             }
         }
@@ -2185,7 +2243,7 @@ impl FromPointer for DateTime<Utc> {
 
 impl FromPointer for Cell {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        heap.get(pointer).map(|cell| cell.as_ref().clone())
+        heap.clone_cell(pointer)
     }
 }
 

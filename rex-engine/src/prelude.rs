@@ -20,7 +20,7 @@ use crate::stack::{
     NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFilterMap,
     NativeUnaryFlatMap, NativeUnaryMap, NativeUnaryShape,
 };
-use crate::value::{Cell, FromPointer, Heap, IntoPointer, Pointer, list_to_vec};
+use crate::value::{Cell, FromPointer, Heap, HeapAccess, IntoPointer, Pointer};
 
 fn values_to_ptrs<T: IntoPointer>(
     heap: &Heap,
@@ -33,8 +33,7 @@ fn values_to_ptrs<T: IntoPointer>(
 }
 
 fn expect_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
-    let cell = heap.get(pointer)?;
-    list_to_vec(heap, cell.as_ref())
+    heap.pointer_as_list(pointer)
 }
 
 fn list_from_pointers(heap: &Heap, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
@@ -217,9 +216,11 @@ pub(crate) fn extremum_by_type(
     let mut values = values.into_iter();
     let mut best = values.next().ok_or(EngineError::EmptySequence)?;
     for value in values {
-        let cell = heap.get(&value)?;
-        let best_cell = heap.get(&best)?;
-        let ord = cmp_cell_by_type(heap, &name, elem_ty, cell.as_ref(), best_cell.as_ref())?;
+        let ord = heap.with_access(|heap| {
+            let cell = heap.get(&value)?;
+            let best_cell = heap.get(&best)?;
+            cmp_cell_by_type(&name, elem_ty, cell, best_cell)
+        })?;
         if ord == choose {
             best = value;
         }
@@ -275,27 +276,16 @@ pub(crate) fn as_nonneg_usize(n: i32) -> usize {
 }
 
 fn cmp_cell_by_type(
-    heap: &Heap,
     op_name: &Symbol,
     typ: &Type,
     lhs: &Cell,
     rhs: &Cell,
 ) -> Result<std::cmp::Ordering, EngineError> {
-    fn mismatch(
-        heap: &Heap,
-        op_name: &Symbol,
-        expected: &str,
-        lhs: &Cell,
-        rhs: &Cell,
-    ) -> EngineError {
+    fn mismatch(op_name: &Symbol, expected: &str, lhs: &Cell, rhs: &Cell) -> EngineError {
         let _ = op_name;
         EngineError::NativeType {
             expected: expected.to_string(),
-            got: format!(
-                "{}, {}",
-                heap.type_name_of_cell(lhs),
-                heap.type_name_of_cell(rhs)
-            ),
+            got: format!("{}, {}", lhs.cell_type_name(), rhs.cell_type_name()),
         }
     }
 
@@ -304,82 +294,82 @@ fn cmp_cell_by_type(
             Some(BuiltinTypeId::U8) => {
                 let a = lhs
                     .cell_as_u8()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u8()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U16) => {
                 let a = lhs
                     .cell_as_u16()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u16()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U32) => {
                 let a = lhs
                     .cell_as_u32()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u32()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U64) => {
                 let a = lhs
                     .cell_as_u64()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u64()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I8) => {
                 let a = lhs
                     .cell_as_i8()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i8()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I16) => {
                 let a = lhs
                     .cell_as_i16()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i16()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I32) => {
                 let a = lhs
                     .cell_as_i32()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i32()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I64) => {
                 let a = lhs
                     .cell_as_i64()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i64()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::F32) => {
                 let a = lhs
                     .cell_as_f32()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_f32()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                     expected: tc.name.to_string(),
                     got: "nan".into(),
@@ -388,10 +378,10 @@ fn cmp_cell_by_type(
             Some(BuiltinTypeId::F64) => {
                 let a = lhs
                     .cell_as_f64()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_f64()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
                     expected: tc.name.to_string(),
                     got: "nan".into(),
@@ -400,33 +390,33 @@ fn cmp_cell_by_type(
             Some(BuiltinTypeId::String) => {
                 let a = lhs
                     .cell_as_string()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_string()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::Uuid) => {
                 let a = lhs
                     .cell_as_uuid()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_uuid()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::DateTime) => {
                 let a = lhs
                     .cell_as_datetime()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_datetime()
-                    .map_err(|_| mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            _ => Err(mismatch(heap, op_name, tc.name.as_ref(), lhs, rhs)),
+            _ => Err(mismatch(op_name, tc.name.as_ref(), lhs, rhs)),
         },
-        _ => Err(mismatch(heap, op_name, &typ.to_string(), lhs, rhs)),
+        _ => Err(mismatch(op_name, &typ.to_string(), lhs, rhs)),
     }
 }
 
@@ -1221,14 +1211,17 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             object: sym("Object"),
         };
 
-        fn to_serde_json(heap: &Heap, v: &Cell, tags: &Tags) -> Option<serde_json::Value> {
+        fn to_serde_json(
+            heap: &HeapAccess<'_>,
+            v: &Cell,
+            tags: &Tags,
+        ) -> Option<serde_json::Value> {
             match v {
                 Cell::Adt(tag, _) if tag == &tags.null => Some(serde_json::Value::Null),
                 Cell::Adt(tag, args) if tag == &tags.bool_ => match args.as_slice() {
                     [arg] => heap
                         .get(arg)
                         .ok()?
-                        .as_ref()
                         .cell_as_bool()
                         .ok()
                         .map(serde_json::Value::Bool),
@@ -1238,7 +1231,6 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                     [arg] => heap
                         .get(arg)
                         .ok()?
-                        .as_ref()
                         .cell_as_string()
                         .ok()
                         .map(serde_json::Value::String),
@@ -1246,7 +1238,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.number => match args.as_slice() {
                     [arg] => {
-                        let n = heap.get(arg).ok()?.as_ref().cell_as_f64().ok()?;
+                        let n = heap.get(arg).ok()?.cell_as_f64().ok()?;
                         serde_json::Number::from_f64(n)
                             .map(serde_json::Value::Number)
                             .or(Some(serde_json::Value::Null))
@@ -1255,11 +1247,11 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.array => match args.as_slice() {
                     [arg] => {
-                        let xs = heap.get(arg).ok()?.as_ref().cell_as_array().ok()?;
+                        let xs = heap.get(arg).ok()?.cell_as_array().ok()?;
                         let mut out = Vec::with_capacity(xs.len());
                         for x in &xs {
                             let x_value = heap.get(x).ok()?;
-                            out.push(to_serde_json(heap, x_value.as_ref(), tags)?);
+                            out.push(to_serde_json(heap, x_value, tags)?);
                         }
                         Some(serde_json::Value::Array(out))
                     }
@@ -1267,14 +1259,11 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 },
                 Cell::Adt(tag, args) if tag == &tags.object => match args.as_slice() {
                     [arg] => {
-                        let map = heap.get(arg).ok()?.as_ref().cell_as_dict().ok()?;
+                        let map = heap.get(arg).ok()?.cell_as_dict().ok()?;
                         let mut out = serde_json::Map::with_capacity(map.len());
                         for (k, v) in &map {
                             let v_value = heap.get(v).ok()?;
-                            out.insert(
-                                k.as_ref().to_string(),
-                                to_serde_json(heap, v_value.as_ref(), tags)?,
-                            );
+                            out.insert(k.as_ref().to_string(), to_serde_json(heap, v_value, tags)?);
                         }
                         Some(serde_json::Value::Object(out))
                     }
@@ -1285,8 +1274,11 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         engine.export_native("prim_json_stringify", scheme, 1, move |engine, _, args| {
-            let value = engine.heap().get(&args[0])?;
-            let Some(json) = to_serde_json(engine.heap(), value.as_ref(), &tags) else {
+            let json = engine.heap().with_access(|heap| {
+                let value = heap.get(&args[0])?;
+                Ok(to_serde_json(heap, value, &tags))
+            })?;
+            let Some(json) = json else {
                 return engine
                     .heap()
                     .alloc_ptr_string("<non-std.json.Value>".into());
@@ -2910,8 +2902,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let list = engine.heap().get(&args[0])?;
-            let values = list_to_vec(engine.heap(), list.as_ref())?;
+            let values = engine.heap().pointer_as_list(&args[0])?;
             extremum_by_type(
                 engine.heap(),
                 "min",
@@ -2979,8 +2970,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
             let list_ty = arg_tys[0].clone();
             let elem_ty = list_elem_type(&list_ty)?;
-            let list = engine.heap().get(&args[0])?;
-            let values = list_to_vec(engine.heap(), list.as_ref())?;
+            let values = engine.heap().pointer_as_list(&args[0])?;
             extremum_by_type(
                 engine.heap(),
                 "max",
