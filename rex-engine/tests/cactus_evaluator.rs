@@ -1,5 +1,6 @@
+use futures::FutureExt;
 use rex_engine::{Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Module, RuntimeEnv};
-use rex_typesystem::types::Type;
+use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
 
 async fn eval_value<State>(
     source: &str,
@@ -147,6 +148,196 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
     )
     .await;
     assert_eq!(result, 87);
+}
+
+#[tokio::test]
+async fn gc_every_alloc_handles_native_returning_nested_data() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut module = Module::global();
+    let i32_ty = Type::builtin(BuiltinTypeId::I32);
+    let row_ty = Type::tuple(vec![i32_ty.clone(), Type::array(i32_ty.clone())]);
+    let scheme = Scheme::new(
+        vec![],
+        vec![],
+        Type::fun(i32_ty.clone(), Type::array(row_ty)),
+    );
+    module
+        .export_native("make_nested", scheme, 1, |engine, _, args| {
+            let count = args
+                .first()
+                .ok_or_else(|| EngineError::Internal("missing make_nested argument".into()))?
+                .as_i32()?;
+            if count < 0 {
+                return Err(EngineError::Internal(
+                    "make_nested count must be non-negative".into(),
+                ));
+            }
+
+            let mut rows = Vec::new();
+            for i in 1..=count {
+                let mut values = Vec::new();
+                for offset in 0..4 {
+                    let item = engine.heap().alloc_i32(i + offset)?;
+                    let label = engine.heap().alloc_string(format!("{i}:{offset}"))?;
+                    let _ = engine.heap().alloc_tuple(vec![item.clone(), label])?;
+                    values.push(item);
+                }
+                let array = engine.heap().alloc_array(values)?;
+                let base = engine.heap().alloc_i32(i)?;
+                let row = engine.heap().alloc_tuple(vec![base, array])?;
+                for noise in 0..4 {
+                    let value = engine.heap().alloc_i32(i * 100 + noise)?;
+                    let _ = engine.heap().alloc_tuple(vec![row.clone(), value])?;
+                }
+                rows.push(row);
+            }
+
+            engine.heap().alloc_array(rows)
+        })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+    engine.heap.set_collect_on_every_alloc(true).unwrap();
+
+    let result = eval_i32(
+        r#"
+        let
+            rows = make_nested 16,
+            row_score = \row ->
+                match row when (base, xs) -> base + sum xs
+        in
+            sum (map row_score rows)
+        "#,
+        engine,
+    )
+    .await;
+    assert_eq!(result, 776);
+}
+
+#[tokio::test]
+async fn gc_every_alloc_handles_self_referential_data() {
+    let result = eval_i32(
+        r#"
+        let rec
+            xs = Cons 1 xs
+        in
+            match xs
+                when Cons h t ->
+                    (match t
+                        when Cons h2 _ -> h + h2
+                        when Empty -> 0)
+                when Empty -> 0
+        "#,
+        engine_collecting_on_every_alloc(),
+    )
+    .await;
+    assert_eq!(result, 2);
+}
+
+#[tokio::test]
+async fn gc_every_alloc_handles_captured_closure_envs() {
+    let result = eval_i32(
+        r#"
+        let
+            xs: List i32 = [
+                1, 2, 3, 4, 5, 6, 7, 8,
+                9, 10, 11, 12, 13, 14, 15, 16
+            ],
+            make_total = \offset ->
+                let
+                    local = map (\x -> x + offset) xs
+                in
+                    \extra -> foldl (\acc x -> acc + x) extra local,
+            f = make_total 3,
+            noise = map (\x -> x * 2) xs
+        in
+            f 10 + sum noise
+        "#,
+        engine_collecting_on_every_alloc(),
+    )
+    .await;
+    assert_eq!(result, 466);
+}
+
+#[tokio::test]
+async fn gc_every_alloc_handles_typeclass_cached_values() {
+    let result = eval_i32(
+        r#"
+        type Box = Box { value: i32 }
+
+        class Score a where
+            score : a -> i32
+
+        instance Score Box where
+            score = \box -> box.value + 1
+
+        instance Score i32 where
+            score = \x -> x * 2
+
+        let
+            boxes: List Box = [
+                Box { value = 1 },
+                Box { value = 2 },
+                Box { value = 3 }
+            ],
+            box_scores: List i32 = map score boxes,
+            int_scores: List i32 = map score [(10 is i32), (20 is i32)],
+            reused_box = score (Box { value = 9 }),
+            reused_int = score (5 is i32)
+        in
+            sum box_scores + sum int_scores + reused_box + reused_int
+        "#,
+        engine_collecting_on_every_alloc(),
+    )
+    .await;
+    assert_eq!(result, 89);
+}
+
+#[tokio::test]
+async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut module = Module::global();
+    let array_i32 = Type::array(Type::builtin(BuiltinTypeId::I32));
+    let i32_ty = Type::builtin(BuiltinTypeId::I32);
+    let scheme = Scheme::new(vec![], vec![], Type::fun(array_i32, i32_ty));
+    module
+        .export_native_async(
+            "async_sum_after_alloc",
+            scheme,
+            1,
+            |engine, _, args: Vec<Handle>| {
+                async move {
+                    let retained = args.first().cloned().ok_or_else(|| {
+                        EngineError::Internal("missing async_sum_after_alloc argument".into())
+                    })?;
+                    tokio::task::yield_now().await;
+                    for value in 0..64 {
+                        let value = engine.heap().alloc_i32(value)?;
+                        let tuple = engine.heap().alloc_tuple(vec![value.clone(), value])?;
+                        let _ = engine.heap().alloc_array(vec![tuple])?;
+                    }
+                    let mut sum = 0;
+                    for value in retained.as_array()? {
+                        sum += i32::from_rex(&value)?;
+                    }
+                    engine.heap().alloc_i32(sum)
+                }
+                .boxed()
+            },
+        )
+        .unwrap();
+    engine.inject_module(module).unwrap();
+    engine.heap.set_collect_on_every_alloc(true).unwrap();
+
+    let result = eval_i32(
+        r#"
+        async_sum_after_alloc (to_array [
+            1, 2, 3, 4, 5, 6, 7, 8
+        ])
+        "#,
+        engine,
+    )
+    .await;
+    assert_eq!(result, 36);
 }
 
 #[tokio::test]

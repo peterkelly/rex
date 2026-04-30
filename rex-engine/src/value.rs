@@ -15,9 +15,21 @@ use crate::Environment;
 use crate::engine::{NativeFn, OverloadedFn};
 use crate::stack::Frame;
 
+// GC invariants:
+//
+// - Any alloc_* call may run collection before it creates the requested object.
+//   Callers must not keep raw Pointer values across allocation unless those
+//   pointers are reachable from a Handle, TempRoots, a stack frame, or another
+//   traced runtime structure.
+// - Handle and TempRoots are heap-managed roots. They are the safe way for
+//   public API and ordinary native/prelude code to keep values alive while
+//   allocating.
+// - Scheduler-native code may still store Pointer values directly, but only in
+//   frame/task state that implements trace_pointers and rewrite_pointers.
+// - The collector is copying: every traced Pointer must be rewritten after a
+//   collection. A raw Pointer from before collection is stale by design.
 struct HeapState {
     slots: Vec<HeapSlot>,
-    free_list: Vec<u32>,
     root_slots: Vec<RootSlot>,
     free_root_list: Vec<u64>,
     next_gc_slot_count: usize,
@@ -25,13 +37,14 @@ struct HeapState {
     collections: u64,
 }
 
-const DEFAULT_GC_SLOT_THRESHOLD: usize = 1_048_576;
+const DEFAULT_GC_SLOT_THRESHOLD: usize = 4_096;
+const GC_SLOT_GROWTH_NUMERATOR: usize = 3;
+const GC_SLOT_GROWTH_DENOMINATOR: usize = 2;
 
 impl Default for HeapState {
     fn default() -> Self {
         Self {
             slots: Vec::new(),
-            free_list: Vec::new(),
             root_slots: Vec::new(),
             free_root_list: Vec::new(),
             next_gc_slot_count: DEFAULT_GC_SLOT_THRESHOLD,
@@ -60,6 +73,13 @@ struct RootId {
     generation: u64,
 }
 
+/// Rex heap and allocation API.
+///
+/// Public allocation methods return [`Handle`] values. A handle is a GC root, so
+/// host code may keep it across later allocations and `await` points. Every
+/// `alloc_*` call may run a copying collection before returning, which means
+/// raw internal pointers must not be kept across allocation unless they are
+/// protected by a handle, temporary root, or traced runtime frame.
 #[derive(Clone)]
 pub struct Heap {
     id: u64,
@@ -71,11 +91,22 @@ pub(crate) struct HeapAccess<'a> {
     state: &'a mut HeapState,
 }
 
+/// Internal temporary roots used while runtime code is constructing heap cells
+/// from raw pointers.
+///
+/// This type is deliberately crate-private. Public API and host callbacks should
+/// use [`Handle`] instead.
 pub(crate) struct TempRoots {
     heap: Heap,
     root_ids: Vec<RootId>,
 }
 
+/// A rooted reference to a Rex heap value.
+///
+/// Cloning a handle clones the root, so the underlying value remains visible to
+/// the collector until the last clone is dropped. This is the public way for
+/// embedders and host functions to keep Rex values alive while allocating new
+/// values or suspending in async code.
 #[derive(Clone)]
 pub struct Handle {
     root: Arc<HandleRoot>,
@@ -838,15 +869,6 @@ impl Heap {
             .collect()
     }
 
-    fn alloc_slot(&self, cell: Cell) -> Result<Pointer, EngineError> {
-        let (index, generation) = self.alloc_slot_raw(cell)?;
-        Ok(Pointer {
-            heap_id: self.id,
-            index,
-            generation,
-        })
-    }
-
     pub(crate) fn clone_cell(&self, pointer: &Pointer) -> Result<Cell, EngineError> {
         self.with_access(|heap| Ok(heap.get(pointer)?.clone()))
     }
@@ -994,71 +1016,71 @@ impl Heap {
     }
 
     pub(crate) fn alloc_ptr_bool(&self, value: bool) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Bool(value))
+        self.alloc_cell(Cell::Bool(value))
     }
 
     pub(crate) fn alloc_ptr_u8(&self, value: u8) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::U8(value))
+        self.alloc_cell(Cell::U8(value))
     }
 
     pub(crate) fn alloc_ptr_u16(&self, value: u16) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::U16(value))
+        self.alloc_cell(Cell::U16(value))
     }
 
     pub(crate) fn alloc_ptr_u32(&self, value: u32) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::U32(value))
+        self.alloc_cell(Cell::U32(value))
     }
 
     pub(crate) fn alloc_ptr_u64(&self, value: u64) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::U64(value))
+        self.alloc_cell(Cell::U64(value))
     }
 
     pub(crate) fn alloc_ptr_i8(&self, value: i8) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::I8(value))
+        self.alloc_cell(Cell::I8(value))
     }
 
     pub(crate) fn alloc_ptr_i16(&self, value: i16) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::I16(value))
+        self.alloc_cell(Cell::I16(value))
     }
 
     pub(crate) fn alloc_ptr_i32(&self, value: i32) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::I32(value))
+        self.alloc_cell(Cell::I32(value))
     }
 
     pub(crate) fn alloc_ptr_i64(&self, value: i64) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::I64(value))
+        self.alloc_cell(Cell::I64(value))
     }
 
     pub(crate) fn alloc_ptr_f32(&self, value: f32) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::F32(value))
+        self.alloc_cell(Cell::F32(value))
     }
 
     pub(crate) fn alloc_ptr_f64(&self, value: f64) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::F64(value))
+        self.alloc_cell(Cell::F64(value))
     }
 
     pub(crate) fn alloc_ptr_string(&self, value: String) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::String(value))
+        self.alloc_cell(Cell::String(value))
     }
 
     pub(crate) fn alloc_ptr_uuid(&self, value: Uuid) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Uuid(value))
+        self.alloc_cell(Cell::Uuid(value))
     }
 
     pub(crate) fn alloc_ptr_datetime(&self, value: DateTime<Utc>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::DateTime(value))
+        self.alloc_cell(Cell::DateTime(value))
     }
 
     pub(crate) fn alloc_ptr_cell(&self, cell: Cell) -> Result<Pointer, EngineError> {
-        self.alloc_slot(cell)
+        self.alloc_cell(cell)
     }
 
     pub(crate) fn alloc_ptr_uninitialized(&self, name: Symbol) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Uninitialized(name))
+        self.alloc_cell(Cell::Uninitialized(name))
     }
 
     pub(crate) fn alloc_ptr_frame(&self, frame: Frame) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Frame(frame))
+        self.alloc_cell(Cell::Frame(frame))
     }
 
     pub(crate) fn alloc_ptr_root_frame_parent(&self) -> Result<Pointer, EngineError> {
@@ -1071,18 +1093,18 @@ impl Heap {
     }
 
     pub(crate) fn alloc_ptr_tuple(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Tuple(values))
+        self.alloc_cell(Cell::Tuple(values))
     }
 
     pub(crate) fn alloc_ptr_array(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Array(values))
+        self.alloc_cell(Cell::Array(values))
     }
 
     pub(crate) fn alloc_ptr_dict(
         &self,
         values: BTreeMap<Symbol, Pointer>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Dict(values))
+        self.alloc_cell(Cell::Dict(values))
     }
 
     pub(crate) fn alloc_ptr_adt(
@@ -1090,7 +1112,7 @@ impl Heap {
         name: Symbol,
         args: Vec<Pointer>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Adt(name, args))
+        self.alloc_cell(Cell::Adt(name, args))
     }
 
     pub(crate) fn alloc_ptr_list(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
@@ -1111,7 +1133,7 @@ impl Heap {
         typ: Type,
         body: Arc<TypedExpr>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Closure(Closure {
+        self.alloc_cell(Cell::Closure(Closure {
             env,
             param,
             param_ty,
@@ -1129,7 +1151,7 @@ impl Heap {
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Native(NativeFn::from_parts(
+        self.alloc_cell(Cell::Native(NativeFn::from_parts(
             native_id,
             name,
             arity,
@@ -1146,7 +1168,7 @@ impl Heap {
         applied: Vec<Pointer>,
         applied_types: Vec<Type>,
     ) -> Result<Pointer, EngineError> {
-        self.alloc_slot(Cell::Overloaded(OverloadedFn::from_parts(
+        self.alloc_cell(Cell::Overloaded(OverloadedFn::from_parts(
             name,
             typ,
             applied,
@@ -1255,12 +1277,13 @@ impl Heap {
         }
 
         state.slots = new_slots;
-        state.free_list.clear();
         state.collections = state
             .collections
             .checked_add(1)
             .ok_or_else(|| EngineError::Internal("heap collection count exhausted".into()))?;
         Self::update_next_gc_slot_count(state);
+        #[cfg(debug_assertions)]
+        self.verify_after_collection_locked(state)?;
         Ok(())
     }
 
@@ -1305,12 +1328,85 @@ impl Heap {
 
     fn update_next_gc_slot_count(state: &mut HeapState) {
         let live = state.slots.len();
-        let doubled = live.saturating_mul(2);
+        let grown = live.saturating_add(
+            live.saturating_mul(GC_SLOT_GROWTH_NUMERATOR - GC_SLOT_GROWTH_DENOMINATOR)
+                / GC_SLOT_GROWTH_DENOMINATOR,
+        );
         let with_slack = live.saturating_add(DEFAULT_GC_SLOT_THRESHOLD);
-        state.next_gc_slot_count = doubled.max(with_slack).max(DEFAULT_GC_SLOT_THRESHOLD);
+        state.next_gc_slot_count = grown.max(with_slack).max(DEFAULT_GC_SLOT_THRESHOLD);
     }
 
-    fn alloc_slot_raw(&self, mut cell: Cell) -> Result<(u32, u64), EngineError> {
+    #[cfg(debug_assertions)]
+    fn verify_after_collection_locked(&self, state: &HeapState) -> Result<(), EngineError> {
+        let mut work = VecDeque::new();
+        let mut seen = HashSet::new();
+
+        for (root_index, slot) in state.root_slots.iter().enumerate() {
+            let Some(pointer) = slot.pointer else {
+                continue;
+            };
+            Self::get_slot_checked(self.id, state, &pointer).map_err(|err| {
+                EngineError::Internal(format!(
+                    "GC verification failed for root {root_index}: {err}"
+                ))
+            })?;
+            if seen.insert(pointer_key(&pointer)) {
+                work.push_back(pointer);
+            }
+        }
+
+        while let Some(pointer) = work.pop_front() {
+            let slot = Self::get_slot_checked(self.id, state, &pointer).map_err(|err| {
+                EngineError::Internal(format!(
+                    "GC verification failed for object {pointer:?}: {err}"
+                ))
+            })?;
+            let cell = slot.cell.as_ref().ok_or_else(|| {
+                EngineError::Internal(format!(
+                    "GC verification found empty live slot for {pointer:?}"
+                ))
+            })?;
+            let mut children = Vec::new();
+            trace_cell_pointers(cell, &mut children);
+            for child in children {
+                Self::get_slot_checked(self.id, state, &child).map_err(|err| {
+                    EngineError::Internal(format!(
+                        "GC verification failed for child {child:?} of {pointer:?}: {err}"
+                    ))
+                })?;
+                if seen.insert(pointer_key(&child)) {
+                    work.push_back(child);
+                }
+            }
+        }
+
+        for (index, slot) in state.slots.iter().enumerate() {
+            if slot.cell.is_none() {
+                return Err(EngineError::Internal(format!(
+                    "GC verification found empty slot {index} after collection"
+                )));
+            }
+            let index = u32::try_from(index)
+                .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
+            let pointer = Pointer {
+                heap_id: self.id,
+                index,
+                generation: slot.generation,
+            };
+            if !seen.contains(&pointer_key(&pointer)) {
+                return Err(EngineError::Internal(format!(
+                    "GC verification found unrooted copied object {pointer:?}"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    // The single ordinary heap-object allocation path. It roots pointers already
+    // stored in the new cell before checking whether this allocation should
+    // collect, then rewrites them to their post-collection locations.
+    fn alloc_cell(&self, mut cell: Cell) -> Result<Pointer, EngineError> {
         let mut protected = Vec::new();
         trace_cell_pointers(&cell, &mut protected);
 
@@ -1353,22 +1449,17 @@ impl Heap {
             ));
         }
 
-        if let Some(index) = state.free_list.pop() {
-            let slot = state
-                .slots
-                .get_mut(index as usize)
-                .ok_or_else(|| EngineError::Internal("heap free-list corruption".into()))?;
-            slot.cell = Some(cell);
-            return Ok((index, slot.generation));
-        }
-
         let index = u32::try_from(state.slots.len())
             .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
         state.slots.push(HeapSlot {
             generation: 0,
             cell: Some(cell),
         });
-        Ok((index, 0))
+        Ok(Pointer {
+            heap_id: self.id,
+            index,
+            generation: 0,
+        })
     }
 }
 
