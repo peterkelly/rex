@@ -5,8 +5,12 @@ use std::fmt::Write as _;
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 
-use futures::{FutureExt, future::BoxFuture};
+use futures::{
+    FutureExt,
+    future::{BoxFuture, poll_fn},
+};
 use rex_ast::expr::{
     ClassDecl, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern, Program, Scope,
     Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern, sym, sym_eq,
@@ -307,7 +311,7 @@ fn sanitize_type_name_for_symbol(typ: &Type) -> String {
 }
 
 pub type NativeFuture = BoxFuture<'static, Result<Handle, EngineError>>;
-pub(crate) type NativePointerFuture = BoxFuture<'static, Result<Pointer, EngineError>>;
+pub(crate) type NativeHandleFuture = BoxFuture<'static, Result<Handle, EngineError>>;
 type NativeId = u64;
 pub(crate) const RUNTIME_LINK_ABI_VERSION: u32 = 1;
 pub(crate) enum SchedulerNativeResult {
@@ -341,7 +345,7 @@ pub(crate) type SchedulerNativeCallable<State> = Arc<
         + 'static,
 >;
 pub(crate) type AsyncNativePointerCallable<State> = Arc<
-    dyn Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativePointerFuture + Send + Sync + 'static,
+    dyn Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeHandleFuture + Send + Sync + 'static,
 >;
 
 type ExportInjector<State> =
@@ -543,7 +547,8 @@ where
                 async move {
                     let handles = handles?;
                     let value = handler(engine.clone(), typ, handles).await?;
-                    value.pointer_for_heap(engine.heap())
+                    value.pointer_for_heap(engine.heap())?;
+                    Ok(value)
                 }
                 .boxed()
             });
@@ -1052,7 +1057,7 @@ macro_rules! define_async_handler_impl {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
                 let func: AsyncNativePointerCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Pointer>| -> NativePointerFuture {
+                    move |engine, _: Type, args: Vec<Pointer>| -> NativeHandleFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         let args = (|| {
@@ -1068,7 +1073,7 @@ macro_rules! define_async_handler_impl {
                         async move {
                             args?;
                             let value = f(engine.state()).await?;
-                            value.into_rex(engine.heap())?.pointer()
+                            value.into_rex(engine.heap())
                         }
                         .boxed()
                     },
@@ -1102,7 +1107,7 @@ macro_rules! define_async_handler_impl {
                 let f = Arc::new(self);
                 let name_sym = normalize_name(export_name);
                 let func: AsyncNativePointerCallable<State> = Arc::new(
-                    move |engine, _: Type, args: Vec<Pointer>| -> NativePointerFuture {
+                    move |engine, _: Type, args: Vec<Pointer>| -> NativeHandleFuture {
                         let f = Arc::clone(&f);
                         let name_sym = name_sym.clone();
                         let args = (|| {
@@ -1125,7 +1130,7 @@ macro_rules! define_async_handler_impl {
                                 let future = f(engine.state(), $($arg_name),+);
                                 async move {
                                     let value = future.await?;
-                                    value.into_rex(engine.heap())?.pointer()
+                                    value.into_rex(engine.heap())
                                 }
                                 .boxed()
                             }
@@ -1169,7 +1174,8 @@ where
             async move {
                 let handles = handles?;
                 let value = func(engine.clone(), typ, handles).await?;
-                value.pointer_for_heap(engine.heap())
+                value.pointer_for_heap(engine.heap())?;
+                Ok(value)
             }
             .boxed()
         });
@@ -1203,7 +1209,7 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 
 pub(crate) enum NativeCallResult {
     Ready(Pointer),
-    Pending(NativePointerFuture),
+    Pending(NativeHandleFuture),
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
@@ -1247,7 +1253,7 @@ pub(crate) struct NativeFn {
 enum NativeApplyResult {
     Value(Pointer),
     Task(NativeTask),
-    Pending(NativePointerFuture),
+    Pending(NativeHandleFuture),
 }
 
 impl NativeFn {
@@ -4251,7 +4257,7 @@ enum EvalControl {
         env: Environment,
     },
     PushFrame(Frame),
-    AwaitNative(NativePointerFuture),
+    AwaitNative(NativeHandleFuture),
     Return(Pointer),
 }
 
@@ -4262,7 +4268,7 @@ enum EvalApplyResult {
         env: Environment,
     },
     PushNative(NativeTask),
-    AwaitNative(NativePointerFuture),
+    AwaitNative(NativeHandleFuture),
 }
 
 enum EvalVarResult {
@@ -4271,12 +4277,18 @@ enum EvalVarResult {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
-    AwaitNative(NativePointerFuture),
+    AwaitNative(NativeHandleFuture),
 }
 
 struct EvalWorkItem {
     frame: Pointer,
-    returned: Option<Pointer>,
+    returned: Option<EvalReturned>,
+}
+
+#[derive(Clone, Copy)]
+struct EvalReturned {
+    child: Pointer,
+    value: Pointer,
 }
 
 impl EvalWorkItem {
@@ -4287,17 +4299,18 @@ impl EvalWorkItem {
         }
     }
 
-    fn receive(frame: Pointer, value: Pointer) -> Self {
+    fn receive(frame: Pointer, child: Pointer, value: Pointer) -> Self {
         Self {
             frame,
-            returned: Some(value),
+            returned: Some(EvalReturned { child, value }),
         }
     }
 
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.frame);
-        if let Some(returned) = self.returned {
-            out.push(returned);
+        if let Some(returned) = self.returned.as_ref() {
+            out.push(returned.child);
+            out.push(returned.value);
         }
     }
 
@@ -4308,36 +4321,129 @@ impl EvalWorkItem {
     ) -> Result<(), EngineError> {
         self.frame = roots.get(*cursor)?;
         *cursor += 1;
-        if self.returned.is_some() {
-            self.returned = Some(roots.get(*cursor)?);
+        if let Some(returned) = self.returned.as_mut() {
+            returned.child = roots.get(*cursor)?;
+            *cursor += 1;
+            returned.value = roots.get(*cursor)?;
             *cursor += 1;
         }
         Ok(())
     }
 }
 
+enum PendingNativeState {
+    Polling(NativeHandleFuture),
+    Ready(Result<Handle, EngineError>),
+}
+
+struct PendingNative {
+    frame: Pointer,
+    state: PendingNativeState,
+}
+
+impl PendingNative {
+    fn new(frame: Pointer, future: NativeHandleFuture) -> Self {
+        Self {
+            frame,
+            state: PendingNativeState::Polling(future),
+        }
+    }
+
+    fn poll(&mut self, cx: &mut Context<'_>) -> bool {
+        match &mut self.state {
+            PendingNativeState::Polling(future) => match future.as_mut().poll(cx) {
+                Poll::Ready(result) => {
+                    self.state = PendingNativeState::Ready(result);
+                    true
+                }
+                Poll::Pending => false,
+            },
+            PendingNativeState::Ready(_) => true,
+        }
+    }
+
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        out.push(self.frame);
+    }
+
+    fn refresh_from_roots(
+        &mut self,
+        roots: &TempRoots,
+        cursor: &mut usize,
+    ) -> Result<(), EngineError> {
+        self.frame = roots.get(*cursor)?;
+        *cursor += 1;
+        Ok(())
+    }
+
+    fn into_completion(self) -> Result<(Pointer, Handle), EngineError> {
+        match self.state {
+            PendingNativeState::Ready(result) => result.map(|handle| (self.frame, handle)),
+            PendingNativeState::Polling(_) => Err(EngineError::Internal(
+                "pending native future completed without a ready result".into(),
+            )),
+        }
+    }
+}
+
 struct EvalScheduler {
     ready: VecDeque<EvalWorkItem>,
+    pending_native: Vec<PendingNative>,
 }
 
 impl EvalScheduler {
     fn new(root: Pointer) -> Self {
         let mut ready = VecDeque::new();
         ready.push_front(EvalWorkItem::enter(root));
-        Self { ready }
+        Self {
+            ready,
+            pending_native: Vec::new(),
+        }
     }
 
     fn schedule_next(&mut self, item: EvalWorkItem) {
         self.ready.push_front(item);
     }
 
+    fn schedule_pending_native(&mut self, frame: Pointer, future: NativeHandleFuture) {
+        self.pending_native.push(PendingNative::new(frame, future));
+    }
+
     fn pop_next(&mut self) -> Option<EvalWorkItem> {
         self.ready.pop_front()
+    }
+
+    fn has_pending_native(&self) -> bool {
+        !self.pending_native.is_empty()
+    }
+
+    fn poll_pending_native_once(&mut self, cx: &mut Context<'_>) -> Option<usize> {
+        for (index, pending) in self.pending_native.iter_mut().enumerate() {
+            if pending.poll(cx) {
+                return Some(index);
+            }
+        }
+        None
+    }
+
+    fn take_pending_native_completion(
+        &mut self,
+        index: usize,
+    ) -> Result<(Pointer, Handle), EngineError> {
+        if index >= self.pending_native.len() {
+            return Err(EngineError::Internal(
+                "pending native completion index out of bounds".into(),
+            ));
+        }
+        self.pending_native.remove(index).into_completion()
     }
 
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         for item in &self.ready {
             item.trace_pointers(out);
+        }
+        for pending in &self.pending_native {
+            pending.trace_pointers(out);
         }
     }
 
@@ -4349,8 +4455,57 @@ impl EvalScheduler {
         for item in &mut self.ready {
             item.refresh_from_roots(roots, cursor)?;
         }
+        for pending in &mut self.pending_native {
+            pending.refresh_from_roots(roots, cursor)?;
+        }
         Ok(())
     }
+}
+
+async fn poll_pending_native<State>(
+    runtime: &mut RuntimeSnapshot<State>,
+    scheduler: &mut EvalScheduler,
+    wait: bool,
+) -> Result<bool, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if !scheduler.has_pending_native() {
+        return Ok(false);
+    }
+
+    let mut protected = Vec::new();
+    scheduler.trace_pointers(&mut protected);
+    runtime.trace_pointers(&mut protected)?;
+    let roots = runtime.heap.temp_roots(protected)?;
+
+    let mut cursor = 0;
+    scheduler.refresh_from_roots(&roots, &mut cursor)?;
+    runtime.refresh_from_roots(&roots, &mut cursor)?;
+
+    let ready_index = if wait {
+        Some(
+            poll_fn(|cx| match scheduler.poll_pending_native_once(cx) {
+                Some(index) => Poll::Ready(index),
+                None => Poll::Pending,
+            })
+            .await,
+        )
+    } else {
+        poll_fn(|cx| Poll::Ready(scheduler.poll_pending_native_once(cx))).await
+    };
+
+    let mut cursor = 0;
+    scheduler.refresh_from_roots(&roots, &mut cursor)?;
+    runtime.refresh_from_roots(&roots, &mut cursor)?;
+
+    let Some(index) = ready_index else {
+        return Ok(false);
+    };
+    let (frame, handle) = scheduler.take_pending_native_completion(index)?;
+    let value = handle.pointer_for_heap(&runtime.heap)?;
+    scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
+    Ok(true)
 }
 
 pub(crate) async fn eval_typed_expr<State>(
@@ -4391,9 +4546,21 @@ where
     let mut scheduler = EvalScheduler::new(root_frame);
 
     loop {
-        let mut item = scheduler
-            .pop_next()
-            .ok_or_else(|| EngineError::Internal("eval scheduler ran out of ready work".into()))?;
+        if poll_pending_native(&mut runtime, &mut scheduler, false).await? {
+            continue;
+        }
+
+        let mut item = match scheduler.pop_next() {
+            Some(item) => item,
+            None => {
+                if poll_pending_native(&mut runtime, &mut scheduler, true).await? {
+                    continue;
+                }
+                return Err(EngineError::Internal(
+                    "eval scheduler ran out of ready work".into(),
+                ));
+            }
+        };
         let mut protected = Vec::new();
         item.trace_pointers(&mut protected);
         scheduler.trace_pointers(&mut protected);
@@ -4407,7 +4574,9 @@ where
 
         let frame = runtime.heap.pointer_as_frame(&item.frame)?;
         let control = match item.returned {
-            Some(value) => eval_receive(&runtime, item.frame, frame, value)?,
+            Some(returned) => {
+                eval_receive(&runtime, item.frame, frame, returned.child, returned.value)?
+            }
             None => eval_enter(&runtime, item.frame, frame)?,
         };
 
@@ -4434,11 +4603,7 @@ where
                     .heap
                     .alloc_ptr_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
-                let child_root = runtime.heap.temp_roots(vec![child])?;
-                let value = future.await?;
-                refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
-                let child = child_root.get(0)?;
-                scheduler.schedule_next(EvalWorkItem::receive(child, value));
+                scheduler.schedule_pending_native(child, future);
             }
             EvalControl::Return(value) => {
                 let mut frame = runtime.heap.pointer_as_frame(&item.frame)?;
@@ -4462,7 +4627,7 @@ where
                         }
                     }
                 }
-                scheduler.schedule_next(EvalWorkItem::receive(parent, value));
+                scheduler.schedule_next(EvalWorkItem::receive(parent, item.frame, value));
             }
         }
     }
@@ -4927,6 +5092,7 @@ fn eval_receive<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     frame: Frame,
+    _child: Pointer,
     value: Pointer,
 ) -> Result<EvalControl, EngineError>
 where
