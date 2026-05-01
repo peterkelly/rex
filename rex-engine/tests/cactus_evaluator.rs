@@ -330,6 +330,95 @@ async fn pending_async_bound_delays_admitting_host_calls() {
 }
 
 #[tokio::test]
+async fn pending_async_bound_delays_invoking_host_callbacks() {
+    let invoked = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = mpsc::channel();
+    let mut release_txs = Vec::new();
+    let mut release_rxs = VecDeque::new();
+    for _ in 0..2 {
+        let (tx, rx) = oneshot::channel();
+        release_txs.push(tx);
+        release_rxs.push_back(rx);
+    }
+    let releases = Arc::new(Mutex::new(release_rxs));
+
+    let mut engine = Engine::with_prelude(()).unwrap();
+    engine.set_execution_bounds(ExecutionBounds::new(64, 1));
+    let mut module = Module::global();
+    module
+        .export_async("gate_call", {
+            let invoked = Arc::clone(&invoked);
+            let started = Arc::clone(&started);
+            let started_tx = started_tx.clone();
+            let releases = Arc::clone(&releases);
+            move |_: &(), value: i32| {
+                invoked.fetch_add(1, Ordering::SeqCst);
+                let started = Arc::clone(&started);
+                let started_tx = started_tx.clone();
+                let release = releases
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("missing async gate release channel");
+                async move {
+                    started_tx.send(value).unwrap();
+                    started.fetch_add(1, Ordering::SeqCst);
+                    release.await.unwrap();
+                    Ok(value)
+                }
+            }
+        })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let eval_task =
+        tokio::spawn(async move { eval_i32("sum [gate_call 1, gate_call 2]", engine).await });
+
+    assert!(
+        wait_for_count(&invoked, 1).await,
+        "evaluation did not invoke the first gated async call"
+    );
+    assert!(
+        wait_for_count(&started, 1).await,
+        "evaluation did not start the first gated async call"
+    );
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        invoked.load(Ordering::SeqCst),
+        1,
+        "second host callback was invoked before the pending async bound opened"
+    );
+    assert_eq!(
+        started.load(Ordering::SeqCst),
+        1,
+        "second async future started before the pending async bound opened"
+    );
+
+    let first = started_rx.recv().unwrap();
+    release_txs.remove(0).send(()).unwrap();
+
+    assert!(
+        wait_for_count(&invoked, 2).await,
+        "evaluation did not invoke the second gated async call"
+    );
+    assert!(
+        wait_for_count(&started, 2).await,
+        "evaluation did not start the second gated async call"
+    );
+    let second = started_rx.recv().unwrap();
+    release_txs.remove(0).send(()).unwrap();
+
+    let result = eval_task.await.expect("gated evaluation task panicked");
+    let mut started_values = vec![first, second];
+    started_values.sort();
+    assert_eq!(started_values, vec![1, 2]);
+    assert_eq!(result, 3);
+}
+
+#[tokio::test]
 async fn gc_every_alloc_handles_broad_evaluator_paths() {
     let result = eval_i32(
         r#"

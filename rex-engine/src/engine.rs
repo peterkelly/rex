@@ -199,6 +199,8 @@ impl AsyncCallPolicy {
         Self::Executor(executor)
     }
 
+    /// Apply the policy after an async host call has been admitted by the
+    /// evaluator scheduler and produced its future.
     fn prepare(&self, future: NativeHandleFuture) -> NativeHandleFuture {
         match self {
             Self::Inline => future,
@@ -1329,9 +1331,76 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
     }
 }
 
-pub(crate) enum NativeCallResult {
+pub(crate) struct NativeAsyncCall<State: Clone + Send + Sync + 'static> {
+    callable: AsyncNativePointerCallable<State>,
+    context: EvalContext,
+    typ: Type,
+    args: Vec<Pointer>,
+}
+
+impl<State> NativeAsyncCall<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn new(
+        callable: AsyncNativePointerCallable<State>,
+        context: EvalContext,
+        typ: Type,
+        args: Vec<Pointer>,
+    ) -> Self {
+        Self {
+            callable,
+            context,
+            typ,
+            args,
+        }
+    }
+
+    fn invoke(
+        mut self,
+        runtime: &RuntimeSnapshot<State>,
+    ) -> Result<NativeHandleFuture, EngineError> {
+        let mut protected = Vec::new();
+        self.trace_pointers(&mut protected);
+        let roots = runtime.heap.temp_roots(protected)?;
+        let mut cursor = 0;
+        self.refresh_from_roots(&roots, &mut cursor)?;
+        let args = self.args;
+        let future = (self.callable)(
+            EvaluatorRef::new_with_context(runtime, self.context),
+            self.typ,
+            args,
+        );
+        Ok(runtime.async_call_policy.prepare(future))
+    }
+
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        if let Some(parent) = self.context.parent {
+            out.push(parent);
+        }
+        out.extend(self.args.iter().copied());
+    }
+
+    fn refresh_from_roots(
+        &mut self,
+        roots: &TempRoots,
+        cursor: &mut usize,
+    ) -> Result<(), EngineError> {
+        if self.context.parent.is_some() {
+            self.context.parent = Some(roots.get(*cursor)?);
+            *cursor += 1;
+        }
+        for arg in &mut self.args {
+            *arg = roots.get(*cursor)?;
+            *cursor += 1;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) enum NativeCallResult<State: Clone + Send + Sync + 'static> {
     Ready(Pointer),
-    Pending(NativeHandleFuture),
+    Pending(NativeAsyncCall<State>),
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
@@ -1341,7 +1410,7 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
         typ: Type,
         args: &[Pointer],
         context: EvalContext,
-    ) -> Result<NativeCallResult, EngineError> {
+    ) -> Result<NativeCallResult<State>, EngineError> {
         match self {
             NativeCallable::Sync(f) => {
                 (f)(EvaluatorRef::new_with_context(runtime, context), &typ, args)
@@ -1350,14 +1419,12 @@ impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
             NativeCallable::Scheduler(_) => Err(EngineError::Internal(
                 "scheduler native called through pointer-returning native ABI".into(),
             )),
-            NativeCallable::Async(f) => {
-                let call_fut = (f)(
-                    EvaluatorRef::new_with_context(runtime, context),
-                    typ,
-                    args.to_vec(),
-                );
-                Ok(NativeCallResult::Pending(call_fut))
-            }
+            NativeCallable::Async(f) => Ok(NativeCallResult::Pending(NativeAsyncCall::new(
+                Arc::clone(f),
+                context,
+                typ,
+                args.to_vec(),
+            ))),
         }
     }
 }
@@ -1372,10 +1439,10 @@ pub(crate) struct NativeFn {
     applied_types: Vec<Type>,
 }
 
-enum NativeApplyResult {
+enum NativeApplyResult<State: Clone + Send + Sync + 'static> {
     Value(Pointer),
     Task(NativeTask),
-    Pending(NativeHandleFuture),
+    Pending(NativeAsyncCall<State>),
 }
 
 impl NativeFn {
@@ -1441,7 +1508,7 @@ impl NativeFn {
         &self,
         runtime: &RuntimeSnapshot<State>,
         context: EvalContext,
-    ) -> Result<NativeCallResult, EngineError> {
+    ) -> Result<NativeCallResult<State>, EngineError> {
         if self.arity != 0 {
             return Err(EngineError::NativeArity {
                 name: self.name.clone(),
@@ -1463,7 +1530,7 @@ impl NativeFn {
         arg: Pointer,
         arg_type: Option<&Type>,
         context: EvalContext,
-    ) -> Result<NativeApplyResult, EngineError> {
+    ) -> Result<NativeApplyResult<State>, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
         // accumulate partial-application state and never mutate shared values.
         if self.arity == 0 {
@@ -4411,7 +4478,7 @@ fn project_pointer_with_access(
     }
 }
 
-enum EvalControl {
+enum EvalControl<State: Clone + Send + Sync + 'static> {
     Push {
         expr: Arc<TypedExpr>,
         env: Environment,
@@ -4419,27 +4486,27 @@ enum EvalControl {
     PushFrame(Box<Frame>),
     Schedule(Vec<Pointer>),
     Wait,
-    AwaitNative(NativeHandleFuture),
+    AwaitNative(NativeAsyncCall<State>),
     Return(Pointer),
 }
 
-enum EvalApplyResult {
+enum EvalApplyResult<State: Clone + Send + Sync + 'static> {
     Value(Pointer),
     Push {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
     PushNative(NativeTask),
-    AwaitNative(NativeHandleFuture),
+    AwaitNative(NativeAsyncCall<State>),
 }
 
-enum EvalVarResult {
+enum EvalVarResult<State: Clone + Send + Sync + 'static> {
     Value(Pointer),
     Push {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
-    AwaitNative(NativeHandleFuture),
+    AwaitNative(NativeAsyncCall<State>),
 }
 
 struct EvalWorkItem {
@@ -4503,9 +4570,9 @@ struct PendingNative {
     state: PendingNativeState,
 }
 
-struct DeferredNative {
+struct DeferredNative<State: Clone + Send + Sync + 'static> {
     frame: Pointer,
-    future: NativeHandleFuture,
+    call: NativeAsyncCall<State>,
 }
 
 impl PendingNative {
@@ -4513,6 +4580,13 @@ impl PendingNative {
         Self {
             frame,
             state: PendingNativeState::Polling(future),
+        }
+    }
+
+    fn ready(frame: Pointer, result: Result<Handle, EngineError>) -> Self {
+        Self {
+            frame,
+            state: PendingNativeState::Ready(result),
         }
     }
 
@@ -4553,17 +4627,24 @@ impl PendingNative {
     }
 }
 
-impl DeferredNative {
-    fn new(frame: Pointer, future: NativeHandleFuture) -> Self {
-        Self { frame, future }
+impl<State> DeferredNative<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn new(frame: Pointer, call: NativeAsyncCall<State>) -> Self {
+        Self { frame, call }
     }
 
-    fn activate(self, policy: &AsyncCallPolicy) -> PendingNative {
-        PendingNative::new(self.frame, policy.prepare(self.future))
+    fn activate(self, runtime: &RuntimeSnapshot<State>) -> PendingNative {
+        match self.call.invoke(runtime) {
+            Ok(future) => PendingNative::new(self.frame, future),
+            Err(err) => PendingNative::ready(self.frame, Err(err)),
+        }
     }
 
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.frame);
+        self.call.trace_pointers(out);
     }
 
     fn refresh_from_roots(
@@ -4573,19 +4654,23 @@ impl DeferredNative {
     ) -> Result<(), EngineError> {
         self.frame = roots.get(*cursor)?;
         *cursor += 1;
+        self.call.refresh_from_roots(roots, cursor)?;
         Ok(())
     }
 }
 
-struct EvalScheduler {
+struct EvalScheduler<State: Clone + Send + Sync + 'static> {
     ready: VecDeque<EvalWorkItem>,
     deferred_ready: VecDeque<EvalWorkItem>,
     pending_native: Vec<PendingNative>,
-    deferred_native: VecDeque<DeferredNative>,
+    deferred_native: VecDeque<DeferredNative<State>>,
     bounds: ExecutionBounds,
 }
 
-impl EvalScheduler {
+impl<State> EvalScheduler<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn new(root: Pointer, bounds: ExecutionBounds) -> Self {
         let mut ready = VecDeque::new();
         ready.push_front(EvalWorkItem::enter(root));
@@ -4603,15 +4688,9 @@ impl EvalScheduler {
         self.enforce_ready_limit();
     }
 
-    fn schedule_pending_native(
-        &mut self,
-        frame: Pointer,
-        future: NativeHandleFuture,
-        policy: &AsyncCallPolicy,
-    ) {
+    fn schedule_pending_native(&mut self, frame: Pointer, call: NativeAsyncCall<State>) {
         self.deferred_native
-            .push_back(DeferredNative::new(frame, future));
-        self.admit_deferred_native(policy);
+            .push_back(DeferredNative::new(frame, call));
     }
 
     fn pop_next(&mut self) -> Option<EvalWorkItem> {
@@ -4644,13 +4723,13 @@ impl EvalScheduler {
         }
     }
 
-    fn admit_deferred_native(&mut self, policy: &AsyncCallPolicy) {
+    fn admit_deferred_native(&mut self, runtime: &RuntimeSnapshot<State>) {
         let limit = self.bounds.pending_async_limit();
         while self.pending_native.len() < limit {
             let Some(deferred) = self.deferred_native.pop_front() else {
                 break;
             };
-            self.pending_native.push(deferred.activate(policy));
+            self.pending_native.push(deferred.activate(runtime));
         }
     }
 
@@ -4713,13 +4792,13 @@ impl EvalScheduler {
 
 async fn poll_pending_native<State>(
     runtime: &mut RuntimeSnapshot<State>,
-    scheduler: &mut EvalScheduler,
+    scheduler: &mut EvalScheduler<State>,
     wait: bool,
 ) -> Result<bool, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    scheduler.admit_deferred_native(&runtime.async_call_policy);
+    scheduler.admit_deferred_native(runtime);
     if !scheduler.has_pending_native() {
         return Ok(false);
     }
@@ -4753,7 +4832,7 @@ where
         return Ok(false);
     };
     let (frame, handle) = scheduler.take_pending_native_completion(index)?;
-    scheduler.admit_deferred_native(&runtime.async_call_policy);
+    scheduler.admit_deferred_native(runtime);
     let value = handle.pointer_for_heap(&runtime.heap)?;
     scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
     Ok(true)
@@ -4855,12 +4934,17 @@ where
                 }
             }
             EvalControl::Wait => {}
-            EvalControl::AwaitNative(future) => {
+            EvalControl::AwaitNative(mut call) => {
+                let mut protected = Vec::new();
+                call.trace_pointers(&mut protected);
+                let call_roots = runtime.heap.temp_roots(protected)?;
                 let child = runtime
                     .heap
                     .alloc_ptr_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
-                scheduler.schedule_pending_native(child, future, &runtime.async_call_policy);
+                let mut cursor = 0;
+                call.refresh_from_roots(&call_roots, &mut cursor)?;
+                scheduler.schedule_pending_native(child, call);
             }
             EvalControl::Return(value) => {
                 let mut frame = runtime.heap.pointer_as_frame(&item.frame)?;
@@ -4893,7 +4977,7 @@ where
 fn refresh_eval_roots<State>(
     runtime: &mut RuntimeSnapshot<State>,
     item: &mut EvalWorkItem,
-    scheduler: &mut EvalScheduler,
+    scheduler: &mut EvalScheduler<State>,
     roots: &TempRoots,
 ) -> Result<(), EngineError>
 where
@@ -5087,7 +5171,7 @@ fn eval_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     frame: Frame,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5294,7 +5378,7 @@ fn eval_tuple_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     mut frame: FrTuple,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5349,7 +5433,7 @@ fn eval_list_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     mut frame: FrList,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5404,7 +5488,7 @@ fn eval_dict_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     mut frame: FrDict,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5456,7 +5540,7 @@ fn eval_record_update_updates_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     mut frame: FrRecordUpdate,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5504,7 +5588,7 @@ fn eval_app_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     mut frame: FrApp,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -5728,7 +5812,7 @@ fn eval_receive<State>(
     frame: Frame,
     child: Pointer,
     value: Pointer,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -6002,7 +6086,7 @@ fn eval_native_enter<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -6023,7 +6107,7 @@ fn eval_native_receive<State>(
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
     value: Pointer,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -6074,7 +6158,7 @@ fn native_step_to_control<State>(
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
     step: NativeStep,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -7081,7 +7165,7 @@ fn eval_apply_overloaded_arg<State>(
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-) -> Result<EvalApplyResult, EngineError>
+) -> Result<EvalApplyResult<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -7154,7 +7238,7 @@ fn eval_apply_arg<State>(
     arg: Pointer,
     func_type: Option<&Type>,
     arg_type: Option<&Type>,
-) -> Result<EvalApplyResult, EngineError>
+) -> Result<EvalApplyResult<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -7208,7 +7292,7 @@ fn continue_app_after_apply<State>(
     mut frame_ptr: Pointer,
     mut frame: FrApp,
     applied: Option<Pointer>,
-) -> Result<EvalControl, EngineError>
+) -> Result<EvalControl<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -7298,7 +7382,7 @@ fn eval_resolve_var<State>(
     env: &Environment,
     name: &Symbol,
     typ: &Type,
-) -> Result<EvalVarResult, EngineError>
+) -> Result<EvalVarResult<State>, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
