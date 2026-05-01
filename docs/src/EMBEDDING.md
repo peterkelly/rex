@@ -693,6 +693,38 @@ let v = engine.eval(program.expr.as_ref()).await?;
 println!("{v}");
 ```
 
+By default, admitted async host futures are polled inline by the evaluator. This keeps the engine
+portable and avoids assuming a particular runtime, which is important for wasm embedders. Inline
+polling is fine for futures that are naturally non-blocking, but CPU-heavy or blocking work should
+be moved onto an executor supplied by the embedding application.
+
+Use `set_async_call_policy` to wrap admitted host futures. The scheduler applies
+`ExecutionBounds::max_pending_async_calls` before this policy is called, so the bound limits how
+many host callbacks can be invoked or submitted to the executor at once.
+
+```rust
+use futures::FutureExt;
+use rex_engine::{AsyncCallPolicy, Engine, EngineError, Module};
+
+let mut engine = Engine::with_prelude(())?;
+engine.set_async_call_policy(AsyncCallPolicy::executor_fn(|future| {
+    async move {
+        tokio::spawn(future)
+            .await
+            .map_err(|err| EngineError::Internal(format!("async host task failed: {err}")))?
+    }
+    .boxed()
+}));
+
+let mut globals = Module::global();
+globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
+engine.inject_module(globals)?;
+```
+
+The executor hook is intentionally generic rather than Tokio-specific. Native applications can use
+Tokio or any other Rust executor; wasm applications can keep the inline policy or adapt to browser
+task primitives in the host crate.
+
 ### Parsing Limits
 
 For untrusted input, you can cap syntactic nesting depth during parsing:

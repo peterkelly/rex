@@ -172,31 +172,76 @@ impl Default for ExecutionBounds {
     }
 }
 
-/// Execution hook for async host calls.
+/// Execution hook for admitted async host calls.
 ///
-/// The evaluator calls this when an async host function produces its future.
+/// The evaluator calls this only after an async host call has passed scheduler
+/// admission. The pending-async bound is therefore applied before this hook
+/// runs and before an executor can receive the future.
+///
 /// Returning the future unchanged preserves inline polling. Embedders can wrap
 /// it to submit work to Tokio, a browser task queue, or another executor.
 pub trait AsyncCallExecutor: Send + Sync + 'static {
     fn spawn(&self, future: NativeFuture) -> NativeFuture;
 }
 
-/// Policy used to prepare async host-call futures before the evaluator waits
-/// for them.
+struct FnAsyncCallExecutor<F> {
+    spawn: F,
+}
+
+impl<F> AsyncCallExecutor for FnAsyncCallExecutor<F>
+where
+    F: Fn(NativeFuture) -> NativeFuture + Send + Sync + 'static,
+{
+    fn spawn(&self, future: NativeFuture) -> NativeFuture {
+        (self.spawn)(future)
+    }
+}
+
+/// Policy used to run admitted async host-call futures.
+///
+/// The default `Inline` policy keeps Rex independent of any particular async
+/// runtime. With this policy, admitted host futures are polled by the evaluator
+/// task itself. This is portable, including to wasm builds, but a future that
+/// performs blocking or CPU-heavy work will still block that evaluator task.
+///
+/// `Executor` lets embedders decide where admitted host futures should run.
+/// The executor is deliberately host-provided so native builds can use Tokio,
+/// wasm builds can use browser/task-queue integration, and other embedders can
+/// use their own runtime without Rex depending on it directly.
 #[derive(Clone, Default)]
 pub enum AsyncCallPolicy {
+    /// Poll admitted host futures in the evaluator task.
     #[default]
     Inline,
+    /// Hand admitted host futures to an embedder-provided executor.
     Executor(Arc<dyn AsyncCallExecutor>),
 }
 
 impl AsyncCallPolicy {
+    pub fn inline() -> Self {
+        Self::Inline
+    }
+
     pub fn executor(executor: impl AsyncCallExecutor) -> Self {
         Self::Executor(Arc::new(executor))
     }
 
     pub fn executor_arc(executor: Arc<dyn AsyncCallExecutor>) -> Self {
         Self::Executor(executor)
+    }
+
+    pub fn executor_fn(
+        spawn: impl Fn(NativeFuture) -> NativeFuture + Send + Sync + 'static,
+    ) -> Self {
+        Self::executor(FnAsyncCallExecutor { spawn })
+    }
+
+    pub fn is_inline(&self) -> bool {
+        matches!(self, Self::Inline)
+    }
+
+    pub fn is_executor(&self) -> bool {
+        matches!(self, Self::Executor(_))
     }
 
     /// Apply the policy after an async host call has been admitted by the

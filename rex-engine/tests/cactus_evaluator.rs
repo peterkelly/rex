@@ -271,6 +271,30 @@ async fn async_call_policy_wraps_host_calls() {
 }
 
 #[tokio::test]
+async fn async_call_policy_accepts_executor_closures() {
+    let spawned = Arc::new(AtomicUsize::new(0));
+    let mut engine = Engine::with_prelude(()).unwrap();
+    engine.set_async_call_policy(AsyncCallPolicy::executor_fn({
+        let spawned = Arc::clone(&spawned);
+        move |future| {
+            spawned.fetch_add(1, Ordering::SeqCst);
+            future
+        }
+    }));
+    assert!(engine.async_call_policy().is_executor());
+
+    let mut module = Module::global();
+    module
+        .export_async("bump", |_: &(), value: i32| async move { Ok(value + 1) })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let result = eval_i32("bump 10 + bump 20", engine).await;
+    assert_eq!(result, 32);
+    assert_eq!(spawned.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn small_ready_work_bound_still_completes_fanout() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.set_execution_bounds(ExecutionBounds::new(1, 64));
