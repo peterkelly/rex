@@ -80,23 +80,27 @@ impl Frame {
             Frame::Tuple(frame) => {
                 out.push(frame.parent);
                 frame.env.trace_pointers(out);
-                out.extend(frame.values.iter().copied());
+                out.extend(frame.children.iter().copied());
+                out.extend(frame.values.iter().flatten().copied());
             }
             Frame::List(frame) => {
                 out.push(frame.parent);
                 frame.env.trace_pointers(out);
-                out.extend(frame.values.iter().copied());
+                out.extend(frame.children.iter().copied());
+                out.extend(frame.values.iter().flatten().copied());
             }
             Frame::Dict(frame) => {
                 out.push(frame.parent);
                 frame.env.trace_pointers(out);
-                out.extend(frame.values.values().copied());
+                out.extend(frame.children.iter().copied());
+                out.extend(frame.values.iter().flatten().copied());
             }
             Frame::RecordUpdate(frame) => {
                 out.push(frame.parent);
                 frame.env.trace_pointers(out);
                 trace_option(frame.base_value, out);
-                out.extend(frame.update_values.values().copied());
+                out.extend(frame.update_children.iter().copied());
+                out.extend(frame.update_values.iter().flatten().copied());
             }
             Frame::App(frame) => {
                 out.push(frame.parent);
@@ -180,23 +184,27 @@ impl Frame {
             Frame::Tuple(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.rewrite_pointers(rewrite)?;
-                rewrite_slice(&mut frame.values, rewrite)
+                rewrite_slice(&mut frame.children, rewrite)?;
+                rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::List(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.rewrite_pointers(rewrite)?;
-                rewrite_slice(&mut frame.values, rewrite)
+                rewrite_slice(&mut frame.children, rewrite)?;
+                rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::Dict(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.rewrite_pointers(rewrite)?;
-                rewrite_map_values(&mut frame.values, rewrite)
+                rewrite_slice(&mut frame.children, rewrite)?;
+                rewrite_option_slice(&mut frame.values, rewrite)
             }
             Frame::RecordUpdate(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.rewrite_pointers(rewrite)?;
                 rewrite_option(&mut frame.base_value, rewrite)?;
-                rewrite_map_values(&mut frame.update_values, rewrite)
+                rewrite_slice(&mut frame.update_children, rewrite)?;
+                rewrite_option_slice(&mut frame.update_values, rewrite)
             }
             Frame::App(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
@@ -282,6 +290,16 @@ fn rewrite_slice(
 ) -> Result<(), EngineError> {
     for pointer in pointers {
         rewrite_pointer(pointer, rewrite)?;
+    }
+    Ok(())
+}
+
+fn rewrite_option_slice(
+    pointers: &mut [Option<Pointer>],
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    for pointer in pointers {
+        rewrite_option(pointer, rewrite)?;
     }
     Ok(())
 }
@@ -823,8 +841,9 @@ pub struct FrTuple {
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrSequenceState,
-    pub next_index: usize,
-    pub values: Vec<Pointer>,
+    pub children: Vec<Pointer>,
+    pub values: Vec<Option<Pointer>>,
+    pub remaining: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -833,8 +852,9 @@ pub struct FrList {
     pub expr: Arc<TypedExpr>,
     pub env: Environment,
     pub state: FrSequenceState,
-    pub next_index: usize,
-    pub values: Vec<Pointer>,
+    pub children: Vec<Pointer>,
+    pub values: Vec<Option<Pointer>>,
+    pub remaining: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -844,8 +864,9 @@ pub struct FrDict {
     pub env: Environment,
     pub state: FrSequenceState,
     pub keys: Vec<Symbol>,
-    pub next_index: usize,
-    pub values: BTreeMap<Symbol, Pointer>,
+    pub children: Vec<Pointer>,
+    pub values: Vec<Option<Pointer>>,
+    pub remaining: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -856,8 +877,9 @@ pub struct FrRecordUpdate {
     pub state: FrRecordUpdateState,
     pub base_value: Option<Pointer>,
     pub update_keys: Vec<Symbol>,
-    pub next_update_index: usize,
-    pub update_values: BTreeMap<Symbol, Pointer>,
+    pub update_children: Vec<Pointer>,
+    pub update_values: Vec<Option<Pointer>>,
+    pub remaining_updates: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -4257,6 +4257,8 @@ enum EvalControl {
         env: Environment,
     },
     PushFrame(Frame),
+    Schedule(Vec<Pointer>),
+    Wait,
     AwaitNative(NativeHandleFuture),
     Return(Pointer),
 }
@@ -4598,6 +4600,12 @@ where
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
+            EvalControl::Schedule(children) => {
+                for child in children.into_iter().rev() {
+                    scheduler.schedule_next(EvalWorkItem::enter(child));
+                }
+            }
+            EvalControl::Wait => {}
             EvalControl::AwaitNative(future) => {
                 let child = runtime
                     .heap
@@ -4712,16 +4720,18 @@ fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Fr
             expr,
             env,
             state: FrSequenceState::Enter,
-            next_index: 0,
+            children: Vec::new(),
             values: Vec::new(),
+            remaining: 0,
         }),
         TypedExprKind::List(_) => Frame::List(FrList {
             parent,
             expr,
             env,
             state: FrSequenceState::Enter,
-            next_index: 0,
+            children: Vec::new(),
             values: Vec::new(),
+            remaining: 0,
         }),
         TypedExprKind::Dict(kvs) => Frame::Dict(FrDict {
             parent,
@@ -4729,8 +4739,9 @@ fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Fr
             env,
             state: FrSequenceState::Enter,
             keys: kvs.keys().cloned().collect(),
-            next_index: 0,
-            values: BTreeMap::new(),
+            children: Vec::new(),
+            values: Vec::new(),
+            remaining: 0,
         }),
         TypedExprKind::RecordUpdate { updates, .. } => Frame::RecordUpdate(FrRecordUpdate {
             parent,
@@ -4739,8 +4750,9 @@ fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Fr
             state: FrRecordUpdateState::Enter,
             base_value: None,
             update_keys: updates.keys().cloned().collect(),
-            next_update_index: 0,
-            update_values: BTreeMap::new(),
+            update_children: Vec::new(),
+            update_values: Vec::new(),
+            remaining_updates: 0,
         }),
         TypedExprKind::Var { .. } => Frame::Var(FrVar {
             parent,
@@ -4874,55 +4886,9 @@ where
             _ => frame_kind_error("datetime"),
         },
         Frame::Hole(_) => Err(EngineError::UnsupportedExpr),
-        Frame::Tuple(mut frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Tuple(elems) if elems.is_empty() => {
-                Ok(EvalControl::Return(runtime.heap.alloc_ptr_tuple(vec![])?))
-            }
-            TypedExprKind::Tuple(elems) => {
-                frame.state = FrSequenceState::EvalItem;
-                frame.values = Vec::with_capacity(elems.len());
-                let expr = Arc::clone(&elems[0]);
-                let env = frame.env.clone();
-                runtime
-                    .heap
-                    .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
-                Ok(EvalControl::Push { expr, env })
-            }
-            _ => frame_kind_error("tuple"),
-        },
-        Frame::List(mut frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::List(elems) if elems.is_empty() => Ok(EvalControl::Return(
-                runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?,
-            )),
-            TypedExprKind::List(elems) => {
-                frame.state = FrSequenceState::EvalItem;
-                frame.values = Vec::with_capacity(elems.len());
-                let expr = Arc::clone(&elems[0]);
-                let env = frame.env.clone();
-                runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
-                Ok(EvalControl::Push { expr, env })
-            }
-            _ => frame_kind_error("list"),
-        },
-        Frame::Dict(mut frame) => {
-            if frame.keys.is_empty() {
-                return Ok(EvalControl::Return(
-                    runtime.heap.alloc_ptr_dict(BTreeMap::new())?,
-                ));
-            }
-            let key = frame.keys[0].clone();
-            let expr = match frame.expr.kind.as_ref() {
-                TypedExprKind::Dict(kvs) => kvs
-                    .get(&key)
-                    .cloned()
-                    .ok_or_else(|| EngineError::Internal("dict frame key missing".into()))?,
-                _ => return frame_kind_error("dict"),
-            };
-            frame.state = FrSequenceState::EvalItem;
-            let env = frame.env.clone();
-            runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
-            Ok(EvalControl::Push { expr, env })
-        }
+        Frame::Tuple(frame) => eval_tuple_enter(runtime, frame_ptr, frame),
+        Frame::List(frame) => eval_list_enter(runtime, frame_ptr, frame),
+        Frame::Dict(frame) => eval_dict_enter(runtime, frame_ptr, frame),
         Frame::RecordUpdate(mut frame) => {
             let base = match frame.expr.kind.as_ref() {
                 TypedExprKind::RecordUpdate { base, .. } => Arc::clone(base),
@@ -5088,11 +5054,309 @@ where
     }
 }
 
+fn eval_tuple_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrTuple,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let elems = match frame.expr.kind.as_ref() {
+        TypedExprKind::Tuple(elems) => elems.clone(),
+        _ => return frame_kind_error("tuple"),
+    };
+    if elems.is_empty() {
+        return Ok(EvalControl::Return(runtime.heap.alloc_ptr_tuple(vec![])?));
+    }
+
+    frame.state = FrSequenceState::EvalItem;
+    frame.children = Vec::with_capacity(elems.len());
+    frame.values = vec![None; elems.len()];
+    frame.remaining = elems.len();
+    runtime
+        .heap
+        .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
+
+    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    for expr in elems {
+        let current_frame_ptr = roots.get(0)?;
+        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::Tuple(frame) => frame,
+            _ => return frame_kind_error("tuple"),
+        };
+        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
+            current_frame_ptr,
+            expr,
+            current_frame.env.clone(),
+        ))?;
+        let current_frame_ptr = roots.get(0)?;
+        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::Tuple(frame) => frame,
+            _ => return frame_kind_error("tuple"),
+        };
+        current_frame.children.push(child);
+        runtime
+            .heap
+            .replace_frame(&current_frame_ptr, Frame::Tuple(current_frame))?;
+    }
+
+    let current_frame_ptr = roots.get(0)?;
+    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        Frame::Tuple(frame) => frame,
+        _ => return frame_kind_error("tuple"),
+    };
+    Ok(EvalControl::Schedule(current_frame.children))
+}
+
+fn eval_list_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrList,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let elems = match frame.expr.kind.as_ref() {
+        TypedExprKind::List(elems) => elems.clone(),
+        _ => return frame_kind_error("list"),
+    };
+    if elems.is_empty() {
+        return Ok(EvalControl::Return(
+            runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?,
+        ));
+    }
+
+    frame.state = FrSequenceState::EvalItem;
+    frame.children = Vec::with_capacity(elems.len());
+    frame.values = vec![None; elems.len()];
+    frame.remaining = elems.len();
+    runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
+
+    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    for expr in elems {
+        let current_frame_ptr = roots.get(0)?;
+        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::List(frame) => frame,
+            _ => return frame_kind_error("list"),
+        };
+        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
+            current_frame_ptr,
+            expr,
+            current_frame.env.clone(),
+        ))?;
+        let current_frame_ptr = roots.get(0)?;
+        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::List(frame) => frame,
+            _ => return frame_kind_error("list"),
+        };
+        current_frame.children.push(child);
+        runtime
+            .heap
+            .replace_frame(&current_frame_ptr, Frame::List(current_frame))?;
+    }
+
+    let current_frame_ptr = roots.get(0)?;
+    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        Frame::List(frame) => frame,
+        _ => return frame_kind_error("list"),
+    };
+    Ok(EvalControl::Schedule(current_frame.children))
+}
+
+fn eval_dict_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrDict,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let exprs = dict_exprs_for_keys(&frame, &frame.keys)?;
+    if exprs.is_empty() {
+        return Ok(EvalControl::Return(
+            runtime.heap.alloc_ptr_dict(BTreeMap::new())?,
+        ));
+    }
+
+    frame.state = FrSequenceState::EvalItem;
+    frame.children = Vec::with_capacity(exprs.len());
+    frame.values = vec![None; exprs.len()];
+    frame.remaining = exprs.len();
+    runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
+
+    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    for expr in exprs {
+        let current_frame_ptr = roots.get(0)?;
+        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::Dict(frame) => frame,
+            _ => return frame_kind_error("dict"),
+        };
+        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
+            current_frame_ptr,
+            expr,
+            current_frame.env.clone(),
+        ))?;
+        let current_frame_ptr = roots.get(0)?;
+        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::Dict(frame) => frame,
+            _ => return frame_kind_error("dict"),
+        };
+        current_frame.children.push(child);
+        runtime
+            .heap
+            .replace_frame(&current_frame_ptr, Frame::Dict(current_frame))?;
+    }
+
+    let current_frame_ptr = roots.get(0)?;
+    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        Frame::Dict(frame) => frame,
+        _ => return frame_kind_error("dict"),
+    };
+    Ok(EvalControl::Schedule(current_frame.children))
+}
+
+fn eval_record_update_updates_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrRecordUpdate,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let exprs = record_update_exprs_for_keys(&frame, &frame.update_keys)?;
+    frame.state = FrRecordUpdateState::EvalUpdate;
+    frame.update_children = Vec::with_capacity(exprs.len());
+    frame.update_values = vec![None; exprs.len()];
+    frame.remaining_updates = exprs.len();
+    runtime
+        .heap
+        .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
+
+    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    for expr in exprs {
+        let current_frame_ptr = roots.get(0)?;
+        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::RecordUpdate(frame) => frame,
+            _ => return frame_kind_error("record update"),
+        };
+        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
+            current_frame_ptr,
+            expr,
+            current_frame.env.clone(),
+        ))?;
+        let current_frame_ptr = roots.get(0)?;
+        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::RecordUpdate(frame) => frame,
+            _ => return frame_kind_error("record update"),
+        };
+        current_frame.update_children.push(child);
+        runtime
+            .heap
+            .replace_frame(&current_frame_ptr, Frame::RecordUpdate(current_frame))?;
+    }
+
+    let current_frame_ptr = roots.get(0)?;
+    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        Frame::RecordUpdate(frame) => frame,
+        _ => return frame_kind_error("record update"),
+    };
+    Ok(EvalControl::Schedule(current_frame.update_children))
+}
+
+fn receive_sequence_value(
+    kind: &'static str,
+    children: &[Pointer],
+    values: &mut [Option<Pointer>],
+    remaining: &mut usize,
+    child: Pointer,
+    value: Pointer,
+) -> Result<(), EngineError> {
+    let index = children
+        .iter()
+        .position(|candidate| *candidate == child)
+        .ok_or_else(|| {
+            EngineError::Internal(format!("{kind} received result from unknown child"))
+        })?;
+    if values.get(index).and_then(|value| *value).is_some() {
+        return Err(EngineError::Internal(format!(
+            "{kind} received duplicate result from child"
+        )));
+    }
+    let slot = values
+        .get_mut(index)
+        .ok_or_else(|| EngineError::Internal(format!("{kind} result slot index out of bounds")))?;
+    *slot = Some(value);
+    *remaining = remaining.checked_sub(1).ok_or_else(|| {
+        EngineError::Internal(format!("{kind} received more results than expected"))
+    })?;
+    Ok(())
+}
+
+fn completed_values(
+    kind: &'static str,
+    values: &[Option<Pointer>],
+) -> Result<Vec<Pointer>, EngineError> {
+    values
+        .iter()
+        .copied()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| EngineError::Internal(format!("{kind} completed with missing result")))
+}
+
+fn map_keys_to_values(
+    kind: &'static str,
+    keys: &[Symbol],
+    values: Vec<Pointer>,
+) -> Result<BTreeMap<Symbol, Pointer>, EngineError> {
+    if keys.len() != values.len() {
+        return Err(EngineError::Internal(format!(
+            "{kind} completed with mismatched keys and values"
+        )));
+    }
+    Ok(keys.iter().cloned().zip(values).collect())
+}
+
+fn dict_exprs_for_keys(
+    frame: &FrDict,
+    keys: &[Symbol],
+) -> Result<Vec<Arc<TypedExpr>>, EngineError> {
+    match frame.expr.kind.as_ref() {
+        TypedExprKind::Dict(kvs) => keys
+            .iter()
+            .map(|key| {
+                kvs.get(key)
+                    .cloned()
+                    .ok_or_else(|| EngineError::Internal("dict frame key missing".into()))
+            })
+            .collect(),
+        _ => frame_kind_error("dict"),
+    }
+}
+
+fn record_update_exprs_for_keys(
+    frame: &FrRecordUpdate,
+    keys: &[Symbol],
+) -> Result<Vec<Arc<TypedExpr>>, EngineError> {
+    match frame.expr.kind.as_ref() {
+        TypedExprKind::RecordUpdate { updates, .. } => {
+            keys.iter()
+                .map(|key| {
+                    updates.get(key).cloned().ok_or_else(|| {
+                        EngineError::Internal("record update frame key missing".into())
+                    })
+                })
+                .collect()
+        }
+        _ => frame_kind_error("record update"),
+    }
+}
+
 fn eval_receive<State>(
     runtime: &RuntimeSnapshot<State>,
     frame_ptr: Pointer,
     frame: Frame,
-    _child: Pointer,
+    child: Pointer,
     value: Pointer,
 ) -> Result<EvalControl, EngineError>
 where
@@ -5103,109 +5367,119 @@ where
             if frame.state != FrSequenceState::EvalItem {
                 return unexpected_child_result("tuple");
             }
-            let elems = match frame.expr.kind.as_ref() {
-                TypedExprKind::Tuple(elems) => elems,
-                _ => return frame_kind_error("tuple"),
-            };
-            frame.values.push(value);
-            frame.next_index += 1;
-            if frame.next_index == elems.len() {
-                return Ok(EvalControl::Return(
-                    runtime.heap.alloc_ptr_tuple(frame.values.clone())?,
+            let index = frame
+                .children
+                .iter()
+                .position(|candidate| *candidate == child)
+                .ok_or_else(|| {
+                    EngineError::Internal("tuple received result from unknown child".into())
+                })?;
+            if frame.values.get(index).and_then(|value| *value).is_some() {
+                return Err(EngineError::Internal(
+                    "tuple received duplicate result from child".into(),
                 ));
             }
-            let expr = Arc::clone(&elems[frame.next_index]);
-            let env = frame.env.clone();
+            let slot = frame.values.get_mut(index).ok_or_else(|| {
+                EngineError::Internal("tuple result slot index out of bounds".into())
+            })?;
+            *slot = Some(value);
+            frame.remaining = frame.remaining.checked_sub(1).ok_or_else(|| {
+                EngineError::Internal("tuple received more results than expected".into())
+            })?;
+            if frame.remaining == 0 {
+                let values = frame
+                    .values
+                    .iter()
+                    .copied()
+                    .collect::<Option<Vec<_>>>()
+                    .ok_or_else(|| {
+                        EngineError::Internal("tuple completed with missing result".into())
+                    })?;
+                return Ok(EvalControl::Return(runtime.heap.alloc_ptr_tuple(values)?));
+            }
             runtime
                 .heap
                 .replace_frame(&frame_ptr, Frame::Tuple(frame))?;
-            Ok(EvalControl::Push { expr, env })
+            Ok(EvalControl::Wait)
         }
         Frame::List(mut frame) => {
             if frame.state != FrSequenceState::EvalItem {
                 return unexpected_child_result("list");
             }
-            let elems = match frame.expr.kind.as_ref() {
-                TypedExprKind::List(elems) => elems,
-                _ => return frame_kind_error("list"),
-            };
-            frame.values.push(value);
-            frame.next_index += 1;
-            if frame.next_index == elems.len() {
-                let list = runtime.heap.alloc_ptr_list(frame.values.clone())?;
+            receive_sequence_value(
+                "list",
+                &frame.children,
+                &mut frame.values,
+                &mut frame.remaining,
+                child,
+                value,
+            )?;
+            if frame.remaining == 0 {
+                let list = runtime
+                    .heap
+                    .alloc_ptr_list(completed_values("list", &frame.values)?)?;
                 return Ok(EvalControl::Return(list));
             }
-            let expr = Arc::clone(&elems[frame.next_index]);
-            let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::List(frame))?;
-            Ok(EvalControl::Push { expr, env })
+            Ok(EvalControl::Wait)
         }
         Frame::Dict(mut frame) => {
             if frame.state != FrSequenceState::EvalItem {
                 return unexpected_child_result("dict");
             }
-            let key =
-                frame.keys.get(frame.next_index).cloned().ok_or_else(|| {
-                    EngineError::Internal("dict frame index out of bounds".into())
-                })?;
-            frame.values.insert(key, value);
-            frame.next_index += 1;
-            if frame.next_index == frame.keys.len() {
-                return Ok(EvalControl::Return(
-                    runtime.heap.alloc_ptr_dict(frame.values.clone())?,
-                ));
+            receive_sequence_value(
+                "dict",
+                &frame.children,
+                &mut frame.values,
+                &mut frame.remaining,
+                child,
+                value,
+            )?;
+            if frame.remaining == 0 {
+                let values = map_keys_to_values(
+                    "dict",
+                    &frame.keys,
+                    completed_values("dict", &frame.values)?,
+                )?;
+                return Ok(EvalControl::Return(runtime.heap.alloc_ptr_dict(values)?));
             }
-            let next_key = frame.keys[frame.next_index].clone();
-            let expr = match frame.expr.kind.as_ref() {
-                TypedExprKind::Dict(kvs) => kvs
-                    .get(&next_key)
-                    .cloned()
-                    .ok_or_else(|| EngineError::Internal("dict frame key missing".into()))?,
-                _ => return frame_kind_error("dict"),
-            };
-            let env = frame.env.clone();
             runtime.heap.replace_frame(&frame_ptr, Frame::Dict(frame))?;
-            Ok(EvalControl::Push { expr, env })
+            Ok(EvalControl::Wait)
         }
         Frame::RecordUpdate(mut frame) => match frame.state {
             FrRecordUpdateState::EvalBase => {
                 frame.base_value = Some(value);
                 if frame.update_keys.is_empty() {
-                    let result =
-                        apply_record_update_values(runtime, value, frame.update_values.clone())?;
+                    let result = apply_record_update_values(runtime, value, BTreeMap::new())?;
                     return Ok(EvalControl::Return(result));
                 }
-                frame.state = FrRecordUpdateState::EvalUpdate;
-                let expr = record_update_expr_at(&frame, frame.next_update_index)?;
-                let env = frame.env.clone();
-                runtime
-                    .heap
-                    .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
-                Ok(EvalControl::Push { expr, env })
+                eval_record_update_updates_enter(runtime, frame_ptr, frame)
             }
             FrRecordUpdateState::EvalUpdate => {
-                let key = frame
-                    .update_keys
-                    .get(frame.next_update_index)
-                    .cloned()
-                    .ok_or_else(|| {
-                        EngineError::Internal("record update frame index out of bounds".into())
-                    })?;
-                frame.update_values.insert(key, value);
-                frame.next_update_index += 1;
-                if frame.next_update_index == frame.update_keys.len() {
+                receive_sequence_value(
+                    "record update",
+                    &frame.update_children,
+                    &mut frame.update_values,
+                    &mut frame.remaining_updates,
+                    child,
+                    value,
+                )?;
+                if frame.remaining_updates == 0 {
                     let base = frame.base_value.ok_or_else(|| {
                         EngineError::Internal("record update frame missing base".into())
                     })?;
-                    let result = apply_record_update_values(runtime, base, frame.update_values)?;
+                    let update_values = map_keys_to_values(
+                        "record update",
+                        &frame.update_keys,
+                        completed_values("record update", &frame.update_values)?,
+                    )?;
+                    let result = apply_record_update_values(runtime, base, update_values)?;
                     return Ok(EvalControl::Return(result));
                 }
-                let expr = record_update_expr_at(&frame, frame.next_update_index)?;
-                let env = frame.env.clone();
                 runtime
                     .heap
                     .replace_frame(&frame_ptr, Frame::RecordUpdate(frame))?;
-                Ok(EvalControl::Push { expr, env })
+                Ok(EvalControl::Wait)
             }
             _ => unexpected_child_result("record update"),
         },
@@ -6683,23 +6957,6 @@ where
         } else {
             Ok(EvalVarResult::Value(value))
         }
-    }
-}
-
-fn record_update_expr_at(
-    frame: &FrRecordUpdate,
-    index: usize,
-) -> Result<Arc<TypedExpr>, EngineError> {
-    let key = frame
-        .update_keys
-        .get(index)
-        .ok_or_else(|| EngineError::Internal("record update frame index out of bounds".into()))?;
-    match frame.expr.kind.as_ref() {
-        TypedExprKind::RecordUpdate { updates, .. } => updates
-            .get(key)
-            .cloned()
-            .ok_or_else(|| EngineError::Internal("record update frame key missing".into())),
-        _ => frame_kind_error("record update"),
     }
 }
 

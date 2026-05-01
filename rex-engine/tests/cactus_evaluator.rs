@@ -1,6 +1,12 @@
-use futures::FutureExt;
+use futures::{FutureExt, channel::oneshot};
 use rex_engine::{Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Module, RuntimeEnv};
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
+use std::collections::VecDeque;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+    mpsc,
+};
 
 async fn eval_value<State>(
     source: &str,
@@ -21,6 +27,111 @@ where
 async fn eval_i32(source: &str, engine: Engine<()>) -> i32 {
     let (value, _typ) = eval_value(source, engine).await.unwrap();
     i32::from_rex(&value).unwrap()
+}
+
+async fn wait_for_count(count: &AtomicUsize, expected: usize) -> bool {
+    for _ in 0..1024 {
+        if count.load(Ordering::SeqCst) >= expected {
+            return true;
+        }
+        tokio::task::yield_now().await;
+    }
+    false
+}
+
+struct GateControl {
+    started: Arc<AtomicUsize>,
+    started_rx: mpsc::Receiver<i32>,
+    releases: Vec<oneshot::Sender<()>>,
+}
+
+fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
+    let started = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = mpsc::channel();
+    let mut release_txs = Vec::new();
+    let mut release_rxs = VecDeque::new();
+    for _ in 0..child_count {
+        let (tx, rx) = oneshot::channel();
+        release_txs.push(tx);
+        release_rxs.push_back(rx);
+    }
+
+    let releases = Arc::new(Mutex::new(release_rxs));
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut module = Module::global();
+    module
+        .export_async("gate", {
+            let started = Arc::clone(&started);
+            let started_tx = started_tx.clone();
+            let releases = Arc::clone(&releases);
+            move |_: &(), value: i32| {
+                let started = Arc::clone(&started);
+                let started_tx = started_tx.clone();
+                let release = releases
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("missing async gate release channel");
+                async move {
+                    started_tx.send(value).unwrap();
+                    started.fetch_add(1, Ordering::SeqCst);
+                    release.await.unwrap();
+                    Ok(value)
+                }
+            }
+        })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    (
+        engine,
+        GateControl {
+            started,
+            started_rx,
+            releases: release_txs,
+        },
+    )
+}
+
+async fn eval_with_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<i32>) {
+    let (engine, gate) = engine_with_gate(gate_count);
+    let source = source.to_string();
+    let eval_task = tokio::spawn(async move { eval_value(&source, engine).await });
+    assert!(
+        wait_for_count(&gate.started, gate_count).await,
+        "evaluation did not start all gated async children"
+    );
+
+    let mut started_values = Vec::with_capacity(gate_count);
+    for _ in 0..gate_count {
+        started_values.push(gate.started_rx.recv().unwrap());
+    }
+    started_values.sort();
+
+    for release in gate.releases {
+        release.send(()).unwrap();
+    }
+    for _ in 0..1024 {
+        if eval_task.is_finished() {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    if !eval_task.is_finished() {
+        eval_task.abort();
+        panic!("timed out waiting for gated evaluation");
+    }
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated evaluation task panicked")
+        .expect("gated evaluation failed");
+    (value, ty, started_values)
+}
+
+async fn eval_gated_i32(source: &str, gate_count: usize) -> (i32, Vec<i32>) {
+    let (value, _ty, started_values) = eval_with_gates(source, gate_count).await;
+    (i32::from_rex(&value).unwrap(), started_values)
 }
 
 fn engine_collecting_on_every_alloc() -> Engine<()> {
@@ -52,6 +163,63 @@ async fn evaluator_handles_literals_sequences_and_records() {
     )
     .await;
     assert_eq!(result, 8);
+}
+
+#[tokio::test]
+async fn tuple_evaluation_starts_all_async_children() {
+    let (value, ty, started_values) = eval_with_gates("(gate 1, gate 2)", 2).await;
+    assert_eq!(started_values, vec![1, 2]);
+
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+        ])
+    );
+    let values = value.as_tuple().unwrap();
+    assert_eq!(i32::from_rex(&values[0]).unwrap(), 1);
+    assert_eq!(i32::from_rex(&values[1]).unwrap(), 2);
+}
+
+#[tokio::test]
+async fn list_evaluation_starts_all_async_children() {
+    let (result, started_values) = eval_gated_i32("sum [gate 1, gate 2]", 2).await;
+    assert_eq!(started_values, vec![1, 2]);
+    assert_eq!(result, 3);
+}
+
+#[tokio::test]
+async fn dict_evaluation_starts_all_async_children() {
+    let (result, started_values) = eval_gated_i32(
+        r#"
+        match { a = gate 1, b = gate 2 }
+            when {a, b} -> a + b
+        "#,
+        2,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2]);
+    assert_eq!(result, 3);
+}
+
+#[tokio::test]
+async fn record_update_starts_all_async_update_children() {
+    let (result, started_values) = eval_gated_i32(
+        r#"
+        type Box = Box { a: i32, b: i32 }
+
+        let
+            base: Box = Box { a = 10, b = 20 },
+            updated: Box = { base with { a = gate 1, b = gate 2 } }
+        in
+            updated.a + updated.b
+        "#,
+        2,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2]);
+    assert_eq!(result, 3);
 }
 
 #[tokio::test]
