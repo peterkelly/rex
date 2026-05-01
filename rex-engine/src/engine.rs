@@ -4256,7 +4256,7 @@ enum EvalControl {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
-    PushFrame(Frame),
+    PushFrame(Box<Frame>),
     Schedule(Vec<Pointer>),
     Wait,
     AwaitNative(NativeHandleFuture),
@@ -4596,7 +4596,7 @@ where
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
             EvalControl::PushFrame(frame) => {
-                let child = runtime.heap.alloc_ptr_frame(frame)?;
+                let child = runtime.heap.alloc_ptr_frame(*frame)?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
                 scheduler.schedule_next(EvalWorkItem::enter(child));
             }
@@ -4768,6 +4768,10 @@ fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Fr
             state: FrAppState::Enter,
             head: None,
             spine: Vec::new(),
+            head_child: None,
+            arg_children: Vec::new(),
+            arg_values: Vec::new(),
+            remaining: 0,
             next_arg_index: 0,
             func: None,
             arg: None,
@@ -4919,24 +4923,7 @@ where
             }
             _ => frame_kind_error("var"),
         },
-        Frame::App(mut frame) => {
-            let mut spine = Vec::new();
-            let mut head = Arc::clone(&frame.expr);
-            while let TypedExprKind::App(func, arg) = head.kind.as_ref() {
-                spine.push(FrAppArg {
-                    func_type: func.typ.clone(),
-                    expr: Arc::clone(arg),
-                });
-                head = Arc::clone(func);
-            }
-            spine.reverse();
-            frame.state = FrAppState::EvalHead;
-            frame.head = Some(Arc::clone(&head));
-            frame.spine = spine;
-            let env = frame.env.clone();
-            runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-            Ok(EvalControl::Push { expr: head, env })
-        }
+        Frame::App(frame) => eval_app_enter(runtime, frame_ptr, frame),
         Frame::Project(mut frame) => {
             let expr = match frame.expr.kind.as_ref() {
                 TypedExprKind::Project { expr, .. } => Arc::clone(expr),
@@ -5264,6 +5251,99 @@ where
     Ok(EvalControl::Schedule(current_frame.update_children))
 }
 
+fn eval_app_enter<State>(
+    runtime: &RuntimeSnapshot<State>,
+    frame_ptr: Pointer,
+    mut frame: FrApp,
+) -> Result<EvalControl, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let mut spine = Vec::new();
+    let mut head = Arc::clone(&frame.expr);
+    while let TypedExprKind::App(func, arg) = head.kind.as_ref() {
+        spine.push(FrAppArg {
+            func_type: func.typ.clone(),
+            expr: Arc::clone(arg),
+        });
+        head = Arc::clone(func);
+    }
+    spine.reverse();
+
+    let arg_exprs = spine
+        .iter()
+        .map(|arg| Arc::clone(&arg.expr))
+        .collect::<Vec<_>>();
+    frame.state = FrAppState::EvalChildren;
+    frame.head = Some(Arc::clone(&head));
+    frame.spine = spine;
+    frame.head_child = None;
+    frame.arg_children = Vec::with_capacity(arg_exprs.len());
+    frame.arg_values = vec![None; arg_exprs.len()];
+    frame.remaining = arg_exprs.len() + 1;
+    frame.next_arg_index = 0;
+    frame.func = None;
+    frame.arg = None;
+    runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
+
+    let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+    let current_frame_ptr = roots.get(0)?;
+    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        Frame::App(frame) => frame,
+        _ => return frame_kind_error("application"),
+    };
+    let head_child = runtime.heap.alloc_ptr_frame(frame_for_expr(
+        current_frame_ptr,
+        head,
+        current_frame.env.clone(),
+    ))?;
+    let current_frame_ptr = roots.get(0)?;
+    let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        Frame::App(frame) => frame,
+        _ => return frame_kind_error("application"),
+    };
+    current_frame.head_child = Some(head_child);
+    runtime
+        .heap
+        .replace_frame(&current_frame_ptr, Frame::App(current_frame))?;
+
+    for expr in arg_exprs {
+        let current_frame_ptr = roots.get(0)?;
+        let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::App(frame) => frame,
+            _ => return frame_kind_error("application"),
+        };
+        let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
+            current_frame_ptr,
+            expr,
+            current_frame.env.clone(),
+        ))?;
+        let current_frame_ptr = roots.get(0)?;
+        let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+            Frame::App(frame) => frame,
+            _ => return frame_kind_error("application"),
+        };
+        current_frame.arg_children.push(child);
+        runtime
+            .heap
+            .replace_frame(&current_frame_ptr, Frame::App(current_frame))?;
+    }
+
+    let current_frame_ptr = roots.get(0)?;
+    let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+        Frame::App(frame) => frame,
+        _ => return frame_kind_error("application"),
+    };
+    let mut children = Vec::with_capacity(1 + current_frame.arg_children.len());
+    children.push(
+        current_frame
+            .head_child
+            .ok_or_else(|| EngineError::Internal("application frame missing head child".into()))?,
+    );
+    children.extend(current_frame.arg_children.iter().copied());
+    Ok(EvalControl::Schedule(children))
+}
+
 fn receive_sequence_value(
     kind: &'static str,
     children: &[Pointer],
@@ -5289,6 +5369,47 @@ fn receive_sequence_value(
     *slot = Some(value);
     *remaining = remaining.checked_sub(1).ok_or_else(|| {
         EngineError::Internal(format!("{kind} received more results than expected"))
+    })?;
+    Ok(())
+}
+
+fn receive_app_child_value(
+    frame: &mut FrApp,
+    child: Pointer,
+    value: Pointer,
+) -> Result<(), EngineError> {
+    if frame.head_child == Some(child) {
+        if frame.func.is_some() {
+            return Err(EngineError::Internal(
+                "application received duplicate result from head child".into(),
+            ));
+        }
+        frame.func = Some(value);
+    } else {
+        let index = frame
+            .arg_children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("application received result from unknown child".into())
+            })?;
+        if frame
+            .arg_values
+            .get(index)
+            .and_then(|value| *value)
+            .is_some()
+        {
+            return Err(EngineError::Internal(
+                "application received duplicate result from argument child".into(),
+            ));
+        }
+        let slot = frame.arg_values.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("application argument result slot index out of bounds".into())
+        })?;
+        *slot = Some(value);
+    }
+    frame.remaining = frame.remaining.checked_sub(1).ok_or_else(|| {
+        EngineError::Internal("application received more results than expected".into())
     })?;
     Ok(())
 }
@@ -5485,61 +5606,18 @@ where
         },
         Frame::Var(_) => Ok(EvalControl::Return(value)),
         Frame::App(mut frame) => match frame.state {
-            FrAppState::EvalHead => {
-                frame.func = Some(value);
-                if frame.spine.is_empty() {
-                    return Ok(EvalControl::Return(value));
+            FrAppState::EvalChildren => {
+                receive_app_child_value(&mut frame, child, value)?;
+                if frame.remaining == 0 {
+                    frame.next_arg_index = 0;
+                    return continue_app_after_apply(runtime, frame_ptr, frame, None);
                 }
-                frame.state = FrAppState::EvalArg;
-                frame.next_arg_index = 0;
-                let expr = Arc::clone(&frame.spine[0].expr);
-                let env = frame.env.clone();
                 runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-                Ok(EvalControl::Push { expr, env })
+                Ok(EvalControl::Wait)
             }
-            FrAppState::EvalArg => {
-                let idx = frame.next_arg_index;
-                let arg_info = frame.spine.get(idx).cloned().ok_or_else(|| {
-                    EngineError::Internal("application frame index out of bounds".into())
-                })?;
-                let func = frame.func.ok_or_else(|| {
-                    EngineError::Internal("application frame missing function".into())
-                })?;
-                frame.arg = Some(value);
-                frame.state = FrAppState::ApplyArg;
-                runtime
-                    .heap
-                    .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
-                let roots = runtime.heap.temp_roots(vec![frame_ptr, func, value])?;
-                let apply_result = eval_apply_arg(
-                    runtime,
-                    frame_ptr,
-                    func,
-                    value,
-                    Some(&arg_info.func_type),
-                    Some(&arg_info.expr.typ),
-                )?;
-                let frame_ptr = roots.get(0)?;
-                let frame = match runtime.heap.pointer_as_frame(&frame_ptr)? {
-                    Frame::App(frame) => frame,
-                    _ => return frame_kind_error("application"),
-                };
-                match apply_result {
-                    EvalApplyResult::Value(applied) => {
-                        continue_app_after_apply(runtime, frame_ptr, frame, applied)
-                    }
-                    EvalApplyResult::Push { expr, env } => Ok(EvalControl::Push { expr, env }),
-                    EvalApplyResult::PushNative(task) => {
-                        Ok(EvalControl::PushFrame(Frame::NativeCall(FrNativeCall {
-                            parent: frame_ptr,
-                            state: FrNativeCallState::Enter,
-                            task,
-                        })))
-                    }
-                    EvalApplyResult::AwaitNative(future) => Ok(EvalControl::AwaitNative(future)),
-                }
+            FrAppState::ApplyArg => {
+                continue_app_after_apply(runtime, frame_ptr, frame, Some(value))
             }
-            FrAppState::ApplyArg => continue_app_after_apply(runtime, frame_ptr, frame, value),
             _ => unexpected_child_result("application"),
         },
         Frame::Project(frame) => match frame.expr.kind.as_ref() {
@@ -6878,29 +6956,91 @@ where
 
 fn continue_app_after_apply<State>(
     runtime: &RuntimeSnapshot<State>,
-    frame_ptr: Pointer,
+    mut frame_ptr: Pointer,
     mut frame: FrApp,
-    applied: Pointer,
+    applied: Option<Pointer>,
 ) -> Result<EvalControl, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    frame.arg = None;
-    frame.func = Some(applied);
-    frame.next_arg_index += 1;
-    if frame.next_arg_index > frame.spine.len() {
-        return Err(EngineError::Internal(
-            "application frame advanced past final argument".into(),
-        ));
+    if let Some(applied) = applied {
+        frame.arg = None;
+        frame.func = Some(applied);
+        frame.next_arg_index += 1;
+        runtime
+            .heap
+            .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
     }
-    if frame.next_arg_index == frame.spine.len() {
-        return Ok(EvalControl::Return(applied));
+
+    loop {
+        if frame.next_arg_index > frame.spine.len() {
+            return Err(EngineError::Internal(
+                "application frame advanced past final argument".into(),
+            ));
+        }
+
+        let func = frame
+            .func
+            .ok_or_else(|| EngineError::Internal("application frame missing function".into()))?;
+        if frame.next_arg_index == frame.spine.len() {
+            return Ok(EvalControl::Return(func));
+        }
+
+        let idx = frame.next_arg_index;
+        let arg_info =
+            frame.spine.get(idx).cloned().ok_or_else(|| {
+                EngineError::Internal("application frame index out of bounds".into())
+            })?;
+        let arg = frame
+            .arg_values
+            .get(idx)
+            .copied()
+            .flatten()
+            .ok_or_else(|| {
+                EngineError::Internal("application frame missing argument value".into())
+            })?;
+
+        frame.arg = Some(arg);
+        frame.state = FrAppState::ApplyArg;
+        runtime
+            .heap
+            .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
+        let roots = runtime.heap.temp_roots(vec![frame_ptr, func, arg])?;
+        let apply_result = eval_apply_arg(
+            runtime,
+            frame_ptr,
+            func,
+            arg,
+            Some(&arg_info.func_type),
+            Some(&arg_info.expr.typ),
+        )?;
+        frame_ptr = roots.get(0)?;
+        frame = match runtime.heap.pointer_as_frame(&frame_ptr)? {
+            Frame::App(frame) => frame,
+            _ => return frame_kind_error("application"),
+        };
+        match apply_result {
+            EvalApplyResult::Value(applied) => {
+                frame.arg = None;
+                frame.func = Some(applied);
+                frame.next_arg_index += 1;
+                runtime
+                    .heap
+                    .replace_frame(&frame_ptr, Frame::App(frame.clone()))?;
+            }
+            EvalApplyResult::Push { expr, env } => return Ok(EvalControl::Push { expr, env }),
+            EvalApplyResult::PushNative(task) => {
+                return Ok(EvalControl::PushFrame(Box::new(Frame::NativeCall(
+                    FrNativeCall {
+                        parent: frame_ptr,
+                        state: FrNativeCallState::Enter,
+                        task,
+                    },
+                ))));
+            }
+            EvalApplyResult::AwaitNative(future) => return Ok(EvalControl::AwaitNative(future)),
+        }
     }
-    frame.state = FrAppState::EvalArg;
-    let expr = Arc::clone(&frame.spine[frame.next_arg_index].expr);
-    let env = frame.env.clone();
-    runtime.heap.replace_frame(&frame_ptr, Frame::App(frame))?;
-    Ok(EvalControl::Push { expr, env })
 }
 
 fn eval_resolve_var<State>(

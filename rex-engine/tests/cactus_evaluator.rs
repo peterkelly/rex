@@ -223,6 +223,20 @@ async fn record_update_starts_all_async_update_children() {
 }
 
 #[tokio::test]
+async fn application_evaluation_starts_all_async_arguments() {
+    let (result, started_values) = eval_gated_i32(
+        r#"
+        let combine = \a -> \b -> a + b
+        in combine (gate 1) (gate 2)
+        "#,
+        2,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2]);
+    assert_eq!(result, 3);
+}
+
+#[tokio::test]
 async fn gc_every_alloc_handles_broad_evaluator_paths() {
     let result = eval_i32(
         r#"

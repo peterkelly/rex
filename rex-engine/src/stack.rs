@@ -105,6 +105,9 @@ impl Frame {
             Frame::App(frame) => {
                 out.push(frame.parent);
                 frame.env.trace_pointers(out);
+                trace_option(frame.head_child, out);
+                out.extend(frame.arg_children.iter().copied());
+                out.extend(frame.arg_values.iter().flatten().copied());
                 trace_option(frame.func, out);
                 trace_option(frame.arg, out);
             }
@@ -209,6 +212,9 @@ impl Frame {
             Frame::App(frame) => {
                 rewrite_pointer(&mut frame.parent, rewrite)?;
                 frame.env.rewrite_pointers(rewrite)?;
+                rewrite_option(&mut frame.head_child, rewrite)?;
+                rewrite_slice(&mut frame.arg_children, rewrite)?;
+                rewrite_option_slice(&mut frame.arg_values, rewrite)?;
                 rewrite_option(&mut frame.func, rewrite)?;
                 rewrite_option(&mut frame.arg, rewrite)
             }
@@ -349,8 +355,7 @@ pub enum FrRecordUpdateState {
 #[derive(Clone, Debug, PartialEq)]
 pub enum FrAppState {
     Enter,
-    EvalHead,
-    EvalArg,
+    EvalChildren,
     ApplyArg,
     Complete,
 }
@@ -890,6 +895,10 @@ pub struct FrApp {
     pub state: FrAppState,
     pub head: Option<Arc<TypedExpr>>,
     pub spine: Vec<FrAppArg>,
+    pub head_child: Option<Pointer>,
+    pub arg_children: Vec<Pointer>,
+    pub arg_values: Vec<Option<Pointer>>,
+    pub remaining: usize,
     pub next_arg_index: usize,
     pub func: Option<Pointer>,
     pub arg: Option<Pointer>,
