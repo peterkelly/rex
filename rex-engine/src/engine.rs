@@ -1,7 +1,7 @@
 //! Core engine implementation for Rex.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
@@ -105,6 +105,128 @@ impl Default for EngineOptions {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExecutionBounds {
+    max_ready_work: usize,
+    max_pending_async_calls: usize,
+}
+
+impl ExecutionBounds {
+    pub const DEFAULT_MAX_READY_WORK: usize = 1024;
+    pub const DEFAULT_MAX_PENDING_ASYNC_CALLS: usize = 64;
+
+    /// Create scheduler bounds for evaluator work.
+    ///
+    /// `max_ready_work` limits how many ready Rex frames are admitted to the
+    /// active scheduler queue. `max_pending_async_calls` limits how many async
+    /// host-call futures are admitted for polling or executor submission at
+    /// once. Zero values are normalized to one so evaluation can always make
+    /// progress.
+    pub const fn new(max_ready_work: usize, max_pending_async_calls: usize) -> Self {
+        Self {
+            max_ready_work: if max_ready_work == 0 {
+                1
+            } else {
+                max_ready_work
+            },
+            max_pending_async_calls: if max_pending_async_calls == 0 {
+                1
+            } else {
+                max_pending_async_calls
+            },
+        }
+    }
+
+    /// Disable scheduler admission limits.
+    pub const fn unbounded() -> Self {
+        Self {
+            max_ready_work: usize::MAX,
+            max_pending_async_calls: usize::MAX,
+        }
+    }
+
+    pub const fn max_ready_work(self) -> usize {
+        self.max_ready_work
+    }
+
+    pub const fn max_pending_async_calls(self) -> usize {
+        self.max_pending_async_calls
+    }
+
+    fn ready_work_limit(self) -> usize {
+        self.max_ready_work
+    }
+
+    fn pending_async_limit(self) -> usize {
+        self.max_pending_async_calls
+    }
+}
+
+impl Default for ExecutionBounds {
+    fn default() -> Self {
+        Self::new(
+            Self::DEFAULT_MAX_READY_WORK,
+            Self::DEFAULT_MAX_PENDING_ASYNC_CALLS,
+        )
+    }
+}
+
+/// Execution hook for async host calls.
+///
+/// The evaluator calls this when an async host function produces its future.
+/// Returning the future unchanged preserves inline polling. Embedders can wrap
+/// it to submit work to Tokio, a browser task queue, or another executor.
+pub trait AsyncCallExecutor: Send + Sync + 'static {
+    fn spawn(&self, future: NativeFuture) -> NativeFuture;
+}
+
+/// Policy used to prepare async host-call futures before the evaluator waits
+/// for them.
+#[derive(Clone, Default)]
+pub enum AsyncCallPolicy {
+    #[default]
+    Inline,
+    Executor(Arc<dyn AsyncCallExecutor>),
+}
+
+impl AsyncCallPolicy {
+    pub fn executor(executor: impl AsyncCallExecutor) -> Self {
+        Self::Executor(Arc::new(executor))
+    }
+
+    pub fn executor_arc(executor: Arc<dyn AsyncCallExecutor>) -> Self {
+        Self::Executor(executor)
+    }
+
+    fn prepare(&self, future: NativeHandleFuture) -> NativeHandleFuture {
+        match self {
+            Self::Inline => future,
+            Self::Executor(executor) => executor.spawn(future),
+        }
+    }
+}
+
+impl fmt::Debug for AsyncCallPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Inline => f.write_str("Inline"),
+            Self::Executor(_) => f.write_str("Executor"),
+        }
+    }
+}
+
+impl PartialEq for AsyncCallPolicy {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Inline, Self::Inline) => true,
+            (Self::Executor(lhs), Self::Executor(rhs)) => Arc::ptr_eq(lhs, rhs),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for AsyncCallPolicy {}
 
 /// Shared ADT registration surface for derived and manually implemented Rust types.
 pub trait RexAdt: RexType {
@@ -1653,6 +1775,8 @@ where
     virtual_modules: BTreeMap<String, VirtualModule>,
     module_local_type_names: BTreeMap<String, BTreeSet<Symbol>>,
     registration_module_context: Option<String>,
+    async_call_policy: AsyncCallPolicy,
+    execution_bounds: ExecutionBounds,
     pub heap: Heap,
 }
 
@@ -1857,6 +1981,8 @@ where
     pub(crate) typeclasses: TypeclassRegistry,
     pub type_system: TypeSystem,
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
+    pub(crate) async_call_policy: AsyncCallPolicy,
+    pub(crate) execution_bounds: ExecutionBounds,
     pub heap: Heap,
 }
 
@@ -1919,6 +2045,8 @@ where
             virtual_modules: self.virtual_modules.clone(),
             module_local_type_names: self.module_local_type_names.clone(),
             registration_module_context: self.registration_module_context.clone(),
+            async_call_policy: self.async_call_policy.clone(),
+            execution_bounds: self.execution_bounds,
             heap: self.heap.clone(),
         }
     }
@@ -1994,6 +2122,32 @@ where
         self.natives.has_name(name)
     }
 
+    pub fn async_call_policy(&self) -> &AsyncCallPolicy {
+        &self.async_call_policy
+    }
+
+    pub fn set_async_call_policy(&mut self, policy: AsyncCallPolicy) {
+        self.async_call_policy = policy;
+    }
+
+    pub fn with_async_call_policy(mut self, policy: AsyncCallPolicy) -> Self {
+        self.set_async_call_policy(policy);
+        self
+    }
+
+    pub fn execution_bounds(&self) -> ExecutionBounds {
+        self.execution_bounds
+    }
+
+    pub fn set_execution_bounds(&mut self, bounds: ExecutionBounds) {
+        self.execution_bounds = bounds;
+    }
+
+    pub fn with_execution_bounds(mut self, bounds: ExecutionBounds) -> Self {
+        self.set_execution_bounds(bounds);
+        self
+    }
+
     pub(crate) fn runtime_snapshot(&self) -> RuntimeSnapshot<State> {
         RuntimeSnapshot {
             state: Arc::clone(&self.state),
@@ -2001,6 +2155,8 @@ where
             typeclasses: self.typeclasses.clone(),
             type_system: self.type_system.clone(),
             typeclass_cache: Arc::clone(&self.typeclass_cache),
+            async_call_policy: self.async_call_policy.clone(),
+            execution_bounds: self.execution_bounds,
             heap: self.heap.clone(),
         }
     }
@@ -2070,6 +2226,8 @@ where
             virtual_modules: BTreeMap::new(),
             module_local_type_names: BTreeMap::new(),
             registration_module_context: None,
+            async_call_policy: AsyncCallPolicy::default(),
+            execution_bounds: ExecutionBounds::default(),
             heap: Heap::new(),
         }
     }
@@ -2101,6 +2259,8 @@ where
             virtual_modules: BTreeMap::new(),
             module_local_type_names: BTreeMap::new(),
             registration_module_context: None,
+            async_call_policy: AsyncCallPolicy::default(),
+            execution_bounds: ExecutionBounds::default(),
             heap: Heap::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {
@@ -4343,6 +4503,11 @@ struct PendingNative {
     state: PendingNativeState,
 }
 
+struct DeferredNative {
+    frame: Pointer,
+    future: NativeHandleFuture,
+}
+
 impl PendingNative {
     fn new(frame: Pointer, future: NativeHandleFuture) -> Self {
         Self {
@@ -4388,35 +4553,105 @@ impl PendingNative {
     }
 }
 
+impl DeferredNative {
+    fn new(frame: Pointer, future: NativeHandleFuture) -> Self {
+        Self { frame, future }
+    }
+
+    fn activate(self, policy: &AsyncCallPolicy) -> PendingNative {
+        PendingNative::new(self.frame, policy.prepare(self.future))
+    }
+
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        out.push(self.frame);
+    }
+
+    fn refresh_from_roots(
+        &mut self,
+        roots: &TempRoots,
+        cursor: &mut usize,
+    ) -> Result<(), EngineError> {
+        self.frame = roots.get(*cursor)?;
+        *cursor += 1;
+        Ok(())
+    }
+}
+
 struct EvalScheduler {
     ready: VecDeque<EvalWorkItem>,
+    deferred_ready: VecDeque<EvalWorkItem>,
     pending_native: Vec<PendingNative>,
+    deferred_native: VecDeque<DeferredNative>,
+    bounds: ExecutionBounds,
 }
 
 impl EvalScheduler {
-    fn new(root: Pointer) -> Self {
+    fn new(root: Pointer, bounds: ExecutionBounds) -> Self {
         let mut ready = VecDeque::new();
         ready.push_front(EvalWorkItem::enter(root));
         Self {
             ready,
+            deferred_ready: VecDeque::new(),
             pending_native: Vec::new(),
+            deferred_native: VecDeque::new(),
+            bounds,
         }
     }
 
     fn schedule_next(&mut self, item: EvalWorkItem) {
         self.ready.push_front(item);
+        self.enforce_ready_limit();
     }
 
-    fn schedule_pending_native(&mut self, frame: Pointer, future: NativeHandleFuture) {
-        self.pending_native.push(PendingNative::new(frame, future));
+    fn schedule_pending_native(
+        &mut self,
+        frame: Pointer,
+        future: NativeHandleFuture,
+        policy: &AsyncCallPolicy,
+    ) {
+        self.deferred_native
+            .push_back(DeferredNative::new(frame, future));
+        self.admit_deferred_native(policy);
     }
 
     fn pop_next(&mut self) -> Option<EvalWorkItem> {
-        self.ready.pop_front()
+        self.admit_deferred_ready();
+        let item = self.ready.pop_front();
+        self.admit_deferred_ready();
+        item
     }
 
     fn has_pending_native(&self) -> bool {
         !self.pending_native.is_empty()
+    }
+
+    fn enforce_ready_limit(&mut self) {
+        let limit = self.bounds.ready_work_limit();
+        while self.ready.len() > limit {
+            if let Some(item) = self.ready.pop_back() {
+                self.deferred_ready.push_front(item);
+            }
+        }
+    }
+
+    fn admit_deferred_ready(&mut self) {
+        let limit = self.bounds.ready_work_limit();
+        while self.ready.len() < limit {
+            let Some(item) = self.deferred_ready.pop_front() else {
+                break;
+            };
+            self.ready.push_back(item);
+        }
+    }
+
+    fn admit_deferred_native(&mut self, policy: &AsyncCallPolicy) {
+        let limit = self.bounds.pending_async_limit();
+        while self.pending_native.len() < limit {
+            let Some(deferred) = self.deferred_native.pop_front() else {
+                break;
+            };
+            self.pending_native.push(deferred.activate(policy));
+        }
     }
 
     fn poll_pending_native_once(&mut self, cx: &mut Context<'_>) -> Option<usize> {
@@ -4444,7 +4679,13 @@ impl EvalScheduler {
         for item in &self.ready {
             item.trace_pointers(out);
         }
+        for item in &self.deferred_ready {
+            item.trace_pointers(out);
+        }
         for pending in &self.pending_native {
+            pending.trace_pointers(out);
+        }
+        for pending in &self.deferred_native {
             pending.trace_pointers(out);
         }
     }
@@ -4457,7 +4698,13 @@ impl EvalScheduler {
         for item in &mut self.ready {
             item.refresh_from_roots(roots, cursor)?;
         }
+        for item in &mut self.deferred_ready {
+            item.refresh_from_roots(roots, cursor)?;
+        }
         for pending in &mut self.pending_native {
+            pending.refresh_from_roots(roots, cursor)?;
+        }
+        for pending in &mut self.deferred_native {
             pending.refresh_from_roots(roots, cursor)?;
         }
         Ok(())
@@ -4472,6 +4719,7 @@ async fn poll_pending_native<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
+    scheduler.admit_deferred_native(&runtime.async_call_policy);
     if !scheduler.has_pending_native() {
         return Ok(false);
     }
@@ -4505,6 +4753,7 @@ where
         return Ok(false);
     };
     let (frame, handle) = scheduler.take_pending_native_completion(index)?;
+    scheduler.admit_deferred_native(&runtime.async_call_policy);
     let value = handle.pointer_for_heap(&runtime.heap)?;
     scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
     Ok(true)
@@ -4545,7 +4794,7 @@ where
         runtime
             .heap
             .alloc_ptr_frame(frame_for_expr(initial_parent, root_expr, env.clone()))?;
-    let mut scheduler = EvalScheduler::new(root_frame);
+    let mut scheduler = EvalScheduler::new(root_frame, runtime.execution_bounds);
 
     loop {
         if poll_pending_native(&mut runtime, &mut scheduler, false).await? {
@@ -4611,7 +4860,7 @@ where
                     .heap
                     .alloc_ptr_frame(Frame::NativeAsync(FrNativeAsync { parent: item.frame }))?;
                 refresh_eval_roots(&mut runtime, &mut item, &mut scheduler, &roots)?;
-                scheduler.schedule_pending_native(child, future);
+                scheduler.schedule_pending_native(child, future, &runtime.async_call_policy);
             }
             EvalControl::Return(value) => {
                 let mut frame = runtime.heap.pointer_as_frame(&item.frame)?;

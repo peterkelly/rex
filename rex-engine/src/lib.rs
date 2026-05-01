@@ -16,11 +16,11 @@ mod value;
 
 pub use compiler::Compiler;
 pub use engine::{
-    ClassMethodCapability, ClassMethodRequirement, CompiledExterns, CompiledProgram,
-    CompiledProgramBoundary, Engine, EngineOptions, Export, HostFnAsync, HostFnSync,
-    NativeCapability, NativeFuture, NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode,
-    ROOT_MODULE_NAME, RexAdt, RexDefault, RuntimeCapabilities, RuntimeCompatibility,
-    RuntimeLinkContract, collect_adts_error_to_engine,
+    AsyncCallExecutor, AsyncCallPolicy, ClassMethodCapability, ClassMethodRequirement,
+    CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine, EngineOptions,
+    ExecutionBounds, Export, HostFnAsync, HostFnSync, NativeCapability, NativeFuture,
+    NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault,
+    RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, collect_adts_error_to_engine,
 };
 pub use env::Environment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};

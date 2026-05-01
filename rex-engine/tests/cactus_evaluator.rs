@@ -1,5 +1,8 @@
 use futures::{FutureExt, channel::oneshot};
-use rex_engine::{Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Module, RuntimeEnv};
+use rex_engine::{
+    AsyncCallExecutor, AsyncCallPolicy, Compiler, Engine, EngineError, Evaluator, ExecutionBounds,
+    FromRex, Handle, Module, NativeFuture, RuntimeEnv,
+};
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
 use std::collections::VecDeque;
 use std::sync::{
@@ -43,6 +46,18 @@ struct GateControl {
     started: Arc<AtomicUsize>,
     started_rx: mpsc::Receiver<i32>,
     releases: Vec<oneshot::Sender<()>>,
+}
+
+#[derive(Clone)]
+struct CountingCallExecutor {
+    spawned: Arc<AtomicUsize>,
+}
+
+impl AsyncCallExecutor for CountingCallExecutor {
+    fn spawn(&self, future: NativeFuture) -> NativeFuture {
+        self.spawned.fetch_add(1, Ordering::SeqCst);
+        future
+    }
 }
 
 fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
@@ -233,6 +248,84 @@ async fn application_evaluation_starts_all_async_arguments() {
     )
     .await;
     assert_eq!(started_values, vec![1, 2]);
+    assert_eq!(result, 3);
+}
+
+#[tokio::test]
+async fn async_call_policy_wraps_host_calls() {
+    let spawned = Arc::new(AtomicUsize::new(0));
+    let mut engine = Engine::with_prelude(()).unwrap();
+    engine.set_async_call_policy(AsyncCallPolicy::executor(CountingCallExecutor {
+        spawned: Arc::clone(&spawned),
+    }));
+
+    let mut module = Module::global();
+    module
+        .export_async("bump", |_: &(), value: i32| async move { Ok(value + 1) })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let result = eval_i32("bump 1 + bump 2", engine).await;
+    assert_eq!(result, 5);
+    assert_eq!(spawned.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn small_ready_work_bound_still_completes_fanout() {
+    let mut engine = Engine::with_prelude(()).unwrap();
+    engine.set_execution_bounds(ExecutionBounds::new(1, 64));
+
+    let result = eval_i32(
+        r#"
+        let
+            xs: List i32 = [
+                1, 2, 3, 4, 5, 6, 7, 8,
+                9, 10, 11, 12, 13, 14, 15, 16
+            ],
+            doubled = map (\x -> x * 2) xs
+        in
+            sum doubled
+        "#,
+        engine,
+    )
+    .await;
+    assert_eq!(result, 272);
+}
+
+#[tokio::test]
+async fn pending_async_bound_delays_admitting_host_calls() {
+    let (mut engine, mut gate) = engine_with_gate(2);
+    engine.set_execution_bounds(ExecutionBounds::new(64, 1));
+
+    let eval_task = tokio::spawn(async move { eval_i32("sum [gate 1, gate 2]", engine).await });
+
+    assert!(
+        wait_for_count(&gate.started, 1).await,
+        "evaluation did not start the first gated async call"
+    );
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        gate.started.load(Ordering::SeqCst),
+        1,
+        "second async call started before the pending async bound opened"
+    );
+
+    let first = gate.started_rx.recv().unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    assert!(
+        wait_for_count(&gate.started, 2).await,
+        "evaluation did not start the second gated async call"
+    );
+    let second = gate.started_rx.recv().unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    let result = eval_task.await.expect("gated evaluation task panicked");
+    let mut started = vec![first, second];
+    started.sort();
+    assert_eq!(started, vec![1, 2]);
     assert_eq!(result, 3);
 }
 

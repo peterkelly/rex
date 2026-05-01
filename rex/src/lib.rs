@@ -6,10 +6,11 @@ pub mod json;
 pub use crate::json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json};
 pub use rex_ast::expr::{Decl, Expr, Program, Symbol, intern, sym};
 pub use rex_engine::{
-    ClassMethodCapability, ClassMethodRequirement, CompileError, CompiledExterns, CompiledProgram,
-    CompiledProgramBoundary, Compiler, Engine, EngineError, EngineOptions, EvalError, Evaluator,
-    EvaluatorRef, ExecutionError, Export, FromRex, Handle, Heap, HostFnAsync, HostFnSync, IntoRex,
-    Module, NativeCapability, NativeFuture, NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode,
+    AsyncCallExecutor, AsyncCallPolicy, ClassMethodCapability, ClassMethodRequirement,
+    CompileError, CompiledExterns, CompiledProgram, CompiledProgramBoundary, Compiler, Engine,
+    EngineError, EngineOptions, EvalError, Evaluator, EvaluatorRef, ExecutionBounds,
+    ExecutionError, Export, FromRex, Handle, Heap, HostFnAsync, HostFnSync, IntoRex, Module,
+    NativeCapability, NativeFuture, NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode,
     ROOT_MODULE_NAME, ReplState, ResolveRequest, ResolvedModule, ResolvedModuleContent, RexAdt,
     RexDefault, RexType, RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary,
     RuntimeLinkContract, Value, ValueDisplayOptions, collect_adts_error_to_engine,
