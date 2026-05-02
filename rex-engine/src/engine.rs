@@ -13,7 +13,7 @@ use futures::{
 };
 use rex_ast::expr::{
     ClassDecl, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern, Program, Scope,
-    Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern, sym, sym_eq,
+    Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
 };
 use rex_lexer::span::Span;
 use rex_typesystem::{
@@ -59,7 +59,7 @@ use crate::{
 };
 
 fn runtime_ctor_symbol(name: &Symbol) -> Symbol {
-    intern(name.as_ref().rsplit('.').next().unwrap_or(name.as_ref()))
+    Symbol::intern(name.as_ref().rsplit('.').next().unwrap_or(name.as_ref()))
 }
 
 fn runtime_ctor_matches(actual: &Symbol, expected: &Symbol) -> bool {
@@ -759,7 +759,7 @@ fn declare_fn_decl_from_scheme(export_name: &str, scheme: &Scheme) -> DeclareFnD
         is_pub: true,
         name: Var {
             span: Span::default(),
-            name: intern(export_name),
+            name: Symbol::intern(export_name),
         },
         params: params
             .into_iter()
@@ -768,7 +768,7 @@ fn declare_fn_decl_from_scheme(export_name: &str, scheme: &Scheme) -> DeclareFnD
                 (
                     Var {
                         span: Span::default(),
-                        name: intern(&format!("arg{idx}")),
+                        name: Symbol::intern(&format!("arg{idx}")),
                     },
                     type_expr_from_type(&ty),
                 )
@@ -871,7 +871,7 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
             let name = tv
                 .name
                 .clone()
-                .unwrap_or_else(|| intern(&format!("t{}", tv.id)));
+                .unwrap_or_else(|| Symbol::intern(&format!("t{}", tv.id)));
             TypeExpr::Name(Span::default(), NameRef::Unqualified(name))
         }
         TypeKind::Con(con) => {
@@ -930,7 +930,7 @@ fn module_local_type_names_from_declarations(declarations: &[String]) -> BTreeSe
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
             .collect();
         if !name.is_empty() {
-            out.insert(sym(&name));
+            out.insert(Symbol::intern(&name));
         }
     }
     out
@@ -2971,8 +2971,8 @@ where
     where
         T: RexType + RexDefault<State>,
     {
-        let class = sym("Default");
-        let method = sym("default");
+        let class = Symbol::intern("Default");
+        let method = Symbol::intern("default");
         let head_ty = T::rex_type();
 
         if !self.type_system.class_methods.contains_key(&method) {
@@ -3020,7 +3020,7 @@ where
             Arc::new(TypedExpr::new(
                 head_ty.clone(),
                 TypedExprKind::Var {
-                    name: sym(&native_name),
+                    name: Symbol::intern(&native_name),
                     overloads: vec![],
                 },
             )),
@@ -3075,8 +3075,8 @@ where
     }
 
     pub fn adt_decl(&mut self, name: &str, params: &[&str]) -> AdtDecl {
-        let name_sym = sym(name);
-        let param_syms: Vec<Symbol> = params.iter().map(|p| sym(p)).collect();
+        let name_sym = Symbol::intern(name);
+        let param_syms: Vec<Symbol> = params.iter().map(|p| Symbol::intern(p)).collect();
         AdtDecl::new(&name_sym, &param_syms, &mut self.type_system.supply)
     }
 
@@ -3615,7 +3615,7 @@ where
                         });
                     }
                     if expr.typ.ftv().is_empty()
-                        && !has_native_impl_in_engine(engine, name, &expr.typ)
+                        && !has_native_impl_in_engine(engine, name.as_ref(), &expr.typ)
                     {
                         return Err(EngineError::MissingImpl {
                             name: name.clone(),
@@ -3714,7 +3714,7 @@ fn has_native_impl_in_engine<State>(engine: &Engine<State>, name: &str, typ: &Ty
 where
     State: Clone + Send + Sync + 'static,
 {
-    let sym_name = sym(name);
+    let sym_name = Symbol::intern(name);
     engine
         .natives
         .get(&sym_name)
@@ -3810,10 +3810,10 @@ fn normalize_name(name: &str) -> Symbol {
             .chars()
             .all(|c| !c.is_alphanumeric() && c != '_' && !c.is_whitespace());
         if ok {
-            return sym(stripped);
+            return Symbol::intern(stripped);
         }
     }
-    sym(name)
+    Symbol::intern(name)
 }
 
 fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
@@ -4291,7 +4291,7 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
         Cell::Array(elems) => {
             let first = elems
                 .first()
-                .ok_or_else(|| EngineError::UnknownType(sym("array")))?;
+                .ok_or_else(|| EngineError::UnknownType(Symbol::intern("array")))?;
             let elem_ty = pointer_type(first)?;
             for elem in elems.iter().skip(1) {
                 let ty = pointer_type(elem)?;
@@ -4308,7 +4308,7 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
             let first = map
                 .values()
                 .next()
-                .ok_or_else(|| EngineError::UnknownType(sym("dict")))?;
+                .ok_or_else(|| EngineError::UnknownType(Symbol::intern("dict")))?;
             let elem_ty = pointer_type(first)?;
             for val in map.values().skip(1) {
                 let ty = pointer_type(val)?;
@@ -4321,23 +4321,25 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
             }
             Ok(Type::app(Type::builtin(BuiltinTypeId::Dict), elem_ty))
         }
-        Cell::Adt(tag, args) if sym_eq(tag, "Some") && args.len() == 1 => {
+        Cell::Adt(tag, args) if tag.as_ref() == "Some" && args.len() == 1 => {
             let inner = pointer_type(&args[0])?;
             Ok(Type::app(Type::builtin(BuiltinTypeId::Option), inner))
         }
-        Cell::Adt(tag, args) if sym_eq(tag, "None") && args.is_empty() => {
-            Err(EngineError::UnknownType(sym("option")))
-        }
-        Cell::Adt(tag, args) if (sym_eq(tag, "Ok") || sym_eq(tag, "Err")) && args.len() == 1 => {
-            Err(EngineError::UnknownType(sym("result")))
+        Cell::Adt(tag, args) if tag.as_ref() == "None" && args.is_empty() => {
+            Err(EngineError::UnknownType(Symbol::intern("option")))
         }
         Cell::Adt(tag, args)
-            if (sym_eq(tag, "Empty") || sym_eq(tag, "Cons")) && args.len() <= 2 =>
+            if (tag.as_ref() == "Ok" || tag.as_ref() == "Err") && args.len() == 1 =>
+        {
+            Err(EngineError::UnknownType(Symbol::intern("result")))
+        }
+        Cell::Adt(tag, args)
+            if (tag.as_ref() == "Empty" || tag.as_ref() == "Cons") && args.len() <= 2 =>
         {
             let elems = list_to_vec(heap, cell)?;
             let first = elems
                 .first()
-                .ok_or_else(|| EngineError::UnknownType(sym("list")))?;
+                .ok_or_else(|| EngineError::UnknownType(Symbol::intern("list")))?;
             let elem_ty = pointer_type(first)?;
             for elem in elems.iter().skip(1) {
                 let ty = pointer_type(elem)?;
@@ -4351,11 +4353,11 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
             Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
         }
         Cell::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
-        Cell::Uninitialized(..) => Err(EngineError::UnknownType(sym("uninitialized"))),
-        Cell::Frame(..) => Err(EngineError::UnknownType(sym("frame"))),
-        Cell::Closure(..) => Err(EngineError::UnknownType(sym("closure"))),
-        Cell::Native(..) => Err(EngineError::UnknownType(sym("native"))),
-        Cell::Overloaded(..) => Err(EngineError::UnknownType(sym("overloaded"))),
+        Cell::Uninitialized(..) => Err(EngineError::UnknownType(Symbol::intern("uninitialized"))),
+        Cell::Frame(..) => Err(EngineError::UnknownType(Symbol::intern("frame"))),
+        Cell::Closure(..) => Err(EngineError::UnknownType(Symbol::intern("closure"))),
+        Cell::Native(..) => Err(EngineError::UnknownType(Symbol::intern("native"))),
+        Cell::Overloaded(..) => Err(EngineError::UnknownType(Symbol::intern("overloaded"))),
     }
 }
 
@@ -4398,7 +4400,7 @@ pub(crate) fn synthetic_application_expr(
     func_type: Type,
     args: &[(Pointer, Type)],
 ) -> Result<(Environment, TypedExpr), EngineError> {
-    let func_name = intern("__rex_apply_func");
+    let func_name = Symbol::intern("__rex_apply_func");
     let mut env = Environment::new().extend(func_name.clone(), func);
     let mut expr = TypedExpr::new(
         func_type.clone(),
@@ -4410,7 +4412,7 @@ pub(crate) fn synthetic_application_expr(
     let mut cur_type = func_type;
 
     for (idx, (arg, arg_type)) in args.iter().enumerate() {
-        let arg_name = intern(&format!("__rex_apply_arg_{idx}"));
+        let arg_name = Symbol::intern(&format!("__rex_apply_arg_{idx}"));
         env = env.extend(arg_name.clone(), *arg);
         let arg_expr = TypedExpr::new(
             arg_type.clone(),
@@ -4439,7 +4441,7 @@ fn synthetic_application_expr_from_head(
     let mut cur_type = expr.typ.clone();
 
     for (idx, (arg, arg_type)) in args.iter().enumerate() {
-        let arg_name = intern(&format!("__rex_apply_arg_{idx}"));
+        let arg_name = Symbol::intern(&format!("__rex_apply_arg_{idx}"));
         env = env.extend(arg_name.clone(), *arg);
         let arg_expr = TypedExpr::new(
             arg_type.clone(),
@@ -5488,7 +5490,9 @@ where
     };
     if elems.is_empty() {
         return Ok(EvalControl::Return(
-            runtime.heap.alloc_ptr_adt(sym("Empty"), vec![])?,
+            runtime
+                .heap
+                .alloc_ptr_adt(Symbol::intern("Empty"), vec![])?,
         ));
     }
 
@@ -6349,8 +6353,10 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match value {
-        Some(value) => runtime.heap.alloc_ptr_adt(sym("Some"), vec![value]),
-        None => runtime.heap.alloc_ptr_adt(sym("None"), vec![]),
+        Some(value) => runtime
+            .heap
+            .alloc_ptr_adt(Symbol::intern("Some"), vec![value]),
+        None => runtime.heap.alloc_ptr_adt(Symbol::intern("None"), vec![]),
     }
 }
 
@@ -6362,8 +6368,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match value {
-        Ok(value) => runtime.heap.alloc_ptr_adt(sym("Ok"), vec![value]),
-        Err(value) => runtime.heap.alloc_ptr_adt(sym("Err"), vec![value]),
+        Ok(value) => runtime
+            .heap
+            .alloc_ptr_adt(Symbol::intern("Ok"), vec![value]),
+        Err(value) => runtime
+            .heap
+            .alloc_ptr_adt(Symbol::intern("Err"), vec![value]),
     }
 }
 
@@ -6375,9 +6385,9 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let (tag, args) = runtime.heap.pointer_as_adt(&pointer)?;
-    if sym_eq(&tag, "Some") && args.len() == 1 {
+    if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0]))
-    } else if sym_eq(&tag, "None") && args.is_empty() {
+    } else if tag.as_ref() == "None" && args.is_empty() {
         Ok(None)
     } else {
         Err(EngineError::NativeType {
@@ -6395,9 +6405,9 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let (tag, args) = runtime.heap.pointer_as_adt(&pointer)?;
-    if sym_eq(&tag, "Ok") && args.len() == 1 {
+    if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0]))
-    } else if sym_eq(&tag, "Err") && args.len() == 1 {
+    } else if tag.as_ref() == "Err" && args.len() == 1 {
         Ok(Err(args[0]))
     } else {
         Err(EngineError::NativeType {
@@ -6429,7 +6439,8 @@ fn overloaded_pointer<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let (name, typ, applied, applied_types) = OverloadedFn::new(sym(name), typ).into_parts();
+    let (name, typ, applied, applied_types) =
+        OverloadedFn::new(Symbol::intern(name), typ).into_parts();
     runtime
         .heap
         .alloc_ptr_overloaded(name, typ, applied, applied_types)
@@ -6448,8 +6459,8 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match elem_ty.as_ref() {
-        TypeKind::Con(c) if sym_eq(&c.name, "f32") => runtime.heap.alloc_ptr_f32(len as f32),
-        TypeKind::Con(c) if sym_eq(&c.name, "f64") => runtime.heap.alloc_ptr_f64(len as f64),
+        TypeKind::Con(c) if c.name.as_ref() == "f32" => runtime.heap.alloc_ptr_f32(len as f32),
+        TypeKind::Con(c) if c.name.as_ref() == "f64" => runtime.heap.alloc_ptr_f64(len as f64),
         _ => Err(EngineError::NativeType {
             expected: "f32 or f64".into(),
             got: elem_ty.to_string(),
@@ -6986,7 +6997,10 @@ where
     State: Clone + Send + Sync + 'static,
 {
     if task.values.is_empty() {
-        return Ok(native_eval_var_step(sym("zero"), task.elem_type.clone()));
+        return Ok(native_eval_var_step(
+            Symbol::intern("zero"),
+            task.elem_type.clone(),
+        ));
     }
     task.acc = Some(task.values[0]);
     task.next_index = 1;
@@ -7659,7 +7673,7 @@ fn match_pattern_ptr_with_access(
         Pattern::Cons(_, head, tail) => {
             let v = heap.get(value).ok()?;
             match v {
-                Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
+                Cell::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
                     let mut left = match_pattern_ptr_with_access(heap, head, &args[0])?;
                     let right = match_pattern_ptr_with_access(heap, tail, &args[1])?;
                     left.extend(right);

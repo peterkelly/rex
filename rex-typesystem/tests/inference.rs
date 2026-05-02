@@ -1,4 +1,4 @@
-use rex_ast::expr::{Decl, Expr, Program, sym};
+use rex_ast::expr::{Decl, Expr, Program, Symbol};
 use rex_lexer::{Token, span::Span};
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -13,7 +13,7 @@ use rex_typesystem::{
 };
 use std::sync::Arc;
 fn tvar(id: TypeVarId, name: &str) -> Type {
-    Type::var(TypeVar::new(id, Some(sym(name))))
+    Type::var(TypeVar::new(id, Some(Symbol::intern(name))))
 }
 
 fn dict_of(elem: Type) -> Type {
@@ -31,7 +31,7 @@ fn unify_simple() {
 
 #[test]
 fn occurs_check_blocks_infinite_type() {
-    let tv = TypeVar::new(0, Some(sym("a")));
+    let tv = TypeVar::new(0, Some(Symbol::intern("a")));
     let t = Type::fun(Type::var(tv.clone()), Type::builtin(BuiltinTypeId::U8));
     let err = unify(&Type::var(tv), &t).unwrap_err();
     assert!(matches!(err, TypeError::Occurs(_, _)));
@@ -40,7 +40,7 @@ fn occurs_check_blocks_infinite_type() {
 #[test]
 fn instantiate_and_generalize_round_trip() {
     let mut supply = TypeVarSupply::new();
-    let a = Type::var(supply.fresh(Some(sym("a"))));
+    let a = Type::var(supply.fresh(Some(Symbol::intern("a"))));
     let scheme = generalize(&TypeEnv::new(), vec![], Type::fun(a.clone(), a.clone()));
     let (preds, inst) = instantiate(&scheme, &mut supply);
     assert!(preds.is_empty());
@@ -78,8 +78,8 @@ fn entail_instances() {
 #[test]
 fn prelude_injects_functions() {
     let ts = TypeSystem::new_with_prelude().unwrap();
-    let minus = ts.env.lookup(&sym("-")).expect("minus in env");
-    let div = ts.env.lookup(&sym("/")).expect("div in env");
+    let minus = ts.env.lookup(&Symbol::intern("-")).expect("minus in env");
+    let div = ts.env.lookup(&Symbol::intern("/")).expect("div in env");
     assert_eq!(minus.len(), 1);
     assert_eq!(div.len(), 1);
     let minus = &minus[0];
@@ -93,12 +93,12 @@ fn prelude_injects_functions() {
 #[test]
 fn adt_constructors_are_present() {
     let ts = TypeSystem::new_with_prelude().unwrap();
-    assert!(ts.env.lookup(&sym("Empty")).is_some());
-    assert!(ts.env.lookup(&sym("Cons")).is_some());
-    assert!(ts.env.lookup(&sym("Ok")).is_some());
-    assert!(ts.env.lookup(&sym("Err")).is_some());
-    assert!(ts.env.lookup(&sym("Some")).is_some());
-    assert!(ts.env.lookup(&sym("None")).is_some());
+    assert!(ts.env.lookup(&Symbol::intern("Empty")).is_some());
+    assert!(ts.env.lookup(&Symbol::intern("Cons")).is_some());
+    assert!(ts.env.lookup(&Symbol::intern("Ok")).is_some());
+    assert!(ts.env.lookup(&Symbol::intern("Err")).is_some());
+    assert!(ts.env.lookup(&Symbol::intern("Some")).is_some());
+    assert!(ts.env.lookup(&Symbol::intern("None")).is_some());
 }
 
 fn parse_expr(code: &str) -> Arc<Expr> {
@@ -174,7 +174,7 @@ fn collect_adts_in_types_rejects_conflicting_names() {
     let err = collect_adts_in_types(vec![arity1.clone(), arity2.clone()]).unwrap_err();
     assert_eq!(err.conflicts.len(), 1);
     let conflict = &err.conflicts[0];
-    assert_eq!(conflict.name, sym("Thing"));
+    assert_eq!(conflict.name, Symbol::intern("Thing"));
     assert_eq!(conflict.definitions, vec![arity1, arity2]);
 }
 
@@ -885,12 +885,12 @@ fn infer_unknown_pattern_constructor_error() {
 #[test]
 fn infer_ambiguous_overload_error() {
     let mut ts = TypeSystem::new();
-    let a = TypeVar::new(0, Some(sym("a")));
-    let b = TypeVar::new(1, Some(sym("b")));
+    let a = TypeVar::new(0, Some(Symbol::intern("a")));
+    let b = TypeVar::new(1, Some(Symbol::intern("b")));
     let scheme_a = Scheme::new(vec![a.clone()], vec![], Type::var(a));
     let scheme_b = Scheme::new(vec![b.clone()], vec![], Type::var(b));
-    ts.add_overload(sym("dup"), scheme_a);
-    ts.add_overload(sym("dup"), scheme_b);
+    ts.add_overload(Symbol::intern("dup"), scheme_a);
+    ts.add_overload(Symbol::intern("dup"), scheme_b);
     let expr = parse_expr("dup");
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(
@@ -1066,7 +1066,7 @@ fn infer_non_exhaustive_option_match_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
-            assert_eq!(missing, vec![sym("None")]);
+            assert_eq!(missing, vec![Symbol::intern("None")]);
         }
         other => panic!("expected non-exhaustive match, got {other:?}"),
     }
@@ -1079,7 +1079,7 @@ fn infer_non_exhaustive_result_match_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
-            assert_eq!(missing, vec![sym("Err")]);
+            assert_eq!(missing, vec![Symbol::intern("Err")]);
         }
         other => panic!("expected non-exhaustive match, got {other:?}"),
     }
@@ -1092,7 +1092,7 @@ fn infer_non_exhaustive_list_missing_empty_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
-            assert_eq!(missing, vec![sym("Empty")]);
+            assert_eq!(missing, vec![Symbol::intern("Empty")]);
         }
         other => panic!("expected non-exhaustive match, got {other:?}"),
     }
@@ -1113,7 +1113,7 @@ fn infer_non_exhaustive_list_missing_cons_error() {
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
-            assert_eq!(missing, vec![sym("Cons")]);
+            assert_eq!(missing, vec![Symbol::intern("Cons")]);
         }
         other => panic!("expected non-exhaustive match, got {other:?}"),
     }

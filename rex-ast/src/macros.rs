@@ -131,7 +131,7 @@ macro_rules! d {
     ($($k:ident = $v:expr),* $(,)?) => {
         ::std::sync::Arc::new($crate::expr::Expr::Dict(::rex_lexer::Span::default(), {
             let mut map = ::std::collections::BTreeMap::new();
-            $(map.insert($crate::expr::intern(stringify!($k)), $v);)*
+            $(map.insert($crate::expr::Symbol::intern(stringify!($k)), $v);)*
             map
         }))
     };
@@ -139,7 +139,7 @@ macro_rules! d {
     ($span:expr; $($k:ident = $v:expr),* $(,)?) => {
         ::std::sync::Arc::new($crate::expr::Expr::Dict(($span).into(), {
             let mut map = ::std::collections::BTreeMap::new();
-            $(map.insert($crate::expr::intern(stringify!($k)), $v);)*
+            $(map.insert($crate::expr::Symbol::intern(stringify!($k)), $v);)*
             map
         }))
     };
@@ -147,7 +147,7 @@ macro_rules! d {
     ($id:expr, $span:expr; $($k:ident = $v:expr),* $(,)?) => {
         ::std::sync::Arc::new($crate::expr::Expr::Dict(($id).into(), ($span).into(), {
             let mut map = ::std::collections::BTreeMap::new();
-            $(map.insert($crate::expr::intern(stringify!($k)), $v);)*
+            $(map.insert($crate::expr::Symbol::intern(stringify!($k)), $v);)*
             map
         }))
     };
@@ -158,14 +158,14 @@ macro_rules! v {
     ($x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {
             span: ::rex_lexer::Span::default(),
-            name: $crate::expr::intern(&($x).to_string()),
+            name: $crate::expr::Symbol::intern(&($x).to_string()),
         }))
     };
 
     ($span:expr; $x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {
             span: ($span).into(),
-            name: $crate::expr::intern(&($x).to_string()),
+            name: $crate::expr::Symbol::intern(&($x).to_string()),
         }))
     };
 
@@ -173,7 +173,7 @@ macro_rules! v {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {
             id: ($id).into(),
             span: ($span).into(),
-            name: $crate::expr::intern(&($x).to_string()),
+            name: $crate::expr::Symbol::intern(&($x).to_string()),
         }))
     };
 }

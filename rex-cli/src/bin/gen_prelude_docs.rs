@@ -264,7 +264,7 @@ fn build_classes(
     for (class_name, methods) in methods_by_class {
         let info = ts
             .class_info
-            .get(&Symbol::from(class_name.as_str()))
+            .get(&Symbol::intern(class_name.as_str()))
             .ok_or_else(|| format!("missing class info for `{class_name}`"))?;
         let supers = info.supers.iter().map(ToString::to_string).collect();
         out.push(ClassDoc {
@@ -324,7 +324,7 @@ fn build_functions(
         let Some(class_name) = class_for_method.get(&method_name).cloned() else {
             continue;
         };
-        let method_sym = Symbol::from(method_name.as_str());
+        let method_sym = Symbol::intern(method_name.as_str());
         let signatures = ts
             .env
             .lookup(&method_sym)
@@ -335,7 +335,7 @@ fn build_functions(
         let implemented_on = ts
             .classes
             .instances
-            .get(&Symbol::from(class_name.as_str()))
+            .get(&Symbol::intern(class_name.as_str()))
             .cloned()
             .unwrap_or_default()
             .iter()
@@ -366,10 +366,10 @@ fn build_functions(
     other_names.sort();
 
     for name in other_names {
-        let sym = Symbol::from(name.as_str());
+        let name_sym = Symbol::intern(name.as_str());
         let signatures = ts
             .env
-            .lookup(&sym)
+            .lookup(&name_sym)
             .unwrap_or_default()
             .iter()
             .map(format_scheme)

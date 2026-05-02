@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use rex_ast::expr::{Decl, Program, Symbol, intern};
+use rex_ast::expr::{Decl, Program, Symbol};
 use rex_typesystem::types::Type;
 
 use crate::Handle;
@@ -68,7 +68,7 @@ pub struct CanonicalSymbol {
 
 impl CanonicalSymbol {
     pub fn new(module: ModuleKey, kind: SymbolKind, local: Symbol) -> Self {
-        let symbol = intern(&format!(
+        let symbol = Symbol::intern(&format!(
             "{}.{}",
             prefix_for_module_key(module),
             local.as_ref()
@@ -265,13 +265,13 @@ pub(crate) fn prefix_for_module(id: &ModuleId) -> String {
 }
 
 pub(crate) fn qualify(prefix: &str, name: &Symbol) -> Symbol {
-    intern(&format!("{prefix}.{}", name.as_ref()))
+    Symbol::intern(&format!("{prefix}.{}", name.as_ref()))
 }
 
 pub fn virtual_export_name(module: &str, export: &str) -> String {
     let id = ModuleId::Virtual(module.to_string());
     let key = module_key_for_module(&id);
-    CanonicalSymbol::new(key, SymbolKind::Value, intern(export))
+    CanonicalSymbol::new(key, SymbolKind::Value, Symbol::intern(export))
         .symbol()
         .to_string()
 }

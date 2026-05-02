@@ -1,6 +1,6 @@
 use rex::{
     Rex,
-    ast::{intern, sym},
+    ast::Symbol,
     engine::{
         Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module, RexAdt,
         RexType, RuntimeEnv, Value,
@@ -302,7 +302,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     assert_eq!(adt.params.len(), 1);
 
     let t = adt
-        .param_type(&intern("T"))
+        .param_type(&Symbol::intern("T"))
         .expect("expected `T` param type");
 
     let just = adt
@@ -580,10 +580,30 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
     let mut engine = Engine::with_prelude(()).unwrap();
     RootNode::inject_rex(&mut engine).unwrap();
 
-    assert!(engine.type_system.adts.contains_key(&sym("SharedLeaf")));
-    assert!(engine.type_system.adts.contains_key(&sym("LeftBranch")));
-    assert!(engine.type_system.adts.contains_key(&sym("RightBranch")));
-    assert!(engine.type_system.adts.contains_key(&sym("RootNode")));
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&Symbol::intern("SharedLeaf"))
+    );
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&Symbol::intern("LeftBranch"))
+    );
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&Symbol::intern("RightBranch"))
+    );
+    assert!(
+        engine
+            .type_system
+            .adts
+            .contains_key(&Symbol::intern("RootNode"))
+    );
 
     let tokens = Token::tokenize(
         r#"
@@ -635,7 +655,7 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
         assert_eq!(
             adt.variants[0].args,
             vec![Type::record(vec![(
-                intern("values"),
+                Symbol::intern("values"),
                 Type::array(Type::builtin(BuiltinTypeId::I32)),
             )])]
         );
@@ -655,7 +675,7 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
             panic!("expected record payload");
         };
         let array_handle = fields
-            .get(&intern("values"))
+            .get(&Symbol::intern("values"))
             .expect("expected `values` field");
         let Value::Array(array_items) = array_handle.value().unwrap() else {
             panic!("expected array field");
@@ -668,10 +688,10 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
         assert_eq!(actual, expected);
 
         let mut fields = std::collections::BTreeMap::new();
-        fields.insert(intern("values"), array_from_values(&heap, expected));
+        fields.insert(Symbol::intern("values"), array_from_values(&heap, expected));
         let handle = heap
             .alloc_adt(
-                intern("VecFieldSnapshot"),
+                Symbol::intern("VecFieldSnapshot"),
                 vec![heap.alloc_dict(fields).unwrap()],
             )
             .unwrap();

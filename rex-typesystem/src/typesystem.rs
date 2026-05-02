@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
-    Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, sym,
+    Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr,
 };
 use rex_lexer::span::Span;
 
@@ -399,19 +399,20 @@ impl TypeSystem {
     }
 
     pub fn add_value(&mut self, name: impl AsRef<str>, scheme: Scheme) {
-        let name = sym(name.as_ref());
+        let name = Symbol::intern(name.as_ref());
         self.declared_values.remove(&name);
         self.env.extend(name, scheme);
     }
 
     pub fn add_overload(&mut self, name: impl AsRef<str>, scheme: Scheme) {
-        let name = sym(name.as_ref());
+        let name = Symbol::intern(name.as_ref());
         self.declared_values.remove(&name);
         self.env.extend_overload(name, scheme);
     }
 
     pub fn register_instance(&mut self, class: impl AsRef<str>, inst: Instance) {
-        self.classes.add_instance(sym(class.as_ref()), inst);
+        self.classes
+            .add_instance(Symbol::intern(class.as_ref()), inst);
     }
 
     pub fn register_class_decl(&mut self, decl: &ClassDecl) -> Result<(), TypeError> {
@@ -1220,6 +1221,7 @@ pub(crate) fn type_from_annotation_expr_vars(
                 Ok(Type::var(tv.clone()))
             } else {
                 let is_upper = name
+                    .as_ref()
                     .chars()
                     .next()
                     .map(|c| c.is_uppercase())

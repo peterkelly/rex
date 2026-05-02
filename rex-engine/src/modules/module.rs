@@ -1,4 +1,4 @@
-use rex_ast::expr::{Decl, NameRef, TypeDecl, TypeExpr, TypeVariant, intern, sym};
+use rex_ast::expr::{Decl, NameRef, Symbol, TypeDecl, TypeExpr, TypeVariant};
 use rex_lexer::span::Span;
 use rex_typesystem::{
     types::collect_adts_in_types,
@@ -120,7 +120,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     fn tracing_log_scheme() -> Scheme {
-        let a_tv = TypeVar::new(0, Some(sym("a")));
+        let a_tv = TypeVar::new(0, Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         Scheme::new(
             vec![a_tv],
@@ -401,7 +401,7 @@ where
         log: fn(&str),
     ) -> Result<(), EngineError> {
         let name = name.into();
-        let name_sym = sym(&name);
+        let name_sym = Symbol::intern(&name);
         let scheme = Self::tracing_log_scheme();
         self.exports.push(Export::from_native_scheduler(
             name,
@@ -564,7 +564,7 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
             let name = tv
                 .name
                 .clone()
-                .unwrap_or_else(|| intern(&format!("t{}", tv.id)));
+                .unwrap_or_else(|| Symbol::intern(&format!("t{}", tv.id)));
             TypeExpr::Name(Span::default(), NameRef::Unqualified(name))
         }
         TypeKind::Con(con) => {

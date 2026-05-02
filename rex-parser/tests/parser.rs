@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rex_ast::{
     app, assert_expr_eq, b, d,
-    expr::{Decl, Expr, ImportClause, ImportPath, Pattern, Scope, TypeExpr, Var, intern},
+    expr::{Decl, Expr, ImportClause, ImportPath, NameRef, Pattern, Scope, Symbol, TypeExpr, Var},
     f, l, s, tup, u, v,
 };
 use rex_lexer::{Token, span, span::Span};
@@ -180,18 +180,25 @@ fn test_parse_type_decl() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Type(decl) => {
-            assert_eq!(decl.name, intern("MyADT"));
-            assert_eq!(decl.params, vec![intern("a"), intern("b"), intern("c")]);
+            assert_eq!(decl.name, Symbol::intern("MyADT"));
+            assert_eq!(
+                decl.params,
+                vec![
+                    Symbol::intern("a"),
+                    Symbol::intern("b"),
+                    Symbol::intern("c")
+                ]
+            );
             assert_eq!(decl.variants.len(), 3);
-            assert_eq!(decl.variants[0].name, intern("MyCtor1"));
+            assert_eq!(decl.variants[0].name, Symbol::intern("MyCtor1"));
             assert!(decl.variants[0].args.is_empty());
-            assert_eq!(decl.variants[1].name, intern("MyCtor2"));
+            assert_eq!(decl.variants[1].name, Symbol::intern("MyCtor2"));
             assert_eq!(decl.variants[1].args.len(), 2);
-            assert_eq!(decl.variants[2].name, intern("MyCtor3"));
+            assert_eq!(decl.variants[2].name, Symbol::intern("MyCtor3"));
             match &decl.variants[2].args[0] {
                 TypeExpr::Record(_, fields) => {
                     assert_eq!(fields.len(), 1);
-                    assert_eq!(fields[0].0, intern("field1"));
+                    assert_eq!(fields[0].0, Symbol::intern("field1"));
                     assert!(matches!(
                         fields[0].1,
                         TypeExpr::Name(_, ref n) if n.as_ref() == "c"
@@ -216,14 +223,14 @@ fn test_parse_fn_decl_simple() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("add"));
+            assert_eq!(fd.name.name, Symbol::intern("add"));
             assert_eq!(fd.params.len(), 2);
-            assert_eq!(fd.params[0].0.name, intern("x"));
+            assert_eq!(fd.params[0].0.name, Symbol::intern("x"));
             assert!(matches!(
                 fd.params[0].1,
                 TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
             ));
-            assert_eq!(fd.params[1].0.name, intern("y"));
+            assert_eq!(fd.params[1].0.name, Symbol::intern("y"));
             assert!(matches!(
                 fd.params[1].1,
                 TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
@@ -246,14 +253,14 @@ fn test_parse_fn_decl_signature_form_with_lambda_body() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("add"));
+            assert_eq!(fd.name.name, Symbol::intern("add"));
             assert_eq!(fd.params.len(), 2);
-            assert_eq!(fd.params[0].0.name, intern("x"));
+            assert_eq!(fd.params[0].0.name, Symbol::intern("x"));
             assert!(matches!(
                 fd.params[0].1,
                 TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
             ));
-            assert_eq!(fd.params[1].0.name, intern("y"));
+            assert_eq!(fd.params[1].0.name, Symbol::intern("y"));
             assert!(matches!(
                 fd.params[1].1,
                 TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
@@ -278,9 +285,9 @@ fn test_parse_fn_sig_multiline_lambda() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("f"));
+            assert_eq!(fd.name.name, Symbol::intern("f"));
             assert_eq!(fd.params.len(), 1);
-            assert_eq!(fd.params[0].0.name, intern("x"));
+            assert_eq!(fd.params[0].0.name, Symbol::intern("x"));
             assert!(matches!(
                 fd.params[0].1,
                 TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
@@ -302,9 +309,9 @@ fn test_parse_fn_decl_signature_form_eta_expands_non_lambda_body() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("inc"));
+            assert_eq!(fd.name.name, Symbol::intern("inc"));
             assert_eq!(fd.params.len(), 1);
-            assert_eq!(fd.params[0].0.name, intern("_arg0"));
+            assert_eq!(fd.params[0].0.name, Symbol::intern("_arg0"));
             assert!(matches!(
                 fd.params[0].1,
                 TypeExpr::Name(_, ref n) if n.as_ref() == "i32"
@@ -326,7 +333,7 @@ fn test_parse_fn_decl_signature_form_where_constraints() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("my_fun"));
+            assert_eq!(fd.name.name, Symbol::intern("my_fun"));
             assert_eq!(fd.params.len(), 2);
             assert!(matches!(
                 fd.constraints[0].class,
@@ -358,7 +365,7 @@ fn test_parse_fn_decl_where_constraints() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("my_fun"));
+            assert_eq!(fd.name.name, Symbol::intern("my_fun"));
             assert_eq!(fd.params.len(), 2);
             assert!(matches!(
                 fd.constraints[0].class,
@@ -388,7 +395,7 @@ fn test_parse_declare_fn_decl_where_constraints() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
-            assert_eq!(fd.name.name, intern("my_fun"));
+            assert_eq!(fd.name.name, Symbol::intern("my_fun"));
             assert_eq!(fd.params.len(), 2);
             assert!(matches!(
                 fd.constraints[0].class,
@@ -419,7 +426,7 @@ fn test_parse_declare_fn_decl_bare_signature() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
-            assert_eq!(fd.name.name, intern("info"));
+            assert_eq!(fd.name.name, Symbol::intern("info"));
             assert_eq!(fd.params.len(), 1);
             assert!(matches!(
                 fd.params[0].1,
@@ -450,7 +457,7 @@ fn test_parse_declare_fn_decl_bare_signature_with_colon() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
-            assert_eq!(fd.name.name, intern("info"));
+            assert_eq!(fd.name.name, Symbol::intern("info"));
             assert_eq!(fd.params.len(), 1);
             assert!(matches!(
                 fd.params[0].1,
@@ -491,11 +498,11 @@ fn test_parse_fn_decl_param_fun_type_requires_parens() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("apply"));
+            assert_eq!(fd.name.name, Symbol::intern("apply"));
             assert_eq!(fd.params.len(), 2);
-            assert_eq!(fd.params[0].0.name, intern("x"));
+            assert_eq!(fd.params[0].0.name, Symbol::intern("x"));
             assert!(matches!(fd.params[0].1, TypeExpr::Fun(_, _, _)));
-            assert_eq!(fd.params[1].0.name, intern("y"));
+            assert_eq!(fd.params[1].0.name, Symbol::intern("y"));
             assert!(matches!(
                 fd.params[1].1,
                 TypeExpr::Name(_, ref n) if n.as_ref() == "a"
@@ -517,11 +524,11 @@ fn test_parse_fn_decl_parenthesized_params_allow_fun_types() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("reduce"));
+            assert_eq!(fd.name.name, Symbol::intern("reduce"));
             assert_eq!(fd.params.len(), 2);
-            assert_eq!(fd.params[0].0.name, intern("f"));
+            assert_eq!(fd.params[0].0.name, Symbol::intern("f"));
             assert!(matches!(fd.params[0].1, TypeExpr::Fun(..)));
-            assert_eq!(fd.params[1].0.name, intern("x"));
+            assert_eq!(fd.params[1].0.name, Symbol::intern("x"));
             assert!(matches!(fd.params[1].1, TypeExpr::App(..)));
             assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "a"));
         }
@@ -550,7 +557,7 @@ fn test_parse_unit_type() {
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
-            assert_eq!(fd.name.name, intern("unit_id"));
+            assert_eq!(fd.name.name, Symbol::intern("unit_id"));
             assert_eq!(fd.params.len(), 1);
             assert!(matches!(fd.params[0].1, TypeExpr::Tuple(_, ref xs) if xs.is_empty()));
             assert!(matches!(fd.ret, TypeExpr::Tuple(_, ref xs) if xs.is_empty()));
@@ -650,7 +657,11 @@ fn test_application_associativity() {
 #[test]
 fn test_projection_expr() {
     let expr = parse("x.field");
-    let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("field")));
+    let expected = Arc::new(Expr::Project(
+        Span::default(),
+        v!("x"),
+        Symbol::intern("field"),
+    ));
 
     assert_expr_eq!(expr, expected; ignore span);
 }
@@ -658,7 +669,7 @@ fn test_projection_expr() {
 #[test]
 fn test_projection_tuple_index_expr() {
     let expr = parse("x.0");
-    let expected = Arc::new(Expr::Project(Span::default(), v!("x"), intern("0")));
+    let expected = Arc::new(Expr::Project(Span::default(), v!("x"), Symbol::intern("0")));
 
     assert_expr_eq!(expr, expected; ignore span);
 }
@@ -674,7 +685,7 @@ fn test_projection_binds_tighter_than_application() {
     let expr = parse("show p.x");
     let expected = app!(
         v!("show"),
-        Arc::new(Expr::Project(Span::default(), v!("p"), intern("x")))
+        Arc::new(Expr::Project(Span::default(), v!("p"), Symbol::intern("x")))
     );
     assert_expr_eq!(expr, expected; ignore span);
 }
@@ -683,7 +694,11 @@ fn test_projection_binds_tighter_than_application() {
 fn test_projection_can_be_applied_without_parens() {
     let expr = parse("x.field y");
     let expected = app!(
-        Arc::new(Expr::Project(Span::default(), v!("x"), intern("field"))),
+        Arc::new(Expr::Project(
+            Span::default(),
+            v!("x"),
+            Symbol::intern("field")
+        )),
         v!("y")
     );
     assert_expr_eq!(expr, expected; ignore span);
@@ -742,8 +757,8 @@ fn test_record_update_expr() {
     match expr.as_ref() {
         Expr::RecordUpdate(_, base, updates) => {
             assert_expr_eq!(base.clone(), v!("foo"); ignore span);
-            assert_expr_eq!(updates.get(&intern("x")).unwrap().clone(), u!(1); ignore span);
-            assert_expr_eq!(updates.get(&intern("y")).unwrap().clone(), u!(2); ignore span);
+            assert_expr_eq!(updates.get(&Symbol::intern("x")).unwrap().clone(), u!(1); ignore span);
+            assert_expr_eq!(updates.get(&Symbol::intern("y")).unwrap().clone(), u!(2); ignore span);
         }
         other => panic!("expected record update, got {other:?}"),
     }
@@ -755,7 +770,7 @@ fn test_brace_expr_prefers_dict_literal() {
     match expr.as_ref() {
         Expr::Dict(_, kvs) => {
             assert_eq!(kvs.len(), 1);
-            assert_expr_eq!(kvs.get(&intern("foo")).unwrap().clone(), u!(1); ignore span);
+            assert_expr_eq!(kvs.get(&Symbol::intern("foo")).unwrap().clone(), u!(1); ignore span);
         }
         other => panic!("expected dict literal, got {other:?}"),
     }
@@ -941,7 +956,7 @@ fn test_match_named_patterns() {
             (
                 Pattern::Named(
                     Span::default(),
-                    "Ok".into(),
+                    NameRef::from("Ok"),
                     vec![Pattern::Var(Var::new("x"))],
                 ),
                 v!("x"),
@@ -949,7 +964,7 @@ fn test_match_named_patterns() {
             (
                 Pattern::Named(
                     Span::default(),
-                    "Err".into(),
+                    NameRef::from("Err"),
                     vec![Pattern::Var(Var::new("e"))],
                 ),
                 v!("e"),
@@ -1011,12 +1026,12 @@ fn test_match_nested_patterns() {
             (
                 Pattern::Named(
                     Span::default(),
-                    "Cons".into(),
+                    NameRef::from("Cons"),
                     vec![
                         Pattern::Var(Var::new("x")),
                         Pattern::Named(
                             Span::default(),
-                            "Cons".into(),
+                            NameRef::from("Cons"),
                             vec![
                                 Pattern::Wildcard(Span::default()),
                                 Pattern::Var(Var::new("xs")),
@@ -1029,16 +1044,16 @@ fn test_match_nested_patterns() {
             (
                 Pattern::Named(
                     Span::default(),
-                    "Pair".into(),
+                    NameRef::from("Pair"),
                     vec![
                         Pattern::Named(
                             Span::default(),
-                            "Just".into(),
+                            NameRef::from("Just"),
                             vec![Pattern::Var(Var::new("a"))],
                         ),
                         Pattern::Named(
                             Span::default(),
-                            "Just".into(),
+                            NameRef::from("Just"),
                             vec![Pattern::Var(Var::new("b"))],
                         ),
                     ],
@@ -1061,8 +1076,8 @@ fn test_match_dict_pattern() {
             Pattern::Dict(
                 Span::default(),
                 vec![
-                    ("foo".into(), Pattern::Var(Var::new("foo"))),
-                    ("bar".into(), Pattern::Var(Var::new("bar"))),
+                    (Symbol::intern("foo"), Pattern::Var(Var::new("foo"))),
+                    (Symbol::intern("bar"), Pattern::Var(Var::new("bar"))),
                 ],
             ),
             app!(v!("foo"), v!("bar")),
@@ -1134,7 +1149,7 @@ fn test_import_clause_all() {
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
-    assert_eq!(import.alias, intern("bar"));
+    assert_eq!(import.alias, Symbol::intern("bar"));
     assert!(matches!(import.clause, Some(ImportClause::All)));
 }
 
@@ -1146,15 +1161,15 @@ fn test_import_clause_items_with_alias() {
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
-    assert_eq!(import.alias, intern("bar"));
+    assert_eq!(import.alias, Symbol::intern("bar"));
     let Some(ImportClause::Items(items)) = &import.clause else {
         panic!("expected import items");
     };
     assert_eq!(items.len(), 2);
-    assert_eq!(items[0].name, intern("x"));
+    assert_eq!(items[0].name, Symbol::intern("x"));
     assert_eq!(items[0].alias, None);
-    assert_eq!(items[1].name, intern("y"));
-    assert_eq!(items[1].alias, Some(intern("z")));
+    assert_eq!(items[1].name, Symbol::intern("y"));
+    assert_eq!(items[1].alias, Some(Symbol::intern("z")));
 }
 
 #[test]
@@ -1187,12 +1202,15 @@ fn test_import_relative_current_dir_path() {
     };
     match &import.path {
         ImportPath::Local { segments, sha } => {
-            assert_eq!(segments, &vec![intern("foo"), intern("bar")]);
+            assert_eq!(
+                segments,
+                &vec![Symbol::intern("foo"), Symbol::intern("bar")]
+            );
             assert_eq!(sha, &None);
         }
         other => panic!("expected local import path, got {other:?}"),
     }
-    assert_eq!(import.alias, intern("bar"));
+    assert_eq!(import.alias, Symbol::intern("bar"));
 }
 
 #[test]
@@ -1208,17 +1226,17 @@ fn test_import_relative_parent_dir_path() {
             assert_eq!(
                 segments,
                 &vec![
-                    intern("super"),
-                    intern("super"),
-                    intern("foo"),
-                    intern("bar")
+                    Symbol::intern("super"),
+                    Symbol::intern("super"),
+                    Symbol::intern("foo"),
+                    Symbol::intern("bar")
                 ]
             );
             assert_eq!(sha, &None);
         }
         other => panic!("expected local import path, got {other:?}"),
     }
-    assert_eq!(import.alias, intern("FB"));
+    assert_eq!(import.alias, Symbol::intern("FB"));
 }
 
 #[test]
@@ -1299,18 +1317,18 @@ default
 
     match &program.decls[0] {
         Decl::Class(decl) => {
-            assert_eq!(decl.name, intern("Default"));
+            assert_eq!(decl.name, Symbol::intern("Default"));
             assert_eq!(decl.methods.len(), 1);
-            assert_eq!(decl.methods[0].name, intern("default"));
+            assert_eq!(decl.methods[0].name, Symbol::intern("default"));
         }
         other => panic!("expected class decl, got {other:?}"),
     }
 
     match &program.decls[1] {
         Decl::Instance(decl) => {
-            assert_eq!(decl.class, intern("Default"));
+            assert_eq!(decl.class, Symbol::intern("Default"));
             assert_eq!(decl.methods.len(), 1);
-            assert_eq!(decl.methods[0].name, intern("default"));
+            assert_eq!(decl.methods[0].name, Symbol::intern("default"));
         }
         other => panic!("expected instance decl, got {other:?}"),
     }
@@ -1350,9 +1368,9 @@ default
     let Decl::Instance(decl) = &program.decls[0] else {
         panic!("expected instance decl");
     };
-    assert_eq!(decl.class, intern("Sample.Default"));
+    assert_eq!(decl.class, Symbol::intern("Sample.Default"));
     assert_eq!(decl.methods.len(), 1);
-    assert_eq!(decl.methods[0].name, intern("default"));
+    assert_eq!(decl.methods[0].name, Symbol::intern("default"));
 }
 
 #[test]

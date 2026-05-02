@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Symbol, intern, sym, sym_eq};
+use rex_ast::expr::Symbol;
 use rex_typesystem::{
     types::{BuiltinTypeId, Scheme, Type, TypeKind, Types},
     unification::unify,
@@ -32,16 +32,16 @@ fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineE
 
 fn option_from_handle(heap: &Heap, value: Option<Handle>) -> Result<Handle, EngineError> {
     match value {
-        Some(value) => heap.alloc_adt(sym("Some"), vec![value]),
-        None => heap.alloc_adt(sym("None"), vec![]),
+        Some(value) => heap.alloc_adt(Symbol::intern("Some"), vec![value]),
+        None => heap.alloc_adt(Symbol::intern("None"), vec![]),
     }
 }
 
 fn option_handle(value: &Handle) -> Result<Option<Handle>, EngineError> {
     let (tag, args) = value.as_adt()?;
-    if sym_eq(&tag, "Some") && args.len() == 1 {
+    if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0].clone()))
-    } else if sym_eq(&tag, "None") && args.is_empty() {
+    } else if tag.as_ref() == "None" && args.is_empty() {
         Ok(None)
     } else {
         Err(EngineError::NativeType {
@@ -53,9 +53,9 @@ fn option_handle(value: &Handle) -> Result<Option<Handle>, EngineError> {
 
 fn result_handle(value: &Handle) -> Result<Result<Handle, Handle>, EngineError> {
     let (tag, args) = value.as_adt()?;
-    if sym_eq(&tag, "Ok") && args.len() == 1 {
+    if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0].clone()))
-    } else if sym_eq(&tag, "Err") && args.len() == 1 {
+    } else if tag.as_ref() == "Err" && args.len() == 1 {
         Ok(Err(args[0].clone()))
     } else {
         Err(EngineError::NativeType {
@@ -67,7 +67,7 @@ fn result_handle(value: &Handle) -> Result<Result<Handle, Handle>, EngineError> 
 
 pub(crate) fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "List")) => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "List") => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -79,7 +79,7 @@ pub(crate) fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
 
 pub(crate) fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Array")) => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Array") => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -91,7 +91,7 @@ pub(crate) fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
 
 pub(crate) fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Dict")) => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Dict") => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -103,7 +103,7 @@ pub(crate) fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
 
 pub(crate) fn option_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option")) => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Option") => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -116,7 +116,7 @@ pub(crate) fn option_elem_type(typ: &Type) -> Result<Type, EngineError> {
 pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, ok) => match head.as_ref() {
-            TypeKind::App(head, err) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Result")) => {
+            TypeKind::App(head, err) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Result") => {
                 Ok((ok.clone(), err.clone()))
             }
             _ => Err(EngineError::NativeType {
@@ -140,16 +140,16 @@ pub(crate) fn option_from_pointer(
     value: Option<Pointer>,
 ) -> Result<Pointer, EngineError> {
     match value {
-        Some(v) => heap.alloc_ptr_adt(sym("Some"), vec![v]),
-        None => heap.alloc_ptr_adt(sym("None"), vec![]),
+        Some(v) => heap.alloc_ptr_adt(Symbol::intern("Some"), vec![v]),
+        None => heap.alloc_ptr_adt(Symbol::intern("None"), vec![]),
     }
 }
 
 pub(crate) fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
-    if sym_eq(&tag, "Some") && args.len() == 1 {
+    if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0]))
-    } else if sym_eq(&tag, "None") && args.is_empty() {
+    } else if tag.as_ref() == "None" && args.is_empty() {
         Ok(None)
     } else {
         Err(EngineError::NativeType {
@@ -164,9 +164,9 @@ pub(crate) fn result_value(
     pointer: &Pointer,
 ) -> Result<Result<Pointer, Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
-    if sym_eq(&tag, "Ok") && args.len() == 1 {
+    if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0]))
-    } else if sym_eq(&tag, "Err") && args.len() == 1 {
+    } else if tag.as_ref() == "Err" && args.len() == 1 {
         Ok(Err(args[0]))
     } else {
         Err(EngineError::NativeType {
@@ -181,8 +181,8 @@ pub(crate) fn result_from_pointer(
     value: Result<Pointer, Pointer>,
 ) -> Result<Pointer, EngineError> {
     match value {
-        Ok(v) => heap.alloc_ptr_adt(sym("Ok"), vec![v]),
-        Err(v) => heap.alloc_ptr_adt(sym("Err"), vec![v]),
+        Ok(v) => heap.alloc_ptr_adt(Symbol::intern("Ok"), vec![v]),
+        Err(v) => heap.alloc_ptr_adt(Symbol::intern("Err"), vec![v]),
     }
 }
 
@@ -233,7 +233,7 @@ pub(crate) fn extremum_handle_by_type(
     values: Vec<Handle>,
     choose: std::cmp::Ordering,
 ) -> Result<Handle, EngineError> {
-    let name = sym(name);
+    let name = Symbol::intern(name);
     let mut values = values.into_iter();
     let mut best = values.next().ok_or(EngineError::EmptySequence)?;
     for value in values {
@@ -446,35 +446,35 @@ pub(crate) fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     let mut list_adt = engine.adt_decl("List", &["a"]);
-    let a_name = sym("a");
+    let a_name = Symbol::intern("a");
     let a = list_adt
         .param_type(&a_name)
-        .ok_or_else(|| EngineError::UnknownType(sym("List")))?;
+        .ok_or_else(|| EngineError::UnknownType(Symbol::intern("List")))?;
     let list_a = list_adt.result_type();
-    list_adt.add_variant(sym("Empty"), vec![]);
-    list_adt.add_variant(sym("Cons"), vec![a, list_a]);
+    list_adt.add_variant(Symbol::intern("Empty"), vec![]);
+    list_adt.add_variant(Symbol::intern("Cons"), vec![a, list_a]);
     engine.inject_adt(list_adt)?;
 
     let mut option_adt = engine.adt_decl("Option", &["t"]);
-    let t_name = sym("t");
+    let t_name = Symbol::intern("t");
     let t = option_adt
         .param_type(&t_name)
-        .ok_or_else(|| EngineError::UnknownType(sym("Option")))?;
-    option_adt.add_variant(sym("Some"), vec![t]);
-    option_adt.add_variant(sym("None"), vec![]);
+        .ok_or_else(|| EngineError::UnknownType(Symbol::intern("Option")))?;
+    option_adt.add_variant(Symbol::intern("Some"), vec![t]);
+    option_adt.add_variant(Symbol::intern("None"), vec![]);
     engine.inject_adt(option_adt)?;
 
     let mut result_adt = engine.adt_decl("Result", &["e", "t"]);
-    let e_name = sym("e");
-    let t_name = sym("t");
+    let e_name = Symbol::intern("e");
+    let t_name = Symbol::intern("t");
     let e = result_adt
         .param_type(&e_name)
-        .ok_or_else(|| EngineError::UnknownType(sym("Result")))?;
+        .ok_or_else(|| EngineError::UnknownType(Symbol::intern("Result")))?;
     let t = result_adt
         .param_type(&t_name)
-        .ok_or_else(|| EngineError::UnknownType(sym("Result")))?;
-    result_adt.add_variant(sym("Err"), vec![e]);
-    result_adt.add_variant(sym("Ok"), vec![t]);
+        .ok_or_else(|| EngineError::UnknownType(Symbol::intern("Result")))?;
+    result_adt.add_variant(Symbol::intern("Err"), vec![e]);
+    result_adt.add_variant(Symbol::intern("Ok"), vec![t]);
     engine.inject_adt(result_adt)?;
     Ok(())
 }
@@ -527,7 +527,7 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     // primitive, but we *can* express the element comparison: the primitive
     // calls `(==)` on each pair.
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(sym("a")));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::app(Type::builtin(BuiltinTypeId::Array), a);
         let bool_ty = Type::builtin(BuiltinTypeId::Bool);
@@ -1051,7 +1051,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 ) -> Result<(), EngineError> {
     // List/Array conversion helpers.
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let array_a = Type::array(a);
@@ -1093,8 +1093,8 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 
     // Dict mapping and traversal helpers (used by `std.json`).
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let dict_a = Type::dict(a.clone());
@@ -1127,9 +1127,9 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
-        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
+        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let e = Type::var(e_tv.clone());
@@ -1209,7 +1209,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     //
     // Used by `std.json` to implement `Show Value` (JSON-encoded string).
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let string_ty = Type::builtin(BuiltinTypeId::String);
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, string_ty));
@@ -1225,12 +1225,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         let tags = Tags {
-            null: sym("Null"),
-            bool_: sym("Bool"),
-            string: sym("String"),
-            number: sym("Number"),
-            array: sym("Array"),
-            object: sym("Object"),
+            null: Symbol::intern("Null"),
+            bool_: Symbol::intern("Bool"),
+            string: Symbol::intern("String"),
+            number: Symbol::intern("Number"),
+            array: Symbol::intern("Array"),
+            object: Symbol::intern("Object"),
         };
 
         fn to_serde_json(
@@ -1314,7 +1314,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     // qualified `std.json.Value` type. It's a primop, so we keep it minimal and
     // let `std.json.parse/from_string` wrap the string error into `DecodeError`.
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let string_ty = Type::builtin(BuiltinTypeId::String);
         let result_con = Type::builtin(BuiltinTypeId::Result);
@@ -1332,12 +1332,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         let tags = Tags {
-            null: sym("Null"),
-            bool_: sym("Bool"),
-            string: sym("String"),
-            number: sym("Number"),
-            array: sym("Array"),
-            object: sym("Object"),
+            null: Symbol::intern("Null"),
+            bool_: Symbol::intern("Bool"),
+            string: Symbol::intern("String"),
+            number: Symbol::intern("Number"),
+            array: Symbol::intern("Array"),
+            object: Symbol::intern("Object"),
         };
 
         fn to_json_value(
@@ -1377,7 +1377,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                     let mut out = BTreeMap::new();
                     for (k, v) in obj {
                         let value = to_json_value(v, tags, heap)?;
-                        out.insert(intern(k.as_str()), value);
+                        out.insert(Symbol::intern(k.as_str()), value);
                     }
                     let dict = heap.alloc_dict(out)?;
                     heap.alloc_adt(tags.object.clone(), vec![dict])
@@ -1386,12 +1386,12 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
         }
 
         fn result_ok(heap: &Heap, v: Handle) -> Result<Handle, EngineError> {
-            heap.alloc_adt(sym("Ok"), vec![v])
+            heap.alloc_adt(Symbol::intern("Ok"), vec![v])
         }
 
         fn result_err(heap: &Heap, msg: String) -> Result<Handle, EngineError> {
             let msg = heap.alloc_string(msg)?;
-            heap.alloc_adt(sym("Err"), vec![msg])
+            heap.alloc_adt(Symbol::intern("Err"), vec![msg])
         }
 
         engine.export_native("prim_json_parse", scheme, 1, move |engine, _, args| {
@@ -1414,8 +1414,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1449,8 +1449,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -1484,7 +1484,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, array_a));
@@ -1494,8 +1494,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -1532,9 +1532,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
-        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
+        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let e = Type::var(e_tv.clone());
@@ -1572,8 +1572,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1614,8 +1614,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -1656,8 +1656,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -1698,8 +1698,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1741,8 +1741,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -1784,8 +1784,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -1826,8 +1826,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -1868,8 +1868,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -1910,8 +1910,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -1952,7 +1952,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -1984,7 +1984,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2016,7 +2016,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2051,8 +2051,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -2091,8 +2091,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -2131,8 +2131,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -2173,8 +2173,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -2208,8 +2208,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -2243,8 +2243,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let opt_a = Type::option(a.clone());
@@ -2281,9 +2281,9 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
-        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
+        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let e = Type::var(e_tv.clone());
@@ -2321,7 +2321,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2351,7 +2351,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2381,7 +2381,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2411,8 +2411,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let e_tv = engine.type_system.fresh_type_var(Some("e".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
         let a = Type::var(a_tv.clone());
         let e = Type::var(e_tv.clone());
         let result_a = Type::result(a.clone(), e.clone());
@@ -2443,7 +2443,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2468,7 +2468,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2493,7 +2493,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2518,7 +2518,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2548,7 +2548,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2578,7 +2578,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2608,7 +2608,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2622,7 +2622,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2636,7 +2636,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2652,7 +2652,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2672,7 +2672,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2692,7 +2692,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2712,7 +2712,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2732,7 +2732,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2749,13 +2749,13 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let _elem_ty = list_elem_type(&list_ty)?;
             let idx = args[0].as_i32()?;
             let xs = args[1].as_list()?;
-            let idx = checked_index(sym("prim_get"), idx, xs.len())?;
+            let idx = checked_index(Symbol::intern("prim_get"), idx, xs.len())?;
             Ok(xs[idx].clone())
         })?;
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2772,13 +2772,13 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let _elem_ty = array_elem_type(&array_ty)?;
             let idx = args[0].as_i32()?;
             let xs = args[1].as_array()?;
-            let idx = checked_index(sym("prim_get"), idx, xs.len())?;
+            let idx = checked_index(Symbol::intern("prim_get"), idx, xs.len())?;
             Ok(xs[idx].clone())
         })?;
     }
 
     for size in 2..=32 {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let tuple = Type::tuple(vec![a.clone(); size]);
         let scheme = Scheme::new(
@@ -2794,7 +2794,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
             let tuple_ty = arg_tys[1].clone();
             let _elem_ty = tuple_elem_type(&tuple_ty)?;
             let idx = args[0].as_i32()?;
-            let idx_usize = checked_index(sym("prim_get"), idx, size)?;
+            let idx_usize = checked_index(Symbol::intern("prim_get"), idx, size)?;
             let xs = args[1].as_tuple()?;
             if xs.len() != size {
                 return Err(EngineError::NativeType {
@@ -2807,8 +2807,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_a = Type::list(a.clone());
@@ -2828,8 +2828,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_a = Type::array(a.clone());
@@ -2849,8 +2849,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let list_pair = Type::list(Type::tuple(vec![a.clone(), b.clone()]));
@@ -2871,8 +2871,8 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
-        let b_tv = engine.type_system.fresh_type_var(Some("b".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
+        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
         let a = Type::var(a_tv.clone());
         let b = Type::var(b_tv.clone());
         let array_pair = Type::array(Type::tuple(vec![a.clone(), b.clone()]));
@@ -2893,7 +2893,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2917,7 +2917,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -2941,7 +2941,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -2961,7 +2961,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let list_a = Type::list(a.clone());
         let scheme = Scheme::new(
@@ -2985,7 +2985,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::array(a.clone());
         let scheme = Scheme::new(
@@ -3009,7 +3009,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some("a".into()));
+        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let opt_a = Type::option(a.clone());
         let scheme = Scheme::new(
@@ -3034,7 +3034,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
 pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
-    let unwrap = sym("unwrap");
+    let unwrap = Symbol::intern("unwrap");
     let unwrap_schemes = engine
         .type_system
         .env
@@ -3044,7 +3044,15 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
     for scheme in unwrap_schemes {
         let typ = scheme.typ.clone();
         match typ.as_ref() {
-            TypeKind::Fun(arg_ty, _) if matches!(arg_ty.as_ref(), TypeKind::App(head, _) if matches!(head.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Option"))) =>
+            TypeKind::Fun(arg_ty, _)
+                if matches!(
+                    arg_ty.as_ref(),
+                    TypeKind::App(head, _)
+                        if matches!(
+                            head.as_ref(),
+                            TypeKind::Con(c) if c.name.as_ref() == "Option"
+                        )
+                ) =>
             {
                 engine.export_native("unwrap", scheme, 1, |_, _, args| {
                     match option_handle(&args[0])? {
@@ -3053,7 +3061,19 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
                     }
                 })?;
             }
-            TypeKind::Fun(arg_ty, _) if matches!(arg_ty.as_ref(), TypeKind::App(head, _) if matches!(head.as_ref(), TypeKind::App(head2, _) if matches!(head2.as_ref(), TypeKind::Con(c) if sym_eq(&c.name, "Result")))) =>
+            TypeKind::Fun(arg_ty, _)
+                if matches!(
+                    arg_ty.as_ref(),
+                    TypeKind::App(head, _)
+                        if matches!(
+                            head.as_ref(),
+                            TypeKind::App(head2, _)
+                                if matches!(
+                                    head2.as_ref(),
+                                    TypeKind::Con(c) if c.name.as_ref() == "Result"
+                                )
+                        )
+                ) =>
             {
                 engine.export_native("unwrap", scheme, 1, |_, _, args| {
                     match result_handle(&args[0])? {
@@ -3066,23 +3086,23 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
         }
     }
 
-    let is_some = sym("is_some");
+    let is_some = Symbol::intern("is_some");
     let is_some_scheme = engine.lookup_scheme(&is_some)?;
     engine.export_native("is_some", is_some_scheme, 1, |engine, _, args| {
         engine.heap().alloc_bool(option_handle(&args[0])?.is_some())
     })?;
-    let is_none = sym("is_none");
+    let is_none = Symbol::intern("is_none");
     let is_none_scheme = engine.lookup_scheme(&is_none)?;
     engine.export_native("is_none", is_none_scheme, 1, |engine, _, args| {
         engine.heap().alloc_bool(option_handle(&args[0])?.is_none())
     })?;
 
-    let is_ok = sym("is_ok");
+    let is_ok = Symbol::intern("is_ok");
     let is_ok_scheme = engine.lookup_scheme(&is_ok)?;
     engine.export_native("is_ok", is_ok_scheme, 1, |engine, _, args| {
         engine.heap().alloc_bool(result_handle(&args[0])?.is_ok())
     })?;
-    let is_err = sym("is_err");
+    let is_err = Symbol::intern("is_err");
     let is_err_scheme = engine.lookup_scheme(&is_err)?;
     engine.export_native("is_err", is_err_scheme, 1, |engine, _, args| {
         engine.heap().alloc_bool(result_handle(&args[0])?.is_err())

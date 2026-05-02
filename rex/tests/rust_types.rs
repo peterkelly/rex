@@ -1,6 +1,6 @@
 use rex::{
     Rex,
-    ast::sym,
+    ast::Symbol,
     engine::{
         Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, Module, RexType,
         RuntimeEnv, Value,
@@ -197,9 +197,9 @@ async fn option_prelude() {
     assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(4).unwrap()])
+            heap.alloc_adt(Symbol::intern("Some"), vec![heap.alloc_i32(4).unwrap()])
                 .unwrap(),
-            heap.alloc_adt(sym("None"), vec![]).unwrap(),
+            heap.alloc_adt(Symbol::intern("None"), vec![]).unwrap(),
         ])
         .unwrap()
     );
@@ -259,9 +259,9 @@ async fn option_into_value() {
     assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(sym("Some"), vec![heap.alloc_i32(5).unwrap()])
+            heap.alloc_adt(Symbol::intern("Some"), vec![heap.alloc_i32(5).unwrap()])
                 .unwrap(),
-            heap.alloc_adt(sym("None"), vec![]).unwrap(),
+            heap.alloc_adt(Symbol::intern("None"), vec![]).unwrap(),
         ])
         .unwrap(),
     );
@@ -316,10 +316,10 @@ async fn result_prelude() {
     assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(sym("Ok"), vec![heap.alloc_i32(42).unwrap()])
+            heap.alloc_adt(Symbol::intern("Ok"), vec![heap.alloc_i32(42).unwrap()])
                 .unwrap(),
             heap.alloc_adt(
-                sym("Err"),
+                Symbol::intern("Err"),
                 vec![heap.alloc_string("error".to_string()).unwrap()]
             )
             .unwrap(),
@@ -428,10 +428,10 @@ async fn result_into_value_primitives() {
     assert_handle_eq!(
         result,
         heap.alloc_tuple(vec![
-            heap.alloc_adt(sym("Ok"), vec![heap.alloc_i32(5).unwrap()])
+            heap.alloc_adt(Symbol::intern("Ok"), vec![heap.alloc_i32(5).unwrap()])
                 .unwrap(),
             heap.alloc_adt(
-                sym("Err"),
+                Symbol::intern("Err"),
                 vec![heap.alloc_string("empty string".to_string()).unwrap()]
             )
             .unwrap(),

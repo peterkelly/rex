@@ -14,14 +14,14 @@ This crate implements a Hindley-Milner style type system with parametric polymor
 ## Quickstart
 
 ```rust
-use rex_ast::expr::intern;
+use rex_ast::expr::Symbol;
 use rex_ts::{BuiltinTypeId, Predicate, Type, TypeSystem};
 
 fn main() -> Result<(), rex_ts::TypeError> {
     let mut ts = TypeSystem::new_with_prelude()?;
 
     // Register an additional function: id :: a -> a
-    let a = Type::var(ts.supply.fresh(Some(intern("a"))));
+    let a = Type::var(ts.supply.fresh(Some(Symbol::intern("a"))));
     let scheme = rex_ts::generalize(&ts.env, vec![], Type::fun(a.clone(), a));
     ts.add_value("id", scheme);
 

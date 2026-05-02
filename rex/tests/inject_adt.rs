@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use rex::{
     Rex,
-    ast::sym,
+    ast::Symbol,
     engine::{
         Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module, RexAdt,
         RexType, RuntimeEnv, Value,
@@ -67,10 +67,10 @@ impl RexType for ManualRecord {
 impl IntoRex for ManualRecord {
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         let mut fields = BTreeMap::new();
-        fields.insert(sym("enabled"), self.enabled.into_rex(heap)?);
-        fields.insert(sym("count"), self.count.into_rex(heap)?);
+        fields.insert(Symbol::intern("enabled"), self.enabled.into_rex(heap)?);
+        fields.insert(Symbol::intern("count"), self.count.into_rex(heap)?);
         let dict = heap.alloc_dict(fields)?;
-        heap.alloc_adt(sym("ManualRecord"), vec![dict])
+        heap.alloc_adt(Symbol::intern("ManualRecord"), vec![dict])
     }
 }
 
@@ -96,14 +96,14 @@ impl FromRex for ManualRecord {
             });
         };
         let enabled = fields
-            .get(&sym("enabled"))
+            .get(&Symbol::intern("enabled"))
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `enabled`".into(),
                 got: "dict".into(),
             })
             .and_then(bool::from_rex)?;
         let count = fields
-            .get(&sym("count"))
+            .get(&Symbol::intern("count"))
             .ok_or_else(|| EngineError::NativeType {
                 expected: "field `count`".into(),
                 got: "dict".into(),
@@ -130,11 +130,11 @@ impl IntoRex for ManualEnum {
         match self {
             Self::Flag(value) => {
                 let value = value.into_rex(heap)?;
-                heap.alloc_adt(sym("Flag"), vec![value])
+                heap.alloc_adt(Symbol::intern("Flag"), vec![value])
             }
             Self::Count(value) => {
                 let value = value.into_rex(heap)?;
-                heap.alloc_adt(sym("Count"), vec![value])
+                heap.alloc_adt(Symbol::intern("Count"), vec![value])
             }
         }
     }
@@ -165,12 +165,12 @@ impl FromRex for ManualEnum {
 impl RexAdt for ManualRecord {
     fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
         let mut supply = TypeVarSupply::new();
-        let mut adt = AdtDecl::new(&sym("ManualRecord"), &[], &mut supply);
+        let mut adt = AdtDecl::new(&Symbol::intern("ManualRecord"), &[], &mut supply);
         let record = Type::record(vec![
-            (sym("enabled"), bool::rex_type()),
-            (sym("count"), i32::rex_type()),
+            (Symbol::intern("enabled"), bool::rex_type()),
+            (Symbol::intern("count"), i32::rex_type()),
         ]);
-        adt.add_variant(sym("ManualRecord"), vec![record]);
+        adt.add_variant(Symbol::intern("ManualRecord"), vec![record]);
         Ok(adt)
     }
 }
@@ -178,9 +178,9 @@ impl RexAdt for ManualRecord {
 impl RexAdt for ManualEnum {
     fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
         let mut supply = TypeVarSupply::new();
-        let mut adt = AdtDecl::new(&sym("ManualEnum"), &[], &mut supply);
-        adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
-        adt.add_variant(sym("Count"), vec![i32::rex_type()]);
+        let mut adt = AdtDecl::new(&Symbol::intern("ManualEnum"), &[], &mut supply);
+        adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
+        adt.add_variant(Symbol::intern("Count"), vec![i32::rex_type()]);
         Ok(adt)
     }
 }
@@ -366,8 +366,8 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     let mut adt = engine
         .adt_decl_from_type_with_params(&Type::con("Wrap", 1), &["T"])
         .unwrap();
-    let t = adt.param_type(&sym("T")).unwrap();
-    adt.add_variant(sym("Wrap"), vec![t]);
+    let t = adt.param_type(&Symbol::intern("T")).unwrap();
+    adt.add_variant(Symbol::intern("Wrap"), vec![t]);
     let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
     engine.inject_module(module).unwrap();
@@ -398,8 +398,8 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     let mut adt = engine
         .adt_decl_from_type_with_params(&DerivedBox::<i32>::rex_type(), &["T"])
         .unwrap();
-    let t = adt.param_type(&sym("T")).unwrap();
-    adt.add_variant(sym("Boxed"), vec![t]);
+    let t = adt.param_type(&Symbol::intern("T")).unwrap();
+    adt.add_variant(Symbol::intern("Boxed"), vec![t]);
     let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
     engine.inject_module(module).unwrap();

@@ -1,5 +1,5 @@
 use crate::engine::{EngineError, Handle, Heap};
-use rex_ast::expr::{Symbol, sym};
+use rex_ast::expr::Symbol;
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Type, TypeKind},
     typesystem::TypeSystem,
@@ -16,7 +16,7 @@ fn local_name_matches(name: &Symbol, expected: &str) -> bool {
 }
 
 fn runtime_ctor(name: &Symbol) -> Symbol {
-    sym(local_name(name))
+    Symbol::intern(local_name(name))
 }
 
 #[derive(Clone, Debug)]
@@ -247,17 +247,17 @@ fn json_to_handle_for_con(
         }
 
         ("Option", [inner]) => match json {
-            Value::Null => heap.alloc_adt(sym("None"), vec![]),
+            Value::Null => heap.alloc_adt(Symbol::intern("None"), vec![]),
             _ => {
                 let inner_handle = json_to_rex(heap, json, inner, ts, opts)?;
-                heap.alloc_adt(sym("Some"), vec![inner_handle])
+                heap.alloc_adt(Symbol::intern("Some"), vec![inner_handle])
             }
         },
 
         ("Promise", [_inner]) => {
             let promise_id =
                 json_to_rex(heap, json, &Type::builtin(BuiltinTypeId::Uuid), ts, opts)?;
-            heap.alloc_adt(sym("Promise"), vec![promise_id])
+            heap.alloc_adt(Symbol::intern("Promise"), vec![promise_id])
         }
 
         // Internal argument order is Result err ok.
@@ -265,10 +265,10 @@ fn json_to_handle_for_con(
             Value::Object(obj) if obj.len() == 1 => {
                 if let Some(v) = obj.get("Ok") {
                     let p = json_to_rex(heap, v, ok_t, ts, opts)?;
-                    heap.alloc_adt(sym("Ok"), vec![p])
+                    heap.alloc_adt(Symbol::intern("Ok"), vec![p])
                 } else if let Some(v) = obj.get("Err") {
                     let p = json_to_rex(heap, v, err_t, ts, opts)?;
-                    heap.alloc_adt(sym("Err"), vec![p])
+                    heap.alloc_adt(Symbol::intern("Err"), vec![p])
                 } else {
                     Err(error(format!(
                         "expected {{Ok:..}} or {{Err:..}}, got {}",
@@ -300,9 +300,9 @@ fn json_to_handle_for_con(
                 for item in items {
                     out.push(json_to_rex(heap, item, elem_t, ts, opts)?);
                 }
-                let mut list = heap.alloc_adt(sym("Empty"), vec![])?;
+                let mut list = heap.alloc_adt(Symbol::intern("Empty"), vec![])?;
                 for p in out.into_iter().rev() {
-                    list = heap.alloc_adt(sym("Cons"), vec![p, list])?;
+                    list = heap.alloc_adt(Symbol::intern("Cons"), vec![p, list])?;
                 }
                 Ok(list)
             }
@@ -313,7 +313,7 @@ fn json_to_handle_for_con(
             Value::Object(obj) => {
                 let mut out = BTreeMap::new();
                 for (k, v) in obj {
-                    out.insert(sym(k), json_to_rex(heap, v, elem_t, ts, opts)?);
+                    out.insert(Symbol::intern(k), json_to_rex(heap, v, elem_t, ts, opts)?);
                 }
                 heap.alloc_dict(out)
             }

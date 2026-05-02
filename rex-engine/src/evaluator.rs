@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 
-use rex_ast::expr::{Expr, Program, Symbol, sym};
+use rex_ast::expr::{Expr, Program, Symbol};
 use rex_typesystem::{
     error::TypeError,
     types::{Type, TypedExpr, Types},
@@ -318,7 +318,7 @@ where
         name: &str,
         typ: &Type,
     ) -> Result<NativeImpl<State>, EngineError> {
-        let sym_name = sym(name);
+        let sym_name = Symbol::intern(name);
         let impls = self
             .runtime
             .natives
@@ -343,7 +343,7 @@ where
     }
 
     pub(crate) fn resolve_native(&self, name: &str, typ: &Type) -> Result<Pointer, EngineError> {
-        let sym_name = sym(name);
+        let sym_name = Symbol::intern(name);
         let impls = self
             .runtime
             .natives

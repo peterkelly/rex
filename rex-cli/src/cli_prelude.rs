@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use rex::{
-    ast::{Symbol, sym},
+    ast::Symbol,
     engine::{Engine, EngineError, Handle, Heap, Module, Value, virtual_export_name},
     typesystem::{BuiltinTypeId, Scheme, Type},
 };
@@ -137,7 +137,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let mut module = Module::new("std.io");
     module.export_tracing_log_functions()?;
 
-    let read_all_sym = sym("read_all");
+    let read_all_sym = Symbol::intern("read_all");
     module.export_native_async(
         "read_all",
         Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), array_u8.clone())),
@@ -169,7 +169,7 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    let write_all_sym = sym("write_all");
+    let write_all_sym = Symbol::intern("write_all");
     module.export_native_async(
         "write_all",
         Scheme::new(
@@ -221,18 +221,18 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
 
 fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let subprocess_name = virtual_export_name("std.process", "Subprocess");
-    let subprocess_ctor = sym(&subprocess_name);
+    let subprocess_ctor = Symbol::intern(&subprocess_name);
     let subprocess = Type::con(&subprocess_name, 0);
     let string = Type::builtin(BuiltinTypeId::String);
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
     let list_string = Type::app(Type::builtin(BuiltinTypeId::List), string.clone());
     let mut module = Module::new("std.process");
     let opts = Type::record(vec![
-        (sym("cmd"), string.clone()),
-        (sym("args"), list_string),
+        (Symbol::intern("cmd"), string.clone()),
+        (Symbol::intern("args"), list_string),
     ]);
 
-    let spawn_sym = sym("spawn");
+    let spawn_sym = Symbol::intern("spawn");
     let subprocess_ctor_for_spawn = subprocess_ctor.clone();
     module.export_native_async(
         "spawn",
@@ -260,13 +260,13 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                 };
 
                 let cmd_handle = map
-                    .get(&sym("cmd"))
+                    .get(&Symbol::intern("cmd"))
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("spawn missing `cmd`".into()))?;
                 let cmd = cmd_handle.to_rust::<String>()?;
 
                 let args_handle = map
-                    .get(&sym("args"))
+                    .get(&Symbol::intern("args"))
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("spawn missing `args`".into()))?;
                 let args_list = list_to_vec(engine.heap(), &args_handle)?;
@@ -347,14 +347,14 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
                     .insert(id, entry);
 
                 let mut payload = BTreeMap::new();
-                payload.insert(sym("id"), engine.heap().alloc_uuid(id)?);
+                payload.insert(Symbol::intern("id"), engine.heap().alloc_uuid(id)?);
                 let payload = engine.heap().alloc_dict(payload)?;
                 engine.heap().alloc_adt(subprocess_ctor, vec![payload])
             })
         },
     )?;
 
-    let wait_sym = sym("wait");
+    let wait_sym = Symbol::intern("wait");
     let subprocess_ctor_for_wait = subprocess_ctor.clone();
     module.export_native_async(
         "wait",
@@ -422,7 +422,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    let stdout_sym = sym("stdout");
+    let stdout_sym = Symbol::intern("stdout");
     let subprocess_ctor_for_stdout = subprocess_ctor.clone();
     module.export_native_async(
         "stdout",
@@ -454,7 +454,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    let stderr_sym = sym("stderr");
+    let stderr_sym = Symbol::intern("stderr");
     let subprocess_ctor_for_stderr = subprocess_ctor.clone();
     module.export_native_async(
         "stderr",
@@ -512,7 +512,7 @@ fn subprocess_id(_heap: &Heap, handle: &Handle, tag: &Symbol) -> Result<Uuid, En
         }
     };
     let id_handle = map
-        .get(&sym("id"))
+        .get(&Symbol::intern("id"))
         .cloned()
         .ok_or_else(|| EngineError::Internal("Subprocess missing id".into()))?;
     id_handle.to_rust::<Uuid>()

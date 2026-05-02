@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use rex_ast::expr::{Decl, Program};
+use rex_ast::expr::{Decl, Program, Symbol};
 use rex_lexer::Token;
 use rex_parser::Parser;
 
@@ -9,7 +9,6 @@ use crate::{
     types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type},
     typesystem::TypeSystem,
 };
-use rex_ast::expr::sym;
 
 fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeError> {
     let program = prelude_typeclasses_program()?;
@@ -106,7 +105,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // allocating) but it must respect `Eq a`, so the primitive calls `(==)` on
     // elements rather than doing structural `Value` equality.
     {
-        let a_tv = ts.supply.fresh(Some(sym("a")));
+        let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let array_a = Type::app(Type::builtin(BuiltinTypeId::Array), a.clone());
         ts.add_value(
@@ -309,7 +308,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // This is intentionally a `prim_` helper with a polymorphic type so the
     // `std.json` module can stay purely-Rex at the surface level.
     {
-        let a_tv = ts.supply.fresh(Some(sym("a")));
+        let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         ts.add_value(
             "prim_json_stringify",
@@ -323,7 +322,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     // `Result std.json.Value string` (and then wrap the string error into
     // `DecodeError`).
     {
-        let a_tv = ts.supply.fresh(Some(sym("a")));
+        let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
         let a = Type::var(a_tv.clone());
         let result_con = Type::builtin(BuiltinTypeId::Result);
         let result_as = Type::app(Type::app(result_con, string_ty.clone()), a);
@@ -350,8 +349,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_map
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
-            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             ts.add_overload(
@@ -387,7 +386,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
                     ),
                 ),
             );
-            let e_tv = ts.supply.fresh(Some(sym("e")));
+            let e_tv = ts.supply.fresh(Some(Symbol::intern("e")));
             let e = Type::var(e_tv.clone());
             ts.add_overload(
                 "prim_map",
@@ -404,7 +403,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_array_singleton
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
             let a = Type::var(a_tv.clone());
             ts.add_value(
                 "prim_array_singleton",
@@ -414,8 +413,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_foldl / prim_foldr / prim_fold
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
-            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             let step_l = Type::fun(b.clone(), Type::fun(a.clone(), b.clone()));
@@ -463,8 +462,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_filter / prim_filter_map
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
-            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             let pred = Type::fun(a.clone(), bool_ty.clone());
@@ -496,8 +495,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         // prim_flat_map
         {
             // List / Array / Option
-            let a_tv = ts.supply.fresh(Some(sym("a")));
-            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             let mut add_for = |fa: Type, fb: Type| {
@@ -516,7 +515,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             add_for(option_of(a.clone()), option_of(b.clone()));
 
             // Result e
-            let e_tv = ts.supply.fresh(Some(sym("e")));
+            let e_tv = ts.supply.fresh(Some(Symbol::intern("e")));
             let e = Type::var(e_tv.clone());
             let ra = result_of(a.clone(), e.clone());
             let rb = result_of(b.clone(), e.clone());
@@ -532,7 +531,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_or_else
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
             let a = Type::var(a_tv.clone());
             let mut add_for = |fa: Type| {
                 let fa2 = fa.clone();
@@ -550,7 +549,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             add_for(array_of(a.clone()));
             add_for(option_of(a.clone()));
 
-            let e_tv = ts.supply.fresh(Some(sym("e")));
+            let e_tv = ts.supply.fresh(Some(Symbol::intern("e")));
             let e = Type::var(e_tv.clone());
             let ra = result_of(a.clone(), e);
             ts.add_overload(
@@ -565,7 +564,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_take / prim_skip
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
             let a = Type::var(a_tv.clone());
             let mut add_for = |fa: Type| {
                 let scheme = Scheme::new(
@@ -582,8 +581,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_zip / prim_unzip
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
-            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             let pair = Type::tuple(vec![a.clone(), b.clone()]);
@@ -616,7 +615,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_get
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
             let a = Type::var(a_tv.clone());
             let idx = i32_ty.clone();
             ts.add_overload(
@@ -652,7 +651,7 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // List/Array conversion helpers.
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
             let a = Type::var(a_tv.clone());
             let list_a = list_of(a.clone());
             let array_a = array_of(a.clone());
@@ -688,8 +687,8 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_dict_map : (a -> b) -> Dict a -> Dict b
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
-            let b_tv = ts.supply.fresh(Some(sym("b")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             let dict_a = Type::app(Type::builtin(BuiltinTypeId::Dict), a.clone());
@@ -706,9 +705,9 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
 
         // prim_dict_traverse_result : (a -> Result b e) -> Dict a -> Result (Dict b) e
         {
-            let a_tv = ts.supply.fresh(Some(sym("a")));
-            let b_tv = ts.supply.fresh(Some(sym("b")));
-            let e_tv = ts.supply.fresh(Some(sym("e")));
+            let a_tv = ts.supply.fresh(Some(Symbol::intern("a")));
+            let b_tv = ts.supply.fresh(Some(Symbol::intern("b")));
+            let e_tv = ts.supply.fresh(Some(Symbol::intern("e")));
             let a = Type::var(a_tv.clone());
             let b = Type::var(b_tv.clone());
             let e = Type::var(e_tv.clone());
@@ -831,34 +830,34 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
 
     // Register ADT constructors as value-level functions.
     {
-        let list_name = sym("List");
-        let a_name = sym("a");
+        let list_name = Symbol::intern("List");
+        let a_name = Symbol::intern("a");
         let list_params = vec![a_name.clone()];
         let mut list_adt = AdtDecl::new(&list_name, &list_params, &mut ts.supply);
         let a = list_adt.param_type(&a_name).ok_or_else(|| {
             TypeError::Internal("prelude: List is missing type parameter `a`".into())
         })?;
         let list_a = list_adt.result_type();
-        list_adt.add_variant(sym("Empty"), vec![]);
-        list_adt.add_variant(sym("Cons"), vec![a.clone(), list_a.clone()]);
+        list_adt.add_variant(Symbol::intern("Empty"), vec![]);
+        list_adt.add_variant(Symbol::intern("Cons"), vec![a.clone(), list_a.clone()]);
         ts.register_adt(&list_adt);
     }
     {
-        let option_name = sym("Option");
-        let t_name = sym("t");
+        let option_name = Symbol::intern("Option");
+        let t_name = Symbol::intern("t");
         let option_params = vec![t_name.clone()];
         let mut option_adt = AdtDecl::new(&option_name, &option_params, &mut ts.supply);
         let t = option_adt.param_type(&t_name).ok_or_else(|| {
             TypeError::Internal("prelude: Option is missing type parameter `t`".into())
         })?;
-        option_adt.add_variant(sym("Some"), vec![t]);
-        option_adt.add_variant(sym("None"), vec![]);
+        option_adt.add_variant(Symbol::intern("Some"), vec![t]);
+        option_adt.add_variant(Symbol::intern("None"), vec![]);
         ts.register_adt(&option_adt);
     }
     {
-        let result_name = sym("Result");
-        let e_name = sym("e");
-        let t_name = sym("t");
+        let result_name = Symbol::intern("Result");
+        let e_name = Symbol::intern("e");
+        let t_name = Symbol::intern("t");
         let result_params = vec![e_name.clone(), t_name.clone()];
         let mut result_adt = AdtDecl::new(&result_name, &result_params, &mut ts.supply);
         let e = result_adt.param_type(&e_name).ok_or_else(|| {
@@ -867,8 +866,8 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
         let t = result_adt.param_type(&t_name).ok_or_else(|| {
             TypeError::Internal("prelude: Result is missing type parameter `t`".into())
         })?;
-        result_adt.add_variant(sym("Err"), vec![e]);
-        result_adt.add_variant(sym("Ok"), vec![t]);
+        result_adt.add_variant(Symbol::intern("Err"), vec![e]);
+        result_adt.add_variant(Symbol::intern("Ok"), vec![t]);
         ts.register_adt(&result_adt);
     }
 
@@ -876,7 +875,7 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
     inject_prelude_classes_and_instances(ts)?;
 
     // Helper constructors used to describe prelude schemes below.
-    let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(sym(name)));
+    let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(Symbol::intern(name)));
     let option_of = |t: Type| Type::app(option_con.clone(), t);
     let result_of = |t: Type, e: Type| Type::app(Type::app(result_con.clone(), e), t);
 

@@ -1,6 +1,6 @@
 use rex::{
     Rex,
-    ast::{Program, intern, sym},
+    ast::{Program, Symbol},
     engine::{
         Compiler, Engine, EngineError, Evaluator, Handle, Heap, ReplState, RuntimeEnv, Value,
     },
@@ -21,9 +21,9 @@ fn mk_type_system() -> TypeSystem {
 
 fn mk_unit_enum(name: &str, variants: &[&str]) -> AdtDecl {
     let mut supply = TypeVarSupply::new();
-    let mut adt = AdtDecl::new(&intern(name), &[], &mut supply);
+    let mut adt = AdtDecl::new(&Symbol::intern(name), &[], &mut supply);
     for variant in variants {
-        adt.add_variant(intern(variant), vec![]);
+        adt.add_variant(Symbol::intern(variant), vec![]);
     }
     adt
 }
@@ -146,7 +146,9 @@ fn promise_roundtrip_from_runtime_value() {
     let opts = JsonOptions::default();
     let promise_ty = Type::promise(Type::builtin(BuiltinTypeId::String));
     let promise_id = heap.alloc_uuid(fixed_uuid()).unwrap();
-    let promise_handle = heap.alloc_adt(sym("Promise"), vec![promise_id]).unwrap();
+    let promise_handle = heap
+        .alloc_adt(Symbol::intern("Promise"), vec![promise_id])
+        .unwrap();
 
     let promise_json = rex_to_json(&promise_handle, &promise_ty, &ts, &opts).unwrap();
     assert_eq!(promise_json, json!(fixed_uuid()));
@@ -193,12 +195,12 @@ fn struct_like_single_variant_adt_roundtrip() {
     let opts = JsonOptions::default();
 
     let mut supply = TypeVarSupply::new();
-    let mut foo = AdtDecl::new(&sym("Foo"), &[], &mut supply);
+    let mut foo = AdtDecl::new(&Symbol::intern("Foo"), &[], &mut supply);
     foo.add_variant(
-        sym("Foo"),
+        Symbol::intern("Foo"),
         vec![Type::record(vec![
-            (sym("a"), Type::builtin(BuiltinTypeId::U64)),
-            (sym("b"), Type::builtin(BuiltinTypeId::String)),
+            (Symbol::intern("a"), Type::builtin(BuiltinTypeId::U64)),
+            (Symbol::intern("b"), Type::builtin(BuiltinTypeId::String)),
         ])],
     );
     ts.register_adt(&foo);
@@ -246,9 +248,9 @@ fn unit_enum_integer_roundtrip_with_patches() {
     let mut opts = JsonOptions::default();
     opts.add_int_enum("Color");
 
-    let red = heap.alloc_adt(sym("Red"), vec![]).unwrap();
-    let green = heap.alloc_adt(sym("Green"), vec![]).unwrap();
-    let blue = heap.alloc_adt(sym("Blue"), vec![]).unwrap();
+    let red = heap.alloc_adt(Symbol::intern("Red"), vec![]).unwrap();
+    let green = heap.alloc_adt(Symbol::intern("Green"), vec![]).unwrap();
+    let blue = heap.alloc_adt(Symbol::intern("Blue"), vec![]).unwrap();
     assert_eq!(rex_to_json(&red, &color_ty, &ts, &opts).unwrap(), json!(0));
     assert_eq!(
         rex_to_json(&green, &color_ty, &ts, &opts).unwrap(),

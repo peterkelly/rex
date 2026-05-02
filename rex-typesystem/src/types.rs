@@ -4,7 +4,7 @@ use crate::{
     unification::{Subst, subst_is_empty},
 };
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Pattern, Symbol, intern, sym};
+use rex_ast::expr::{Pattern, Symbol};
 use rpds::HashTrieMapSync;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -41,7 +41,7 @@ pub enum BuiltinTypeId {
 
 impl BuiltinTypeId {
     pub fn as_symbol(self) -> Symbol {
-        sym(self.as_str())
+        Symbol::intern(self.as_str())
     }
 
     pub fn as_str(self) -> &'static str {
@@ -163,7 +163,7 @@ impl Type {
 
     pub fn user_con(name: impl AsRef<str>, arity: usize) -> Self {
         Type::new(TypeKind::Con(TypeConst {
-            name: intern(name.as_ref()),
+            name: Symbol::intern(name.as_ref()),
             arity,
             builtin_id: None,
         }))
@@ -416,7 +416,7 @@ pub struct Predicate {
 impl Predicate {
     pub fn new(class: impl AsRef<str>, typ: Type) -> Self {
         Self {
-            class: intern(class.as_ref()),
+            class: Symbol::intern(class.as_ref()),
             typ,
         }
     }

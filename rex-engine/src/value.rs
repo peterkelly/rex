@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Symbol, sym, sym_eq};
+use rex_ast::expr::Symbol;
 use rex_typesystem::types::{AdtDecl, BuiltinTypeId, Type, TypedExpr};
 use uuid::Uuid;
 
@@ -159,7 +159,7 @@ impl Value {
             Value::Tuple(..) => "tuple",
             Value::Array(..) => "array",
             Value::Dict(..) => "dict",
-            Value::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
+            Value::Adt(name, ..) if name.as_ref() == "Empty" || name.as_ref() == "Cons" => "list",
             Value::Adt(..) => "adt",
             Value::Uninitialized(..) => "uninitialized",
             Value::Frame => "frame",
@@ -1117,10 +1117,10 @@ impl Heap {
 
     pub(crate) fn alloc_ptr_list(&self, values: Vec<Pointer>) -> Result<Pointer, EngineError> {
         let roots = self.temp_roots(values)?;
-        let mut list = self.alloc_ptr_adt(sym("Empty"), vec![])?;
+        let mut list = self.alloc_ptr_adt(Symbol::intern("Empty"), vec![])?;
         for index in (0..roots.len()).rev() {
             let value = roots.get(index)?;
-            list = self.alloc_ptr_adt(sym("Cons"), vec![value, list])?;
+            list = self.alloc_ptr_adt(Symbol::intern("Cons"), vec![value, list])?;
         }
         Ok(list)
     }
@@ -1526,7 +1526,7 @@ impl Cell {
             Cell::Tuple(..) => "tuple",
             Cell::Array(..) => "array",
             Cell::Dict(..) => "dict",
-            Cell::Adt(name, ..) if sym_eq(name, "Empty") || sym_eq(name, "Cons") => "list",
+            Cell::Adt(name, ..) if name.as_ref() == "Empty" || name.as_ref() == "Cons" => "list",
             Cell::Adt(..) => "adt",
             Cell::Uninitialized(..) => "uninitialized",
             Cell::Frame(..) => "frame",
@@ -2230,10 +2230,10 @@ fn list_to_vec_opt(
     let mut cursor = cell;
     loop {
         match cursor {
-            Cell::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => {
+            Cell::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
                 return Ok(Some(out));
             }
-            Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
+            Cell::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
                 out.push(args[0]);
                 cursor = heap.get(&args[1])?;
             }
@@ -2247,8 +2247,8 @@ pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Poin
     let mut cursor = cell;
     loop {
         match cursor {
-            Cell::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return Ok(out),
-            Cell::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
+            Cell::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => return Ok(out),
+            Cell::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
                 out.push(args[0]);
                 cursor = heap.get(&args[1])?;
             }
@@ -2408,9 +2408,9 @@ impl<T: IntoPointer> IntoPointer for Option<T> {
         match self {
             Some(v) => {
                 let ptr = v.into_pointer(heap)?;
-                heap.alloc_ptr_adt(sym("Some"), vec![ptr])
+                heap.alloc_ptr_adt(Symbol::intern("Some"), vec![ptr])
             }
-            None => heap.alloc_ptr_adt(sym("None"), vec![]),
+            None => heap.alloc_ptr_adt(Symbol::intern("None"), vec![]),
         }
     }
 }
@@ -2513,10 +2513,10 @@ impl<T: IntoRex> IntoRex for Option<T> {
                 let value = value.into_rex(heap)?;
                 handle_from_pointer(
                     heap,
-                    heap.alloc_ptr_adt(sym("Some"), vec![value.pointer()?])?,
+                    heap.alloc_ptr_adt(Symbol::intern("Some"), vec![value.pointer()?])?,
                 )
             }
-            None => handle_from_pointer(heap, heap.alloc_ptr_adt(sym("None"), vec![])?),
+            None => handle_from_pointer(heap, heap.alloc_ptr_adt(Symbol::intern("None"), vec![])?),
         }
     }
 }
@@ -2526,11 +2526,11 @@ impl<T: FromRex> FromRex for Option<T> {
         let heap = handle.heap();
         let pointer = handle.pointer()?;
         let (tag, args) = heap.pointer_as_adt(&pointer)?;
-        if sym_eq(&tag, "Some") && args.len() == 1 {
+        if tag.as_ref() == "Some" && args.len() == 1 {
             let value = heap.handle(args[0])?;
             return Ok(Some(T::from_rex(&value)?));
         }
-        if sym_eq(&tag, "None") && args.is_empty() {
+        if tag.as_ref() == "None" && args.is_empty() {
             return Ok(None);
         }
         Err(EngineError::NativeType {
@@ -2725,10 +2725,10 @@ where
 {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         let (tag, args) = heap.pointer_as_adt(pointer)?;
-        if sym_eq(&tag, "Some") && args.len() == 1 {
+        if tag.as_ref() == "Some" && args.len() == 1 {
             return Ok(Some(T::from_pointer(heap, &args[0])?));
         }
-        if sym_eq(&tag, "None") && args.is_empty() {
+        if tag.as_ref() == "None" && args.is_empty() {
             return Ok(None);
         }
         Err(EngineError::NativeType {
@@ -2743,11 +2743,11 @@ impl<T: IntoPointer, E: IntoPointer> IntoPointer for Result<T, E> {
         match self {
             Ok(v) => {
                 let ptr = v.into_pointer(heap)?;
-                heap.alloc_ptr_adt(sym("Ok"), vec![ptr])
+                heap.alloc_ptr_adt(Symbol::intern("Ok"), vec![ptr])
             }
             Err(e) => {
                 let ptr = e.into_pointer(heap)?;
-                heap.alloc_ptr_adt(sym("Err"), vec![ptr])
+                heap.alloc_ptr_adt(Symbol::intern("Err"), vec![ptr])
             }
         }
     }
@@ -2769,10 +2769,10 @@ where
 {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         let (tag, args) = heap.pointer_as_adt(pointer)?;
-        if sym_eq(&tag, "Ok") && args.len() == 1 {
+        if tag.as_ref() == "Ok" && args.len() == 1 {
             return Ok(Ok(T::from_pointer(heap, &args[0])?));
         }
-        if sym_eq(&tag, "Err") && args.len() == 1 {
+        if tag.as_ref() == "Err" && args.len() == 1 {
             return Ok(Err(E::from_pointer(heap, &args[0])?));
         }
         Err(EngineError::NativeType {
@@ -2787,13 +2787,16 @@ impl<T: IntoRex, E: IntoRex> IntoRex for Result<T, E> {
         match self {
             Ok(value) => {
                 let value = value.into_rex(heap)?;
-                handle_from_pointer(heap, heap.alloc_ptr_adt(sym("Ok"), vec![value.pointer()?])?)
+                handle_from_pointer(
+                    heap,
+                    heap.alloc_ptr_adt(Symbol::intern("Ok"), vec![value.pointer()?])?,
+                )
             }
             Err(error) => {
                 let error = error.into_rex(heap)?;
                 handle_from_pointer(
                     heap,
-                    heap.alloc_ptr_adt(sym("Err"), vec![error.pointer()?])?,
+                    heap.alloc_ptr_adt(Symbol::intern("Err"), vec![error.pointer()?])?,
                 )
             }
         }
@@ -2805,11 +2808,11 @@ impl<T: FromRex, E: FromRex> FromRex for Result<T, E> {
         let heap = handle.heap();
         let pointer = handle.pointer()?;
         let (tag, args) = heap.pointer_as_adt(&pointer)?;
-        if sym_eq(&tag, "Ok") && args.len() == 1 {
+        if tag.as_ref() == "Ok" && args.len() == 1 {
             let value = heap.handle(args[0])?;
             return Ok(Ok(T::from_rex(&value)?));
         }
-        if sym_eq(&tag, "Err") && args.len() == 1 {
+        if tag.as_ref() == "Err" && args.len() == 1 {
             let error = heap.handle(args[0])?;
             return Ok(Err(E::from_rex(&error)?));
         }
@@ -2950,14 +2953,14 @@ impl IntoPointer for serde_json::Value {
         let json_string = serde_json::to_string(&self)
             .map_err(|e| EngineError::Internal(format!("failed to serialize JSON: {}", e)))?;
         let string_ptr = heap.alloc_ptr_string(json_string)?;
-        heap.alloc_ptr_adt(sym("serde_json::Value"), vec![string_ptr])
+        heap.alloc_ptr_adt(Symbol::intern("serde_json::Value"), vec![string_ptr])
     }
 }
 
 impl FromPointer for serde_json::Value {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         let (tag, args) = heap.pointer_as_adt(pointer)?;
-        if !sym_eq(&tag, "serde_json::Value") {
+        if tag.as_ref() != "serde_json::Value" {
             return Err(EngineError::NativeType {
                 expected: "serde_json::Value".into(),
                 got: heap.type_name(pointer)?.into(),
@@ -3214,7 +3217,7 @@ mod tests {
             .expect("alloc_bool should succeed");
 
         let mut fields = BTreeMap::new();
-        fields.insert(sym("ready"), payload);
+        fields.insert(Symbol::intern("ready"), payload);
         let dict = heap
             .handle(
                 heap.alloc_ptr_dict(fields)
@@ -3225,13 +3228,13 @@ mod tests {
             panic!("expected dict value");
         };
         assert!(
-            bool::from_rex(fields.get(&sym("ready")).expect("ready field"))
+            bool::from_rex(fields.get(&Symbol::intern("ready")).expect("ready field"))
                 .expect("bool should decode")
         );
         assert!(
             dict.as_dict()
                 .expect("dict handle")
-                .get(&sym("ready"))
+                .get(&Symbol::intern("ready"))
                 .expect("ready field")
                 .as_bool()
                 .expect("bool handle")
@@ -3239,18 +3242,18 @@ mod tests {
 
         let option = heap
             .handle(
-                heap.alloc_ptr_adt(sym("Some"), vec![payload])
+                heap.alloc_ptr_adt(Symbol::intern("Some"), vec![payload])
                     .expect("alloc_adt should succeed"),
             )
             .expect("adt should be rootable");
         let Value::Adt(tag, args) = option.value().expect("adt value") else {
             panic!("expected adt value");
         };
-        assert!(sym_eq(&tag, "Some"));
+        assert!(tag.as_ref() == "Some");
         assert_eq!(args.len(), 1);
         assert!(bool::from_rex(&args[0]).expect("bool should decode"));
         let (tag, args) = option.as_adt().expect("adt handle");
-        assert!(sym_eq(&tag, "Some"));
+        assert!(tag.as_ref() == "Some");
         assert_eq!(args.len(), 1);
         assert!(args[0].as_bool().expect("bool handle"));
     }

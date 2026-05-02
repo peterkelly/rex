@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
-use rex_ast::expr::sym;
+use rex_ast::expr::Symbol;
 use rex_engine::{
     Compiler, Engine, EngineError, EngineOptions, Evaluator, EvaluatorRef, Handle, Module,
     PreludeMode, RexAdt, RexType, RuntimeEnv, Value,
@@ -67,8 +67,8 @@ impl RexType for LocalRunSpec {
 impl RexAdt for LocalRunSpec {
     fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
         let mut supply = TypeVarSupply::new();
-        let mut adt = AdtDecl::new(&sym("RunSpec"), &[], &mut supply);
-        adt.add_variant(sym("Pending"), vec![]);
+        let mut adt = AdtDecl::new(&Symbol::intern("RunSpec"), &[], &mut supply);
+        adt.add_variant(Symbol::intern("Pending"), vec![]);
         Ok(adt)
     }
 }
@@ -534,7 +534,12 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             i32_value_scheme(),
             0,
             |engine: EvaluatorRef<bool>, _: &Type, _args| {
-                assert!(engine.type_system().adts.contains_key(&sym("Option")));
+                assert!(
+                    engine
+                        .type_system()
+                        .adts
+                        .contains_key(&Symbol::intern("Option"))
+                );
                 engine.heap().alloc_i32(123)
             },
         )
@@ -651,7 +656,7 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
             Scheme::new(vec![], vec![], LocalRunSpec::rex_type()),
             0,
             |engine: EvaluatorRef<()>, _typ: &Type, _args: &[Handle]| {
-                engine.heap().alloc_adt(sym("Pending"), vec![])
+                engine.heap().alloc_adt(Symbol::intern("Pending"), vec![])
             },
         )
         .unwrap();
@@ -1360,7 +1365,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
             Scheme::new(vec![], vec![], Type::con("RunSpec", 0)),
             0,
             |engine: EvaluatorRef<()>, _: &Type, _args| {
-                engine.heap().alloc_adt(sym("Pending"), vec![])
+                engine.heap().alloc_adt(Symbol::intern("Pending"), vec![])
             },
         )
         .unwrap();

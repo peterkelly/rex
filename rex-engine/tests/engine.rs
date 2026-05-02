@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rex_ast::expr::{Decl, Expr, Program, sym};
+use rex_ast::expr::{Decl, Expr, Program, Symbol};
 use rex_engine::{Compiler, Engine, EngineError, Evaluator, Module, ReplState, RuntimeEnv, Value};
 use rex_lexer::Token;
 use rex_parser::Parser;
@@ -62,7 +62,7 @@ fn registry_markdown_lists_core_sections() {
 fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::new("acme.types");
-    let a = Type::var(TypeVar::new(0, Some(sym("a"))));
+    let a = Type::var(TypeVar::new(0, Some(Symbol::intern("a"))));
     let types = vec![
         Type::fun(
             Type::app(Type::user_con("Foo", 1), a.clone()),
@@ -78,13 +78,13 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
         module
             .structured_decls
             .iter()
-            .any(|d| matches!(d, Decl::Type(td) if td.name == sym("Foo")))
+            .any(|d| matches!(d, Decl::Type(td) if td.name == Symbol::intern("Foo")))
     );
     assert!(
         module
             .structured_decls
             .iter()
-            .any(|d| matches!(d, Decl::Type(td) if td.name == sym("Bar")))
+            .any(|d| matches!(d, Decl::Type(td) if td.name == Symbol::intern("Bar")))
     );
 }
 
@@ -109,9 +109,9 @@ fn module_add_adt_decls_from_types_rejects_conflicting_adts() {
 fn inject_adt_family_rejects_cycles() {
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut a = engine.adt_decl("A", &[]);
-    a.add_variant(sym("A"), vec![Type::con("B", 0)]);
+    a.add_variant(Symbol::intern("A"), vec![Type::con("B", 0)]);
     let mut b = engine.adt_decl("B", &[]);
-    b.add_variant(sym("B"), vec![Type::con("A", 0)]);
+    b.add_variant(Symbol::intern("B"), vec![Type::con("A", 0)]);
 
     let mut module = Module::<()>::global();
     let err = module.add_adt_family(vec![a, b]).unwrap_err();

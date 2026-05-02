@@ -1,4 +1,4 @@
-use rex_ast::expr::sym;
+use rex_ast::expr::Symbol;
 use rex_engine::{EngineError, Heap, Value, ValueDisplayOptions};
 
 #[test]
@@ -58,7 +58,7 @@ fn value_display_default_strips_internal_noise() {
     assert_eq!(num.display().expect("display i32"), "2");
 
     let ctor = heap
-        .alloc_adt(sym("@snippetabc.A"), vec![])
+        .alloc_adt(Symbol::intern("@snippetabc.A"), vec![])
         .expect("alloc adt");
     assert_eq!(ctor.display().expect("display adt"), "A");
 }
@@ -71,7 +71,7 @@ fn value_display_unsanitized_keeps_suffixes_and_names() {
     assert_eq!(num.display_with(opts).expect("display i32"), "2i32");
 
     let ctor = heap
-        .alloc_adt(sym("@snippetabc.A"), vec![])
+        .alloc_adt(Symbol::intern("@snippetabc.A"), vec![])
         .expect("alloc adt");
     assert_eq!(
         ctor.display_with(opts).expect("display adt"),
@@ -87,11 +87,13 @@ fn value_display_docs_mode_strips_internal_noise() {
     assert_eq!(num.display_with(opts).expect("display i32 docs"), "2");
 
     let ctor = heap
-        .alloc_adt(sym("@snippetabc.A"), vec![])
+        .alloc_adt(Symbol::intern("@snippetabc.A"), vec![])
         .expect("alloc adt");
     assert_eq!(ctor.display_with(opts).expect("display adt docs"), "A");
 
-    let non_snippet = heap.alloc_adt(sym("pkg.A"), vec![]).expect("alloc adt");
+    let non_snippet = heap
+        .alloc_adt(Symbol::intern("pkg.A"), vec![])
+        .expect("alloc adt");
     assert_eq!(
         non_snippet
             .display_with(opts)

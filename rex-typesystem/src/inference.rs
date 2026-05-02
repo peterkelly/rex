@@ -11,7 +11,7 @@ use crate::{
     },
     unification::{Subst, Unifier, compose_subst, subst_is_empty, unify},
 };
-use rex_ast::expr::{Expr, Pattern, Symbol, TypeConstraint, TypeExpr, sym};
+use rex_ast::expr::{Expr, Pattern, Symbol, TypeConstraint, TypeExpr};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
@@ -593,11 +593,11 @@ fn infer_expr_type_inner(
     match expr {
         Expr::Bool(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::Bool))),
         Expr::Uint(_, _) => {
-            let lit_ty = Type::var(supply.fresh(Some(sym("n"))));
+            let lit_ty = Type::var(supply.fresh(Some(Symbol::intern("n"))));
             Ok((vec![Predicate::new("Integral", lit_ty.clone())], lit_ty))
         }
         Expr::Int(_, _) => {
-            let lit_ty = Type::var(supply.fresh(Some(sym("n"))));
+            let lit_ty = Type::var(supply.fresh(Some(Symbol::intern("n"))));
             Ok((
                 vec![
                     Predicate::new("Integral", lit_ty.clone()),
@@ -611,7 +611,7 @@ fn infer_expr_type_inner(
         Expr::Uuid(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::Uuid))),
         Expr::DateTime(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::DateTime))),
         Expr::Hole(_) => {
-            let t = Type::var(supply.fresh(Some(sym("hole"))));
+            let t = Type::var(supply.fresh(Some(Symbol::intern("hole"))));
             Ok((vec![], t))
         }
         Expr::Var(var) => {
@@ -717,7 +717,7 @@ fn infer_expr_type_inner(
                 }
                 let res_ty = match overload_candidates.as_ref() {
                     Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
-                    _ => Type::var(supply.fresh(Some("r".into()))),
+                    _ => Type::var(supply.fresh(Some(Symbol::intern("r")))),
                 };
                 unifier.unify(&func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
                 preds.extend(p_arg);
@@ -905,7 +905,7 @@ fn infer_expr_type_inner(
             Ok((preds, tuple_ty))
         }
         Expr::List(_, elems) => {
-            let elem_tv = Type::var(supply.fresh(Some("a".into())));
+            let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("a"))));
             let mut preds = Vec::new();
             for elem in elems {
                 let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, elem.as_ref())?;
@@ -919,7 +919,7 @@ fn infer_expr_type_inner(
             Ok((preds, list_ty))
         }
         Expr::Dict(_, kvs) => {
-            let elem_tv = Type::var(supply.fresh(Some("v".into())));
+            let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("v"))));
             let mut preds = Vec::new();
             for v in kvs.values() {
                 let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, v.as_ref())?;
@@ -935,7 +935,7 @@ fn infer_expr_type_inner(
         Expr::Match(_, scrutinee, arms) => {
             let (p1, t1) = infer_expr_type(unifier, supply, env, adts, known, scrutinee.as_ref())?;
             let mut preds = p1;
-            let res_ty = Type::var(supply.fresh(Some("match".into())));
+            let res_ty = Type::var(supply.fresh(Some(Symbol::intern("match"))));
             let patterns: Vec<Pattern> = arms.iter().map(|(pat, _)| pat.clone()).collect();
 
             for (pat, expr) in arms {
@@ -1028,7 +1028,7 @@ fn infer_expr(
                 ))
             }
             Expr::Uint(_, v) => {
-                let t = Type::var(supply.fresh(Some(sym("n"))));
+                let t = Type::var(supply.fresh(Some(Symbol::intern("n"))));
                 Ok((
                     vec![Predicate::new("Integral", t.clone())],
                     t.clone(),
@@ -1036,7 +1036,7 @@ fn infer_expr(
                 ))
             }
             Expr::Int(_, v) => {
-                let t = Type::var(supply.fresh(Some(sym("n"))));
+                let t = Type::var(supply.fresh(Some(Symbol::intern("n"))));
                 Ok((
                     vec![
                         Predicate::new("Integral", t.clone()),
@@ -1079,7 +1079,7 @@ fn infer_expr(
                 ))
             }
             Expr::Hole(_) => {
-                let t = Type::var(supply.fresh(Some(sym("hole"))));
+                let t = Type::var(supply.fresh(Some(Symbol::intern("hole"))));
                 Ok((vec![], t.clone(), TypedExpr::new(t, TypedExprKind::Hole)))
             }
             Expr::Var(var) => {
@@ -1204,7 +1204,7 @@ fn infer_expr(
                             let coercion_fn = TypedExpr::new(
                                 coercion_ty,
                                 TypedExprKind::Var {
-                                    name: sym("prim_array_from_list"),
+                                    name: Symbol::intern("prim_array_from_list"),
                                     overloads: vec![],
                                 },
                             );
@@ -1230,7 +1230,7 @@ fn infer_expr(
                     }
                     let res_ty = match overload_candidates.as_ref() {
                         Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
-                        _ => Type::var(supply.fresh(Some("r".into()))),
+                        _ => Type::var(supply.fresh(Some(Symbol::intern("r")))),
                     };
                     unifier.unify(&func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
                     let result_ty = match overload_candidates.as_ref() {
@@ -1482,7 +1482,7 @@ fn infer_expr(
                 Ok((preds, tuple_ty, typed))
             }
             Expr::List(_, elems) => {
-                let elem_tv = Type::var(supply.fresh(Some("a".into())));
+                let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("a"))));
                 let mut preds = Vec::new();
                 let mut typed_elems = Vec::new();
                 for elem in elems {
@@ -1499,7 +1499,7 @@ fn infer_expr(
                 Ok((preds, list_ty, typed))
             }
             Expr::Dict(_, kvs) => {
-                let elem_tv = Type::var(supply.fresh(Some("v".into())));
+                let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("v"))));
                 let mut preds = Vec::new();
                 let mut typed_kvs = BTreeMap::new();
                 for (k, v) in kvs {
@@ -1520,7 +1520,7 @@ fn infer_expr(
                     infer_expr(unifier, supply, env, adts, known, scrutinee)?;
                 let mut preds = p1;
                 let mut typed_arms = Vec::new();
-                let res_ty = Type::var(supply.fresh(Some("match".into())));
+                let res_ty = Type::var(supply.fresh(Some(Symbol::intern("match"))));
                 let patterns: Vec<Pattern> = arms.iter().map(|(pat, _)| pat.clone()).collect();
 
                 for (pat, expr) in arms {
@@ -1777,7 +1777,10 @@ fn resolve_record_update(
         return Ok((base_ty.clone(), fields.clone()));
     }
 
-    let field_for_errors = update_fields.first().cloned().unwrap_or_else(|| sym("_"));
+    let field_for_errors = update_fields
+        .first()
+        .cloned()
+        .unwrap_or_else(|| Symbol::intern("_"));
 
     let (adt, variant) =
         select_record_variant(adts, base_ty, known_variant, &field_for_errors, |fields| {
@@ -1834,7 +1837,7 @@ fn resolve_projection(
             TypeKind::Var(_) => {
                 let mut elems = Vec::with_capacity(index + 1);
                 for _ in 0..=index {
-                    elems.push(Type::var(supply.fresh(Some(sym("t")))));
+                    elems.push(Type::var(supply.fresh(Some(Symbol::intern("t")))));
                 }
                 let tuple_ty = Type::tuple(elems.clone());
                 unifier.unify(base_ty, &tuple_ty)?;
@@ -1932,7 +1935,7 @@ fn infer_pattern(
             Ok((all_preds, bindings))
         }
         Pattern::List(_, ps) => {
-            let elem_tv = Type::var(supply.fresh(Some("a".into())));
+            let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("a"))));
             let list_ty = Type::app(Type::builtin(BuiltinTypeId::List), elem_tv.clone());
             unifier.unify(scrutinee_ty, &list_ty)?;
             let mut preds = Vec::new();
@@ -1950,7 +1953,7 @@ fn infer_pattern(
             Ok((preds, bindings))
         }
         Pattern::Cons(_, head, tail) => {
-            let elem_tv = Type::var(supply.fresh(Some("a".into())));
+            let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("a"))));
             let list_ty = Type::app(Type::builtin(BuiltinTypeId::List), elem_tv.clone());
             unifier.unify(scrutinee_ty, &list_ty)?;
             let mut preds = Vec::new();
@@ -1977,7 +1980,7 @@ fn infer_pattern(
         }
         Pattern::Tuple(_, elems) => {
             let mut elem_tys: Vec<Type> = (0..elems.len())
-                .map(|i| Type::var(supply.fresh(Some(format!("t{i}").into()))))
+                .map(|i| Type::var(supply.fresh(Some(Symbol::intern(&format!("t{i}"))))))
                 .collect();
             let expected = Type::tuple(elem_tys.clone());
             unifier.unify(scrutinee_ty, &expected)?;
@@ -2022,7 +2025,7 @@ fn infer_pattern(
                     .collect();
                 Ok((preds, bindings))
             } else {
-                let elem_tv = Type::var(supply.fresh(Some("v".into())));
+                let elem_tv = Type::var(supply.fresh(Some(Symbol::intern("v"))));
                 let dict_ty = Type::app(Type::builtin(BuiltinTypeId::Dict), elem_tv.clone());
                 unifier.unify(scrutinee_ty, &dict_ty)?;
                 let elem_ty = unifier.apply_type(&elem_tv);
@@ -2067,7 +2070,7 @@ fn adt_name_from_patterns(
                 let name_sym = name.to_dotted_symbol();
                 ctor_lookup(adts, &name_sym).map(|(adt, _)| adt.name.clone())
             }
-            Pattern::List(..) | Pattern::Cons(..) => Some(sym("List")),
+            Pattern::List(..) | Pattern::Cons(..) => Some(Symbol::intern("List")),
             _ => None,
         };
         if let Some(next) = next {
@@ -2117,10 +2120,10 @@ fn check_match_exhaustive(
                 }
             }
             Pattern::List(_, elems) if adt_name.as_ref() == "List" && elems.is_empty() => {
-                covered.insert(sym("Empty"));
+                covered.insert(Symbol::intern("Empty"));
             }
             Pattern::Cons(..) if adt_name.as_ref() == "List" => {
-                covered.insert(sym("Cons"));
+                covered.insert(Symbol::intern("Cons"));
             }
             _ => {}
         }

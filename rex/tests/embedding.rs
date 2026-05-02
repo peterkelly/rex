@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use rex::{
     Rex,
-    ast::{Expr, sym},
+    ast::{Expr, Symbol},
     engine::{
         Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module,
         RexDefault, RuntimeEnv, Value, virtual_export_name,
@@ -284,9 +284,9 @@ fn tuple_items(value: &Handle) -> Vec<Handle> {
 }
 
 fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineError> {
-    let mut list = heap.alloc_adt(sym("Empty"), vec![])?;
+    let mut list = heap.alloc_adt(Symbol::intern("Empty"), vec![])?;
     for value in values.into_iter().rev() {
-        list = heap.alloc_adt(sym("Cons"), vec![value, list])?;
+        list = heap.alloc_adt(Symbol::intern("Cons"), vec![value, list])?;
     }
     Ok(list)
 }
@@ -301,10 +301,10 @@ fn handle_as_list(handle: &Handle) -> Result<Vec<Handle>, EngineError> {
                 got: cursor.type_name()?.into(),
             });
         };
-        if tag == sym("Empty") {
+        if tag == Symbol::intern("Empty") {
             return Ok(out);
         }
-        if tag == sym("Cons") && args.len() == 2 {
+        if tag == Symbol::intern("Cons") && args.len() == 2 {
             out.push(args[0].clone());
             cursor = args[1].clone();
             continue;
@@ -605,7 +605,7 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
 
     // This demonstrates how to write a generic function by declaring a fresh
     // type variable `T` and using it in the exported Rex type scheme.
-    let t_var = engine.type_system.fresh_type_var(Some("T".into()));
+    let t_var = engine.type_system.fresh_type_var(Some(Symbol::intern("T")));
     let t = Type::var(t_var.clone());
     let scheme = Scheme::new(
         vec![t_var],
@@ -660,8 +660,8 @@ async fn generic_export_can_swap_two_values_of_different_types() {
 
     // This is another example of writing a generic function: it introduces
     // independent type variables `P` and `Q` and returns them in swapped order.
-    let p_var = engine.type_system.fresh_type_var(Some("P".into()));
-    let q_var = engine.type_system.fresh_type_var(Some("Q".into()));
+    let p_var = engine.type_system.fresh_type_var(Some(Symbol::intern("P")));
+    let q_var = engine.type_system.fresh_type_var(Some(Symbol::intern("Q")));
     let p = Type::var(p_var.clone());
     let q = Type::var(q_var.clone());
     let scheme = Scheme::new(

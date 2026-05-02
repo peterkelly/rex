@@ -9,7 +9,7 @@ use std::{
 use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl,
     ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Scope,
-    Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var, intern,
+    Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_lexer::{
     Token, Tokens,
@@ -75,12 +75,12 @@ impl Parser {
         match self.current_token() {
             Token::Ident(name, span, ..) => {
                 self.next_token();
-                Ok((intern(&name), span))
+                Ok((Symbol::intern(&name), span))
             }
             token => {
                 if let Some((name, span)) = Self::operator_token_name(&token) {
                     self.next_token();
-                    Ok((intern(name), span))
+                    Ok((Symbol::intern(name), span))
                 } else {
                     Err(ParserErr::new(
                         *token.span(),
@@ -759,13 +759,13 @@ impl Parser {
 
             let (field, end) = match self.current_token() {
                 Token::Ident(name, span, ..) => {
-                    let name = intern(&name);
+                    let name = Symbol::intern(&name);
                     let end = span.end;
                     self.next_token();
                     (name, end)
                 }
                 Token::Int(value, span) => {
-                    let name = intern(&value.to_string());
+                    let name = Symbol::intern(&value.to_string());
                     let end = span.end;
                     self.next_token();
                     (name, end)
@@ -1755,7 +1755,7 @@ impl Parser {
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
                 self.next_token_raw();
-                (intern(&name), span)
+                (Symbol::intern(&name), span)
             }
             token => {
                 return Err(ParserErr::new(
@@ -1778,7 +1778,7 @@ impl Parser {
                 break;
             }
             header_end = header_end.max(span.end);
-            params.push(intern(&p));
+            params.push(Symbol::intern(&p));
             self.next_token_raw();
         }
 
@@ -2688,7 +2688,7 @@ impl Parser {
                     if alias.is_empty() {
                         None
                     } else {
-                        Some(intern(&alias))
+                        Some(Symbol::intern(&alias))
                     },
                 )
             }
@@ -2740,7 +2740,7 @@ impl Parser {
             Token::Ident(..) => {
                 let mut segs: Vec<Symbol> = Vec::new();
                 let (first, first_span) = match self.current_token() {
-                    Token::Ident(name, span, ..) => (intern(&name), span),
+                    Token::Ident(name, span, ..) => (Symbol::intern(&name), span),
                     token => {
                         return Err(ParserErr::new(
                             *token.span(),
@@ -2755,7 +2755,7 @@ impl Parser {
                 while matches!(self.current_token(), Token::Dot(..)) {
                     self.next_token();
                     let (seg, seg_span) = match self.current_token() {
-                        Token::Ident(name, span, ..) => (intern(&name), span),
+                        Token::Ident(name, span, ..) => (Symbol::intern(&name), span),
                         token => {
                             return Err(ParserErr::new(
                                 *token.span(),
@@ -2839,7 +2839,7 @@ impl Parser {
                             Token::Ident(alias, alias_span, ..) => {
                                 self.next_token();
                                 item_end = alias_span.end;
-                                Some(intern(&alias))
+                                Some(Symbol::intern(&alias))
                             }
                             token => {
                                 return Err(ParserErr::new(
@@ -2898,7 +2898,7 @@ impl Parser {
                 Token::Ident(name, span, ..) => {
                     self.next_token();
                     span_end = span_end.max(span.end);
-                    intern(&name)
+                    Symbol::intern(&name)
                 }
                 token => {
                     return Err(ParserErr::new(
@@ -2909,7 +2909,7 @@ impl Parser {
             }
         } else {
             default_alias
-                .or_else(|| clause.as_ref().map(|_| intern("_")))
+                .or_else(|| clause.as_ref().map(|_| Symbol::intern("_")))
                 .ok_or_else(|| {
                     ParserErr::new(
                         Span::from_begin_end(span_begin, span_end),
@@ -2934,7 +2934,7 @@ impl Parser {
         loop {
             if matches!(self.current_token(), Token::DotDot(..)) {
                 self.next_token();
-                segments.push(intern("super"));
+                segments.push(Symbol::intern("super"));
             } else {
                 match self.current_token() {
                     Token::Dot(..) => self.next_token(),
@@ -2963,7 +2963,7 @@ impl Parser {
         }
 
         let (first, first_span) = match self.current_token() {
-            Token::Ident(name, span, ..) => (intern(&name), span),
+            Token::Ident(name, span, ..) => (Symbol::intern(&name), span),
             token => {
                 return Err(ParserErr::new(
                     *token.span(),
@@ -2981,7 +2981,7 @@ impl Parser {
             }
             self.next_token();
             let (seg, seg_span) = match self.current_token() {
-                Token::Ident(name, span, ..) => (intern(&name), span),
+                Token::Ident(name, span, ..) => (Symbol::intern(&name), span),
                 token => {
                     return Err(ParserErr::new(
                         *token.span(),
@@ -3013,7 +3013,7 @@ impl Parser {
 
         let (name, _name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let name = intern(&name);
+                let name = Symbol::intern(&name);
                 self.next_token();
                 (name, span)
             }
@@ -3028,7 +3028,7 @@ impl Parser {
         let mut params = Vec::new();
         while let Token::Ident(_param, ..) = self.current_token() {
             let name = match self.current_token() {
-                Token::Ident(param, ..) => intern(&param),
+                Token::Ident(param, ..) => Symbol::intern(&param),
                 _ => unreachable!(),
             };
             self.next_token();
@@ -3067,7 +3067,7 @@ impl Parser {
     fn parse_type_variant(&mut self) -> Result<(TypeVariant, Span), ParserErr> {
         let (name, name_span) = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                let name = intern(&name);
+                let name = Symbol::intern(&name);
                 self.next_token();
                 (name, span)
             }
@@ -3234,7 +3234,7 @@ impl Parser {
             let span_end = loop {
                 let (name, _span) = match this.current_token() {
                     Token::Ident(name, span, ..) => {
-                        let name = intern(&name);
+                        let name = Symbol::intern(&name);
                         this.next_token();
                         (name, span)
                     }
@@ -3312,7 +3312,7 @@ impl Parser {
                 self.next_token();
                 match self.current_token() {
                     Token::Ident(name, seg_span, ..) => {
-                        segments.push(intern(&name));
+                        segments.push(Symbol::intern(&name));
                         end = seg_span.end;
                         self.next_token();
                     }
@@ -3343,6 +3343,7 @@ impl Parser {
             if let Pattern::Var(var) = &head {
                 let is_constructor = var
                     .name
+                    .as_ref()
                     .chars()
                     .next()
                     .map(|c| c.is_uppercase())
@@ -3402,7 +3403,7 @@ impl Parser {
         let start = self.current_token().span().begin;
         let mut end = match self.current_token() {
             Token::Ident(name, span, ..) => {
-                segments.push(intern(&name));
+                segments.push(Symbol::intern(&name));
                 self.next_token();
                 span.end
             }
@@ -3413,7 +3414,7 @@ impl Parser {
             self.next_token();
             match self.current_token() {
                 Token::Ident(name, span, ..) => {
-                    segments.push(intern(&name));
+                    segments.push(Symbol::intern(&name));
                     end = span.end;
                     self.next_token();
                 }
@@ -3531,7 +3532,7 @@ impl Parser {
                 match this.current_token() {
                     Token::Ident(name, key_span, ..) => {
                         let key_name = name;
-                        let key = intern(&key_name);
+                        let key = Symbol::intern(&key_name);
                         this.next_token();
 
                         let pat = if matches!(this.current_token(), Token::Colon(..)) {

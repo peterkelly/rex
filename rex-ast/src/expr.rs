@@ -1,9 +1,7 @@
 use std::{
-    borrow::Borrow,
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fmt::{self, Display, Formatter},
-    ops::Deref,
-    sync::{Arc, Mutex, OnceLock},
+    sync::Arc,
 };
 
 use rex_lexer::span::{Position, Span};
@@ -12,96 +10,9 @@ use rpds::HashTrieMapSync;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Deserialize, serde::Serialize,
-)]
-#[serde(transparent)]
-pub struct Symbol(Arc<str>);
-
-impl Symbol {
-    pub fn as_str(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-
-impl Deref for Symbol {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-
-impl AsRef<str> for Symbol {
-    fn as_ref(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-
-impl Borrow<str> for Symbol {
-    fn borrow(&self) -> &str {
-        self.0.as_ref()
-    }
-}
-
-impl Display for Symbol {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl From<&str> for Symbol {
-    fn from(value: &str) -> Self {
-        Symbol(Arc::from(value))
-    }
-}
-
-impl From<String> for Symbol {
-    fn from(value: String) -> Self {
-        Symbol(Arc::from(value))
-    }
-}
-
-impl From<Arc<str>> for Symbol {
-    fn from(value: Arc<str>) -> Self {
-        Symbol(value)
-    }
-}
+pub use crate::symbol::Symbol;
 
 pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;
-
-// Global symbol interner.
-//
-// Design constraints:
-// - Symbols wrap `Arc<str>` so cloning them is cheap and comparisons are fast.
-// - The table is process-global and monotonically grows; that's fine for a
-//   typical “compile a program, then exit” workflow.
-// - Locking makes the cost model explicit (and obvious in profiles). If this
-//   ever shows up hot, the first step is usually “reduce calls to `intern`”,
-//   not “invent a clever interner”.
-static INTERNER: OnceLock<Mutex<HashMap<String, Symbol>>> = OnceLock::new();
-
-pub fn intern(name: &str) -> Symbol {
-    let mutex = INTERNER.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut table = match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    };
-    if let Some(existing) = table.get(name) {
-        return existing.clone();
-    }
-    let sym = Symbol(Arc::from(name));
-    table.insert(name.to_string(), sym.clone());
-    sym
-}
-
-pub fn sym(name: &str) -> Symbol {
-    intern(name)
-}
-
-pub fn sym_eq(name: &Symbol, expected: &str) -> bool {
-    name.as_ref() == expected
-}
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -114,14 +25,14 @@ impl Var {
     pub fn new(name: impl ToString) -> Self {
         Self {
             span: Span::default(),
-            name: intern(&name.to_string()),
+            name: Symbol::intern(&name.to_string()),
         }
     }
 
     pub fn with_span(span: Span, name: impl ToString) -> Self {
         Self {
             span,
-            name: intern(&name.to_string()),
+            name: Symbol::intern(&name.to_string()),
         }
     }
 
@@ -158,7 +69,7 @@ impl NameRef {
         if segments.len() == 1 {
             NameRef::Unqualified(segments[0].clone())
         } else {
-            let dotted = intern(
+            let dotted = Symbol::intern(
                 &segments
                     .iter()
                     .map(|s| s.as_ref())
@@ -170,7 +81,7 @@ impl NameRef {
     }
 
     pub fn from_dotted(name: &str) -> Self {
-        let segments: Vec<Symbol> = name.split('.').map(intern).collect();
+        let segments: Vec<Symbol> = name.split('.').map(Symbol::intern).collect();
         NameRef::from_segments(segments)
     }
 

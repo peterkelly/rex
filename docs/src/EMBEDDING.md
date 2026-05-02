@@ -822,14 +822,14 @@ without `#[derive(Rex)]`.
 several ADTs manually, prefer batching them in one module with `add_adt_family(...)`.
 
 ```rust
-use rex::{Engine, Module, RexType, Type, sym};
+use rex::{Engine, Module, RexType, Symbol, Type};
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
 
 let mut adt = engine.adt_decl_from_type(&Type::con("PrimitiveEither", 0))?;
-adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
-adt.add_variant(sym("Count"), vec![i32::rex_type()]);
+adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
+adt.add_variant(Symbol::intern("Count"), vec![i32::rex_type()]);
 globals.add_adt_decl(adt)?;
 engine.inject_module(globals)?;
 ```
@@ -842,7 +842,7 @@ If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(
 `AdtDecl` there. Leaf types can inherit the default no-op implementation.
 
 ```rust
-use rex::{AdtDecl, Engine, EngineError, RexAdt, RexType, Type, TypeVarSupply, sym};
+use rex::{AdtDecl, Engine, EngineError, RexAdt, RexType, Symbol, Type, TypeVarSupply};
 
 struct PrimitiveEither;
 
@@ -860,9 +860,9 @@ impl RexType for PrimitiveEither {
 impl RexAdt for PrimitiveEither {
     fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
         let mut supply = TypeVarSupply::new();
-        let mut adt = AdtDecl::new(&sym("PrimitiveEither"), &[], &mut supply);
-        adt.add_variant(sym("Flag"), vec![bool::rex_type()]);
-        adt.add_variant(sym("Count"), vec![i32::rex_type()]);
+        let mut adt = AdtDecl::new(&Symbol::intern("PrimitiveEither"), &[], &mut supply);
+        adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
+        adt.add_variant(Symbol::intern("Count"), vec![i32::rex_type()]);
         Ok(adt)
     }
 }

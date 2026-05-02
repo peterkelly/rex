@@ -12,7 +12,7 @@ use lsp_types::{
 use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath,
     InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Symbol, TypeConstraint, TypeDecl,
-    TypeExpr, TypeVariant, Var, intern,
+    TypeExpr, TypeVariant, Var,
 };
 use rex_engine::{Engine, EngineError, ModuleError};
 use rex_lexer::{
@@ -1356,13 +1356,13 @@ pub fn prepare_program_with_imports(
                 Decl::Type(td) => {
                     type_map.insert(
                         td.name.clone(),
-                        intern(&format!("{prefix}.{}", td.name.as_ref())),
+                        Symbol::intern(&format!("{prefix}.{}", td.name.as_ref())),
                     );
                 }
                 Decl::Class(cd) => {
                     class_map.insert(
                         cd.name.clone(),
-                        intern(&format!("{prefix}.{}", cd.name.as_ref())),
+                        Symbol::intern(&format!("{prefix}.{}", cd.name.as_ref())),
                     );
                 }
                 _ => {}
@@ -1380,7 +1380,7 @@ pub fn prepare_program_with_imports(
                 .variants
                 .iter()
                 .map(|v| TypeVariant {
-                    name: intern(&format!("{prefix}.{}", v.name.as_ref())),
+                    name: Symbol::intern(&format!("{prefix}.{}", v.name.as_ref())),
                     args: v
                         .args
                         .iter()
@@ -1405,8 +1405,8 @@ pub fn prepare_program_with_imports(
         for decl in &module_program.decls {
             match decl {
                 Decl::Fn(fd) if fd.is_pub => {
-                    let internal = intern(&format!("{prefix}.{}", fd.name.name.as_ref()));
-                    value_map.insert(intern(fd.name.name.as_ref()), internal.clone());
+                    let internal = Symbol::intern(&format!("{prefix}.{}", fd.name.name.as_ref()));
+                    value_map.insert(Symbol::intern(fd.name.name.as_ref()), internal.clone());
                     export_names.insert(fd.name.name.as_ref().to_string());
 
                     let params = fd
@@ -1433,8 +1433,8 @@ pub fn prepare_program_with_imports(
                     let _ = ts.inject_declare_fn_decl(&decl);
                 }
                 Decl::DeclareFn(df) if df.is_pub => {
-                    let internal = intern(&format!("{prefix}.{}", df.name.name.as_ref()));
-                    value_map.insert(intern(df.name.name.as_ref()), internal.clone());
+                    let internal = Symbol::intern(&format!("{prefix}.{}", df.name.name.as_ref()));
+                    value_map.insert(Symbol::intern(df.name.name.as_ref()), internal.clone());
                     export_names.insert(df.name.name.as_ref().to_string());
 
                     let params = df
@@ -1463,7 +1463,8 @@ pub fn prepare_program_with_imports(
                 Decl::Type(td) if td.is_pub => {
                     // Public constructors are accessible as values.
                     for variant in &td.variants {
-                        let internal = intern(&format!("{prefix}.{}", variant.name.as_ref()));
+                        let internal =
+                            Symbol::intern(&format!("{prefix}.{}", variant.name.as_ref()));
                         value_map.insert(variant.name.clone(), internal);
                         export_names.insert(variant.name.as_ref().to_string());
                     }
@@ -1506,7 +1507,7 @@ fn completion_exports_for_module_alias(
     program: &Program,
     alias: &str,
 ) -> std::result::Result<Vec<String>, String> {
-    let alias_sym = intern(alias);
+    let alias_sym = Symbol::intern(alias);
     let Some(import_decl) = program.decls.iter().find_map(|d| {
         let Decl::Import(id) = d else { return None };
         if id.alias == alias_sym {
@@ -1587,7 +1588,7 @@ pub(crate) fn goto_definition_response(
     if let Some((alias, field)) = imported_projection
         && let Ok((_rewritten, _ts, imports, _diags)) = prepare_program_with_imports(uri, &program)
     {
-        let alias_sym = intern(&alias);
+        let alias_sym = Symbol::intern(&alias);
         if let Some(info) = imports.get(&alias_sym)
             && let Some(span) = info.export_defs.get(&field)
             && let Some(path) = info.path.as_ref()

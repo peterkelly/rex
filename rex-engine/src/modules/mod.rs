@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl,
     ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Symbol,
-    TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var, intern,
+    TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_lexer::{Span, Token};
 use rex_parser::Parser as RexParser;
@@ -84,10 +84,10 @@ fn default_import_decl(module_name: &str) -> ImportDecl {
         span: Span::default(),
         is_pub: false,
         path: ImportPath::Local {
-            segments: vec![intern(module_name)],
+            segments: vec![Symbol::intern(module_name)],
             sha: None,
         },
-        alias: intern(module_name),
+        alias: Symbol::intern(module_name),
         clause: Some(ImportClause::All),
     }
 }
@@ -1967,7 +1967,7 @@ fn graph_imports_for_program(program: &Program, default_imports: &[String]) -> V
         }
     }
     for module_name in default_imports {
-        let alias = intern(module_name);
+        let alias = Symbol::intern(module_name);
         if contains_import_alias(&program.decls, &alias) {
             continue;
         }
@@ -2450,7 +2450,7 @@ where
             policy.existing_imported_values.cloned().unwrap_or_default();
         let default_imports = self.default_imports().to_vec();
         for module_name in default_imports {
-            let alias = intern(&module_name);
+            let alias = Symbol::intern(&module_name);
             if contains_import_alias(decls, &alias) {
                 continue;
             }
@@ -2710,7 +2710,7 @@ where
 
         let default_imports = self.default_imports().to_vec();
         for module_name in default_imports {
-            let alias = intern(&module_name);
+            let alias = Symbol::intern(&module_name);
             if contains_import_alias(&program.decls, &alias) {
                 continue;
             }

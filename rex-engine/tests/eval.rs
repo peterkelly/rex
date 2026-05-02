@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use rex_ast::expr::{Decl, Expr, Program, sym, sym_eq};
+use rex_ast::expr::{Decl, Expr, Program, Symbol};
 use rex_engine::{
     Compiler, Engine, EngineError, Evaluator, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module,
     RexType, RuntimeEnv, Value,
@@ -142,8 +142,8 @@ fn list_values(value: &Value) -> Vec<Handle> {
     let mut cur = value.clone();
     loop {
         match &cur {
-            Value::Adt(tag, args) if sym_eq(tag, "Empty") && args.is_empty() => return out,
-            Value::Adt(tag, args) if sym_eq(tag, "Cons") && args.len() == 2 => {
+            Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => return out,
+            Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
                 out.push(args[0].clone());
                 cur = args[1].value().unwrap();
             }
@@ -272,7 +272,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     let mut compiler = Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("inc 1").unwrap();
 
-    assert_eq!(program.externs().natives, vec![sym("inc")]);
+    assert_eq!(program.externs().natives, vec![Symbol::intern("inc")]);
     assert_eq!(
         program.link_contract().abi_version,
         runtime_engine_abi_version()
@@ -292,7 +292,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         compatibility.actual_abi_version,
         runtime.capabilities().abi_version
     );
-    assert_eq!(compatibility.missing_natives, vec![sym("inc")]);
+    assert_eq!(compatibility.missing_natives, vec![Symbol::intern("inc")]);
     assert!(!compatibility.is_compatible());
     assert_ne!(runtime.fingerprint(), 0);
     assert!(!runtime.storage_boundary().serializable);
@@ -306,7 +306,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
             actual_abi_version,
             missing_natives,
             ..
-        } if expected_abi_version == actual_abi_version && missing_natives == vec![sym("inc")]
+        } if expected_abi_version == actual_abi_version && missing_natives == vec![Symbol::intern("inc")]
     ));
 
     let mut evaluator = Evaluator::new(runtime);
@@ -320,7 +320,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         EngineError::Link {
             missing_natives,
             ..
-        } if missing_natives == vec![sym("inc")]
+        } if missing_natives == vec![Symbol::intern("inc")]
     ));
 }
 
@@ -340,7 +340,10 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
     });
     let runtime = RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
-    assert_eq!(compatibility.incompatible_natives, vec![sym("inc")]);
+    assert_eq!(
+        compatibility.incompatible_natives,
+        vec![Symbol::intern("inc")]
+    );
     assert!(!compatibility.is_compatible());
 
     let err = runtime.validate(&program).unwrap_err().into_engine_error();
@@ -349,7 +352,7 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
         EngineError::Link {
             incompatible_natives,
             ..
-        } if incompatible_natives == vec![sym("inc")]
+        } if incompatible_natives == vec![Symbol::intern("inc")]
     ));
 }
 
@@ -393,13 +396,16 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
     let mut compiler = Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("answer + 1").unwrap();
 
-    assert_eq!(program.externs().natives, vec![sym("answer")]);
-    assert_eq!(program.externs().class_methods, vec![sym("+")]);
+    assert_eq!(program.externs().natives, vec![Symbol::intern("answer")]);
+    assert_eq!(program.externs().class_methods, vec![Symbol::intern("+")]);
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
     let runtime = RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
-    assert_eq!(compatibility.missing_natives, vec![sym("answer")]);
+    assert_eq!(
+        compatibility.missing_natives,
+        vec![Symbol::intern("answer")]
+    );
     assert!(!compatibility.is_compatible());
 
     let err = runtime.validate(&program).unwrap_err().into_engine_error();
@@ -408,7 +414,7 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
         EngineError::Link {
             missing_natives,
             ..
-        } if missing_natives == vec![sym("answer")]
+        } if missing_natives == vec![Symbol::intern("answer")]
     ));
 }
 
@@ -430,12 +436,18 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
         )
         .unwrap();
 
-    assert_eq!(program.externs().class_methods, vec![sym("pick")]);
+    assert_eq!(
+        program.externs().class_methods,
+        vec![Symbol::intern("pick")]
+    );
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
     let runtime = RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
-    assert_eq!(compatibility.missing_class_methods, vec![sym("pick")]);
+    assert_eq!(
+        compatibility.missing_class_methods,
+        vec![Symbol::intern("pick")]
+    );
     assert!(!compatibility.is_compatible());
 
     let err = runtime.validate(&program).unwrap_err().into_engine_error();
@@ -444,7 +456,7 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
         EngineError::Link {
             missing_class_methods,
             ..
-        } if missing_class_methods == vec![sym("pick")]
+        } if missing_class_methods == vec![Symbol::intern("pick")]
     ));
 }
 
@@ -1336,8 +1348,8 @@ async fn eval_option_result_helpers() {
         Value::Tuple(xs) => {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 6);
-            assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
-            assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "Ok")));
+            assert!(matches!(xs[0], Value::Adt(ref n, _) if n.as_ref() == "Some"));
+            assert!(matches!(xs[1], Value::Adt(ref n, _) if n.as_ref() == "Ok"));
             assert_pointer_eq!(
                 &engine.heap,
                 engine.heap.alloc_value(xs[2].clone()).unwrap(),
@@ -1453,9 +1465,9 @@ async fn eval_option_and_then_or_else() {
         Value::Tuple(xs) => {
             let xs = pvals!(engine, xs);
             assert_eq!(xs.len(), 3);
-            assert!(matches!(xs[0], Value::Adt(ref n, _) if sym_eq(n, "Some")));
-            assert!(matches!(xs[1], Value::Adt(ref n, _) if sym_eq(n, "None")));
-            assert!(matches!(xs[2], Value::Adt(ref n, _) if sym_eq(n, "Some")));
+            assert!(matches!(xs[0], Value::Adt(ref n, _) if n.as_ref() == "Some"));
+            assert!(matches!(xs[1], Value::Adt(ref n, _) if n.as_ref() == "None"));
+            assert!(matches!(xs[2], Value::Adt(ref n, _) if n.as_ref() == "Some"));
         }
         _ => panic!("expected tuple result"),
     }

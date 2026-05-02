@@ -1,5 +1,5 @@
 use rex::{
-    ast::{Program, sym},
+    ast::{Program, Symbol},
     engine::{Compiler, Engine, EngineError, Evaluator, Module, RuntimeEnv},
     parser::{Parser, ParserErr, ParserLimits, Token},
     typesystem::TypeError,
@@ -374,7 +374,7 @@ async fn compile_rejects_invalid_programs_engine_errors() {
                         EngineError::Link {
                             incompatible_natives,
                             ..
-                        } if incompatible_natives == &vec![sym("prim_fold")]
+                        } if incompatible_natives == &vec![Symbol::intern("prim_fold")]
                     )
             },
         ),

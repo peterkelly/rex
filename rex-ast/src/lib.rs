@@ -10,3 +10,6 @@
 pub mod expr;
 pub mod id;
 pub mod macros;
+pub mod symbol;
+
+pub use symbol::Symbol;
