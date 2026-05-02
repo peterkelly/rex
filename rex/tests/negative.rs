@@ -1,5 +1,8 @@
 use rex::{
-    Engine, EngineError, Module, Parser, ParserErr, ParserLimits, Program, Token, TypeError, sym,
+    ast::{Program, sym},
+    engine::{Compiler, Engine, EngineError, Evaluator, Module, RuntimeEnv},
+    parser::{Parser, ParserErr, ParserLimits, Token},
+    typesystem::TypeError,
 };
 
 fn strip_span(mut err: TypeError) -> TypeError {
@@ -27,9 +30,9 @@ async fn compile_err(code: &str) -> EngineError {
     if let Err(e) = engine.inject_module(module) {
         return e;
     }
-    match rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    match Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

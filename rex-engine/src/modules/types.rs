@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use rex_ast::expr::{Program, Symbol, intern};
+use rex_ast::expr::{Decl, Program, Symbol, intern};
 use rex_typesystem::types::Type;
 
 use crate::Handle;
@@ -186,7 +186,7 @@ impl ModuleExports {
 #[derive(Clone)]
 pub struct VirtualModule {
     pub exports: ModuleExports,
-    pub decls: Vec<rex_ast::expr::Decl>,
+    pub decls: Vec<Decl>,
     pub source: Option<String>,
 }
 

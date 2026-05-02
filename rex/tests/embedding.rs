@@ -1,9 +1,14 @@
 use std::sync::Arc;
 
-use rex::virtual_export_name;
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Expr, FromRex, Handle, Heap, IntoRex, Module, Parser, Rex,
-    RexDefault, Scheme, Token, Type, TypeError, TypeKind, Value, sym,
+    Rex,
+    ast::{Expr, sym},
+    engine::{
+        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module,
+        RexDefault, RuntimeEnv, Value, virtual_export_name,
+    },
+    parser::{Parser, Token},
+    typesystem::{BuiltinTypeId, Scheme, Type, TypeError, TypeKind},
 };
 use uuid::Uuid;
 
@@ -56,9 +61,9 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
         })
         .unwrap();
     engine.inject_module(module).unwrap();
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(
         r#"
@@ -126,9 +131,9 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
         })
         .unwrap();
     engine.inject_module(module).unwrap();
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(
         r#"
@@ -159,9 +164,9 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     module.add_rex_adt::<Side>().unwrap();
     module.add_rex_adt::<Correctness>().unwrap();
     engine.inject_module(module).unwrap();
-    let err = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let err = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(
         r#"
@@ -366,9 +371,9 @@ async fn injected_functions_can_read_shared_state_fields() {
     let expr = parse(
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
     );
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -408,9 +413,9 @@ async fn derived_rex_default_can_read_host_state() {
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
     let expr = parse("let e: Entity1 = default in e");
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -448,9 +453,9 @@ async fn derived_rex_default_record_update_can_override_fields() {
     let expr = parse(
         r#"let e: Entity1 = { default with { name = "sample", tags = Some (to_array ["x", "y"]), numbers = to_array [7, 11] } } in e"#,
     );
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -486,9 +491,9 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
     let expr = parse(r#"Entity2 "sample" [7, 11]"#);
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -532,9 +537,9 @@ async fn entity2_constructor_result_can_be_record_updated() {
             }
         }"#,
     );
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -573,9 +578,9 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     .unwrap();
 
     let expr = parse("(have_role_async \"editor\", have_role_async \"admin\")");
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -621,9 +626,9 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
     .unwrap();
 
     let expr = parse(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -674,9 +679,9 @@ async fn generic_export_can_swap_two_values_of_different_types() {
     .unwrap();
 
     let expr = parse(r#"(swap_pair "left" 7, swap_pair true "right")"#);
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -750,9 +755,9 @@ async fn overloaded_exports_types_and_values() {
     let (_, inferred) = engine.infer_snippet(expr).unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
-    let value = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let value = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(parse(expr).as_ref())
     .await;
@@ -820,9 +825,9 @@ async fn overloaded_async_exports_types_and_values() {
     let (_, inferred) = engine.infer_snippet(expr).unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
-    let value = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let value = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(parse(expr).as_ref())
     .await;

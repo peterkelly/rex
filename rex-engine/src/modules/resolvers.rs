@@ -3,7 +3,7 @@ use std::sync::Arc;
 #[cfg(feature = "github-imports")]
 use std::process::Command;
 
-use rex_util::sha256_hex;
+use rex_util::{sha256_hex, stdlib_source};
 
 use crate::ModuleError;
 
@@ -65,7 +65,7 @@ pub fn default_stdlib_resolver() -> ResolverFn {
             (req.module_name.as_str(), None)
         };
 
-        let Some(source) = rex_util::stdlib_source(base) else {
+        let Some(source) = stdlib_source(base) else {
             return Ok(None);
         };
 

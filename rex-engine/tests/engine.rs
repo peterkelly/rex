@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rex_ast::expr::{Expr, Program, sym};
-use rex_engine::{Engine, EngineError, Module, ReplState, Value};
+use rex_ast::expr::{Decl, Expr, Program, sym};
+use rex_engine::{Compiler, Engine, EngineError, Evaluator, Module, ReplState, RuntimeEnv, Value};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -78,13 +78,13 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
         module
             .structured_decls
             .iter()
-            .any(|d| matches!(d, rex_ast::expr::Decl::Type(td) if td.name == sym("Foo")))
+            .any(|d| matches!(d, Decl::Type(td) if td.name == sym("Foo")))
     );
     assert!(
         module
             .structured_decls
             .iter()
-            .any(|d| matches!(d, rex_ast::expr::Decl::Type(td) if td.name == sym("Bar")))
+            .any(|d| matches!(d, Decl::Type(td) if td.name == sym("Bar")))
     );
 }
 
@@ -124,9 +124,9 @@ async fn repl_persists_function_definitions() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.add_default_resolvers();
     let mut state = ReplState::new();
-    let mut evaluator = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let mut evaluator = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     );
 
     let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
@@ -155,9 +155,9 @@ async fn repl_persists_import_aliases() {
     engine.add_include_resolver(&examples).unwrap();
 
     let mut state = ReplState::new();
-    let mut evaluator = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let mut evaluator = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     );
     let program1 = parse_program("import foo.bar as Bar\n()");
     let (v1, t1) = evaluator
@@ -188,9 +188,9 @@ async fn repl_persists_imported_values() {
     engine.add_include_resolver(&examples).unwrap();
 
     let mut state = ReplState::new();
-    let mut evaluator = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let mut evaluator = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     );
     let program1 = parse_program("import foo.bar (triple as t)\n()");
     let (v1, t1) = evaluator
@@ -223,9 +223,9 @@ async fn injected_module_can_define_pub_adt_declarations() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value, _ty) = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let (value, _ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(
         r#"
@@ -250,9 +250,9 @@ async fn export_value_registers_global_value() {
     let expr = parse("answer");
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut engine, |module| module.export_value("answer", 42i32));
-    let (value, ty) = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -276,9 +276,9 @@ async fn record_update_requires_known_variant_for_sum_types() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    match rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    match Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

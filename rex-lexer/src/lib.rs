@@ -7,7 +7,7 @@ use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use span::{Span, Spanned};
+pub use span::{Position, Span, Spanned};
 
 pub mod macros;
 pub mod span;

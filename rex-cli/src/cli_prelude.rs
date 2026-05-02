@@ -6,8 +6,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
 
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Handle, Heap, Module, Scheme, Symbol, Type, Value, sym,
-    virtual_export_name,
+    ast::{Symbol, sym},
+    engine::{Engine, EngineError, Handle, Heap, Module, Value, virtual_export_name},
+    typesystem::{BuiltinTypeId, Scheme, Type},
 };
 use uuid::Uuid;
 
@@ -533,7 +534,7 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 
 #[cfg(test)]
 mod tests {
-    use rex::Engine;
+    use rex::engine::{Compiler, Engine, Evaluator, RuntimeEnv};
 
     use super::*;
     #[tokio::test]
@@ -549,9 +550,9 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
-        rex::Evaluator::new_with_compiler(
-            rex::RuntimeEnv::new(engine.clone()),
-            rex::Compiler::new(engine.clone()),
+        Evaluator::new_with_compiler(
+            RuntimeEnv::new(engine.clone()),
+            Compiler::new(engine.clone()),
         )
         .eval_snippet(code)
         .await
@@ -570,9 +571,9 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
-        let (value, ty) = rex::Evaluator::new_with_compiler(
-            rex::RuntimeEnv::new(engine.clone()),
-            rex::Compiler::new(engine.clone()),
+        let (value, ty) = Evaluator::new_with_compiler(
+            RuntimeEnv::new(engine.clone()),
+            Compiler::new(engine.clone()),
         )
         .eval_snippet(code)
         .await

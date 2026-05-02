@@ -1,8 +1,14 @@
 use std::collections::BTreeMap;
 
 use rex::{
-    AdtDecl, BuiltinTypeId, Engine, EngineError, FromRex, Handle, Heap, IntoRex, Parser, Rex,
-    RexAdt, RexType, Token, Type, TypeVarSupply, Value, sym,
+    Rex,
+    ast::sym,
+    engine::{
+        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module, RexAdt,
+        RexType, RuntimeEnv, Value,
+    },
+    parser::{Parser, Token},
+    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeVarSupply},
 };
 
 macro_rules! assert_handle_eq {
@@ -187,9 +193,9 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let tokens = Token::tokenize("ManualRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -213,9 +219,9 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     let tokens = Token::tokenize("DerivedRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -246,9 +252,9 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -272,9 +278,9 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -362,7 +368,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
         .unwrap();
     let t = adt.param_type(&sym("T")).unwrap();
     adt.add_variant(sym("Wrap"), vec![t]);
-    let mut module = rex::Module::global();
+    let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
     engine.inject_module(module).unwrap();
 
@@ -375,9 +381,9 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -394,7 +400,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
         .unwrap();
     let t = adt.param_type(&sym("T")).unwrap();
     adt.add_variant(sym("Boxed"), vec![t]);
-    let mut module = rex::Module::global();
+    let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
     engine.inject_module(module).unwrap();
 
@@ -407,9 +413,9 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

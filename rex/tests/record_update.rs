@@ -1,4 +1,8 @@
-use rex::{BuiltinTypeId, Engine, Module, Parser, Token, Type, Value};
+use rex::{
+    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv, Value},
+    parser::{Parser, Token},
+    typesystem::{BuiltinTypeId, Type},
+};
 
 #[tokio::test]
 async fn record_update_end_to_end() {
@@ -24,9 +28,9 @@ async fn record_update_end_to_end() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let (value_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

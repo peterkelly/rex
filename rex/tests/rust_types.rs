@@ -1,6 +1,12 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, FromRex, Handle, Heap, Module, Parser, Rex, RexType, Token,
-    Type, Value, sym,
+    Rex,
+    ast::sym,
+    engine::{
+        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, Module, RexType,
+        RuntimeEnv, Value,
+    },
+    parser::{Parser, Token},
+    typesystem::{BuiltinTypeId, Type},
 };
 use serde_json::json;
 
@@ -17,9 +23,9 @@ fn inject_globals(
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

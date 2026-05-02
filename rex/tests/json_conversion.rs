@@ -1,7 +1,12 @@
 use rex::{
-    AdtDecl, BuiltinTypeId, Engine, EngineError, EnumPatch, Handle, Heap, JsonOptions, Parser,
-    Program, ReplState, Rex, Token, Type, TypeSystem, TypeVarSupply, Value, intern, json_to_rex,
-    rex_to_json, sym,
+    Rex,
+    ast::{Program, intern, sym},
+    engine::{
+        Compiler, Engine, EngineError, Evaluator, Handle, Heap, ReplState, RuntimeEnv, Value,
+    },
+    json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json},
+    parser::{Parser, Token},
+    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
 };
 use serde::Serialize;
 use serde_json::json;
@@ -326,17 +331,17 @@ async fn eval_entry_points_return_type_for_json_eval() {
         expected_json
     );
     let expr_program = parse_program(rex_code);
-    let (handle_eval, ty_eval) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle_eval, ty_eval) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr_program.expr.as_ref())
     .await
     .unwrap();
     assert_eval_json(&engine, &handle_eval, &ty_eval, expected_json.clone());
-    let (handle_snippet, ty_snippet) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle_snippet, ty_snippet) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(rex_code)
     .await
@@ -346,9 +351,9 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let (handle_snippet_at, ty_snippet_at) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle_snippet_at, ty_snippet_at) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet_at(rex_code, &importer)
     .await
@@ -362,9 +367,9 @@ async fn eval_entry_points_return_type_for_json_eval() {
 
     let repl_program = parse_program(rex_code);
     let mut repl_state = ReplState::new();
-    let (handle_repl, ty_repl) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle_repl, ty_repl) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_repl_program(&repl_program, &mut repl_state)
     .await

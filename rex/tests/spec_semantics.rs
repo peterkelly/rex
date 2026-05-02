@@ -1,5 +1,7 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, Handle, Heap, Module, Parser, Token, Type, TypeError, Value,
+    engine::{Compiler, Engine, EngineError, Evaluator, Handle, Heap, Module, RuntimeEnv, Value},
+    parser::{Parser, Token},
+    typesystem::{BuiltinTypeId, Type, TypeError},
 };
 
 fn strip_type_span(mut err: TypeError) -> TypeError {
@@ -17,9 +19,9 @@ async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

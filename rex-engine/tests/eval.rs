@@ -1,7 +1,8 @@
 use futures::FutureExt;
-use rex_ast::expr::{Decl, sym, sym_eq};
+use rex_ast::expr::{Decl, Expr, Program, sym, sym_eq};
 use rex_engine::{
-    Engine, EngineError, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module, RexType, Value,
+    Compiler, Engine, EngineError, Evaluator, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module,
+    RexType, RuntimeEnv, Value,
 };
 use rex_lexer::Token;
 use rex_parser::Parser;
@@ -11,12 +12,12 @@ use rex_typesystem::{
 };
 use std::sync::Arc;
 
-fn parse(code: &str) -> Arc<rex_ast::expr::Expr> {
+fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap().expr
 }
 
-fn parse_program(code: &str) -> rex_ast::expr::Program {
+fn parse_program(code: &str) -> Program {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap()
 }
@@ -81,10 +82,10 @@ fn inject_global_type_decls(engine: &mut Engine, decls: &[Decl]) {
     );
 }
 
-async fn eval_expr(engine: &mut Engine, expr: &rex_ast::expr::Expr) -> Result<Handle, EngineError> {
-    rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+async fn eval_expr(engine: &mut Engine, expr: &Expr) -> Result<Handle, EngineError> {
+    Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr)
     .await
@@ -268,7 +269,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         module.export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
     });
 
-    let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
+    let mut compiler = Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("inc 1").unwrap();
 
     assert_eq!(program.externs().natives, vec![sym("inc")]);
@@ -281,7 +282,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     assert!(!program.storage_boundary().serializable);
     assert!(program.storage_boundary().captures_process_local_env);
 
-    let runtime = rex_engine::RuntimeEnv::new(Engine::with_prelude(()).unwrap());
+    let runtime = RuntimeEnv::new(Engine::with_prelude(()).unwrap());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(
         compatibility.expected_abi_version,
@@ -308,7 +309,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         } if expected_abi_version == actual_abi_version && missing_natives == vec![sym("inc")]
     ));
 
-    let mut evaluator = rex_engine::Evaluator::new(runtime);
+    let mut evaluator = Evaluator::new(runtime);
     let err = evaluator
         .run(&program)
         .await
@@ -330,14 +331,14 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
         module.export("inc", |_: &(), x: i32| Ok(x + 1))
     });
 
-    let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
+    let mut compiler = Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("inc 1").unwrap();
 
     let mut runtime_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut runtime_engine, |module| {
         module.export("inc", |_: &(), value: String| Ok(value))
     });
-    let runtime = rex_engine::RuntimeEnv::new(runtime_engine.clone());
+    let runtime = RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.incompatible_natives, vec![sym("inc")]);
     assert!(!compatibility.is_compatible());
@@ -356,7 +357,7 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
 async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     let compile_engine = Engine::with_prelude(()).unwrap();
 
-    let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
+    let mut compiler = Compiler::new(compile_engine.clone());
     let program = compiler
         .compile_snippet(
             r#"
@@ -369,11 +370,11 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     assert!(program.externs().is_empty(), "{:?}", program.externs());
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
-    let runtime = rex_engine::RuntimeEnv::new(runtime_engine.clone());
+    let runtime = RuntimeEnv::new(runtime_engine.clone());
     assert!(runtime.compatibility_with(&program).is_compatible());
     runtime.validate(&program).unwrap();
 
-    let mut evaluator = rex_engine::Evaluator::new(runtime);
+    let mut evaluator = Evaluator::new(runtime);
     let value = evaluator.run(&program).await.unwrap();
     assert_pointer_eq!(
         &runtime_engine.heap,
@@ -389,14 +390,14 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
         module.export_value("answer", 41i32)
     });
 
-    let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
+    let mut compiler = Compiler::new(compile_engine.clone());
     let program = compiler.compile_snippet("answer + 1").unwrap();
 
     assert_eq!(program.externs().natives, vec![sym("answer")]);
     assert_eq!(program.externs().class_methods, vec![sym("+")]);
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
-    let runtime = rex_engine::RuntimeEnv::new(runtime_engine.clone());
+    let runtime = RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.missing_natives, vec![sym("answer")]);
     assert!(!compatibility.is_compatible());
@@ -414,7 +415,7 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
 #[tokio::test]
 async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
     let compile_engine = Engine::with_prelude(()).unwrap();
-    let mut compiler = rex_engine::Compiler::new(compile_engine.clone());
+    let mut compiler = Compiler::new(compile_engine.clone());
     let program = compiler
         .compile_snippet(
             r#"
@@ -432,7 +433,7 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
     assert_eq!(program.externs().class_methods, vec![sym("pick")]);
 
     let runtime_engine = Engine::with_prelude(()).unwrap();
-    let runtime = rex_engine::RuntimeEnv::new(runtime_engine.clone());
+    let runtime = RuntimeEnv::new(runtime_engine.clone());
     let compatibility = runtime.compatibility_with(&program);
     assert_eq!(compatibility.missing_class_methods, vec![sym("pick")]);
     assert!(!compatibility.is_compatible());
@@ -448,7 +449,7 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
 }
 
 fn runtime_engine_abi_version() -> u32 {
-    rex_engine::RuntimeEnv::new(Engine::with_prelude(()).unwrap())
+    RuntimeEnv::new(Engine::with_prelude(()).unwrap())
         .capabilities()
         .abi_version
 }
@@ -732,9 +733,9 @@ async fn typed_native_injection_uses_handle_conversions() {
     });
 
     let expr = parse("(bump_handle_only 41, shift_handle_only_array (to_array [1, 2, 3]))");
-    let (ptr, ty) = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let (ptr, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(expr.as_ref())
     .await
@@ -798,7 +799,7 @@ fn engine_export_native_rejects_invalid_arity_scheme_pair() {
             unary_scheme,
             2,
             |_engine: EvaluatorRef<()>, _: &Type, _args| {
-                Err(rex_engine::EngineError::Internal("unused".into()))
+                Err(EngineError::Internal("unused".into()))
             },
         )
         .unwrap_err();
@@ -827,7 +828,7 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
             unary_scheme,
             2,
             |_engine: EvaluatorRef<()>, _: Type, _args| {
-                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed()
+                async { Err(EngineError::Internal("unused".into())) }.boxed()
             },
         )
         .unwrap_err();

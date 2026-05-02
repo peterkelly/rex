@@ -2,9 +2,12 @@ use lsp_types::{
     CodeAction, CodeActionOrCommand, Diagnostic, DiagnosticSeverity, Position, Range, Url,
     WorkspaceEdit,
 };
-use rex::{Engine, Parser, Token};
-use rex_ast::expr::{Decl, Expr, TypeExpr};
-use rex_engine::ValueDisplayOptions;
+use rex::{
+    engine::{Engine, Module},
+    parser::{Parser, Token},
+};
+use rex_ast::expr::{Decl, Expr, NameRef, TypeExpr};
+use rex_engine::{Compiler, Evaluator, RuntimeEnv, ValueDisplayOptions};
 use rex_lsp::server::*;
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -39,9 +42,9 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn assert_internal_name_ref(name: &rex_ast::expr::NameRef) {
+fn assert_internal_name_ref(name: &NameRef) {
     match name {
-        rex_ast::expr::NameRef::Unqualified(sym) => {
+        NameRef::Unqualified(sym) => {
             assert!(
                 sym.as_ref().starts_with("@m"),
                 "expected internal rewritten symbol, got `{sym}`"
@@ -56,12 +59,12 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().expect("parse source");
     let mut engine = Engine::with_prelude(()).expect("build engine");
-    let mut module = rex_engine::Module::global();
+    let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).expect("inject decls");
-    let (handle, ty) = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::FutureExt;
 use rex_ast::expr::sym;
 use rex_engine::{
-    Engine, EngineError, EngineOptions, EvaluatorRef, Handle, Module, PreludeMode, RexAdt, RexType,
-    Value,
+    Compiler, Engine, EngineError, EngineOptions, Evaluator, EvaluatorRef, Handle, Module,
+    PreludeMode, RexAdt, RexType, RuntimeEnv, Value,
 };
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind},
@@ -117,7 +117,7 @@ async fn engine_options_can_disable_prelude() {
 async fn eval_module_file<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     path: &Path,
-) -> Result<(Handle, Type), rex_engine::EngineError> {
+) -> Result<(Handle, Type), EngineError> {
     let source = fs::read_to_string(path).unwrap();
     eval_snippet_at(engine, &source, path).await
 }
@@ -125,10 +125,10 @@ async fn eval_module_file<State: Clone + Send + Sync + 'static>(
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
-) -> Result<(Handle, Type), rex_engine::EngineError> {
-    rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+) -> Result<(Handle, Type), EngineError> {
+    Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(source)
     .await
@@ -139,10 +139,10 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
-) -> Result<(Handle, Type), rex_engine::EngineError> {
-    rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+) -> Result<(Handle, Type), EngineError> {
+    Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet_at(source, importer_path)
     .await
@@ -202,9 +202,9 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     engine.add_default_resolvers();
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
-    let _ = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let _ = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_module_file(&module)
     .await
@@ -221,9 +221,9 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     // Edit the same local module path and ensure the engine invalidates path-keyed
     // module cache entries before reloading.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
-    let _ = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let _ = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_module_file(&module)
     .await
@@ -524,7 +524,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
                 let idx = if *engine.state() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
-                    .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+                    .ok_or_else(|| EngineError::Internal("missing argument".into()))
             },
         )
         .unwrap();
@@ -552,7 +552,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
                 let idx = if *engine.state() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
-                    .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+                    .ok_or_else(|| EngineError::Internal("missing argument".into()))
             }
         })
         .unwrap();
@@ -687,7 +687,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
                 async move {
                     args.get(idx)
                         .cloned()
-                        .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+                        .ok_or_else(|| EngineError::Internal("missing argument".into()))
                 }
                 .boxed()
             },
@@ -719,7 +719,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
                     }
                     args.get(idx)
                         .cloned()
-                        .ok_or_else(|| rex_engine::EngineError::Internal("missing argument".into()))
+                        .ok_or_else(|| EngineError::Internal("missing argument".into()))
                 }
                 .boxed()
             }
@@ -773,7 +773,7 @@ fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
             unary_scheme,
             2,
             |_engine: EvaluatorRef<()>, _: &Type, _args: &[Handle]| {
-                Err(rex_engine::EngineError::Internal("unused".into()))
+                Err(EngineError::Internal("unused".into()))
             },
         )
         .unwrap_err();
@@ -795,7 +795,7 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
             unary_scheme,
             2,
             |_engine: EvaluatorRef<()>, _: Type, _args: Vec<Handle>| {
-                async { Err(rex_engine::EngineError::Internal("unused".into())) }.boxed()
+                async { Err(EngineError::Internal("unused".into())) }.boxed()
             },
         )
         .unwrap_err();

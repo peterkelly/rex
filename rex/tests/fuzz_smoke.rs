@@ -1,4 +1,8 @@
-use rex::{Engine, Module, Parser, ParserLimits, Token, TypeSystem, infer};
+use rex::{
+    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv},
+    parser::{Parser, ParserLimits, Token},
+    typesystem::{TypeSystem, infer},
+};
 
 #[derive(Clone)]
 struct XorShift64 {
@@ -68,9 +72,9 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         let mut module = Module::global();
         module.add_decls(program.decls.clone());
         let _ = engine.inject_module(module);
-        let _ = rex::Evaluator::new_with_compiler(
-            rex::RuntimeEnv::new(engine.clone()),
-            rex::Compiler::new(engine.clone()),
+        let _ = Evaluator::new_with_compiler(
+            RuntimeEnv::new(engine.clone()),
+            Compiler::new(engine.clone()),
         )
         .eval(program.expr.as_ref())
         .await;

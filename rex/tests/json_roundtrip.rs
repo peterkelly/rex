@@ -1,6 +1,11 @@
 #![allow(clippy::disallowed_names)]
 
-use rex::{Engine, Handle, JsonOptions, Module, Type, rex_to_json};
+use rex::{
+    Rex,
+    engine::{Compiler, Engine, EngineError, Evaluator, Handle, Module, RuntimeEnv},
+    json::{JsonOptions, rex_to_json},
+    typesystem::Type,
+};
 use serde::{Deserialize, Serialize};
 
 fn engine_with_prelude() -> Engine {
@@ -9,24 +14,24 @@ fn engine_with_prelude() -> Engine {
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
     source: &str,
-) -> Result<(Handle, Type), rex::EngineError> {
-    rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+) -> Result<(Handle, Type), EngineError> {
+    Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(source)
     .await
     .map_err(|err| err.into_engine_error())
 }
 
-#[derive(rex::Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
 enum EchoEnum {
     Foo,
     #[serde(rename = "BAR")]
     Bar,
 }
 
-#[derive(rex::Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
 struct EchoRecord {
     foo: u8,
     bar: u8,

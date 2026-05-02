@@ -1,4 +1,4 @@
-use crate::{EngineError, Handle, Heap};
+use crate::engine::{EngineError, Handle, Heap};
 use rex_ast::expr::{Symbol, sym};
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Type, TypeKind},

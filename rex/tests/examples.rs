@@ -1,4 +1,8 @@
-use rex::{BuiltinTypeId, Engine, Module, Parser, ParserErr, Token, Type, Value};
+use rex::{
+    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv, Value},
+    parser::{Parser, ParserErr, Token},
+    typesystem::{BuiltinTypeId, Type},
+};
 
 fn format_parse_errors(errs: &[ParserErr]) -> String {
     let mut out = String::from("parse error:");
@@ -21,9 +25,9 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     engine
         .inject_module(module)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
-    let (value, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (value, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

@@ -1,4 +1,8 @@
-use rex::{BuiltinTypeId, Engine, Module, Parser, Token, Type, TypeKind, ValueDisplayOptions};
+use rex::{
+    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv, ValueDisplayOptions},
+    parser::{Parser, Token},
+    typesystem::{BuiltinTypeId, Type, TypeKind},
+};
 
 fn type_compatible(actual: &Type, expected: &Type) -> bool {
     match (actual.as_ref(), expected.as_ref()) {
@@ -31,9 +35,9 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).map_err(|e| format!("{e}"))?;
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

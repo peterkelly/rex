@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use rex_ast::expr::{
-    Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl, ImportPath, InstanceDecl, NameRef,
-    Pattern, Program, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
+    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl,
+    ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Symbol,
+    TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var, intern,
 };
-use rex_lexer::Token;
+use rex_lexer::{Span, Token};
 use rex_parser::Parser as RexParser;
 use rex_typesystem::types::{Predicate, Type};
 use rex_util::sha256_hex;
@@ -80,7 +81,7 @@ fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
 
 fn default_import_decl(module_name: &str) -> ImportDecl {
     ImportDecl {
-        span: rex_lexer::span::Span::default(),
+        span: Span::default(),
         is_pub: false,
         path: ImportPath::Local {
             segments: vec![intern(module_name)],
@@ -682,7 +683,7 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
                 let variants = td
                     .variants
                     .iter()
-                    .map(|v| rex_ast::expr::TypeVariant {
+                    .map(|v| TypeVariant {
                         name: value_renames
                             .get(&v.name)
                             .cloned()
@@ -785,12 +786,12 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
                 let methods = cd
                     .methods
                     .iter()
-                    .map(|m| rex_ast::expr::ClassMethodSig {
+                    .map(|m| ClassMethodSig {
                         name: m.name.clone(),
                         typ: rename_type_expr(&m.typ, &type_renames, &class_renames),
                     })
                     .collect();
-                Some(Decl::Class(rex_ast::expr::ClassDecl {
+                Some(Decl::Class(ClassDecl {
                     span: cd.span,
                     is_pub: cd.is_pub,
                     name,
@@ -816,7 +817,7 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
                         &type_renames,
                         &class_renames,
                     ));
-                    methods.push(rex_ast::expr::InstanceMethodImpl {
+                    methods.push(InstanceMethodImpl {
                         name: m.name.clone(),
                         body,
                     });
@@ -1420,7 +1421,7 @@ pub(crate) fn rewrite_import_uses(
                 variants: td
                     .variants
                     .iter()
-                    .map(|v| rex_ast::expr::TypeVariant {
+                    .map(|v| TypeVariant {
                         name: v.name.clone(),
                         args: v
                             .args
@@ -1439,7 +1440,7 @@ pub(crate) fn rewrite_import_uses(
                     })
                     .collect(),
             }),
-            Decl::Class(cd) => Decl::Class(rex_ast::expr::ClassDecl {
+            Decl::Class(cd) => Decl::Class(ClassDecl {
                 span: cd.span,
                 is_pub: cd.is_pub,
                 name: cd.name.clone(),
@@ -1469,7 +1470,7 @@ pub(crate) fn rewrite_import_uses(
                 methods: cd
                     .methods
                     .iter()
-                    .map(|m| rex_ast::expr::ClassMethodSig {
+                    .map(|m| ClassMethodSig {
                         name: m.name.clone(),
                         typ: rewrite_import_uses_type_expr(
                             &m.typ,
@@ -1493,7 +1494,7 @@ pub(crate) fn rewrite_import_uses(
                             &mut bound,
                             &scope,
                         ));
-                        rex_ast::expr::InstanceMethodImpl {
+                        InstanceMethodImpl {
                             name: m.name.clone(),
                             body,
                         }

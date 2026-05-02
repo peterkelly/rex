@@ -1,4 +1,7 @@
-use rex::{BuiltinTypeId, Engine, Handle, Heap, Type, Value};
+use rex::{
+    engine::{Compiler, Engine, Evaluator, Handle, Heap, RuntimeEnv, Value},
+    typesystem::{BuiltinTypeId, Type},
+};
 
 const DEMO_STACK_SIZE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -38,9 +41,9 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                     engine
                         .infer_snippet(&source)
                         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
-                    let (value, ty) = rex::Evaluator::new_with_compiler(
-                        rex::RuntimeEnv::new(engine.clone()),
-                        rex::Compiler::new(engine.clone()),
+                    let (value, ty) = Evaluator::new_with_compiler(
+                        RuntimeEnv::new(engine.clone()),
+                        Compiler::new(engine.clone()),
                     )
                     .eval_snippet(&source)
                     .await

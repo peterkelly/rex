@@ -7,8 +7,9 @@ use std::io::{self, BufRead, Read, Write};
 
 use clap::{Args, Parser, Subcommand};
 use rex::{
-    Engine, Parser as RexParser, ParserErr, ParserLimits, Program, ReplState, Token,
-    ValueDisplayOptions,
+    ast::Program,
+    engine::{Compiler, Engine, Evaluator, ReplState, RuntimeEnv, ValueDisplayOptions},
+    parser::{Parser as RexParser, ParserErr, ParserLimits, Token},
 };
 use serde_json::json;
 
@@ -293,9 +294,9 @@ async fn repl_loop(include: Vec<String>, parser_limits: ParserLimits) -> Result<
             }
         };
 
-        match rex::Evaluator::new_with_compiler(
-            rex::RuntimeEnv::new(engine.clone()),
-            rex::Compiler::new(engine.clone()),
+        match Evaluator::new_with_compiler(
+            RuntimeEnv::new(engine.clone()),
+            Compiler::new(engine.clone()),
         )
         .eval_repl_program(&program, &mut state)
         .await
@@ -382,9 +383,9 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let engine = init_engine(&include)?;
 
-    let mut evaluator = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let mut evaluator = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     );
 
     let (value, _) = if let Some(path) = file {

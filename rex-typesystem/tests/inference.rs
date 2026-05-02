@@ -1,4 +1,4 @@
-use rex_ast::expr::sym;
+use rex_ast::expr::{Decl, Expr, Program, sym};
 use rex_lexer::{Token, span::Span};
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -11,6 +11,7 @@ use rex_typesystem::{
     typesystem::{TypeSystem, TypeSystemLimits, TypeVarSupply, entails, generalize, instantiate},
     unification::unify,
 };
+use std::sync::Arc;
 fn tvar(id: TypeVarId, name: &str) -> Type {
     Type::var(TypeVar::new(id, Some(sym(name))))
 }
@@ -100,12 +101,12 @@ fn adt_constructors_are_present() {
     assert!(ts.env.lookup(&sym("None")).is_some());
 }
 
-fn parse_expr(code: &str) -> std::sync::Arc<rex_ast::expr::Expr> {
+fn parse_expr(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap().expr
 }
 
-fn parse_program(code: &str) -> rex_ast::expr::Program {
+fn parse_program(code: &str) -> Program {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap()
 }
@@ -246,7 +247,7 @@ fn declare_fn_is_noop_when_matching_existing_scheme() {
             0
             "#,
     );
-    let rex_ast::expr::Decl::DeclareFn(fd) = &program.decls[0] else {
+    let Decl::DeclareFn(fd) = &program.decls[0] else {
         panic!("expected declare fn decl");
     };
     ts.inject_declare_fn_decl(fd).unwrap();
@@ -295,7 +296,7 @@ fn type_errors_include_span() {
 fn reject_user_redefinition_of_primitive_type_name() {
     let program = parse_program("type i32 = I32Wrap i32");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
-    let rex_ast::expr::Decl::Type(decl) = &program.decls[0] else {
+    let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
     };
     let err = ts.register_type_decl(decl).unwrap_err();
@@ -309,7 +310,7 @@ fn reject_user_redefinition_of_primitive_type_name() {
 fn reject_user_redefinition_of_prelude_adt_name() {
     let program = parse_program("type Result e a = Nope e a");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
-    let rex_ast::expr::Decl::Type(decl) = &program.decls[0] else {
+    let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
     };
     let err = ts.register_type_decl(decl).unwrap_err();
@@ -323,7 +324,7 @@ fn reject_user_redefinition_of_prelude_adt_name() {
 fn reject_user_redefinition_of_promise_type_name() {
     let program = parse_program("type Promise a = PromiseWrap a");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
-    let rex_ast::expr::Decl::Type(decl) = &program.decls[0] else {
+    let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
     };
     let err = ts.register_type_decl(decl).unwrap_err();
@@ -413,7 +414,7 @@ fn infer_project_single_variant_let() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     for decl in &program.decls {
-        if let rex_ast::expr::Decl::Type(decl) = decl {
+        if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
         }
     }
@@ -438,7 +439,7 @@ fn infer_project_known_variant_let() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     for decl in &program.decls {
-        if let rex_ast::expr::Decl::Type(decl) = decl {
+        if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
         }
     }
@@ -459,7 +460,7 @@ fn infer_project_unknown_variant_error() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     for decl in &program.decls {
-        if let rex_ast::expr::Decl::Type(decl) = decl {
+        if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
         }
     }
@@ -480,7 +481,7 @@ fn infer_project_lambda_param_single_variant() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     for decl in &program.decls {
-        if let rex_ast::expr::Decl::Type(decl) = decl {
+        if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
         }
     }
@@ -503,7 +504,7 @@ fn infer_project_in_match_arm() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     for decl in &program.decls {
-        if let rex_ast::expr::Decl::Type(decl) = decl {
+        if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
         }
     }
@@ -637,7 +638,7 @@ fn infer_record_pattern_in_lambda() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     for decl in &program.decls {
-        if let rex_ast::expr::Decl::Type(decl) = decl {
+        if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
         }
     }

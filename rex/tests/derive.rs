@@ -1,6 +1,13 @@
 use rex::{
-    BuiltinTypeId, Engine, EngineError, FromRex, Handle, Heap, IntoRex, JsonOptions, Module,
-    Parser, Rex, RexAdt, RexType, Token, Type, Value, rex_to_json,
+    Rex,
+    ast::{intern, sym},
+    engine::{
+        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module, RexAdt,
+        RexType, RuntimeEnv, Value,
+    },
+    json::{JsonOptions, rex_to_json},
+    parser::{Parser, Token},
+    typesystem::{BuiltinTypeId, Type},
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -29,9 +36,9 @@ async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let (handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -131,7 +138,7 @@ impl RexType for AtomRef {
 }
 
 impl IntoRex for AtomRef {
-    fn into_rex(self, heap: &rex::Heap) -> Result<Handle, EngineError> {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         self.0.into_rex(heap)
     }
 }
@@ -160,7 +167,7 @@ impl RexType for Xyzf32 {
 }
 
 impl IntoRex for Xyzf32 {
-    fn into_rex(self, heap: &rex::Heap) -> Result<Handle, EngineError> {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         (self.0[0], self.0[1], self.0[2]).into_rex(heap)
     }
 }
@@ -254,9 +261,9 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let (v_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -295,7 +302,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     assert_eq!(adt.params.len(), 1);
 
     let t = adt
-        .param_type(&rex::intern("T"))
+        .param_type(&intern("T"))
         .expect("expected `T` param type");
 
     let just = adt
@@ -347,9 +354,9 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let (v_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -405,9 +412,9 @@ async fn derive_can_be_used_in_injected_native_functions() {
         })
     })
     .unwrap();
-    let (v_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -434,9 +441,9 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let tokens = Token::tokenize("const_struct.y").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -466,9 +473,9 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -493,9 +500,9 @@ async fn derive_types_implement_rex_adt_trait() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -522,9 +529,9 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -573,25 +580,10 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
     let mut engine = Engine::with_prelude(()).unwrap();
     RootNode::inject_rex(&mut engine).unwrap();
 
-    assert!(
-        engine
-            .type_system
-            .adts
-            .contains_key(&rex::sym("SharedLeaf"))
-    );
-    assert!(
-        engine
-            .type_system
-            .adts
-            .contains_key(&rex::sym("LeftBranch"))
-    );
-    assert!(
-        engine
-            .type_system
-            .adts
-            .contains_key(&rex::sym("RightBranch"))
-    );
-    assert!(engine.type_system.adts.contains_key(&rex::sym("RootNode")));
+    assert!(engine.type_system.adts.contains_key(&sym("SharedLeaf")));
+    assert!(engine.type_system.adts.contains_key(&sym("LeftBranch")));
+    assert!(engine.type_system.adts.contains_key(&sym("RightBranch")));
+    assert!(engine.type_system.adts.contains_key(&sym("RootNode")));
 
     let tokens = Token::tokenize(
         r#"
@@ -604,9 +596,9 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -643,7 +635,7 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
         assert_eq!(
             adt.variants[0].args,
             vec![Type::record(vec![(
-                rex::intern("values"),
+                intern("values"),
                 Type::array(Type::builtin(BuiltinTypeId::I32)),
             )])]
         );
@@ -663,7 +655,7 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
             panic!("expected record payload");
         };
         let array_handle = fields
-            .get(&rex::intern("values"))
+            .get(&intern("values"))
             .expect("expected `values` field");
         let Value::Array(array_items) = array_handle.value().unwrap() else {
             panic!("expected array field");
@@ -676,10 +668,10 @@ fn derive_vec_fields_serialize_and_deserialize_as_arrays() {
         assert_eq!(actual, expected);
 
         let mut fields = std::collections::BTreeMap::new();
-        fields.insert(rex::intern("values"), array_from_values(&heap, expected));
+        fields.insert(intern("values"), array_from_values(&heap, expected));
         let handle = heap
             .alloc_adt(
-                rex::intern("VecFieldSnapshot"),
+                intern("VecFieldSnapshot"),
                 vec![heap.alloc_dict(fields).unwrap()],
             )
             .unwrap();
@@ -700,9 +692,9 @@ async fn derive_leaf_rex_type_field_does_not_require_rex_adt_dependency() {
     let tokens = Token::tokenize("Fragment [1, 2, 3]").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await
@@ -722,9 +714,9 @@ async fn derive_leaf_rex_type_record_fields_support_manual_leaf_types() {
         Token::tokenize("BoundingBox { min = (1.0, 2.0, 3.0), max = (4.0, 5.0, 6.0) }").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v_handle, ty) = rex::Evaluator::new_with_compiler(
-        rex::RuntimeEnv::new(engine.clone()),
-        rex::Compiler::new(engine.clone()),
+    let (v_handle, ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval(program.expr.as_ref())
     .await

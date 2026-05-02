@@ -7,8 +7,10 @@ use std::fs;
 use std::path::Path;
 
 use rex::{
-    Decl, Instance, Predicate, Program, Scheme, Symbol, Type, TypeKind, TypeSystem,
-    prelude_typeclasses_program,
+    ast::{Decl, Program, Symbol},
+    typesystem::{
+        Instance, Predicate, Scheme, Type, TypeKind, TypeSystem, prelude_typeclasses_program,
+    },
 };
 
 const OUTPUT_PATH: &str = "docs/src/PRELUDE.md";

@@ -2,7 +2,8 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use futures::executor::block_on;
-use rex_engine::{Engine, ValueDisplayOptions};
+use rex_ast::expr::Program;
+use rex_engine::{Compiler, Engine, Evaluator, RuntimeEnv, ValueDisplayOptions};
 use rex_lexer::Token;
 use rex_lsp::server::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,
@@ -16,10 +17,7 @@ use rex_typesystem::{
 };
 use wasm_bindgen::prelude::*;
 
-fn parse_program_with_limits(
-    source: &str,
-    limits: ParserLimits,
-) -> Result<rex_ast::expr::Program, String> {
+fn parse_program_with_limits(source: &str, limits: ParserLimits) -> Result<Program, String> {
     let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     parser.set_limits(limits);
@@ -130,9 +128,9 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
     engine.type_system.set_limits(TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between native `rex run` and wasm playground.
-    let (value, _value_ty) = rex_engine::Evaluator::new_with_compiler(
-        rex_engine::RuntimeEnv::new(engine.clone()),
-        rex_engine::Compiler::new(engine.clone()),
+    let (value, _value_ty) = Evaluator::new_with_compiler(
+        RuntimeEnv::new(engine.clone()),
+        Compiler::new(engine.clone()),
     )
     .eval_snippet(source)
     .await
@@ -230,9 +228,9 @@ pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
 
     let fut = async move {
         let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-        let (value, _value_ty) = rex_engine::Evaluator::new_with_compiler(
-            rex_engine::RuntimeEnv::new(engine.clone()),
-            rex_engine::Compiler::new(engine.clone()),
+        let (value, _value_ty) = Evaluator::new_with_compiler(
+            RuntimeEnv::new(engine.clone()),
+            Compiler::new(engine.clone()),
         )
         .eval_snippet(source)
         .await

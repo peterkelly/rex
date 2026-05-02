@@ -10,8 +10,9 @@ use lsp_types::{
     Location, MarkupContent, MarkupKind, Position, Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
 };
 use rex_ast::expr::{
-    Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath, InstanceDecl, Pattern, Program,
-    Symbol, TypeConstraint, TypeDecl, TypeExpr, Var, intern,
+    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath,
+    InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Symbol, TypeConstraint, TypeDecl,
+    TypeExpr, TypeVariant, Var, intern,
 };
 use rex_engine::{Engine, EngineError, ModuleError};
 use rex_lexer::{
@@ -26,7 +27,7 @@ use rex_typesystem::{
     typesystem::{PreparedInstanceDecl, TypeSystem, instantiate},
     unification::unify,
 };
-use rex_util::sha256_hex;
+use rex_util::{resolve_local_import_path, sha256_hex, stdlib_source};
 use serde_json::{Value, json, to_value};
 
 const MAX_DIAGNOSTICS: usize = 50;
@@ -184,9 +185,9 @@ fn tokenize_and_parse_cached(
 pub struct ImportModuleInfo {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     path: Option<PathBuf>,
-    value_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>, // field -> internal name
-    type_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>,
-    class_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>,
+    value_map: HashMap<Symbol, Symbol>, // field -> internal name
+    type_map: HashMap<Symbol, Symbol>,
+    class_map: HashMap<Symbol, Symbol>,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     export_defs: HashMap<String, Span>,
 }
@@ -278,14 +279,11 @@ fn inject_program_decls(
 type PreparedInstance = (usize, PreparedInstanceDecl);
 type InjectedDecls = (Vec<PreparedInstance>, Option<PreparedInstanceDecl>);
 
-fn rewrite_type_expr(
-    ty: &TypeExpr,
-    type_map: &HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol>,
-) -> TypeExpr {
+fn rewrite_type_expr(ty: &TypeExpr, type_map: &HashMap<Symbol, Symbol>) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => {
             if let Some(new) = type_map.get(&name.to_dotted_symbol()) {
-                TypeExpr::Name(*span, rex_ast::expr::NameRef::Unqualified(new.clone()))
+                TypeExpr::Name(*span, NameRef::Unqualified(new.clone()))
             } else {
                 TypeExpr::Name(*span, name.clone())
             }
@@ -317,7 +315,7 @@ fn rewrite_type_expr(
     }
 }
 
-fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<rex_ast::expr::Symbol>) {
+fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
     match pat {
         Pattern::Wildcard(..) => {}
         Pattern::Var(v) => out.push(v.name.clone()),
@@ -345,8 +343,8 @@ fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<rex_ast::expr::Symbol>)
 
 fn rewrite_import_projections_expr(
     expr: &Expr,
-    bound: &mut BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    bound: &mut BTreeSet<Symbol>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Expr {
     match expr {
@@ -623,11 +621,9 @@ fn rewrite_import_projections_expr(
     }
 }
 
-fn qualified_alias_member(
-    name: &rex_ast::expr::NameRef,
-) -> Option<(&rex_ast::expr::Symbol, &rex_ast::expr::Symbol)> {
+fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol)> {
     match name {
-        rex_ast::expr::NameRef::Qualified(_, segments) if segments.len() == 2 => {
+        NameRef::Qualified(_, segments) if segments.len() == 2 => {
             Some((&segments[0], &segments[1]))
         }
         _ => None,
@@ -635,10 +631,10 @@ fn qualified_alias_member(
 }
 
 fn rewrite_import_projections_class_name(
-    class: &rex_ast::expr::NameRef,
-    bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
-) -> rex_ast::expr::NameRef {
+    class: &NameRef,
+    bound: &BTreeSet<Symbol>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
+) -> NameRef {
     let Some((alias, member)) = qualified_alias_member(class) else {
         return class.clone();
     };
@@ -650,14 +646,14 @@ fn rewrite_import_projections_class_name(
     };
     info.class_map
         .get(member)
-        .map(|s| rex_ast::expr::NameRef::Unqualified(s.clone()))
+        .map(|s| NameRef::Unqualified(s.clone()))
         .unwrap_or_else(|| class.clone())
 }
 
 fn rewrite_import_projections_type_expr(
     ty: &TypeExpr,
-    bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    bound: &BTreeSet<Symbol>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
 ) -> TypeExpr {
     match ty {
         TypeExpr::Name(span, name) => {
@@ -671,9 +667,9 @@ fn rewrite_import_projections_type_expr(
                 return TypeExpr::Name(*span, name.clone());
             };
             if let Some(new) = info.type_map.get(member) {
-                TypeExpr::Name(*span, rex_ast::expr::NameRef::Unqualified(new.clone()))
+                TypeExpr::Name(*span, NameRef::Unqualified(new.clone()))
             } else if let Some(new) = info.class_map.get(member) {
-                TypeExpr::Name(*span, rex_ast::expr::NameRef::Unqualified(new.clone()))
+                TypeExpr::Name(*span, NameRef::Unqualified(new.clone()))
             } else {
                 TypeExpr::Name(*span, name.clone())
             }
@@ -712,7 +708,7 @@ fn rewrite_import_projections_type_expr(
 
 fn rewrite_program_import_projections(
     program: &Program,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Program {
     let decl_bound = BTreeSet::new();
@@ -721,7 +717,7 @@ fn rewrite_program_import_projections(
         .iter()
         .map(|decl| match decl {
             Decl::Fn(fd) => {
-                let mut bound: BTreeSet<rex_ast::expr::Symbol> =
+                let mut bound: BTreeSet<Symbol> =
                     fd.params.iter().map(|(v, _)| v.name.clone()).collect();
                 let body = std::sync::Arc::new(rewrite_import_projections_expr(
                     fd.body.as_ref(),
@@ -795,7 +791,7 @@ fn rewrite_program_import_projections(
                 variants: td
                     .variants
                     .iter()
-                    .map(|v| rex_ast::expr::TypeVariant {
+                    .map(|v| TypeVariant {
                         name: v.name.clone(),
                         args: v
                             .args
@@ -805,7 +801,7 @@ fn rewrite_program_import_projections(
                     })
                     .collect(),
             }),
-            Decl::Class(cd) => Decl::Class(rex_ast::expr::ClassDecl {
+            Decl::Class(cd) => Decl::Class(ClassDecl {
                 span: cd.span,
                 is_pub: cd.is_pub,
                 name: cd.name.clone(),
@@ -825,7 +821,7 @@ fn rewrite_program_import_projections(
                 methods: cd
                     .methods
                     .iter()
-                    .map(|m| rex_ast::expr::ClassMethodSig {
+                    .map(|m| ClassMethodSig {
                         name: m.name.clone(),
                         typ: rewrite_import_projections_type_expr(&m.typ, &decl_bound, imports),
                     })
@@ -843,7 +839,7 @@ fn rewrite_program_import_projections(
                             imports,
                             diagnostics,
                         ));
-                        rex_ast::expr::InstanceMethodImpl {
+                        InstanceMethodImpl {
                             name: m.name.clone(),
                             body,
                         }
@@ -853,7 +849,7 @@ fn rewrite_program_import_projections(
                     span: inst.span,
                     is_pub: inst.is_pub,
                     class: rewrite_import_projections_class_name(
-                        &rex_ast::expr::NameRef::from_dotted(inst.class.as_ref()),
+                        &NameRef::from_dotted(inst.class.as_ref()),
                         &decl_bound,
                         imports,
                     )
@@ -890,10 +886,10 @@ fn rewrite_program_import_projections(
 }
 
 fn validate_import_projection_class_name(
-    class: &rex_ast::expr::NameRef,
+    class: &NameRef,
     span: Span,
-    bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    bound: &BTreeSet<Symbol>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some((alias, member)) = qualified_alias_member(class) else {
@@ -916,8 +912,8 @@ fn validate_import_projection_class_name(
 
 fn validate_import_projection_type_expr(
     ty: &TypeExpr,
-    bound: &BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    bound: &BTreeSet<Symbol>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match ty {
@@ -962,8 +958,8 @@ fn validate_import_projection_type_expr(
 
 fn validate_import_projection_expr(
     expr: &Expr,
-    bound: &mut BTreeSet<rex_ast::expr::Symbol>,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    bound: &mut BTreeSet<Symbol>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     match expr {
@@ -1075,7 +1071,7 @@ fn validate_import_projection_expr(
 
 fn validate_import_projection_uses(
     program: &Program,
-    imports: &HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let decl_bound = BTreeSet::new();
@@ -1096,7 +1092,7 @@ fn validate_import_projection_uses(
                     );
                     validate_import_projection_type_expr(&c.typ, &decl_bound, imports, diagnostics);
                 }
-                let mut bound: BTreeSet<rex_ast::expr::Symbol> =
+                let mut bound: BTreeSet<Symbol> =
                     fd.params.iter().map(|(v, _)| v.name.clone()).collect();
                 validate_import_projection_expr(fd.body.as_ref(), &mut bound, imports, diagnostics);
             }
@@ -1140,7 +1136,7 @@ fn validate_import_projection_uses(
             }
             Decl::Instance(inst) => {
                 validate_import_projection_class_name(
-                    &rex_ast::expr::NameRef::from_dotted(inst.class.as_ref()),
+                    &NameRef::from_dotted(inst.class.as_ref()),
                     inst.span,
                     &decl_bound,
                     imports,
@@ -1177,7 +1173,7 @@ fn validate_import_projection_uses(
 pub type PreparedProgram = (
     Program,
     TypeSystem,
-    HashMap<rex_ast::expr::Symbol, ImportModuleInfo>,
+    HashMap<Symbol, ImportModuleInfo>,
     Vec<Diagnostic>,
 );
 
@@ -1191,7 +1187,7 @@ pub fn prepare_program_with_imports(
 
     let importer = uri_to_file_path(uri);
 
-    let mut imports: HashMap<rex_ast::expr::Symbol, ImportModuleInfo> = HashMap::new();
+    let mut imports: HashMap<Symbol, ImportModuleInfo> = HashMap::new();
 
     for decl in &program.decls {
         let Decl::Import(ImportDecl {
@@ -1217,7 +1213,7 @@ pub fn prepare_program_with_imports(
             .join(".");
 
         let (module_path, hash, source, module_label, keep_constraints) =
-            if let Some(source) = rex_util::stdlib_source(&module_name) {
+            if let Some(source) = stdlib_source(&module_name) {
                 let hash = sha256_hex(source.as_bytes());
                 if let Some(expected) = expected_sha {
                     let expected = expected.to_ascii_lowercase();
@@ -1244,7 +1240,7 @@ pub fn prepare_program_with_imports(
                     ));
                     continue;
                 };
-                let module_path = match rex_util::resolve_local_import_path(base_dir, segments) {
+                let module_path = match resolve_local_import_path(base_dir, segments) {
                     Ok(Some(p)) => p,
                     Ok(None) => {
                         diagnostics.push(diagnostic_for_span(
@@ -1353,8 +1349,8 @@ pub fn prepare_program_with_imports(
         let index = index_decl_spans(&module_program, &tokens);
         let prefix = module_prefix(&hash);
 
-        let mut type_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
-        let mut class_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
+        let mut type_map: HashMap<Symbol, Symbol> = HashMap::new();
+        let mut class_map: HashMap<Symbol, Symbol> = HashMap::new();
         for decl in &module_program.decls {
             match decl {
                 Decl::Type(td) => {
@@ -1383,7 +1379,7 @@ pub fn prepare_program_with_imports(
             let variants = td
                 .variants
                 .iter()
-                .map(|v| rex_ast::expr::TypeVariant {
+                .map(|v| TypeVariant {
                     name: intern(&format!("{prefix}.{}", v.name.as_ref())),
                     args: v
                         .args
@@ -1402,7 +1398,7 @@ pub fn prepare_program_with_imports(
             let _ = ts.register_type_decl(&td2);
         }
 
-        let mut value_map: HashMap<rex_ast::expr::Symbol, rex_ast::expr::Symbol> = HashMap::new();
+        let mut value_map: HashMap<Symbol, Symbol> = HashMap::new();
         let mut export_names: BTreeSet<String> = BTreeSet::new();
 
         // Exported functions (pub only)
@@ -1532,14 +1528,14 @@ fn completion_exports_for_module_alias(
         .collect::<Vec<_>>()
         .join(".");
 
-    let source = if let Some(source) = rex_util::stdlib_source(&module_name) {
+    let source = if let Some(source) = stdlib_source(&module_name) {
         source.to_string()
     } else {
         let importer = uri_to_file_path(uri).ok_or_else(|| "not a file uri".to_string())?;
         let Some(base_dir) = importer.parent() else {
             return Ok(Vec::new());
         };
-        let Some(module_path) = rex_util::resolve_local_import_path(base_dir, segments)
+        let Some(module_path) = resolve_local_import_path(base_dir, segments)
             .ok()
             .flatten()
             .and_then(|p| p.canonicalize().ok())
