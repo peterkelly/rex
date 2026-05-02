@@ -2,14 +2,11 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, Module, RexType,
-        RuntimeEnv, Value,
+        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, Module, RuntimeEnv, Value,
     },
     parser::{Parser, Token},
-    typesystem::{BuiltinTypeId, Type},
+    typesystem::{BuiltinTypeId, RexType, Type},
 };
-use serde_json::json;
-
 fn inject_globals(
     engine: &mut Engine<()>,
     build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
@@ -568,150 +565,5 @@ async fn result_into_value_custom_types() {
             code: 500,
             message: "server error".to_string(),
         })
-    );
-}
-
-#[tokio::test]
-async fn serde_json_value_into_rex() {
-    fn return_json(_state: &(), key: String) -> Result<serde_json::Value, EngineError> {
-        Ok(json!({
-            "key": key,
-            "count": 42,
-            "nested": {
-                "array": [1, 2, 3],
-                "flag": true
-            }
-        }))
-    }
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
-        module.export("return_json", return_json)
-    });
-
-    let (result, _heap, ty) = eval_expr(engine, r#"return_json "test_key""#).await;
-    assert_eq!(ty, Type::con("serde_json::Value", 0));
-
-    let Value::Adt(tag, args) = result.value().unwrap() else {
-        panic!("expected serde_json::Value ADT");
-    };
-    assert_eq!(tag.as_ref(), "serde_json::Value");
-    assert_eq!(args.len(), 1);
-
-    let json_string = args[0].to_rust::<String>().unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&json_string).unwrap();
-    assert_eq!(parsed["key"], "test_key");
-    assert_eq!(parsed["count"], 42);
-}
-
-#[tokio::test]
-async fn serde_json_value_from_rex() {
-    fn accept_json(_state: &(), value: serde_json::Value) -> Result<String, EngineError> {
-        Ok(format!(
-            "key={}, count={}",
-            value["key"].as_str().unwrap_or(""),
-            value["count"].as_i64().unwrap_or(0)
-        ))
-    }
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
-        module.export("accept_json", accept_json)?;
-        module.export_value("test_json", json!({"key": "manual_key", "count": 99}))
-    });
-
-    let (result, heap, ty) = eval_expr(engine, r#"accept_json test_json"#).await;
-    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-
-    assert_handle_eq!(
-        result,
-        heap.alloc_string("key=manual_key, count=99".to_string())
-            .unwrap(),
-    );
-}
-
-#[tokio::test]
-async fn serde_json_value_roundtrip() {
-    fn roundtrip(_state: &(), value: serde_json::Value) -> Result<serde_json::Value, EngineError> {
-        Ok(value)
-    }
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| module.export("roundtrip", roundtrip));
-
-    let original = json!({
-        "string": "hello",
-        "number": 123,
-        "float": 2.5,
-        "bool": true,
-        "null": null,
-        "array": [1, 2, 3],
-        "object": {"nested": "value"}
-    });
-    inject_globals(&mut engine, |module| {
-        module.export_value("test_json", original.clone())
-    });
-
-    let (result, _heap, ty) = eval_expr(engine, r#"roundtrip test_json"#).await;
-    assert_eq!(ty, Type::con("serde_json::Value", 0));
-
-    let result_value = serde_json::Value::from_rex(&result).unwrap();
-    assert_eq!(result_value, original);
-}
-
-#[tokio::test]
-async fn serde_json_value_rex_type() {
-    fn return_json(_state: &(), _input: String) -> Result<serde_json::Value, EngineError> {
-        Ok(json!({"test": "value"}))
-    }
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
-        module.export("return_json", return_json)
-    });
-
-    let ty = infer_type(&mut engine, r#"return_json "test""#);
-    assert_eq!(ty, Type::con("serde_json::Value", 0));
-}
-
-#[tokio::test]
-async fn serde_json_value_primitives() {
-    fn accept_primitives(
-        _state: &(),
-        null: serde_json::Value,
-        boolean: serde_json::Value,
-        number: serde_json::Value,
-        string: serde_json::Value,
-    ) -> Result<String, EngineError> {
-        Ok(format!(
-            "null={}, bool={}, num={}, str={}",
-            null.is_null(),
-            boolean.as_bool().unwrap(),
-            number.as_i64().unwrap(),
-            string.as_str().unwrap()
-        ))
-    }
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
-        module.export("accept_primitives", accept_primitives)?;
-        module.export_value("null_val", json!(null))?;
-        module.export_value("bool_val", json!(true))?;
-        module.export_value("num_val", json!(42))?;
-        module.export_value("str_val", json!("hello"))?;
-        Ok(())
-    });
-
-    let (result, heap, ty) = eval_expr(
-        engine,
-        r#"accept_primitives null_val bool_val num_val str_val"#,
-    )
-    .await;
-    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
-
-    assert_handle_eq!(
-        result,
-        heap.alloc_string("null=true, bool=true, num=42, str=hello".to_string())
-            .unwrap(),
     );
 }

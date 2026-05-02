@@ -1,5 +1,5 @@
 use crate::{
-    error::{AdtConflict, CollectAdtsError},
+    error::{AdtConflict, CollectAdtsError, TypeError},
     typesystem::TypeVarSupply,
     unification::{Subst, subst_is_empty},
 };
@@ -854,6 +854,161 @@ impl AdtDecl {
     }
 }
 
+pub trait RexType {
+    fn rex_type() -> Type;
+
+    fn collect_rex_family(_out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
+        Ok(())
+    }
+}
+
+/// Shared ADT declaration surface for derived and manually implemented Rust types.
+pub trait RexAdt: RexType {
+    fn rex_adt_decl() -> Result<AdtDecl, TypeError>;
+
+    fn rex_adt_family() -> Result<Vec<AdtDecl>, TypeError> {
+        let mut out = Vec::new();
+        <Self as RexType>::collect_rex_family(&mut out)?;
+        Ok(out)
+    }
+}
+
+impl RexType for bool {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::Bool)
+    }
+}
+
+impl RexType for u8 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::U8)
+    }
+}
+
+impl RexType for u16 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::U16)
+    }
+}
+
+impl RexType for u32 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::U32)
+    }
+}
+
+impl RexType for u64 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::U64)
+    }
+}
+
+impl RexType for i8 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::I8)
+    }
+}
+
+impl RexType for i16 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::I16)
+    }
+}
+
+impl RexType for i32 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::I32)
+    }
+}
+
+impl RexType for i64 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::I64)
+    }
+}
+
+impl RexType for f32 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::F32)
+    }
+}
+
+impl RexType for f64 {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::F64)
+    }
+}
+
+impl RexType for String {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::String)
+    }
+}
+
+impl RexType for &str {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::String)
+    }
+}
+
+impl RexType for Uuid {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::Uuid)
+    }
+}
+
+impl RexType for DateTime<Utc> {
+    fn rex_type() -> Type {
+        Type::builtin(BuiltinTypeId::DateTime)
+    }
+}
+
+impl<T: RexType> RexType for Vec<T> {
+    fn rex_type() -> Type {
+        Type::app(Type::builtin(BuiltinTypeId::Array), T::rex_type())
+    }
+}
+
+impl<T: RexType> RexType for Option<T> {
+    fn rex_type() -> Type {
+        Type::app(Type::builtin(BuiltinTypeId::Option), T::rex_type())
+    }
+}
+
+impl<T: RexType, E: RexType> RexType for Result<T, E> {
+    fn rex_type() -> Type {
+        Type::app(
+            Type::app(Type::builtin(BuiltinTypeId::Result), E::rex_type()),
+            T::rex_type(),
+        )
+    }
+}
+
+impl RexType for () {
+    fn rex_type() -> Type {
+        Type::tuple(vec![])
+    }
+}
+
+macro_rules! impl_tuple_rex_type {
+    ($($name:ident),+) => {
+        impl<$($name: RexType),+> RexType for ($($name,)+) {
+            fn rex_type() -> Type {
+                Type::tuple(vec![$($name::rex_type()),+])
+            }
+        }
+    };
+}
+
+impl_tuple_rex_type!(A0);
+impl_tuple_rex_type!(A0, A1);
+impl_tuple_rex_type!(A0, A1, A2);
+impl_tuple_rex_type!(A0, A1, A2, A3);
+impl_tuple_rex_type!(A0, A1, A2, A3, A4);
+impl_tuple_rex_type!(A0, A1, A2, A3, A4, A5);
+impl_tuple_rex_type!(A0, A1, A2, A3, A4, A5, A6);
+impl_tuple_rex_type!(A0, A1, A2, A3, A4, A5, A6, A7);
+
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Class {
     pub supers: Vec<Symbol>,
@@ -976,4 +1131,219 @@ pub fn collect_adts_in_types(types: Vec<Type>) -> Result<Vec<Type>, CollectAdtsE
     }
 
     Ok(out)
+}
+
+fn collect_adts_error_to_type(err: CollectAdtsError) -> TypeError {
+    let details = err
+        .conflicts
+        .into_iter()
+        .map(|conflict| {
+            let defs = conflict
+                .definitions
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}: [{defs}]", conflict.name)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    TypeError::Internal(format!(
+        "conflicting ADT definitions discovered in input types: {details}"
+    ))
+}
+
+fn type_head_and_args_for_adt_family(typ: &Type) -> Result<(Symbol, usize, Vec<Type>), TypeError> {
+    let mut args = Vec::new();
+    let mut head = typ;
+    while let TypeKind::App(f, arg) = head.as_ref() {
+        args.push(arg.clone());
+        head = f;
+    }
+    args.reverse();
+
+    let TypeKind::Con(con) = head.as_ref() else {
+        return Err(TypeError::Internal(format!(
+            "cannot build ADT declaration from non-constructor type `{typ}`"
+        )));
+    };
+    if !args.is_empty() && args.len() != con.arity {
+        return Err(TypeError::Internal(format!(
+            "constructor `{}` expected {} type arguments but got {} in `{typ}`",
+            con.name,
+            con.arity,
+            args.len()
+        )));
+    }
+    Ok((con.name.clone(), con.arity, args))
+}
+
+fn type_head_for_adt_family(typ: &Type) -> Result<Type, TypeError> {
+    let (name, arity, _args) = type_head_and_args_for_adt_family(typ)?;
+    Ok(Type::con(name.as_ref(), arity))
+}
+
+fn adt_shape(adt: &AdtDecl) -> String {
+    let param_names: BTreeMap<_, _> = adt
+        .params
+        .iter()
+        .enumerate()
+        .map(|(idx, param)| (param.var.id, format!("t{idx}")))
+        .collect();
+    let mut variants = adt
+        .variants
+        .iter()
+        .map(|variant| {
+            let args = variant
+                .args
+                .iter()
+                .map(|arg| normalize_type_for_shape(arg, &param_names))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}({args})", variant.name)
+        })
+        .collect::<Vec<_>>();
+    variants.sort();
+    format!("{}[{}]", adt.name, variants.join(" | "))
+}
+
+fn normalize_type_for_shape(typ: &Type, param_names: &BTreeMap<usize, String>) -> String {
+    match typ.as_ref() {
+        TypeKind::Var(tv) => param_names
+            .get(&tv.id)
+            .cloned()
+            .unwrap_or_else(|| format!("v{}", tv.id)),
+        TypeKind::Con(con) => con.name.to_string(),
+        TypeKind::App(fun, arg) => format!(
+            "({} {})",
+            normalize_type_for_shape(fun, param_names),
+            normalize_type_for_shape(arg, param_names)
+        ),
+        TypeKind::Fun(arg, ret) => format!(
+            "({} -> {})",
+            normalize_type_for_shape(arg, param_names),
+            normalize_type_for_shape(ret, param_names)
+        ),
+        TypeKind::Tuple(elems) => format!(
+            "({})",
+            elems
+                .iter()
+                .map(|elem| normalize_type_for_shape(elem, param_names))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        TypeKind::Record(fields) => format!(
+            "{{{}}}",
+            fields
+                .iter()
+                .map(|(name, typ)| format!(
+                    "{name}: {}",
+                    normalize_type_for_shape(typ, param_names)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn adt_shape_eq(left: &AdtDecl, right: &AdtDecl) -> bool {
+    adt_shape(left) == adt_shape(right)
+}
+
+fn adt_direct_dependencies(adt: &AdtDecl) -> Result<Vec<Type>, TypeError> {
+    let types = adt
+        .variants
+        .iter()
+        .flat_map(|variant| variant.args.iter().cloned())
+        .collect::<Vec<_>>();
+    let deps = collect_adts_in_types(types).map_err(collect_adts_error_to_type)?;
+    deps.into_iter()
+        .map(|typ| type_head_for_adt_family(&typ))
+        .collect()
+}
+
+/// Order a family of algebraic data type declarations for registration.
+///
+/// An ADT family is the root ADT an embedder wants to expose plus the
+/// user-defined ADTs that appear in its variant fields, recursively. For
+/// example, if Rust type `Workflow` contains a `Step` field and `Step` contains
+/// a `Resource` field, then `Workflow`, `Step`, and `Resource` form the family
+/// that must be registered together.
+///
+/// This function deduplicates identical declarations, rejects conflicting
+/// declarations for the same ADT name, rejects dependency cycles, and returns
+/// the declarations in dependency order so nested ADTs are registered before
+/// the ADTs that refer to them.
+pub fn order_adt_family(adts: Vec<AdtDecl>) -> Result<Vec<AdtDecl>, TypeError> {
+    let mut unique = BTreeMap::new();
+    for adt in adts {
+        match unique.get(&adt.name) {
+            Some(existing) if adt_shape_eq(existing, &adt) => {}
+            Some(existing) => {
+                return Err(TypeError::Internal(format!(
+                    "conflicting ADT family definitions for `{}`: {} vs {}",
+                    adt.name,
+                    adt_shape(existing),
+                    adt_shape(&adt)
+                )));
+            }
+            None => {
+                unique.insert(adt.name.clone(), adt);
+            }
+        }
+    }
+
+    let mut visiting = Vec::<Symbol>::new();
+    let mut visited = BTreeSet::<Symbol>::new();
+    let mut ordered = Vec::<AdtDecl>::new();
+
+    fn visit(
+        name: &Symbol,
+        unique: &BTreeMap<Symbol, AdtDecl>,
+        visiting: &mut Vec<Symbol>,
+        visited: &mut BTreeSet<Symbol>,
+        ordered: &mut Vec<AdtDecl>,
+    ) -> Result<(), TypeError> {
+        if visited.contains(name) {
+            return Ok(());
+        }
+        if let Some(idx) = visiting.iter().position(|current| current == name) {
+            let mut cycle = visiting[idx..]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>();
+            cycle.push(name.to_string());
+            return Err(TypeError::Internal(format!(
+                "cyclic ADT auto-registration is not supported yet: {}",
+                cycle.join(" -> ")
+            )));
+        }
+
+        let adt = unique
+            .get(name)
+            .ok_or_else(|| TypeError::Internal(format!("missing ADT `{name}` during ordering")))?;
+        visiting.push(name.clone());
+        for dep in adt_direct_dependencies(adt)? {
+            let dep_head = type_head_for_adt_family(&dep)?;
+            let TypeKind::Con(dep_con) = dep_head.as_ref() else {
+                return Err(TypeError::Internal(format!(
+                    "dependency head for `{name}` was not a constructor"
+                )));
+            };
+            if unique.contains_key(&dep_con.name) {
+                visit(&dep_con.name, unique, visiting, visited, ordered)?;
+            }
+        }
+        visiting.pop();
+        visited.insert(name.clone());
+        ordered.push(adt.clone());
+        Ok(())
+    }
+
+    let mut names = unique.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        visit(&name, &unique, &mut visiting, &mut visited, &mut ordered)?;
+    }
+    Ok(ordered)
 }

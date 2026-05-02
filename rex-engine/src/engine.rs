@@ -21,8 +21,8 @@ use rex_typesystem::{
     inference::{infer, infer_typed},
     prelude::prelude_typeclasses_program,
     types::{
-        AdtDecl, BuiltinTypeId, Instance, Predicate, Scheme, Type, TypeKind, TypedExpr,
-        TypedExprKind, Types, collect_adts_in_types,
+        AdtDecl, BuiltinTypeId, Instance, Predicate, RexAdt, RexType, Scheme, Type, TypeKind,
+        TypedExpr, TypedExprKind, Types, order_adt_family,
     },
     typesystem::{PreparedInstanceDecl, TypeSystem, TypeVarSupply},
     typesystem::{entails, instantiate},
@@ -54,7 +54,7 @@ use crate::stack::{
 use crate::value::FromPointer;
 use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec};
 use crate::{
-    EngineError, Environment, FromRex, IntoRex, RexType,
+    EngineError, Environment, FromRex, IntoRex,
     evaluator::{EvalContext, EvaluatorRef},
 };
 
@@ -274,31 +274,6 @@ impl PartialEq for AsyncCallPolicy {
 }
 
 impl Eq for AsyncCallPolicy {}
-
-/// Shared ADT registration surface for derived and manually implemented Rust types.
-pub trait RexAdt: RexType {
-    fn rex_adt_decl() -> Result<AdtDecl, EngineError>;
-
-    fn rex_adt_family() -> Result<Vec<AdtDecl>, EngineError> {
-        let mut out = Vec::new();
-        <Self as RexType>::collect_rex_family(&mut out)?;
-        Ok(out)
-    }
-
-    fn inject_rex<State: Clone + Send + Sync + 'static>(
-        engine: &mut Engine<State>,
-    ) -> Result<(), EngineError>
-    where
-        Self: Sized,
-    {
-        let mut family = Vec::new();
-        <Self as RexType>::collect_rex_family(&mut family)?;
-        for adt in order_adt_family(family)? {
-            engine.inject_adt(adt)?;
-        }
-        Ok(())
-    }
-}
 
 fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
     engine: &RuntimeSnapshot<State>,
@@ -1064,6 +1039,13 @@ pub fn collect_adts_error_to_engine(err: CollectAdtsError) -> EngineError {
     EngineError::Custom(format!(
         "conflicting ADT definitions discovered in input types: {details}"
     ))
+}
+
+pub(crate) fn adt_family_error_to_engine(err: TypeError) -> EngineError {
+    match err {
+        TypeError::Internal(message) => EngineError::Custom(message),
+        other => EngineError::Type(other),
+    }
 }
 
 fn native_export_arg_types(
@@ -3133,6 +3115,13 @@ where
         Ok(self.adt_decl(name.as_ref(), params))
     }
 
+    pub fn inject_rex_adt<T: RexAdt>(&mut self) -> Result<(), EngineError> {
+        for adt in order_adt_family(T::rex_adt_family()?).map_err(adt_family_error_to_engine)? {
+            self.inject_adt(adt)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn inject_adt(&mut self, adt: AdtDecl) -> Result<(), EngineError> {
         let register_type = match self.type_system.adts.get(&adt.name) {
             Some(existing) if adt_shape_eq(existing, &adt) => false,
@@ -4058,11 +4047,6 @@ fn type_head_and_args(typ: &Type) -> Result<(Symbol, usize, Vec<Type>), EngineEr
     Ok((con.name.clone(), con.arity, args))
 }
 
-fn type_head(typ: &Type) -> Result<Type, EngineError> {
-    let (name, arity, _args) = type_head_and_args(typ)?;
-    Ok(Type::con(name.as_ref(), arity))
-}
-
 pub(crate) fn adt_shape(adt: &AdtDecl) -> String {
     let param_names: BTreeMap<_, _> = adt
         .params
@@ -4128,90 +4112,6 @@ fn normalize_type_for_shape(typ: &Type, param_names: &BTreeMap<usize, String>) -
 
 pub(crate) fn adt_shape_eq(left: &AdtDecl, right: &AdtDecl) -> bool {
     adt_shape(left) == adt_shape(right)
-}
-
-fn adt_direct_dependencies(adt: &AdtDecl) -> Result<Vec<Type>, EngineError> {
-    let types = adt
-        .variants
-        .iter()
-        .flat_map(|variant| variant.args.iter().cloned())
-        .collect::<Vec<_>>();
-    let deps = collect_adts_in_types(types).map_err(collect_adts_error_to_engine)?;
-    deps.into_iter().map(|typ| type_head(&typ)).collect()
-}
-
-pub(crate) fn order_adt_family(adts: Vec<AdtDecl>) -> Result<Vec<AdtDecl>, EngineError> {
-    let mut unique = BTreeMap::new();
-    for adt in adts {
-        match unique.get(&adt.name) {
-            Some(existing) if adt_shape_eq(existing, &adt) => {}
-            Some(existing) => {
-                return Err(EngineError::Custom(format!(
-                    "conflicting ADT family definitions for `{}`: {} vs {}",
-                    adt.name,
-                    adt_shape(existing),
-                    adt_shape(&adt)
-                )));
-            }
-            None => {
-                unique.insert(adt.name.clone(), adt);
-            }
-        }
-    }
-
-    let mut visiting = Vec::<Symbol>::new();
-    let mut visited = BTreeSet::<Symbol>::new();
-    let mut ordered = Vec::<AdtDecl>::new();
-
-    fn visit(
-        name: &Symbol,
-        unique: &BTreeMap<Symbol, AdtDecl>,
-        visiting: &mut Vec<Symbol>,
-        visited: &mut BTreeSet<Symbol>,
-        ordered: &mut Vec<AdtDecl>,
-    ) -> Result<(), EngineError> {
-        if visited.contains(name) {
-            return Ok(());
-        }
-        if let Some(idx) = visiting.iter().position(|current| current == name) {
-            let mut cycle = visiting[idx..]
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>();
-            cycle.push(name.to_string());
-            return Err(EngineError::Custom(format!(
-                "cyclic ADT auto-registration is not supported yet: {}",
-                cycle.join(" -> ")
-            )));
-        }
-
-        let adt = unique.get(name).ok_or_else(|| {
-            EngineError::Internal(format!("missing ADT `{name}` during ordering"))
-        })?;
-        visiting.push(name.clone());
-        for dep in adt_direct_dependencies(adt)? {
-            let dep_head = type_head(&dep)?;
-            let TypeKind::Con(dep_con) = dep_head.as_ref() else {
-                return Err(EngineError::Internal(format!(
-                    "dependency head for `{name}` was not a constructor"
-                )));
-            };
-            if unique.contains_key(&dep_con.name) {
-                visit(&dep_con.name, unique, visiting, visited, ordered)?;
-            }
-        }
-        visiting.pop();
-        visited.insert(name.clone());
-        ordered.push(adt.clone());
-        Ok(())
-    }
-
-    let mut names = unique.keys().cloned().collect::<Vec<_>>();
-    names.sort();
-    for name in names {
-        visit(&name, &unique, &mut visiting, &mut visited, &mut ordered)?;
-    }
-    Ok(ordered)
 }
 
 fn type_arity(typ: &Type) -> usize {

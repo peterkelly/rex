@@ -4,11 +4,11 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module, RexAdt,
-        RexType, RuntimeEnv, Value,
+        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module,
+        RuntimeEnv, Value,
     },
     parser::{Parser, Token},
-    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeVarSupply},
+    typesystem::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply},
 };
 
 macro_rules! assert_handle_eq {
@@ -58,7 +58,7 @@ impl RexType for ManualRecord {
         Type::con("ManualRecord", 0)
     }
 
-    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
         out.push(<Self as RexAdt>::rex_adt_decl()?);
         Ok(())
     }
@@ -119,7 +119,7 @@ impl RexType for ManualEnum {
         Type::con("ManualEnum", 0)
     }
 
-    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
         out.push(<Self as RexAdt>::rex_adt_decl()?);
         Ok(())
     }
@@ -163,7 +163,7 @@ impl FromRex for ManualEnum {
 }
 
 impl RexAdt for ManualRecord {
-    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+    fn rex_adt_decl() -> Result<AdtDecl, TypeError> {
         let mut supply = TypeVarSupply::new();
         let mut adt = AdtDecl::new(&Symbol::intern("ManualRecord"), &[], &mut supply);
         let record = Type::record(vec![
@@ -176,7 +176,7 @@ impl RexAdt for ManualRecord {
 }
 
 impl RexAdt for ManualEnum {
-    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+    fn rex_adt_decl() -> Result<AdtDecl, TypeError> {
         let mut supply = TypeVarSupply::new();
         let mut adt = AdtDecl::new(&Symbol::intern("ManualEnum"), &[], &mut supply);
         adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
@@ -188,7 +188,7 @@ impl RexAdt for ManualEnum {
 #[tokio::test]
 async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    ManualRecord::inject_rex(&mut engine).unwrap();
+    engine.inject_rex_adt::<ManualRecord>().unwrap();
 
     let tokens = Token::tokenize("ManualRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
@@ -240,7 +240,7 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
 #[tokio::test]
 async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    ManualEnum::inject_rex(&mut engine).unwrap();
+    engine.inject_rex_adt::<ManualEnum>().unwrap();
 
     let tokens = Token::tokenize(
         r#"

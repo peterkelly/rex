@@ -19,7 +19,7 @@ pub use engine::{
     AsyncCallExecutor, AsyncCallPolicy, ClassMethodCapability, ClassMethodRequirement,
     CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine, EngineOptions,
     ExecutionBounds, Export, HostFnAsync, HostFnSync, NativeCapability, NativeFuture,
-    NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexAdt, RexDefault,
+    NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexDefault,
     RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, collect_adts_error_to_engine,
 };
 pub use env::Environment;
@@ -31,4 +31,4 @@ pub use modules::{
     ResolveRequest, ResolvedModule, ResolvedModuleContent, SymbolKind,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
-pub use value::{FromRex, Handle, Heap, IntoRex, RexType, Value, ValueDisplayOptions};
+pub use value::{FromRex, Handle, Heap, IntoRex, Value, ValueDisplayOptions};

@@ -2,12 +2,12 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module, RexAdt,
-        RexType, RuntimeEnv, Value,
+        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module,
+        RuntimeEnv, Value,
     },
     json::{JsonOptions, rex_to_json},
     parser::{Parser, Token},
-    typesystem::{BuiltinTypeId, Type},
+    typesystem::{BuiltinTypeId, RexType, Type},
 };
 use serde::Serialize;
 use std::collections::HashMap;
@@ -488,7 +488,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
 #[tokio::test]
 async fn derive_types_implement_rex_adt_trait() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    <Shape as RexAdt>::inject_rex(&mut engine).unwrap();
+    engine.inject_rex_adt::<Shape>().unwrap();
 
     let tokens = Token::tokenize(
         r#"

@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use rex_ast::expr::Symbol;
-use rex_typesystem::types::{AdtDecl, BuiltinTypeId, Type, TypedExpr};
+use rex_typesystem::types::{Type, TypedExpr};
 use uuid::Uuid;
 
 use crate::EngineError;
@@ -2278,14 +2278,6 @@ pub trait FromRex: Sized {
     fn from_rex(handle: &Handle) -> Result<Self, EngineError>;
 }
 
-pub trait RexType {
-    fn rex_type() -> Type;
-
-    fn collect_rex_family(_out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
-        Ok(())
-    }
-}
-
 impl IntoPointer for Cell {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
         heap.alloc_ptr_cell(self)
@@ -2552,108 +2544,6 @@ impl IntoPointer for DateTime<Utc> {
     }
 }
 
-impl RexType for bool {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::Bool)
-    }
-}
-
-impl RexType for u8 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::U8)
-    }
-}
-
-impl RexType for u16 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::U16)
-    }
-}
-
-impl RexType for u32 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::U32)
-    }
-}
-
-impl RexType for u64 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::U64)
-    }
-}
-
-impl RexType for i8 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::I8)
-    }
-}
-
-impl RexType for i16 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::I16)
-    }
-}
-
-impl RexType for i32 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::I32)
-    }
-}
-
-impl RexType for i64 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::I64)
-    }
-}
-
-impl RexType for f32 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::F32)
-    }
-}
-
-impl RexType for f64 {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::F64)
-    }
-}
-
-impl RexType for String {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::String)
-    }
-}
-
-impl RexType for &str {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::String)
-    }
-}
-
-impl RexType for Uuid {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::Uuid)
-    }
-}
-
-impl RexType for DateTime<Utc> {
-    fn rex_type() -> Type {
-        Type::builtin(BuiltinTypeId::DateTime)
-    }
-}
-
-impl<T: RexType> RexType for Vec<T> {
-    fn rex_type() -> Type {
-        Type::app(Type::builtin(BuiltinTypeId::Array), T::rex_type())
-    }
-}
-
-impl<T: RexType> RexType for Option<T> {
-    fn rex_type() -> Type {
-        Type::app(Type::builtin(BuiltinTypeId::Option), T::rex_type())
-    }
-}
-
 impl FromPointer for bool {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
         heap.pointer_as_bool(pointer)
@@ -2753,15 +2643,6 @@ impl<T: IntoPointer, E: IntoPointer> IntoPointer for Result<T, E> {
     }
 }
 
-impl<T: RexType, E: RexType> RexType for Result<T, E> {
-    fn rex_type() -> Type {
-        Type::app(
-            Type::app(Type::builtin(BuiltinTypeId::Result), E::rex_type()),
-            T::rex_type(),
-        )
-    }
-}
-
 impl<T, E> FromPointer for Result<T, E>
 where
     T: FromPointer,
@@ -2823,12 +2704,6 @@ impl<T: FromRex, E: FromRex> FromRex for Result<T, E> {
     }
 }
 
-impl RexType for () {
-    fn rex_type() -> Type {
-        Type::tuple(vec![])
-    }
-}
-
 impl IntoPointer for () {
     fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
         heap.alloc_ptr_tuple(vec![])
@@ -2864,12 +2739,6 @@ impl FromRex for () {
 
 macro_rules! impl_tuple_traits {
     ($($name:ident),+) => {
-        impl<$($name: RexType),+> RexType for ($($name,)+) {
-            fn rex_type() -> Type {
-                Type::tuple(vec![$($name::rex_type()),+])
-            }
-        }
-
         impl<$($name: IntoPointer),+> IntoPointer for ($($name,)+) {
             #[allow(non_snake_case)]
             fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
@@ -2941,44 +2810,6 @@ impl_tuple_traits!(A0, A1, A2, A3, A4);
 impl_tuple_traits!(A0, A1, A2, A3, A4, A5);
 impl_tuple_traits!(A0, A1, A2, A3, A4, A5, A6);
 impl_tuple_traits!(A0, A1, A2, A3, A4, A5, A6, A7);
-
-impl RexType for serde_json::Value {
-    fn rex_type() -> Type {
-        Type::con("serde_json::Value", 0)
-    }
-}
-
-impl IntoPointer for serde_json::Value {
-    fn into_pointer(self, heap: &Heap) -> Result<Pointer, EngineError> {
-        let json_string = serde_json::to_string(&self)
-            .map_err(|e| EngineError::Internal(format!("failed to serialize JSON: {}", e)))?;
-        let string_ptr = heap.alloc_ptr_string(json_string)?;
-        heap.alloc_ptr_adt(Symbol::intern("serde_json::Value"), vec![string_ptr])
-    }
-}
-
-impl FromPointer for serde_json::Value {
-    fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError> {
-        let (tag, args) = heap.pointer_as_adt(pointer)?;
-        if tag.as_ref() != "serde_json::Value" {
-            return Err(EngineError::NativeType {
-                expected: "serde_json::Value".into(),
-                got: heap.type_name(pointer)?.into(),
-            });
-        }
-        if args.len() != 1 {
-            return Err(EngineError::Internal(format!(
-                "serde_json::Value ADT should have 1 field, got {}",
-                args.len()
-            )));
-        }
-        let json_string = heap.pointer_as_string(&args[0])?;
-        serde_json::from_str(&json_string)
-            .map_err(|e| EngineError::Internal(format!("failed to deserialize JSON: {}", e)))
-    }
-}
-
-impl_rex_via_pointer!(serde_json::Value);
 
 #[cfg(test)]
 mod tests {

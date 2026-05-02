@@ -2,13 +2,13 @@ use futures::FutureExt;
 use rex_ast::expr::{Decl, Expr, Program, Symbol};
 use rex_engine::{
     Compiler, Engine, EngineError, Evaluator, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module,
-    RexType, RuntimeEnv, Value,
+    RuntimeEnv, Value,
 };
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_typesystem::{
     error::TypeError,
-    types::{BuiltinTypeId, Scheme, Type},
+    types::{BuiltinTypeId, RexType, Scheme, Type},
 };
 use std::sync::Arc;
 

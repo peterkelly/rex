@@ -48,15 +48,18 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     let type_param_count = type_param_idents.len();
 
     let mut rex_type_generics = ast.generics.clone();
-    add_bound_to_type_params(&mut rex_type_generics, parse_quote!(::rex::engine::RexType));
+    add_bound_to_type_params(
+        &mut rex_type_generics,
+        parse_quote!(::rex::typesystem::RexType),
+    );
     let (rex_type_impl_generics, rex_type_ty_generics, rex_type_where_clause) =
         rex_type_generics.split_for_impl();
     let rex_type_params = type_param_idents.iter().map(|ident| {
-        quote! { <#ident as ::rex::engine::RexType>::rex_type() }
+        quote! { <#ident as ::rex::typesystem::RexType>::rex_type() }
     });
     let rex_type_collect_family = adt_family_fn(ast, &type_name, &type_param_idents)?;
     let rex_type_impl = quote! {
-        impl #rex_type_impl_generics ::rex::engine::RexType for #rust_ident #rex_type_ty_generics #rex_type_where_clause {
+        impl #rex_type_impl_generics ::rex::typesystem::RexType for #rust_ident #rex_type_ty_generics #rex_type_where_clause {
             fn rex_type() -> ::rex::typesystem::Type {
                 let mut ty = ::rex::typesystem::Type::con(#type_name, #type_param_count);
                 #( ty = ::rex::typesystem::Type::app(ty, #rex_type_params); )*
@@ -65,19 +68,22 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
 
             fn collect_rex_family(
                 out: &mut ::std::vec::Vec<::rex::typesystem::AdtDecl>,
-            ) -> Result<(), ::rex::engine::EngineError> {
+            ) -> Result<(), ::rex::typesystem::TypeError> {
                 #rex_type_collect_family
             }
         }
     };
     let adt_decl_fn = adt_decl_fn(ast, &type_name, &type_param_idents)?;
     let mut rex_adt_generics = ast.generics.clone();
-    add_bound_to_type_params(&mut rex_adt_generics, parse_quote!(::rex::engine::RexType));
+    add_bound_to_type_params(
+        &mut rex_adt_generics,
+        parse_quote!(::rex::typesystem::RexType),
+    );
     let (rex_adt_impl_generics, rex_adt_ty_generics, rex_adt_where_clause) =
         rex_adt_generics.split_for_impl();
     let rex_adt_impl = quote! {
-        impl #rex_adt_impl_generics ::rex::engine::RexAdt for #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
-            fn rex_adt_decl() -> Result<::rex::typesystem::AdtDecl, ::rex::engine::EngineError> {
+        impl #rex_adt_impl_generics ::rex::typesystem::RexAdt for #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
+            fn rex_adt_decl() -> Result<::rex::typesystem::AdtDecl, ::rex::typesystem::TypeError> {
                 #adt_decl_fn
             }
         }
@@ -87,15 +93,15 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             pub fn inject_rex<State: Clone + Send + Sync + 'static>(
                 engine: &mut ::rex::engine::Engine<State>,
             ) -> Result<(), ::rex::engine::EngineError> {
-                <Self as ::rex::engine::RexAdt>::inject_rex(engine)
+                engine.inject_rex_adt::<Self>()
             }
 
             pub fn rex_adt_decl() -> Result<::rex::typesystem::AdtDecl, ::rex::engine::EngineError> {
-                <Self as ::rex::engine::RexAdt>::rex_adt_decl()
+                Ok(<Self as ::rex::typesystem::RexAdt>::rex_adt_decl()?)
             }
 
             pub fn rex_adt_family() -> Result<::std::vec::Vec<::rex::typesystem::AdtDecl>, ::rex::engine::EngineError> {
-                <Self as ::rex::engine::RexAdt>::rex_adt_family()
+                Ok(<Self as ::rex::typesystem::RexAdt>::rex_adt_family()?)
             }
 
             pub fn inject_rex_with_default<State: Clone + Send + Sync + 'static>(
@@ -104,7 +110,7 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             where
                 Self: ::rex::engine::RexDefault<State>,
             {
-                <Self as ::rex::engine::RexAdt>::inject_rex(engine)?;
+                engine.inject_rex_adt::<Self>()?;
                 engine.inject_rex_default_instance::<Self>()
             }
 
@@ -116,7 +122,7 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
                 State: Clone + Send + Sync + 'static,
                 H: ::rex::engine::HostFnSync<State, Sig>,
             {
-                <Self as ::rex::engine::RexAdt>::inject_rex(engine)?;
+                engine.inject_rex_adt::<Self>()?;
                 let mut module = ::rex::engine::Module::global();
                 module.export(#type_name, constructor)?;
                 engine.inject_module(module)
@@ -225,7 +231,7 @@ fn adt_decl_fn(
         param_bindings.push(quote! {
             let #p_ident = adt
                 .param_type(&::rex::ast::Symbol::intern(#p_lit))
-                .ok_or_else(|| ::rex::engine::EngineError::UnknownType(::rex::ast::Symbol::intern(#type_name)))?;
+                .ok_or_else(|| ::rex::typesystem::TypeError::UnknownTypeName(::rex::ast::Symbol::intern(#type_name)))?;
         });
         param_map.insert(p_name, quote!(#p_ident.clone()));
     }
@@ -344,7 +350,7 @@ fn adt_family_fn(
         #(
             #deps
         )*
-        out.push(<Self as ::rex::engine::RexAdt>::rex_adt_decl()?);
+        out.push(<Self as ::rex::typesystem::RexAdt>::rex_adt_decl()?);
         Ok(())
     }})
 }
@@ -469,7 +475,7 @@ fn collect_dependency_exprs_from_type(
                     collect_dependency_exprs_from_type(err, self_type_name, type_params, deps)
                 }
                 _ => {
-                    deps.push(quote! { <#type_path as ::rex::engine::RexType>::collect_rex_family(out)?; });
+                    deps.push(quote! { <#type_path as ::rex::typesystem::RexType>::collect_rex_family(out)?; });
                     Ok(())
                 }
             }
@@ -593,7 +599,7 @@ fn rex_type_expr(
                         )
                     })
                 }
-                _ => Ok(quote! { <#type_path as ::rex::engine::RexType>::rex_type() }),
+                _ => Ok(quote! { <#type_path as ::rex::typesystem::RexType>::rex_type() }),
             }
         }
         other => Err(Error::new(

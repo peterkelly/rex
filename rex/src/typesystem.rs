@@ -3,8 +3,8 @@ pub use rex_typesystem::{
     inference::{infer, infer_typed},
     prelude::prelude_typeclasses_program,
     types::{
-        AdtDecl, AdtParam, AdtVariant, BuiltinTypeId, Instance, Predicate, Scheme, Type, TypeConst,
-        TypeKind, TypeVar, collect_adts_in_types,
+        AdtDecl, AdtParam, AdtVariant, BuiltinTypeId, Instance, Predicate, RexAdt, RexType, Scheme,
+        Type, TypeConst, TypeKind, TypeVar, collect_adts_in_types, order_adt_family,
     },
     typesystem::{TypeSystem, TypeVarSupply},
 };

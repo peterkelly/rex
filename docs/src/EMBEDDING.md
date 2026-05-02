@@ -759,7 +759,11 @@ field annotation is required. Such leaf types inherit the default no-op family c
 `RexType`, so derived ADTs can contain them without trying to register them as ADTs.
 
 ```rust
-use rex::{Engine, FromRex, Handle, IntoRex, Rex, RexType, Type};
+use rex::{
+    Rex,
+    engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex},
+    typesystem::{RexType, Type},
+};
 
 #[derive(Debug, PartialEq)]
 struct AtomRef(i32);
@@ -771,13 +775,13 @@ impl RexType for AtomRef {
 }
 
 impl IntoRex for AtomRef {
-    fn into_rex(self, heap: &rex::Heap) -> Result<Handle, rex::EngineError> {
+    fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError> {
         self.0.into_rex(heap)
     }
 }
 
 impl FromRex for AtomRef {
-    fn from_rex(handle: &Handle) -> Result<Self, rex::EngineError> {
+    fn from_rex(handle: &Handle) -> Result<Self, EngineError> {
         Ok(Self(i32::from_rex(handle)?))
     }
 }
@@ -822,7 +826,11 @@ without `#[derive(Rex)]`.
 several ADTs manually, prefer batching them in one module with `add_adt_family(...)`.
 
 ```rust
-use rex::{Engine, Module, RexType, Symbol, Type};
+use rex::{
+    ast::Symbol,
+    engine::{Engine, Module},
+    typesystem::{RexType, Type},
+};
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
@@ -835,14 +843,18 @@ engine.inject_module(globals)?;
 ```
 
 If you have a Rust type with manual `RexType`/`IntoRex`/`FromRex` impls, implement
-`RexAdt` and provide `rex_adt_decl()`. Then `RexAdt::inject_rex(...)` gives the same
-registration workflow as derived types.
+`RexAdt` and provide `rex_adt_decl()`. Then `Engine::inject_rex_adt::<T>()` gives manual
+types the same registration workflow that `#[derive(Rex)]` exposes as `T::inject_rex(...)`.
 
 If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(...)` and add its
 `AdtDecl` there. Leaf types can inherit the default no-op implementation.
 
 ```rust
-use rex::{AdtDecl, Engine, EngineError, RexAdt, RexType, Symbol, Type, TypeVarSupply};
+use rex::{
+    ast::Symbol,
+    engine::Engine,
+    typesystem::{AdtDecl, RexAdt, RexType, Type, TypeError, TypeVarSupply},
+};
 
 struct PrimitiveEither;
 
@@ -851,14 +863,14 @@ impl RexType for PrimitiveEither {
         Type::con("PrimitiveEither", 0)
     }
 
-    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
         out.push(<Self as RexAdt>::rex_adt_decl()?);
         Ok(())
     }
 }
 
 impl RexAdt for PrimitiveEither {
-    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+    fn rex_adt_decl() -> Result<AdtDecl, TypeError> {
         let mut supply = TypeVarSupply::new();
         let mut adt = AdtDecl::new(&Symbol::intern("PrimitiveEither"), &[], &mut supply);
         adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
@@ -868,7 +880,7 @@ impl RexAdt for PrimitiveEither {
 }
 
 let mut engine = Engine::with_prelude(())?;
-PrimitiveEither::inject_rex(&mut engine)?;
+engine.inject_rex_adt::<PrimitiveEither>()?;
 ```
 
 ## Depth Limits

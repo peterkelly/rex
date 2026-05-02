@@ -9,10 +9,11 @@ use futures::FutureExt;
 use rex_ast::expr::Symbol;
 use rex_engine::{
     Compiler, Engine, EngineError, EngineOptions, Evaluator, EvaluatorRef, Handle, Module,
-    PreludeMode, RexAdt, RexType, RuntimeEnv, Value,
+    PreludeMode, RuntimeEnv, Value,
 };
 use rex_typesystem::{
-    types::{AdtDecl, BuiltinTypeId, Scheme, Type, TypeKind},
+    error::TypeError,
+    types::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Scheme, Type, TypeKind},
     typesystem::TypeVarSupply,
 };
 use uuid::Uuid;
@@ -58,14 +59,14 @@ impl RexType for LocalRunSpec {
         Type::con("RunSpec", 0)
     }
 
-    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), EngineError> {
+    fn collect_rex_family(out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
         out.push(<Self as RexAdt>::rex_adt_decl()?);
         Ok(())
     }
 }
 
 impl RexAdt for LocalRunSpec {
-    fn rex_adt_decl() -> Result<AdtDecl, EngineError> {
+    fn rex_adt_decl() -> Result<AdtDecl, TypeError> {
         let mut supply = TypeVarSupply::new();
         let mut adt = AdtDecl::new(&Symbol::intern("RunSpec"), &[], &mut supply);
         adt.add_variant(Symbol::intern("Pending"), vec![]);

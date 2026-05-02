@@ -1,16 +1,17 @@
 use rex_ast::expr::{Decl, NameRef, Symbol, TypeDecl, TypeExpr, TypeVariant};
 use rex_lexer::span::Span;
 use rex_typesystem::{
-    types::collect_adts_in_types,
-    types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type, TypeKind, TypeVar},
+    types::{AdtDecl, BuiltinTypeId, Predicate, RexType, Scheme, Type, TypeKind, TypeVar},
+    types::{collect_adts_in_types, order_adt_family},
 };
 
 use crate::EvaluatorRef;
 use crate::engine::{
-    Export, HostFnAsync, HostFnSync, NativeFuture, SchedulerNativeResult, order_adt_family,
+    Export, HostFnAsync, HostFnSync, NativeFuture, SchedulerNativeResult,
+    adt_family_error_to_engine,
 };
 use crate::stack::{NativeLogShow, NativeTask};
-use crate::{Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME, RexType};
+use crate::{Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME};
 
 /// A staged host module that you build up in Rust and later inject into an [`Engine`].
 ///
@@ -229,7 +230,7 @@ where
     /// Families are ordered before insertion so declarations are staged in
     /// dependency order, and cycles are rejected.
     pub fn add_adt_family(&mut self, adts: Vec<AdtDecl>) -> Result<(), EngineError> {
-        for adt in order_adt_family(adts)? {
+        for adt in order_adt_family(adts).map_err(adt_family_error_to_engine)? {
             let candidate = type_decl_from_adt(&adt);
             let already_staged = self.structured_decls.iter().find_map(|decl| match decl {
                 Decl::Type(type_decl) if type_decl.name == adt.name => Some(type_decl),
