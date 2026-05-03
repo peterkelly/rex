@@ -601,7 +601,7 @@ pub enum Expr {
     Let(Span, Var, Option<TypeExpr>, Arc<Expr>, Arc<Expr>), // let x = e1 in e2
     LetRec(Span, Vec<(Var, Option<TypeExpr>, Arc<Expr>)>, Arc<Expr>), // let rec f = e1 and g = e2 in e3
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>),                       // if e1 then e2 else e3
-    Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>),                // match e1 with patterns
+    Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>),                // match e1 with { ... }
     Ann(Span, Arc<Expr>, TypeExpr),                                   // e is t
 }
 
@@ -979,7 +979,7 @@ impl Display for Expr {
             Self::Match(_span, scrutinee, arms) => {
                 "match ".fmt(f)?;
                 scrutinee.fmt(f)?;
-                " { ".fmt(f)?;
+                " with { ".fmt(f)?;
                 for (pat, expr) in arms {
                     "when ".fmt(f)?;
                     pat.fmt(f)?;

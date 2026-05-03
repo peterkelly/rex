@@ -312,14 +312,14 @@ instance Eq datetime where {
 }
 instance Eq (List a) <= Eq a where {
     == = \xs ys ->
-        match xs {
+        match xs with {
             when [] ->
-                (match ys {
+                (match ys with {
                     when [] -> true;
                     when _ -> false;
                 });
             when x::xs1 ->
-                (match ys {
+                (match ys with {
                     when y::ys1 -> if x == y then xs1 == ys1 else false;
                     when [] -> false;
                 });
@@ -328,14 +328,14 @@ instance Eq (List a) <= Eq a where {
 }
 instance Eq (Option a) <= Eq a where {
     == = \x y ->
-        match x {
+        match x with {
             when Some a0 ->
-                (match y {
+                (match y with {
                     when Some b0 -> a0 == b0;
                     when None -> false;
                 });
             when None ->
-                (match y {
+                (match y with {
                     when None -> true;
                     when Some _ -> false;
                 });
@@ -348,14 +348,14 @@ instance Eq (Array a) <= Eq a where {
 }
 instance Eq (Result a e) <= Eq a, Eq e where {
     == = \x y ->
-        match x {
+        match x with {
             when Ok a0 ->
-                (match y {
+                (match y with {
                     when Ok b0 -> a0 == b0;
                     when Err _ -> false;
                 });
             when Err e0 ->
-                (match y {
+                (match y with {
                     when Err e1 -> e0 == e1;
                     when Ok _ -> false;
                 });
@@ -534,7 +534,7 @@ instance Default (Result a e) <= Default a where {
 }
 instance Show (List a) <= Show a where {
     show = \xs ->
-        match xs {
+        match xs with {
             when [] -> "[]";
             when x::xs1 ->
                 let
@@ -556,14 +556,14 @@ instance Show (Array a) <= Show a where {
 }
 instance Show (Option a) <= Show a where {
     show = \x ->
-        match x {
+        match x with {
             when Some a0 -> "Some(" + show a0 + ")";
             when None -> "None";
         };
 }
 instance Show (Result a e) <= Show a, Show e where {
     show = \x ->
-        match x {
+        match x with {
             when Ok a0 -> "Ok(" + show a0 + ")";
             when Err e0 -> "Err(" + show e0 + ")";
         };
@@ -588,7 +588,7 @@ instance Applicative List <= Functor List where {
 instance Applicative Option <= Functor Option where {
     pure = \x -> Some x;
     ap = \ff xx ->
-        match ff {
+        match ff with {
             when Some f -> map f xx;
             when None -> None;
         };
@@ -600,7 +600,7 @@ instance Applicative Array <= Functor Array where {
 instance Applicative (Result e) <= Functor (Result e) where {
     pure = \x -> Ok x;
     ap = \rf rx ->
-        match rf {
+        match rf with {
             when Ok f -> map f rx;
             when Err err -> Err err;
         };

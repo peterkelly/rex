@@ -5396,6 +5396,9 @@ fn keyword_doc(word: &str) -> Option<&'static str> {
         "in" => Some("Begins the expression body for a let binding."),
         "type" => Some("Declares a type or ADT."),
         "match" => Some("Starts a pattern match expression."),
+        "with" => {
+            Some("Separates a match scrutinee from its arm block, or introduces a record update.")
+        }
         "when" => Some("Introduces a match arm."),
         "if" => Some("Conditional expression keyword."),
         "then" => Some("Conditional expression branch."),

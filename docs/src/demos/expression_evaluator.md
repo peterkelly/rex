@@ -10,7 +10,7 @@ The code defines one ADT (`Expr`) and then reuses it across three traversals: `e
 type Expr = Lit i32 | Add Expr Expr | Mul Expr Expr | Neg Expr;
 
 fn eval : Expr -> i32 = \e ->
-  match e {
+  match e with {
     when Lit n -> n;
     when Add a b -> eval a + eval b;
     when Mul a b -> eval a * eval b;
@@ -18,7 +18,7 @@ fn eval : Expr -> i32 = \e ->
   };
 
 fn depth : Expr -> i32 = \e ->
-  match e {
+  match e with {
     when Lit _ -> 1;
     when Add a b ->
       if depth a > depth b then 1 + depth a else 1 + depth b;
@@ -28,7 +28,7 @@ fn depth : Expr -> i32 = \e ->
   };
 
 fn simplify_once : Expr -> Expr = \e ->
-  match e {
+  match e with {
     when Neg (Neg x) -> x;
     when _ -> e;
   };

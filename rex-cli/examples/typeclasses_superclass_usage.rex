@@ -8,19 +8,19 @@ type Color = Red | Green | Blue;
 
 instance MyEq Color where {
     eq = \x y ->
-        match x {
+        match x with {
             when Red ->
-                let r = match y { when Red -> true; when _ -> false; } in r;
+                let r = match y with { when Red -> true; when _ -> false; } in r;
             when Green ->
-                let r = match y { when Green -> true; when _ -> false; } in r;
+                let r = match y with { when Green -> true; when _ -> false; } in r;
             when Blue ->
-                let r = match y { when Blue -> true; when _ -> false; } in r;
+                let r = match y with { when Blue -> true; when _ -> false; } in r;
         };
 }
 instance MyOrd Color <= MyEq Color where {
     my_cmp = \x y ->
         if eq x y then 0 else
-        match x {
+        match x with {
             when Red -> -1;
             when Green -> if eq y Red then 1 else -1;
             when Blue -> 1;

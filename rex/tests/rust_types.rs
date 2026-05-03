@@ -167,7 +167,7 @@ async fn to_list_allows_pattern_matching_host_arrays() {
 
     let (result, heap, ty) = eval_expr(
         engine,
-        r#"match (to_list (return_vec "abc")) {
+        r#"match (to_list (return_vec "abc")) with {
             when Cons x _ -> x;
             when Empty -> -1;
         }"#,

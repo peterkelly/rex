@@ -33,7 +33,7 @@ pub fn stringify : Value -> string
 
 pub fn parse : string -> Result Value DecodeError
     = (\s ->
-        match (prim_json_parse s) {
+        match (prim_json_parse s) with {
             when Ok v -> Ok v;
             when Err msg -> Err (DecodeError { message = msg });
         }
@@ -46,7 +46,7 @@ fn fail : string -> Result a DecodeError
     = \msg -> Err (DecodeError { message = msg });
 
 fn kind : Value -> string
-    = (\v -> match v {
+    = (\v -> match v with {
         when Null -> "null";
         when Bool _ -> "bool";
         when String _ -> "string";
@@ -70,7 +70,7 @@ instance EncodeJson bool where {
 }
 instance DecodeJson bool where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Bool b -> Ok b;
 	            when _ -> Err (expected "bool" v);
             };
@@ -80,7 +80,7 @@ instance EncodeJson string where {
 }
 instance DecodeJson string where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when String s -> Ok s;
 	            when _ -> Err (expected "string" v);
             };
@@ -90,7 +90,7 @@ instance EncodeJson f64 where {
 }
 instance DecodeJson f64 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Number n -> Ok n;
 	            when _ -> Err (expected "number" v);
             };
@@ -100,9 +100,9 @@ instance EncodeJson f32 where {
 }
 instance DecodeJson f32 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Number n -> (
-	                match (prim_f64_to_f32 n) {
+	                match (prim_f64_to_f32 n) with {
 	                    when Some x -> Ok x;
 	                    when None -> fail "expected finite f64 representable as f32";
 	                }
@@ -115,9 +115,9 @@ instance EncodeJson u8 where {
 }
 instance DecodeJson u8 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Number n -> (
-	                match (prim_f64_to_u8 n) {
+	                match (prim_f64_to_u8 n) with {
 	                    when Some x -> Ok x;
 	                    when None -> fail "expected integer number representable as u8";
 	                }
@@ -130,9 +130,9 @@ instance EncodeJson u16 where {
 }
 instance DecodeJson u16 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Number n -> (
-	                match (prim_f64_to_u16 n) {
+	                match (prim_f64_to_u16 n) with {
 	                    when Some x -> Ok x;
 	                    when None -> fail "expected integer number representable as u16";
                     }
@@ -145,9 +145,9 @@ instance EncodeJson u32 where {
 }
 instance DecodeJson u32 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when Number n -> (
-                match (prim_f64_to_u32 n) {
+                match (prim_f64_to_u32 n) with {
                     when Some x -> Ok x;
                     when None -> fail "expected integer number representable as u32";
                 }
@@ -160,9 +160,9 @@ instance EncodeJson u64 where {
 }
 instance DecodeJson u64 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when Number n -> (
-                match (prim_f64_to_u64 n) {
+                match (prim_f64_to_u64 n) with {
                     when Some x -> Ok x;
                     when None -> fail "expected integer number representable as u64";
                 }
@@ -175,9 +175,9 @@ instance EncodeJson i8 where {
 }
 instance DecodeJson i8 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when Number n -> (
-                match (prim_f64_to_i8 n) {
+                match (prim_f64_to_i8 n) with {
                     when Some x -> Ok x;
                     when None -> fail "expected integer number representable as i8";
                 }
@@ -190,9 +190,9 @@ instance EncodeJson i16 where {
 }
 instance DecodeJson i16 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when Number n -> (
-                match (prim_f64_to_i16 n) {
+                match (prim_f64_to_i16 n) with {
                     when Some x -> Ok x;
                     when None -> fail "expected integer number representable as i16";
                 }
@@ -205,9 +205,9 @@ instance EncodeJson i32 where {
 }
 instance DecodeJson i32 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when Number n -> (
-                match (prim_f64_to_i32 n) {
+                match (prim_f64_to_i32 n) with {
                     when Some x -> Ok x;
                     when None -> fail "expected integer number representable as i32";
                 }
@@ -220,9 +220,9 @@ instance EncodeJson i64 where {
 }
 instance DecodeJson i64 where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when Number n -> (
-                match (prim_f64_to_i64 n) {
+                match (prim_f64_to_i64 n) with {
                     when Some x -> Ok x;
                     when None -> fail "expected integer number representable as i64";
                 }
@@ -235,9 +235,9 @@ instance EncodeJson uuid where {
 }
 instance DecodeJson uuid where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when String s -> (
-                match (prim_parse_uuid s) {
+                match (prim_parse_uuid s) with {
                     when Some u -> Ok u;
                     when None -> fail "expected uuid string";
                 }
@@ -250,9 +250,9 @@ instance EncodeJson datetime where {
 }
 instance DecodeJson datetime where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
             when String s -> (
-                match (prim_parse_datetime s) {
+                match (prim_parse_datetime s) with {
                     when Some d -> Ok d;
                     when None -> fail "expected RFC3339 datetime string";
                 }
@@ -262,17 +262,17 @@ instance DecodeJson datetime where {
 	}
 instance EncodeJson (Option a) <= EncodeJson a where {
     encode_json = \opt ->
-        match opt {
+        match opt with {
             when Some x -> to_json x;
             when None -> Null;
         };
 }
 instance DecodeJson (Option a) <= DecodeJson a where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Null -> Ok None;
 	            when _ ->
-	                match (from_json v) {
+	                match (from_json v) with {
 	                    when Ok x -> Ok (Some x);
 	                    when Err e -> Err e;
                     };
@@ -280,25 +280,25 @@ instance DecodeJson (Option a) <= DecodeJson a where {
 	}
 instance EncodeJson (Result a e) <= EncodeJson a, EncodeJson e where {
 	    encode_json = \r ->
-	        match r {
+	        match r with {
 	            when Ok x -> Object { ok = to_json x };
 	            when Err e0 -> Object { err = to_json e0 };
             };
 	}
 instance DecodeJson (Result a e) <= DecodeJson a, DecodeJson e where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Object d -> (
-	                match d {
+	                match d with {
 	                    when {ok, err} -> fail "expected object with exactly one of {ok} or {err}";
 	                    when {ok} -> (
-	                        match (from_json ok) {
+	                        match (from_json ok) with {
 	                            when Ok x -> Ok (Ok x);
 	                            when Err e -> Err e;
                             }
 	                      );
 	                    when {err} -> (
-	                        match (from_json err) {
+	                        match (from_json err) with {
 	                            when Ok e0 -> Ok (Err e0);
 	                            when Err e -> Err e;
                             }
@@ -315,12 +315,12 @@ instance EncodeJson (List a) <= EncodeJson a where {
 }
 instance DecodeJson (List a) <= DecodeJson a where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Array xs ->
-	                let step = \x acc -> match acc {
+	                let step = \x acc -> match acc with {
 	                        when Err e -> Err e;
 	                        when Ok out ->
-	                            match (from_json x) {
+	                            match (from_json x) with {
 	                                when Err e2 -> Err e2;
 	                                when Ok y -> Ok (Cons y out);
                                 };
@@ -335,19 +335,19 @@ instance EncodeJson (Array a) <= EncodeJson a where {
 }
 instance DecodeJson (Array a) <= DecodeJson a where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Array xs ->
-	                let step = \x acc -> match acc {
+	                let step = \x acc -> match acc with {
 	                        when Err e -> Err e;
 	                        when Ok out ->
-	                            match (from_json x) {
+	                            match (from_json x) with {
 	                                when Err e2 -> Err e2;
 	                                when Ok y -> Ok (Cons y out);
                                 };
                         }
 	                in
 	                    (
-                        match (foldr step (Ok []) xs) {
+                        match (foldr step (Ok []) xs) with {
                             when Err e -> Err e;
                             when Ok ys -> Ok (prim_array_from_list ys);
                         }
@@ -360,7 +360,7 @@ instance EncodeJson (Dict a) <= EncodeJson a where {
 }
 instance DecodeJson (Dict a) <= DecodeJson a where {
 	    decode_json = \v ->
-	        match v {
+	        match v with {
 	            when Object d -> prim_dict_traverse_result (\x -> from_json x) d;
 	            when _ -> Err (expected "object" v);
             };

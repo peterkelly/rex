@@ -244,7 +244,7 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
 
     let tokens = Token::tokenize(
         r#"
-        match (Count 9) {
+        match (Count 9) with {
             when Flag b -> if b then 1 else 0;
             when Count n -> n + 1;
         }
@@ -271,7 +271,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
 
     let tokens = Token::tokenize(
         r#"
-        match (Count 9) {
+        match (Count 9) with {
             when Flag b -> if b then 1 else 0;
             when Count n -> n + 1;
         }
@@ -376,7 +376,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
 
     let tokens = Token::tokenize(
         r#"
-        match (Wrap 9) {
+        match (Wrap 9) with {
             when Wrap x -> x + 1;
         }
         "#,
@@ -409,7 +409,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
 
     let tokens = Token::tokenize(
         r#"
-        match (Boxed 9) {
+        match (Boxed 9) with {
             when Boxed x -> x + 1;
         }
         "#,

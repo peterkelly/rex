@@ -15,7 +15,7 @@ Use `match` to branch on the shape of values.
 type Maybe a = Just a | Nothing;
 
 let fromMaybe = \d m ->
-  match m {
+  match m with {
     when Just x -> x;
     when Nothing -> d;
   }
@@ -30,7 +30,7 @@ Rex checks matches for exhaustiveness on ADTs and reports missing constructors.
 You’ll often see compact “inline” matches in examples:
 
 ```rex,interactive
-match (Some 1) { when Some x -> x; when None -> 0; }
+match (Some 1) with { when Some x -> x; when None -> 0; }
 ```
 
 ## Common patterns
@@ -38,7 +38,7 @@ match (Some 1) { when Some x -> x; when None -> 0; }
 Wildcards:
 
 ```rex,interactive
-match [1, 2, 3] {
+match [1, 2, 3] with {
   when Empty -> 0;
   when Cons _ _ -> 1;
 }
@@ -47,7 +47,7 @@ match [1, 2, 3] {
 List patterns:
 
 ```rex,interactive
-match [1, 2] {
+match [1, 2] with {
   when [] -> 0;
   when [x] -> x;
   when [x, y] -> x + y;
@@ -58,7 +58,7 @@ match [1, 2] {
 Cons patterns:
 
 ```rex,interactive
-match [1, 2, 3] {
+match [1, 2, 3] with {
   when h::t -> h;
   when [] -> 0;
 }
@@ -72,7 +72,7 @@ Record patterns on record-carrying constructors:
 type Point = Point { x: i32, y: i32 };
 
 let p = Point { x = 1, y = 2 } in
-match p {
+match p with {
   when Point { x: x, y: y } -> x + y;
 }
 ```
@@ -81,7 +81,7 @@ Dict key presence patterns:
 
 ```rex,interactive
 let d = ({ a = 1, b = 2 }) is Dict i32 in
-match d {
+match d with {
   when {a, b} -> a + b;
   when {a} -> a;
   when {} -> 0;
@@ -96,7 +96,7 @@ Arms can use `->` or `→`:
 type Bit = T | F;
 
 let v = T in
-match v {
+match v with {
   when T → 1;
   when F -> 0;
 }

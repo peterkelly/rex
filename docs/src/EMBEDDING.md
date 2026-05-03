@@ -287,7 +287,7 @@ Then Rex code can import and use those names from the module:
 import acme.status (Status, Failed);
 
 let fail: string -> Status = \msg -> Failed msg in
-match (fail "boom") {
+match (fail "boom") with {
   when Failed msg -> length msg;
   when _ -> 0;
 }
@@ -505,7 +505,7 @@ program point where representation changes. This preserves ergonomics while
 avoiding hidden work:
 
 ```rex
-match (to_list bytes) {
+match (to_list bytes) with {
     when Cons head _ -> head;
     when Empty -> 0;
 }

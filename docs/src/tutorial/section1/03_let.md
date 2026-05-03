@@ -53,7 +53,7 @@ Rex supports writing recursive helpers via `let rec`. This is the easiest way to
 ```rex,interactive
 let rec
   sum = \xs ->
-    match xs {
+    match xs with {
       when [] -> 0;
       when x::xs -> x + sum xs;
     }

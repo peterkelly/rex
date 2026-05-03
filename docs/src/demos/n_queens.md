@@ -11,7 +11,7 @@ fn abs_i32 : i32 -> i32 = \x ->
   if x < 0 then 0 - x else x;
 
 fn is_safe : i32 -> List i32 -> i32 -> bool = \col placed dist ->
-  match placed {
+  match placed with {
     when [] -> true;
     when c::rest ->
       if col == c then

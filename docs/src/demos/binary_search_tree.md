@@ -10,7 +10,7 @@ The `Tree` type has `Empty` and `Node` constructors, and each operation recursiv
 type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 
 fn insert : i32 -> Tree -> Tree = \k t ->
-  match t {
+  match t with {
     when Empty -> Node { key = k, left = Empty, right = Empty };
     when Node {key, left, right} ->
       if k < key then
@@ -22,7 +22,7 @@ fn insert : i32 -> Tree -> Tree = \k t ->
   };
 
 fn contains : i32 -> Tree -> bool = \k t ->
-  match t {
+  match t with {
     when Empty -> false;
     when Node {key, left, right} ->
       if k == key then true
@@ -31,7 +31,7 @@ fn contains : i32 -> Tree -> bool = \k t ->
   };
 
 fn size : Tree -> i32 = \t ->
-  match t {
+  match t with {
     when Empty -> 0;
     when Node {left, right} -> 1 + size left + size right;
   };

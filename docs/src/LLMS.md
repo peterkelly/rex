@@ -35,7 +35,7 @@ fn classify_ph : f32 -> string = \ph ->
   else "stable";
 
 fn qc_label_from_sensor : string -> Result string string = \raw ->
-  match (parse_ph raw) {
+  match (parse_ph raw) with {
     when Ok ph -> Ok (classify_ph ph);
     when Err e -> Err e;
   };
@@ -389,7 +389,7 @@ For small enums and ADTs, write an explicit equality helper:
 
 ```rex
 node_eq = \a b ->
-  match (a, b) {
+  match (a, b) with {
     when (A, A) -> true;
     when (B, B) -> true;
     when _ -> false;
@@ -412,7 +412,7 @@ type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 let
   t0: Tree = Empty
 in
-  match t0 {
+  match t0 with {
     when Empty -> 0;
     when Node {key, left, right} -> key;
   }

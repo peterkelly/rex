@@ -11,7 +11,7 @@ type Node = A | B | C | D;
 type Edge = Edge Node Node;
 
 fn node_eq : Node -> Node -> bool = \a b ->
-  match (a, b) {
+  match (a, b) with {
     when (A, A) -> true;
     when (B, B) -> true;
     when (C, C) -> true;
@@ -20,19 +20,19 @@ fn node_eq : Node -> Node -> bool = \a b ->
   };
 
 fn contains : List Node -> Node -> bool = \xs x ->
-  match xs {
+  match xs with {
     when [] -> false;
     when y::ys -> if node_eq y x then true else contains ys x;
   };
 
 fn append : List Node -> List Node -> List Node = \xs ys ->
-  match xs {
+  match xs with {
     when [] -> ys;
     when h::t -> Cons h (append t ys);
   };
 
 fn reverse_go : List Node -> List Node -> List Node = \rest acc ->
-  match rest {
+  match rest with {
     when [] -> acc;
     when h::t -> reverse_go t (Cons h acc);
   };
@@ -41,13 +41,13 @@ fn reverse : List Node -> List Node = \xs ->
   reverse_go xs [];
 
 fn is_empty : List a -> bool = \xs ->
-  match xs {
+  match xs with {
     when [] -> true;
     when _::_ -> false;
   };
 
 fn remove_outgoing : List Edge -> Node -> List Edge = \edges n ->
-  match edges {
+  match edges with {
     when [] -> [];
     when Edge from to::rest ->
       if node_eq from n then remove_outgoing rest n
@@ -55,7 +55,7 @@ fn remove_outgoing : List Edge -> Node -> List Edge = \edges n ->
   };
 
 fn in_degree : List Edge -> Node -> i32 = \edges n ->
-  match edges {
+  match edges with {
     when [] -> 0;
     when Edge from to::rest ->
       let tail = in_degree rest n in
@@ -66,7 +66,7 @@ fn push_unique : List Node -> Node -> List Node = \queue n ->
   if contains queue n then queue else append queue [n];
 
 fn enqueue_zeros : List Node -> List Node -> List Node -> List Edge -> List Node = \nodes queue seen edges ->
-  match nodes {
+  match nodes with {
     when [] -> queue;
     when n::rest ->
       let queue1 =
@@ -81,7 +81,7 @@ fn enqueue_zeros : List Node -> List Node -> List Node -> List Edge -> List Node
   };
 
 fn kahn : List Node -> List Node -> List Node -> List Edge -> List Node -> List Node = \queue seen order edges nodes ->
-  match queue {
+  match queue with {
     when [] ->
       if is_empty edges then
         reverse order

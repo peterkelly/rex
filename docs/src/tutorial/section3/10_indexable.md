@@ -49,7 +49,7 @@ Problem: return the first list element safely.
 ```rex,interactive
 let
   head = \xs ->
-    match xs {
+    match xs with {
       when [] -> None;
       when x::_ -> Some x;
     }

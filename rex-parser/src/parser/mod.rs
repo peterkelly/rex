@@ -1502,12 +1502,12 @@ impl Parser {
 
         let scrutinee_start = self.token_cursor;
         let mut depth = 0usize;
-        let mut block_candidates = Vec::new();
+        let mut with_idx = None;
         for i in scrutinee_start..self.tokens.len() {
             match &self.tokens[i] {
-                Token::BraceL(..) if depth == 0 => {
-                    block_candidates.push(i);
-                    depth += 1;
+                Token::With(..) if depth == 0 => {
+                    with_idx = Some(i);
+                    break;
                 }
                 Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
                 Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
@@ -1516,51 +1516,43 @@ impl Parser {
                 _ => {}
             }
         }
-        let mut saw_leading_brace = false;
-        let mut selected = None;
-        for candidate in block_candidates {
-            if candidate == scrutinee_start {
-                saw_leading_brace = true;
-                continue;
-            }
-
-            let mut next = candidate + 1;
-            while matches!(self.tokens.get(next), Some(Token::WhitespaceNewline(..))) {
-                next += 1;
-            }
-            if !matches!(
-                self.tokens.get(next),
-                Some(Token::When(..)) | Some(Token::BraceR(..))
-            ) {
-                continue;
-            }
-
-            if let Ok(scrutinee) = self.parse_expr_slice(&self.tokens[scrutinee_start..candidate]) {
-                selected = Some((candidate, scrutinee));
-                break;
-            }
+        let with_idx = with_idx.ok_or_else(|| {
+            ParserErr::new(
+                self.eof,
+                "expected `with {` after match scrutinee".to_string(),
+            )
+        })?;
+        if with_idx == scrutinee_start {
+            let span = self
+                .tokens
+                .get(with_idx)
+                .map(|t| *t.span())
+                .unwrap_or(self.eof);
+            return Err(ParserErr::new(
+                span,
+                "expected match scrutinee before `with`",
+            ));
         }
 
-        let (block_start, scrutinee) = selected.ok_or_else(|| {
-            if saw_leading_brace {
-                let span = self
-                    .tokens
-                    .get(scrutinee_start)
-                    .map(|t| *t.span())
-                    .unwrap_or(self.eof);
-                ParserErr::new(span, "expected match scrutinee before `{`")
-            } else {
-                ParserErr::new(self.eof, "expected `{` after match scrutinee".to_string())
+        let scrutinee = self.parse_expr_slice(&self.tokens[scrutinee_start..with_idx])?;
+        self.token_cursor = with_idx;
+
+        match self.current_token() {
+            Token::With(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    "expected `with` after match scrutinee",
+                ));
             }
-        })?;
-        self.token_cursor = block_start;
+        }
 
         match self.current_token() {
             Token::BraceL(..) => self.next_token(),
             token => {
                 return Err(ParserErr::new(
                     *token.span(),
-                    "expected `{` after match scrutinee",
+                    "expected `{` after `with` in match expression",
                 ));
             }
         }

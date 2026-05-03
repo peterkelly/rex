@@ -36,7 +36,7 @@ let xs = 1::2::3::[] in xs
 ```
 
 ```rex,interactive
-match [1, 2, 3] {
+match [1, 2, 3] with {
   when Empty -> 0;
   when Cons h t -> h;
 }
@@ -47,7 +47,7 @@ match [1, 2, 3] {
 Rex also supports list-pattern sugar:
 
 ```rex,interactive
-match [1, 2, 3] {
+match [1, 2, 3] with {
   when [] -> 0;
   when [x] -> x;
   when x::xs -> x;
@@ -81,7 +81,7 @@ let
   {- We use to_array here to simulate a host function result of type Array i32. -}
   data = to_array [1, 2, 3]
 in
-  match (to_list data) {
+  match (to_list data) with {
     when x::xs -> x;
     when [] -> -1;
   }
@@ -94,7 +94,7 @@ let
   {- We use to_array here to simulate a host function result of type Array i32. -}
   data = to_array [1, 2, 3]
 in
-  match data {
+  match data with {
     when x::xs -> x;
     when [] -> -1;
   }
@@ -163,7 +163,7 @@ Dictionary patterns check for key presence and bind those keys to variables:
 
 ```rex,interactive
 let d = ({ a = 1, b = 2 }) is Dict i32 in
-match d {
+match d with {
   when {a, b} -> a + b;
   when {a} -> a;
   when {} -> 0;

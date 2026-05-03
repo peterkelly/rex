@@ -222,11 +222,11 @@ in
 
 ### Pattern Matching
 
-`match` performs structural matching with one or more semicolon-terminated `when` arms inside a
-braced arm block:
+`match` performs structural matching. The scrutinee is followed by `with`, then one or more
+semicolon-terminated `when` arms inside a braced arm block:
 
 ```rex
-match xs {
+match xs with {
   when Empty -> 0;
   when Cons h t -> h;
 }
@@ -244,7 +244,7 @@ Patterns include:
 - record patterns on record-carrying constructors: `Bar {x, y}`
 
 ```rex,interactive
-match [1, 2, 3] {
+match [1, 2, 3] with {
   when h::t -> h;
   when [] -> 0;
 }
@@ -342,7 +342,7 @@ Example (multi-variant refinement via `match`):
 type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
-match s {
+match s with {
   when A {x} -> { s with { x = x + 1 } };
   when B {x} -> { s with { x = x + 2 } };
 }
@@ -414,7 +414,7 @@ class Size a where {
 }
 instance Size (List t) where {
   size = \xs ->
-    match xs {
+    match xs with {
       when Empty -> 0;
       when Cons _ rest -> 1 + size rest;
     };

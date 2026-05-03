@@ -29,7 +29,7 @@ type Maybe a = Just a | Nothing;
 
 let
   fromMaybe = \d m ->
-    match m {
+    match m with {
       when Just x -> x;
       when Nothing -> d;
     }

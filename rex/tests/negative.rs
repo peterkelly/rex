@@ -70,7 +70,7 @@ async fn parse_rejects_invalid_programs() {
         ("orphan_close_brace", "}"),
         ("bad_if", "if true then 1"),
         ("bad_let", "let x = 1 in"),
-        ("bad_match", "match 1 { when -> 2; }"),
+        ("bad_match", "match 1 with { when -> 2; }"),
         ("bad_type_decl", "type Foo ="),
         ("bad_fn_decl", "fn inc (x: i32) -> i32 ="),
         ("bad_record_update", "{ 1 with }"),
@@ -110,7 +110,7 @@ async fn compile_rejects_invalid_programs() {
         }),
         (
             "unknown_constructor_in_pattern",
-            "match 1 { when Foo -> 1; }",
+            "match 1 with { when Foo -> 1; }",
             |e| matches!(e, TypeError::UnknownVar(name) if name.as_ref() == "Foo"),
         ),
         (
@@ -122,7 +122,7 @@ async fn compile_rejects_invalid_programs() {
             "non_exhaustive_match_on_adt",
             r#"
             type Sum = A i32 | B i32;
-            match (A 1) {
+            match (A 1) with {
                 when A x -> x;
             }
             "#,
@@ -131,7 +131,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "non_exhaustive_match_on_option",
             r#"
-            match (Some 1) {
+            match (Some 1) with {
                 when Some x -> x;
             }
             "#,
@@ -283,7 +283,7 @@ async fn compile_rejects_invalid_programs() {
             r#"
             type Sum = A { x: i32 } | B { x: i32 };
             let s: Sum = A { x = 1 } in
-            match s {
+            match s with {
                 when A {x} -> x;
             }
             "#,
@@ -318,7 +318,7 @@ async fn compile_rejects_invalid_programs() {
             r#"
             type Foo = Bar { x: i32 };
             let v: Foo = Bar { x = 1 } in
-            match v {
+            match v with {
                 when Bar { y } -> y;
             }
             "#,
@@ -329,7 +329,7 @@ async fn compile_rejects_invalid_programs() {
             r#"
             type Foo = Bar i32;
             let v: Foo = Bar 1 in
-            match v {
+            match v with {
                 when Bar { x } -> x;
             }
             "#,

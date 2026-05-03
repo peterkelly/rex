@@ -3,7 +3,7 @@ class Head a where {
 }
 instance Head i32 where {
     head_or = \fallback xs ->
-        match xs {
+        match xs with {
             when [] -> fallback;
             when x::rest -> x;
         };

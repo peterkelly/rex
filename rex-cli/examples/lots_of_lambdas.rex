@@ -86,7 +86,7 @@ let
     last_three = λx → x,
     head_num = λx → x,
     head_opt = λx → x,
-    opt_to_zero = λx → match x { when None → 0; when Some v → v; },
+    opt_to_zero = λx → match x with { when None → 0; when Some v → v; },
     head_or_zero = λx → x,
     deep_match = λx → x,
     first_five = λx → x,

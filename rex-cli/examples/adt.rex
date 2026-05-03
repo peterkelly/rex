@@ -14,40 +14,40 @@ let
 
 in
     (
-        match v1 {
+        match v1 with {
             when MyCtor1 → 0;
             when MyCtor2 _ _ → 1;
             when MyCtor3 {field1} → field1;
         },
-        match v2 {
+        match v2 with {
             when MyCtor1 → 0;
             when MyCtor2 x y → x + y;
             when MyCtor3 {field1} → field1;
         },
-        match v3 {
+        match v3 with {
             when MyCtor1 → 0;
             when MyCtor2 _ _ → 1;
             when MyCtor3 {field1} → field1;
         },
-        match v4 {
+        match v4 with {
             when MyOtherCtor1 x y → x + y;
             when MyOtherCtor2 _ _ → "";
             when MyOtherCtor3 {field1} → field1;
             when MyOtherCtor4 {field1} → field1;
         },
-        match v5 {
+        match v5 with {
             when MyOtherCtor1 _ _ → "";
             when MyOtherCtor2 x y → x + y;
             when MyOtherCtor3 {field1} → field1;
             when MyOtherCtor4 {field1} → field1;
         },
-        match v6 {
+        match v6 with {
             when MyOtherCtor1 _ _ → "";
             when MyOtherCtor2 _ _ → "";
             when MyOtherCtor3 {field1} → field1;
             when MyOtherCtor4 {field1} → field1;
         },
-        match v7 {
+        match v7 with {
             when MyOtherCtor1 _ _ → "";
             when MyOtherCtor2 _ _ → "";
             when MyOtherCtor3 {field1} → field1;
