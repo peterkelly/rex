@@ -7,8 +7,8 @@ Related reading: [Topological sorting](https://en.wikipedia.org/wiki/Topological
 The helpers break the algorithm into pure list operations: `in_degree` counts incoming edges, `remove_outgoing` deletes edges from a chosen node, and `enqueue_zeros` updates the processing queue with newly unlocked nodes. `kahn` drives the main loop by consuming the queue and accumulating output order, with a final reversal because nodes are prepended during recursion.
 
 ```rex,interactive
-type Node = A | B | C | D
-type Edge = Edge Node Node
+type Node = A | B | C | D;
+type Edge = Edge Node Node;
 
 fn node_eq : Node -> Node -> bool = \a b ->
   match (a, b)

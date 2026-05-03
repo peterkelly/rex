@@ -623,7 +623,7 @@ async fn eval_type_annotation_lambda_param() {
 async fn eval_record_update_single_variant_adt() {
     let program = parse_program(
         r#"
-        type Foo = Bar { x: i32, y: i32, z: i32 }
+        type Foo = Bar { x: i32, y: i32, z: i32 };
         let
           foo: Foo = Bar { x = 1, y = 2, z = 3 },
           bar: Foo = { foo with { x = 6 } }
@@ -641,7 +641,7 @@ async fn eval_record_update_single_variant_adt() {
 async fn eval_record_update_refined_by_match() {
     let program = parse_program(
         r#"
-        type Foo = Bar { x: i32 } | Baz { x: i32 }
+        type Foo = Bar { x: i32 } | Baz { x: i32 };
         let
           foo: Foo = Bar { x = 1 }
         in
@@ -1111,7 +1111,7 @@ async fn eval_safe_div_pipeline() {
 async fn eval_user_adt_declaration() {
     let program = parse_program(
         r#"
-        type Boxed a = Box a
+        type Boxed a = Box a;
         let
             value = Box 42
         in
@@ -1159,7 +1159,7 @@ async fn eval_fn_decl_with_where_constraints() {
 async fn eval_adt_record_projection_single_variant() {
     let program = parse_program(
         r#"
-        type MyADT = MyVariant1 { field1: i32, field2: f32 }
+        type MyADT = MyVariant1 { field1: i32, field2: f32 };
         let
             x = MyVariant1 { field1 = 1, field2 = 2.0 }
         in
@@ -1191,7 +1191,7 @@ async fn eval_adt_record_projection_single_variant() {
 async fn eval_adt_record_projection_match_arm() {
     let program = parse_program(
         r#"
-        type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32
+        type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32;
         let
             x = MyVariant1 { field1 = 1 }
         in

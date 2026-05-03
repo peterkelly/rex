@@ -1,8 +1,8 @@
-type Box = Box { value: i32 }
+type Box = Box { value: i32 };
 
 type Tree 
     = Leaf { value: i32 }
-    | Node { left: Tree, right: Tree }
+    | Node { left: Tree, right: Tree };
 
 fn foo : i32 → i32 → i32 = λ x y → x * 2;
 fn bar : i32 → i32 → i32 = λ x y → x * 2;

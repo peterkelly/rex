@@ -18,7 +18,7 @@ We’ll build it up in layers:
 class DemoShow a where {
   demo_show : a -> string;
 }
-type Point = Point { x: i32, y: i32 }
+type Point = Point { x: i32, y: i32 };
 
 instance DemoShow i32 where {
   demo_show = \_ -> "<i32>";

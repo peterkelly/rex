@@ -219,7 +219,7 @@ async fn injected_module_can_define_pub_adt_declarations() {
 
     let mut module = Module::new("acme.status");
     module
-        .add_raw_declaration("pub type Status = Ready | Failed string")
+        .add_raw_declaration("pub type Status = Ready | Failed string;")
         .unwrap();
     engine.inject_module(module).unwrap();
 
@@ -265,7 +265,7 @@ async fn export_value_registers_global_value() {
 async fn record_update_requires_known_variant_for_sum_types() {
     let program = parse_program(
         r#"
-        type Foo = Bar { x: i32 } | Baz { x: i32 }
+        type Foo = Bar { x: i32 } | Baz { x: i32 };
         let
           f = \ (foo : Foo) -> { foo with { x = 2 } }
         in

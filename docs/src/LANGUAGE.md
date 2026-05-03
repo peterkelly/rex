@@ -100,8 +100,8 @@ Path resolution:
 ### Whitespace and Comments
 
 - Whitespace, including newlines, is generally insignificant and indentation has no syntactic
-  meaning. Top-level `fn` declarations, `declare fn` declarations, marker classes/instances,
-  and class/instance items use explicit semicolon terminators.
+  meaning. Top-level `type`, `fn`, and `declare fn` declarations, marker classes/instances, and
+  class/instance items use explicit semicolon terminators.
 - Comments use `{- ... -}` and are stripped before parsing.
 - Nested block comments are not supported in current Rex builds.
 
@@ -276,10 +276,10 @@ Functions are right-associative: `a -> b -> c` means `a -> (b -> c)`.
 
 ### ADTs
 
-Define an ADT with `type`:
+Define an ADT with `type`. Each top-level type declaration is terminated by a semicolon:
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 ```
 
 Constructors are values (functions) in the prelude environment:
@@ -294,7 +294,7 @@ Nothing
 ADT variants can carry a record payload:
 
 ```rex,interactive
-type User = User { name: string, age: i32 }
+type User = User { name: string, age: i32 };
 
 let u: User = User { name = "Ada", age = 36 } in u
 ```
@@ -336,7 +336,7 @@ Projection and update are valid when the field is *definitely available* on the 
 Example (multi-variant refinement via `match`):
 
 ```rex,interactive
-type Sum = A { x: i32 } | B { x: i32 }
+type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
 match s

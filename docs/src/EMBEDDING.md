@@ -277,7 +277,7 @@ let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 
 let mut m = Module::new("acme.status");
-m.add_raw_declaration("pub type Status = Ready | Failed string")?;
+m.add_raw_declaration("pub type Status = Ready | Failed string;")?;
 engine.inject_module(m)?;
 ```
 

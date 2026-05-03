@@ -74,7 +74,7 @@ async fn assert_err_contains(code: &str, needle: &str) {
 async fn default_record_dispatch() {
     assert_eval(
         r#"
-        type Foo = Foo { x: i32, y: i32 } | Bar { z: f32 }
+        type Foo = Foo { x: i32, y: i32 } | Bar { z: f32 };
 
         instance Default Foo where {
             default = Bar { z = 0.0 };
@@ -103,7 +103,7 @@ async fn default_nested_context_list() {
 async fn pattern_field_renaming() {
     assert_eval(
         r#"
-        type Point = Point { x: f32, y: f32 }
+        type Point = Point { x: f32, y: f32 };
 
         instance AdditiveMonoid Point where {
             zero = Point { x = 0.0, y = 0.0 };
@@ -135,7 +135,7 @@ async fn default_nested_context_option() {
 async fn default_custom_adt_single_ctor_unnamed_fields() {
     assert_eval(
         r#"
-        type Pair = Pair i32 bool
+        type Pair = Pair i32 bool;
 
         instance Default Pair where {
             default = Pair 42 true;
@@ -152,7 +152,7 @@ async fn default_custom_adt_single_ctor_unnamed_fields() {
 async fn default_custom_adt_single_ctor_named_fields() {
     assert_eval(
         r#"
-        type Config = Config { retries: i32, enabled: bool }
+        type Config = Config { retries: i32, enabled: bool };
 
         instance Default Config where {
             default = Config { retries = 3, enabled = false };
@@ -169,7 +169,7 @@ async fn default_custom_adt_single_ctor_named_fields() {
 async fn default_custom_adt_enum_unit_variants() {
     assert_eval(
         r#"
-        type Mode = Fast | Safe | Debug
+        type Mode = Fast | Safe | Debug;
 
         instance Default Mode where {
             default = Safe;
@@ -186,7 +186,7 @@ async fn default_custom_adt_enum_unit_variants() {
 async fn default_custom_adt_enum_mixed_variant_payloads() {
     assert_eval(
         r#"
-        type Token = Eof | IntLit i32 | Meta { line: i32, col: i32 }
+        type Token = Eof | IntLit i32 | Meta { line: i32, col: i32 };
 
         instance Default Token where {
             default = Meta { line = 1, col = 1 };
@@ -203,7 +203,7 @@ async fn default_custom_adt_enum_mixed_variant_payloads() {
 async fn default_custom_adt_generic_instance_uses_constraint() {
     assert_eval(
         r#"
-        type Box a = Box a | Missing
+        type Box a = Box a | Missing;
 
         instance Default (Box a) <= Default a where {
             default = Box default;
@@ -222,8 +222,8 @@ async fn default_multiple_adts_same_named_fields_then_record_update_without_is_f
     // `{ default with ... }`, so record update cannot prove field availability.
     assert_err_contains(
         r#"
-        type A = A { x: i32, y: i32 }
-        type B = B { x: i32, y: i32 }
+        type A = A { x: i32, y: i32 };
+        type B = B { x: i32, y: i32 };
 
         instance Default A where {
             default = A { x = 1, y = 2 };
@@ -248,8 +248,8 @@ async fn default_multiple_adts_same_named_fields_then_record_update_uses_let_ann
     // updates can resolve `default` without requiring explicit `is`.
     assert_eval(
         r#"
-        type A = A { x: i32, y: i32 }
-        type B = B { x: i32, y: i32 }
+        type A = A { x: i32, y: i32 };
+        type B = B { x: i32, y: i32 };
 
         instance Default A where {
             default = A { x = 1, y = 2 };
@@ -275,8 +275,8 @@ async fn default_multiple_adts_same_named_fields_then_record_update() {
     // explicitly pinned to a concrete ADT (`A`/`B`) before record update.
     assert_eval(
         r#"
-        type A = A { x: i32, y: i32 }
-        type B = B { x: i32, y: i32 }
+        type A = A { x: i32, y: i32 };
+        type B = B { x: i32, y: i32 };
 
         instance Default A where {
             default = A { x = 1, y = 2 };
@@ -303,8 +303,8 @@ async fn default_multiple_adts_same_named_fields_with_is_disambiguates_without_l
     // ambiguous even though `A` and `B` share the same field names.
     assert_eval(
         r#"
-        type A = A { x: i32, y: i32 }
-        type B = B { x: i32, y: i32 }
+        type A = A { x: i32, y: i32 };
+        type B = B { x: i32, y: i32 };
 
         instance Default A where {
             default = A { x = 1, y = 2 };
@@ -333,7 +333,7 @@ async fn methods_can_call_other_methods() {
             second : p -> i32;
             sum_pair : p -> i32;
         }
-        type Pair = Pair { a: i32, b: i32 }
+        type Pair = Pair { a: i32, b: i32 };
 
         instance PairOps Pair where {
             first = \p -> p.a;
@@ -465,7 +465,7 @@ async fn superclass_and_instance_context() {
         class MyOrd a <= MyEq a where {
             my_cmp : a -> a -> i32;
         }
-        type Color = Red | Green | Blue
+        type Color = Red | Green | Blue;
 
         instance MyEq Color where {
             eq = \x y ->

@@ -7,7 +7,7 @@ Related reading: [Abstract syntax tree](https://en.wikipedia.org/wiki/Abstract_s
 The code defines one ADT (`Expr`) and then reuses it across three traversals: `eval` computes numeric meaning, `depth` computes structural height, and `simplify_once` applies a local rewrite rule for double negation. In the final expression block, two sample trees are built, one is simplified once, and the output tuple shows evaluation and depth results side-by-side.
 
 ```rex,interactive
-type Expr = Lit i32 | Add Expr Expr | Mul Expr Expr | Neg Expr
+type Expr = Lit i32 | Add Expr Expr | Mul Expr Expr | Neg Expr;
 
 fn eval : Expr -> i32 = \e ->
   match e

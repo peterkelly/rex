@@ -21,7 +21,7 @@ let p: { x: i32, y: i32 } = { x = 1, y = 2 } in
 ## Projection
 
 ```rex,interactive
-type Point = Point { x: i32, y: i32 }
+type Point = Point { x: i32, y: i32 };
 
 let p: Point = Point { x = 1, y = 2 } in p.x
 ```
@@ -34,7 +34,7 @@ Projection is accepted when the field is *definitely available* on the type (see
 ## Update
 
 ```rex,interactive
-type Point = Point { x: i32, y: i32 }
+type Point = Point { x: i32, y: i32 };
 
 let p: Point = Point { x = 1, y = 2 } in
   { p with { x = p.x + 10 } }
@@ -43,7 +43,7 @@ let p: Point = Point { x = 1, y = 2 } in
 Updates can set multiple fields at once:
 
 ```rex,interactive
-type Point = Point { x: i32, y: i32 }
+type Point = Point { x: i32, y: i32 };
 
 let p: Point = Point { x = 1, y = 2 } in
   { p with { x = 100, y = 200 } }
@@ -54,7 +54,7 @@ let p: Point = Point { x = 1, y = 2 } in
 This is a common pattern:
 
 ```rex,interactive
-type Sum = A { x: i32 } | B { x: i32 }
+type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
 match s

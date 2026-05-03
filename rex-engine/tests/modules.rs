@@ -283,7 +283,7 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
     write_file(
         &b,
         r#"
-        pub type Boxed = Boxed i32
+        pub type Boxed = Boxed i32;
         "#,
     );
     write_file(
@@ -411,7 +411,7 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
     write_file(
         &dep,
         r#"
-        pub type Boxed = Boxed i32
+        pub type Boxed = Boxed i32;
         ()
         "#,
     );
@@ -1069,7 +1069,7 @@ async fn module_import_selected_clause_can_import_type_exports() {
     write_file(
         &dep,
         r#"
-        pub type Status = Ready | Failed
+        pub type Status = Ready | Failed;
         ()
 "#,
     );
@@ -1104,7 +1104,7 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
     write_file(
         &dep,
         r#"
-        pub type Token = Token
+        pub type Token = Token;
         ()
 "#,
     );
@@ -1114,7 +1114,7 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
         import dep (Token)
 
         let id: Token -> Token = \x -> x in
-        id (Token ())
+        id Token
 "#,
     );
 
@@ -1124,11 +1124,7 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
-            assert_eq!(fields.len(), 1);
-            match fields[0].value().unwrap() {
-                Value::Tuple(items) => assert!(items.is_empty()),
-                other => panic!("expected unit payload, got {}", other.value_type_name()),
-            }
+            assert!(fields.is_empty());
         }
         other => panic!("expected adt value, got {}", other.value_type_name()),
     }
@@ -1143,7 +1139,7 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
     write_file(
         &dep,
         r#"
-        pub type Token = Token
+        pub type Token = Token;
         ()
 "#,
     );
@@ -1152,7 +1148,7 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
         r#"
         import dep (Token as Wrapped)
 
-        let wrap: Wrapped = Wrapped () in
+        let wrap: Wrapped = Wrapped in
         wrap
 "#,
     );
@@ -1163,11 +1159,7 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
-            assert_eq!(fields.len(), 1);
-            match fields[0].value().unwrap() {
-                Value::Tuple(items) => assert!(items.is_empty()),
-                other => panic!("expected unit payload, got {}", other.value_type_name()),
-            }
+            assert!(fields.is_empty());
         }
         other => panic!("expected adt value, got {}", other.value_type_name()),
     }
@@ -1182,7 +1174,7 @@ async fn module_import_wildcard_clause_imports_type_exports_too() {
     write_file(
         &dep,
         r#"
-        pub type Status = Ready | Failed
+        pub type Status = Ready | Failed;
         ()
 "#,
     );
@@ -1255,7 +1247,7 @@ async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
     write_file(
         &dep,
         r#"
-        pub type Status = Ready | Failed
+        pub type Status = Ready | Failed;
         ()
 "#,
     );
@@ -1302,7 +1294,7 @@ async fn module_import_selected_clause_type_name_does_not_create_value_facet() {
     write_file(
         &dep,
         r#"
-        pub type Status = Ready | Failed
+        pub type Status = Ready | Failed;
         ()
 "#,
     );
@@ -1446,7 +1438,7 @@ async fn module_import_missing_type_export_in_fn_signature() {
     write_file(
         &dep,
         r#"
-        pub type Present = Present i32
+        pub type Present = Present i32;
         ()
 "#,
     );
@@ -1634,7 +1626,7 @@ async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named
     write_file(
         &dep,
         r#"
-        pub type Present = Present i32
+        pub type Present = Present i32;
         ()
 "#,
     );
@@ -1669,7 +1661,7 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
     write_file(
         &dep,
         r#"
-        pub type Num = Num i32
+        pub type Num = Num i32;
         ()
 "#,
     );
@@ -1704,7 +1696,7 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
     write_file(
         &dep,
         r#"
-        pub type Num = Num i32
+        pub type Num = Num i32;
         ()
 "#,
     );
@@ -1738,7 +1730,7 @@ async fn module_import_missing_type_export_in_let_annotation_with_alias_named_bi
     write_file(
         &dep,
         r#"
-        pub type Present = Present i32
+        pub type Present = Present i32;
         ()
 "#,
     );

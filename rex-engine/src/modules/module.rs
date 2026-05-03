@@ -39,7 +39,7 @@ use crate::{Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME};
 ///
 /// let mut math = Module::new("acme.math");
 /// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-/// math.add_raw_declaration("pub type Sign = Positive | Negative").unwrap();
+/// math.add_raw_declaration("pub type Sign = Positive | Negative;").unwrap();
 ///
 /// engine.inject_module(math).unwrap();
 /// ```
@@ -77,7 +77,7 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     ///
     /// let mut module = Module::<()>::new("acme.status");
     /// module
-    ///     .add_raw_declaration("pub type Status = Ready | Failed string")
+    ///     .add_raw_declaration("pub type Status = Ready | Failed string;")
     ///     .unwrap();
     ///
     /// assert_eq!(module.raw_declarations.len(), 1);
@@ -178,7 +178,7 @@ where
     ///
     /// let mut module = Module::<()>::new("acme.status");
     /// module
-    ///     .add_raw_declaration("pub type Status = Ready | Failed string")
+    ///     .add_raw_declaration("pub type Status = Ready | Failed string;")
     ///     .unwrap();
     /// ```
     pub fn add_raw_declaration(

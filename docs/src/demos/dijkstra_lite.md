@@ -7,8 +7,8 @@ Related reading: [Dijkstra's algorithm](https://en.wikipedia.org/wiki/Dijkstra%2
 `add_weight` and `min_dist` isolate the distance algebra, so `shortest_a_to_b` can read clearly as “direct path versus via-`C` path, then pick minimum.” The sample graphs in the final `let` block exercise both outcomes: one where routing through `C` wins and one where the direct edge is best, with `as_i32` converting the ADT into plain output numbers for display.
 
 ```rex,interactive
-type Dist = Inf | Finite i32
-type Graph = Graph { ab: i32, ac: i32, cb: i32 }
+type Dist = Inf | Finite i32;
+type Graph = Graph { ab: i32, ac: i32, cb: i32 };
 
 fn add_weight : Dist -> i32 -> Dist = (\d w ->
   match d

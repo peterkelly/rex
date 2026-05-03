@@ -7,7 +7,7 @@ Related reading: [Disjoint-set data structure](https://en.wikipedia.org/wiki/Dis
 `get_parent` and `set_parent` provide indexed access over a fixed-size parent record, while `find` follows parent pointers recursively until it reaches a representative. `union` links one representative to another when sets differ, and `connected` compares representatives; the final block performs a few unions and returns both connectivity checks and representatives to show resulting components.
 
 ```rex,interactive
-type UF = UF { p0: i32, p1: i32, p2: i32, p3: i32, p4: i32 }
+type UF = UF { p0: i32, p1: i32, p2: i32, p3: i32, p4: i32 };
 
 fn get_parent : UF -> i32 -> i32 = \uf x ->
   if x == 0 then uf.p0

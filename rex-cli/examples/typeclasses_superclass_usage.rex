@@ -4,7 +4,7 @@ class MyEq a where {
 class MyOrd a <= MyEq a where {
     my_cmp : a -> a -> i32;
 }
-type Color = Red | Green | Blue
+type Color = Red | Green | Blue;
 
 instance MyEq Color where {
     eq = \x y ->

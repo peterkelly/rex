@@ -7,8 +7,8 @@ Related reading: [Polish notation](https://en.wikipedia.org/wiki/Polish_notation
 `parse_expr` is the parser entrypoint and consumes tokens according to constructor shape: numbers produce leaf nodes, while operators recursively parse the required subexpressions. `eval` then interprets the produced AST, and `is_empty` checks whether parsing consumed all tokens; the two sample token streams demonstrate both parsing and evaluation in one result tuple.
 
 ```rex,interactive
-type Tok = TNum i32 | TPlus | TMul | TNeg
-type Expr = Num i32 | Add Expr Expr | Mul Expr Expr | Neg Expr
+type Tok = TNum i32 | TPlus | TMul | TNeg;
+type Expr = Num i32 | Add Expr Expr | Mul Expr Expr | Neg Expr;
 
 fn parse_expr : List Tok -> (Expr, List Tok) = \toks ->
   match toks

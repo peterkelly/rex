@@ -12,7 +12,7 @@ Model a `User` record, read its fields, and produce an updated copy.
 ## Step 1: define and update
 
 ```rex,interactive
-type User = User { name: string, age: i32 }
+type User = User { name: string, age: i32 };
 
 let
   u: User = User { name = "Ada", age = 36 },
@@ -30,7 +30,7 @@ in
 ## Step 2: update multiple fields
 
 ```rex,interactive
-type User = User { name: string, age: i32 }
+type User = User { name: string, age: i32 };
 
 let
   u: User = User { name = "Ada", age = 36 },
@@ -50,7 +50,7 @@ Projection/update is only allowed when a field is *definitely available* on the 
 multi-variant ADT, you often refine it with `match` first:
 
 ```rex,interactive
-type Sum = A { x: i32 } | B { x: i32 }
+type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
 match s
@@ -65,7 +65,7 @@ match s
 Problem: define `birthday : User -> User` and apply it two times.
 
 ```rex,interactive
-type User = User { name: string, age: i32 }
+type User = User { name: string, age: i32 };
 
 let
   birthday = \u -> { u with { age = u.age + 1 } },
@@ -82,7 +82,7 @@ Why this works: each `birthday` call returns a new `User` with `age` incremented
 Problem: add a boolean field and set it to `true`.
 
 ```rex,interactive
-type User = User { name: string, age: i32, admin: bool }
+type User = User { name: string, age: i32, admin: bool };
 
 let
   promote = \u -> { u with { admin = true } },
@@ -98,7 +98,7 @@ Why this works: record update changes only `admin`, preserving other fields.
 Problem: extend `Sum` with `C { x: i32 }` and keep updates valid.
 
 ```rex,interactive
-type Sum = A { x: i32 } | B { x: i32 } | C { x: i32 }
+type Sum = A { x: i32 } | B { x: i32 } | C { x: i32 };
 
 let s: Sum = C { x = 1 } in
 match s

@@ -7,7 +7,7 @@ Related reading: [Binary search tree](https://en.wikipedia.org/wiki/Binary_searc
 The `Tree` type has `Empty` and `Node` constructors, and each operation recursively follows tree structure. `insert` descends left or right based on key order and rebuilds the path back up, `contains` follows the same branching logic to test membership, and `size` traverses both subtrees to count nodes; the final `let` block builds an example tree and returns a tuple of summary queries.
 
 ```rex,interactive
-type Tree = Empty | Node { key: i32, left: Tree, right: Tree }
+type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 
 fn insert : i32 -> Tree -> Tree = \k t ->
   match t

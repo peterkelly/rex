@@ -104,16 +104,17 @@ Rules:
 
 ## Top-Level Declaration Terminators
 
-Top-level `fn` declarations and `declare fn` declarations are terminated by explicit semicolons:
+Top-level `type`, `fn`, and `declare fn` declarations are terminated by explicit semicolons:
 
 ```rex
+type Box a = Box a;
 fn inc : i32 -> i32 = \x -> x + 1;
 declare fn host_value : i32;
 ```
 
 Rules:
 
-- The semicolon terminates the declaration, not the body expression itself.
+- The semicolon terminates the declaration, not a nested type or expression itself.
 - The terminating semicolon is found at top-level expression/type depth; semicolons nested inside
   parentheses, brackets, braces, or blocks do not terminate the declaration.
 - Indentation and newlines do not delimit declarations.
@@ -201,7 +202,7 @@ The typechecker refines “which constructor is known” via two mechanisms:
 This enables the common pattern:
 
 ```rex,interactive
-type Sum = A { x: i32 } | B { x: i32 }
+type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
 match s

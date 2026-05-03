@@ -48,7 +48,7 @@ async fn example_adt_record_constructor() {
     assert_program_ok(
         "adt_record_constructor",
         r#"
-            type Foo = Bar { x: i32, y: i32 }
+            type Foo = Bar { x: i32, y: i32 };
 
             let v: Foo = Bar { x = 1, y = 2 } in
               v.x + v.y
@@ -95,7 +95,7 @@ async fn example_match() {
     assert_program_ok(
         "match",
         r#"
-            type Sum = A { x: i32 } | B { x: i32 }
+            type Sum = A { x: i32 } | B { x: i32 };
 
             let v: Sum = A { x = 7 } in
               match v

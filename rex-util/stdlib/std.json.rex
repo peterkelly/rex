@@ -12,9 +12,9 @@ pub type Value
     | String string
     | Number f64
     | Array (Array Value)
-    | Object (Dict Value)
+    | Object (Dict Value);
 
-pub type DecodeError = DecodeError { message: string }
+pub type DecodeError = DecodeError { message: string };
 
 pub class EncodeJson a where {
     encode_json : a -> Value;

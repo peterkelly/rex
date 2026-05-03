@@ -1,4 +1,4 @@
-type Point = Point { x: i32, y: i32 }
+type Point = Point { x: i32, y: i32 };
 
 instance Show Point where {
     show = \p -> "Point(" + show p.x + ", " + show p.y + ")";

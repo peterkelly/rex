@@ -1,6 +1,6 @@
-type MyADT a b c = MyCtor1 | MyCtor2 a b | MyCtor3 { field1: c }
+type MyADT a b c = MyCtor1 | MyCtor2 a b | MyCtor3 { field1: c };
 
-type MyOtherADT a b c = MyOtherCtor1 a b | MyOtherCtor2 a b | MyOtherCtor3 { field1: c } | MyOtherCtor4 { field1: c }
+type MyOtherADT a b c = MyOtherCtor1 a b | MyOtherCtor2 a b | MyOtherCtor3 { field1: c } | MyOtherCtor4 { field1: c };
 
 let
     v1 = MyCtor1,

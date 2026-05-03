@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn eval_to_string_hides_snippet_prefix_and_numeric_suffix() {
         let source = r#"
-type T = A | B
+type T = A | B;
 let
   x = A,
   n = 2

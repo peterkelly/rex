@@ -28,7 +28,7 @@ You can implement `Default` for many ADT shapes.
 Single constructor with unnamed fields:
 
 ```rex
-type Pair = Pair i32 bool
+type Pair = Pair i32 bool;
 
 instance Default Pair where {
     default = Pair 42 true;
@@ -38,7 +38,7 @@ instance Default Pair where {
 Single constructor with named fields:
 
 ```rex
-type Config = Config { retries: i32, enabled: bool }
+type Config = Config { retries: i32, enabled: bool };
 
 instance Default Config where {
     default = Config { retries = 3, enabled = false };
@@ -48,7 +48,7 @@ instance Default Config where {
 Multiple variants (enum) with no fields:
 
 ```rex
-type Mode = Fast | Safe | Debug
+type Mode = Fast | Safe | Debug;
 
 instance Default Mode where {
     default = Safe;
@@ -58,7 +58,7 @@ instance Default Mode where {
 Multiple variants with mixed payload shapes:
 
 ```rex
-type Token = Eof | IntLit i32 | Meta { line: i32, col: i32 }
+type Token = Eof | IntLit i32 | Meta { line: i32, col: i32 };
 
 instance Default Token where {
     default = Meta { line = 1, col = 1 };
@@ -68,7 +68,7 @@ instance Default Token where {
 Generic ADTs with constraints:
 
 ```rex
-type Box a = Box a | Missing
+type Box a = Box a | Missing;
 
 instance Default (Box a) <= Default a where {
     default = Box default;
@@ -83,8 +83,8 @@ Record updates require a definitely known base type.
 Failing example:
 
 ```rex,interactive
-type A = A { x: i32, y: i32 }
-type B = B { x: i32, y: i32 }
+type A = A { x: i32, y: i32 };
+type B = B { x: i32, y: i32 };
 
 instance Default A where {
     default = A { x = 1, y = 2 };
@@ -101,8 +101,8 @@ Try it on the example above.
 Passing example (same setup, with explicit `is`):
 
 ```rex,interactive
-type A = A { x: i32, y: i32 }
-type B = B { x: i32, y: i32 }
+type A = A { x: i32, y: i32 };
+type B = B { x: i32, y: i32 };
 
 instance Default A where {
     default = A { x = 1, y = 2 };
@@ -116,8 +116,8 @@ instance Default B where {
 Another failing example (same ambiguity in a `let` binding):
 
 ```rex,interactive
-type A = A { x: i32, y: i32 }
-type B = B { x: i32, y: i32 }
+type A = A { x: i32, y: i32 };
+type B = B { x: i32, y: i32 };
 
 instance Default A where {
     default = A { x = 1, y = 2 };

@@ -3038,15 +3038,26 @@ impl Parser {
             }
         }
 
-        let (first, first_span) = self.parse_type_variant()?;
+        let (first, _first_span) = self.parse_type_variant()?;
         let mut variants = vec![first];
-        let mut span_end = first_span.end;
         while let Token::Pipe(..) = self.current_token() {
             self.next_token();
-            let (variant, vspan) = self.parse_type_variant()?;
-            span_end = vspan.end;
+            let (variant, _vspan) = self.parse_type_variant()?;
             variants.push(variant);
         }
+
+        let span_end = match self.current_token() {
+            Token::SemiColon(span, ..) => {
+                self.next_token();
+                span.end
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    "expected `;` after type declaration",
+                ));
+            }
+        };
 
         Ok(TypeDecl {
             span: Span::from_begin_end(span_begin, span_end),

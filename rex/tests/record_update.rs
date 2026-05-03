@@ -7,8 +7,8 @@ use rex::{
 #[tokio::test]
 async fn record_update_end_to_end() {
     let code = r#"
-        type Foo = Bar { x: i32, y: i32, z: i32 }
-        type Sum = A { x: i32 } | B { x: i32 }
+        type Foo = Bar { x: i32, y: i32, z: i32 };
+        type Sum = A { x: i32 } | B { x: i32 };
 
         let
             foo: Foo = Bar { x = 1, y = 2, z = 3 },

@@ -12,7 +12,7 @@ Use `match` to branch on the shape of values.
 ## Matching ADTs
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let fromMaybe = \d m ->
   match m
@@ -67,7 +67,7 @@ match [1, 2, 3]
 Record patterns on record-carrying constructors:
 
 ```rex,interactive
-type Point = Point { x: i32, y: i32 }
+type Point = Point { x: i32, y: i32 };
 
 let p = Point { x = 1, y = 2 } in
 match p
@@ -89,7 +89,7 @@ match d
 Arms can use `->` or `→`:
 
 ```rex,interactive
-type Bit = T | F
+type Bit = T | F;
 
 let v = T in
 match v

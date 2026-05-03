@@ -33,7 +33,7 @@ async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
 #[tokio::test]
 async fn spec_record_update_requires_refinement_for_sum_types() {
     let code = r#"
-type Foo = Bar { x: i32 } | Baz { x: i32 }
+type Foo = Bar { x: i32 } | Baz { x: i32 };
 let
   f = \ (foo : Foo) -> { foo with { x = 2 } }
 in

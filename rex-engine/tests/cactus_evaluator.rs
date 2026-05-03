@@ -159,8 +159,8 @@ fn engine_collecting_on_every_alloc() -> Engine<()> {
 async fn evaluator_handles_literals_sequences_and_records() {
     let result = eval_i32(
         r#"
-        type Foo = Bar { x: i32, y: i32, z: i32 }
-        type Sum = A { x: i32 } | B { x: i32 }
+        type Foo = Bar { x: i32, y: i32, z: i32 };
+        type Sum = A { x: i32 } | B { x: i32 };
 
         let
             foo: Foo = Bar { x = 1, y = 2, z = 3 },
@@ -222,7 +222,7 @@ async fn dict_evaluation_starts_all_async_children() {
 async fn record_update_starts_all_async_update_children() {
     let (result, started_values) = eval_gated_i32(
         r#"
-        type Box = Box { a: i32, b: i32 }
+        type Box = Box { a: i32, b: i32 };
 
         let
             base: Box = Box { a = 10, b = 20 },
@@ -446,8 +446,8 @@ async fn pending_async_bound_delays_invoking_host_callbacks() {
 async fn gc_every_alloc_handles_broad_evaluator_paths() {
     let result = eval_i32(
         r#"
-        type Point = Point { x: i32, y: i32 }
-        type Choice = Left { item: i32 } | Right { item: i32 }
+        type Point = Point { x: i32, y: i32 };
+        type Choice = Left { item: i32 } | Right { item: i32 };
 
         class Score a where {
             score : a -> i32;
@@ -652,7 +652,7 @@ async fn gc_every_alloc_handles_captured_closure_envs() {
 async fn gc_every_alloc_handles_typeclass_cached_values() {
     let result = eval_i32(
         r#"
-        type Box = Box { value: i32 }
+        type Box = Box { value: i32 };
 
         class Score a where {
             score : a -> i32;

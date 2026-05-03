@@ -121,7 +121,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "non_exhaustive_match_on_adt",
             r#"
-            type Sum = A i32 | B i32
+            type Sum = A i32 | B i32;
             match (A 1)
                 when A x -> x
             "#,
@@ -141,7 +141,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "unknown_field_projection",
             r#"
-            type Foo = Bar { x: i32, y: i32 }
+            type Foo = Bar { x: i32, y: i32 };
             let foo: Foo = Bar { x = 1, y = 2 } in foo.z
             "#,
             |e| matches!(e, TypeError::UnknownField { field, .. } if field.as_ref() == "z"),
@@ -149,7 +149,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "unknown_field_record_update",
             r#"
-            type Foo = Bar { x: i32 }
+            type Foo = Bar { x: i32 };
             let foo: Foo = Bar { x = 1 } in { foo with { y = 2 } }
             "#,
             |e| matches!(e, TypeError::UnknownField { field, .. } if field.as_ref() == "y"),
@@ -279,7 +279,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "non_exhaustive_match_on_record_adt",
             r#"
-            type Sum = A { x: i32 } | B { x: i32 }
+            type Sum = A { x: i32 } | B { x: i32 };
             let s: Sum = A { x = 1 } in
             match s
                 when A {x} -> x
@@ -289,7 +289,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "constructor_wrong_payload_type",
             r#"
-            type Foo = Bar i32
+            type Foo = Bar i32;
             let x: Foo = Bar true in x
             "#,
             |e| matches!(e, TypeError::Unification(..)),
@@ -297,7 +297,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "wrong_field_type_in_record_constructor",
             r#"
-            type Foo = Bar { x: i32 }
+            type Foo = Bar { x: i32 };
             let x: Foo = Bar { x = false } in x
             "#,
             |e| matches!(e, TypeError::Unification(..)),
@@ -305,7 +305,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "unknown_type_in_type_decl",
             r#"
-            type Foo = Bar Nope
+            type Foo = Bar Nope;
             0
             "#,
             |e| matches!(e, TypeError::UnknownTypeName(name) if name.as_ref() == "Nope"),
@@ -313,7 +313,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "unknown_field_in_record_pattern",
             r#"
-            type Foo = Bar { x: i32 }
+            type Foo = Bar { x: i32 };
             let v: Foo = Bar { x = 1 } in
             match v
                 when Bar { y } -> y
@@ -323,7 +323,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "record_payload_pattern_used_on_positional_ctor",
             r#"
-            type Foo = Bar i32
+            type Foo = Bar i32;
             let v: Foo = Bar 1 in
             match v
                 when Bar { x } -> x

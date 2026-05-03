@@ -1,6 +1,6 @@
 # Algebraic Data Types (ADTs)
 
-ADTs let you define your own sum types.
+ADTs let you define your own sum types. Top-level `type` declarations end with semicolons.
 
 You’ll use ADTs to model “this or that” choices: optional values, tagged unions, trees, results,
 etc.
@@ -8,13 +8,13 @@ etc.
 ## Simple ADT
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 ```
 
 Constructors are values:
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let v = Just 1 in
   (v, Nothing)
@@ -25,7 +25,7 @@ let v = Just 1 in
 Defining an ADT is only half the story; consuming it is done with pattern matching:
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let
   fromMaybe = \d m ->
@@ -39,7 +39,7 @@ in
 ## Constructors with multiple fields
 
 ```rex,interactive
-type Pair a b = Pair a b
+type Pair a b = Pair a b;
 
 let v = Pair 1 "hi" in
   v
@@ -53,7 +53,7 @@ constructors instead because they self-document field names.
 Variants can carry a record payload:
 
 ```rex,interactive
-type User = User { name: string, age: i32 }
+type User = User { name: string, age: i32 };
 
 let u = User { name = "Ada", age = 36 } in
   u
@@ -68,7 +68,7 @@ You can define sum types with multiple constructors, including recursive ones:
 ```rex,interactive
 type Tree
   = Leaf { value: i32 }
-  | Node { left: Tree, right: Tree }
+  | Node { left: Tree, right: Tree };
 ```
 
 Recursive ADTs are the foundation for ASTs, expression trees, and many structured data problems.

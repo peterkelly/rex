@@ -16,13 +16,13 @@ Build a tiny “Maybe” API:
 ## Define an ADT
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 ```
 
 ## Use it
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let
   fromMaybe = \d m ->
@@ -43,7 +43,7 @@ The next example implements `mapMaybe`, which applies a function to `Just x` and
 ## A worked `mapMaybe`
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let
   mapMaybe = \f m ->
@@ -61,7 +61,7 @@ in
 There’s no special “isJust” operator — you write it with `match`:
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let
   isJust = \m ->
@@ -84,7 +84,7 @@ names the missing constructors.
 Problem: return the first `Just` value, otherwise return the fallback `Maybe`.
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let
   orElse = \ma mb ->
@@ -102,7 +102,7 @@ Why this works: `match` chooses `ma` when it is `Just`, and only uses `mb` when 
 Problem: chain a function that returns `Maybe`, failing early on `Nothing`.
 
 ```rex,interactive
-type Maybe a = Just a | Nothing
+type Maybe a = Just a | Nothing;
 
 let
   andThen = \f ma ->
@@ -121,7 +121,7 @@ Why this works: `Just` unwraps and continues with `f`; `Nothing` short-circuits 
 Problem: extend `Maybe` and still keep matches exhaustive.
 
 ```rex,interactive
-type Maybe a = Just a | Nothing | Unknown
+type Maybe a = Just a | Nothing | Unknown;
 
 let
   fromMaybe = \d m ->

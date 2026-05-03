@@ -145,7 +145,7 @@ async fn self_referential_list_let_rec() {
 #[tokio::test]
 async fn factorial_plain_let() {
     let expr = r#"
-        type Rec a b = Rec ((Rec a b) -> a -> b)
+        type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
           match r
@@ -167,7 +167,7 @@ async fn factorial_plain_let() {
 #[tokio::test]
 async fn mutual_even_odd_plain_let() {
     let expr = r#"
-        type Rec a b = Rec ((Rec a b) -> a -> b)
+        type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
           match r
@@ -190,7 +190,7 @@ async fn mutual_even_odd_plain_let() {
 #[tokio::test]
 async fn mutual_list_cycle_plain_let() {
     let expr = r#"
-        type Rec a b = Rec ((Rec a b) -> a -> b)
+        type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
           match r
@@ -216,7 +216,7 @@ async fn mutual_list_cycle_plain_let() {
 #[tokio::test]
 async fn self_referential_list_plain_let() {
     let expr = r#"
-        type Rec a b = Rec ((Rec a b) -> a -> b)
+        type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
           match r

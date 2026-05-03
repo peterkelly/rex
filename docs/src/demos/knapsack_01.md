@@ -7,7 +7,7 @@ Related reading: [Knapsack problem](https://en.wikipedia.org/wiki/Knapsack_probl
 `zeros` initializes the base DP row, `build_row` computes one new row for a single item, and `go` folds this process across the full item list. For each capacity, `build_row` compares `without` (skip item) and `with_item` (take item plus best compatible remainder), then stores the maximum; `solve` returns the final cell at `max_cap`.
 
 ```rex,interactive
-type Item = Item { w: i32, v: i32 }
+type Item = Item { w: i32, v: i32 };
 
 fn nth : List i32 -> i32 -> i32 = \xs i ->
   match xs

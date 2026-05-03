@@ -1,5 +1,5 @@
 
-pub type Subprocess = Subprocess { id: uuid }
+pub type Subprocess = Subprocess { id: uuid };
 
 pub declare fn spawn (opts: { cmd: string, args: List string }) -> Subprocess;
 pub declare fn wait (p: Subprocess) -> i32;

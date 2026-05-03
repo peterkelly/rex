@@ -172,7 +172,7 @@ fn test_add() {
 #[test]
 fn test_parse_type_decl() {
     let code = r#"
-    type MyADT a b c = MyCtor1 | MyCtor2 a b | MyCtor3 { field1: c }
+    type MyADT a b c = MyCtor1 | MyCtor2 a b | MyCtor3 { field1: c };
     42
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -210,6 +210,41 @@ fn test_parse_type_decl() {
         other => panic!("expected type decl, got {other:?}"),
     }
     assert_expr_eq!(program.expr, u!(span!(3:5 - 3:7); 42));
+}
+
+#[test]
+fn test_parse_type_decl_requires_semicolon() {
+    let code = r#"
+    type MyADT = MyCtor
+    42
+    "#;
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|err| err.message.contains("expected `;` after type declaration")),
+        "expected missing type declaration semicolon error, got: {errs:?}"
+    );
+}
+
+#[test]
+fn test_parse_type_decl_semicolon_preserves_ident_expr_boundary() {
+    let code = r#"
+    type MyADT = MyCtor;
+    value
+    "#;
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let program = parser.parse_program().unwrap();
+    assert_eq!(program.decls.len(), 1);
+    match &program.decls[0] {
+        Decl::Type(decl) => {
+            assert_eq!(decl.variants.len(), 1);
+            assert_eq!(decl.variants[0].name, Symbol::intern("MyCtor"));
+            assert!(decl.variants[0].args.is_empty());
+        }
+        other => panic!("expected type decl, got {other:?}"),
+    }
+    assert_expr_eq!(program.expr, v!(span!(3:5 - 3:10); "value"));
 }
 
 #[test]

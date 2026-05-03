@@ -11,7 +11,7 @@ hard-coding the type at every call site.
 class Size a where {
   size : a -> i32;
 }
-type Blob = Blob { bytes: List i32 }
+type Blob = Blob { bytes: List i32 };
 
 instance Size (List t) where {
   size = \xs ->
@@ -92,7 +92,7 @@ instance Size (List t) where {
       when Empty -> 0
       when Cons _ t -> 1 + size t;
 }
-type Blob = Blob { name: string, bytes: List i32 }
+type Blob = Blob { name: string, bytes: List i32 };
 
 instance Size Blob where {
   size = \b -> size b.bytes;

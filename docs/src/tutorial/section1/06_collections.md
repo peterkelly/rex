@@ -139,7 +139,7 @@ These are “record-like” values. Depending on context they may be treated as 
 field is known to exist:
 
 ```rex,interactive
-type R = R { a: i32, b: i32 }
+type R = R { a: i32, b: i32 };
 
 let r: R = R { a = 1, b = 2 } in r.a
 ```

@@ -339,7 +339,7 @@ Before returning generated Rex code:
 #### 1) Recursion model
 
 - Top-level `fn` declarations are mutually recursive.
-- Top-level `fn` declarations end with `;`; indentation and newlines do not terminate them.
+- Top-level `type` and `fn` declarations end with `;`; indentation and newlines do not terminate them.
 - Single recursive local helper: `let rec`
 - Mutually recursive local helpers: `let rec` with commas between bindings.
 
@@ -405,7 +405,7 @@ example `List.Empty` and `Tree.Empty`).
 Disambiguate with an annotation at the binding site:
 
 ```rex,interactive
-type Tree = Empty | Node { key: i32, left: Tree, right: Tree }
+type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 
 let
   t0: Tree = Empty

@@ -7,7 +7,7 @@ Related reading: [Merge sort](https://en.wikipedia.org/wiki/Merge_sort).
 `compare_i32` converts primitive comparisons into an `Order` ADT, and `split_alt` peels off pairs to partition input into two sublists without mutation. `mergesort` handles the empty and singleton base cases, then recursively sorts both halves and combines them with `merge`, which pattern-matches on two lists and always emits the smaller head first.
 
 ```rex,interactive
-type Order = Lt | Eq | Gt
+type Order = Lt | Eq | Gt;
 
 fn compare_i32 : i32 -> i32 -> Order = \a b ->
   if a < b then Lt else if a == b then Eq else Gt;

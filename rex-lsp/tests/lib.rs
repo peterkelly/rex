@@ -102,7 +102,7 @@ fn prepare_program_rewrites_imported_type_refs_in_annotations() {
     fs::write(
         &dep,
         r#"
-pub type Boxed = Boxed i32
+pub type Boxed = Boxed i32;
 "#,
     )
     .expect("write dep");
@@ -242,7 +242,7 @@ fn diagnostics_report_missing_type_export_in_annotation() {
     fs::write(
         &dep,
         r#"
-pub type Present = Present i32
+pub type Present = Present i32;
 ()
 "#,
     )
@@ -412,7 +412,7 @@ fn diagnostics_allow_lambda_param_named_like_import_alias_in_annotation() {
     fs::write(
         &dep,
         r#"
-pub type Boxed = Boxed i32
+pub type Boxed = Boxed i32;
 ()
 "#,
     )
@@ -440,7 +440,7 @@ fn diagnostics_report_missing_type_export_in_letrec_annotation_with_alias_named_
     fs::write(
         &dep,
         r#"
-pub type Present = Present i32
+pub type Present = Present i32;
 ()
 "#,
     )
@@ -472,7 +472,7 @@ fn diagnostics_allow_letrec_annotation_with_alias_named_binding_for_valid_type()
     fs::write(
         &dep,
         r#"
-pub type Num = Num i32
+pub type Num = Num i32;
 ()
 "#,
     )
@@ -499,7 +499,7 @@ fn diagnostics_allow_let_annotation_with_alias_named_binding_for_valid_type() {
     fs::write(
         &dep,
         r#"
-pub type Num = Num i32
+pub type Num = Num i32;
 ()
 "#,
     )
@@ -527,7 +527,7 @@ fn diagnostics_report_missing_type_export_in_let_annotation_with_alias_named_bin
     fs::write(
         &dep,
         r#"
-pub type Present = Present i32
+pub type Present = Present i32;
 ()
 "#,
     )
@@ -582,7 +582,7 @@ fn diagnostics_report_typed_hole_error() {
 #[test]
 fn diagnostics_use_compiler_path_for_local_constructor_names() {
     let text = r#"
-type Tree = Empty | Node { key: i32, left: Tree, right: Tree }
+type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 
 fn insert : i32 -> Tree -> Tree = \k t ->
   match t
@@ -608,8 +608,8 @@ insert 1 Empty
 #[test]
 fn diagnostics_report_both_default_record_update_ambiguities() {
     let text = r#"
-type A = A { x: i32, y: i32 }
-type B = B { x: i32, y: i32 }
+type A = A { x: i32, y: i32 };
+type B = B { x: i32, y: i32 };
 
 instance Default A where {
     default = A { x = 1, y = 2 };
@@ -641,8 +641,8 @@ in
 
 #[tokio::test]
 async fn e2e_ambiguous_default_record_updates_two_quick_fix_styles_then_eval() {
-    let text = r#"type A = A { x: i32, y: i32 }
-type B = B { x: i32, y: i32 }
+    let text = r#"type A = A { x: i32, y: i32 };
+type B = B { x: i32, y: i32 };
 
 instance Default A where {
     default = A { x = 1, y = 2 };
@@ -849,7 +849,7 @@ in
 #[test]
 fn document_symbols_returns_top_level_items() {
     let text = r#"
-type T = A | B
+type T = A | B;
 fn f : i32 -> i32 = \x -> x + 1;
 let x = 0 in f x
 "#;
@@ -1044,8 +1044,8 @@ in
 #[test]
 fn code_actions_offer_default_disambiguation_with_is_for_record_update() {
     let text = r#"
-type A = A { x: i32, y: i32 }
-type B = B { x: i32, y: i32 }
+type A = A { x: i32, y: i32 };
+type B = B { x: i32, y: i32 };
 
 instance Default A where {
     default = A { x = 1, y = 2 };

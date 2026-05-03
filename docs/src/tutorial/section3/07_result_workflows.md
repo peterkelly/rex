@@ -69,7 +69,7 @@ Why this works: `bind` short-circuits on either error source, including the new 
 Problem: replace string errors with structured errors.
 
 ```rex,interactive
-type Err = Negative | TooLarge
+type Err = Negative | TooLarge;
 
 let
   step1 = \x -> if x < 0 then Err Negative else Ok (x + 1),

@@ -294,7 +294,7 @@ fn type_errors_include_span() {
 
 #[test]
 fn reject_user_redefinition_of_primitive_type_name() {
-    let program = parse_program("type i32 = I32Wrap i32");
+    let program = parse_program("type i32 = I32Wrap i32;");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
@@ -308,7 +308,7 @@ fn reject_user_redefinition_of_primitive_type_name() {
 
 #[test]
 fn reject_user_redefinition_of_prelude_adt_name() {
-    let program = parse_program("type Result e a = Nope e a");
+    let program = parse_program("type Result e a = Nope e a;");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
@@ -322,7 +322,7 @@ fn reject_user_redefinition_of_prelude_adt_name() {
 
 #[test]
 fn reject_user_redefinition_of_promise_type_name() {
-    let program = parse_program("type Promise a = PromiseWrap a");
+    let program = parse_program("type Promise a = PromiseWrap a;");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
@@ -405,7 +405,7 @@ fn infer_type_annotation_mismatch_error() {
 fn infer_project_single_variant_let() {
     let program = parse_program(
         r#"
-            type MyADT = MyVariant1 { field1: i32, field2: f32 }
+            type MyADT = MyVariant1 { field1: i32, field2: f32 };
             let
                 x = MyVariant1 { field1 = 1, field2 = 2.0 }
             in
@@ -430,7 +430,7 @@ fn infer_project_single_variant_let() {
 fn infer_project_known_variant_let() {
     let program = parse_program(
         r#"
-            type MyADT = MyVariant1 { field1: i32, field2: f32 } | MyVariant2 i32 f32
+            type MyADT = MyVariant1 { field1: i32, field2: f32 } | MyVariant2 i32 f32;
             let
                 x = MyVariant1 { field1 = 1, field2 = 2.0 }
             in
@@ -451,7 +451,7 @@ fn infer_project_known_variant_let() {
 fn infer_project_unknown_variant_error() {
     let program = parse_program(
         r#"
-            type MyADT = MyVariant1 { field1: i32, field2: f32 } | MyVariant2 i32 f32
+            type MyADT = MyVariant1 { field1: i32, field2: f32 } | MyVariant2 i32 f32;
             let
                 x = MyVariant2 1 2.0
             in
@@ -472,7 +472,7 @@ fn infer_project_unknown_variant_error() {
 fn infer_project_lambda_param_single_variant() {
     let program = parse_program(
         r#"
-            type Boxed = Boxed { value: i32 }
+            type Boxed = Boxed { value: i32 };
             let
                 f = \x -> x.value
             in
@@ -493,7 +493,7 @@ fn infer_project_lambda_param_single_variant() {
 fn infer_project_in_match_arm() {
     let program = parse_program(
         r#"
-            type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32
+            type MyADT = MyVariant1 { field1: i32 } | MyVariant2 i32;
             let
                 x = MyVariant1 { field1 = 1 }
             in
@@ -627,7 +627,7 @@ fn infer_head_or_list_match_cons_constructor_form() {
 fn infer_record_pattern_in_lambda() {
     let program = parse_program(
         r#"
-            type Pair = Pair { left: i32, right: i32 }
+            type Pair = Pair { left: i32, right: i32 };
             let
                 sum = \p ->
                     match p
@@ -1166,7 +1166,7 @@ fn infer_missing_instances_produce_unsatisfied_predicates() {
 fn record_update_single_variant_adt_infers() {
     let program = parse_program(
         r#"
-            type Foo = Bar { x: i32, y: i32 }
+            type Foo = Bar { x: i32, y: i32 };
             let
               foo: Foo = Bar { x = 1, y = 2 },
               bar = { foo with { x = 3 } }
@@ -1184,7 +1184,7 @@ fn record_update_single_variant_adt_infers() {
 fn record_update_unknown_field_errors() {
     let program = parse_program(
         r#"
-            type Foo = Bar { x: i32 }
+            type Foo = Bar { x: i32 };
             let
               foo: Foo = Bar { x = 1 }
             in
@@ -1202,7 +1202,7 @@ fn record_update_unknown_field_errors() {
 fn record_update_requires_refined_variant_for_sum_types() {
     let program = parse_program(
         r#"
-            type Foo = Bar { x: i32 } | Baz { x: i32 }
+            type Foo = Bar { x: i32 } | Baz { x: i32 };
             let
               f = \ (foo : Foo) -> { foo with { x = 2 } }
             in
@@ -1220,7 +1220,7 @@ fn record_update_requires_refined_variant_for_sum_types() {
 fn record_update_allowed_after_match_refines_variant() {
     let program = parse_program(
         r#"
-            type Foo = Bar { x: i32 } | Baz { x: i32 }
+            type Foo = Bar { x: i32 } | Baz { x: i32 };
             let
               f = \ (foo : Foo) ->
                 match foo
