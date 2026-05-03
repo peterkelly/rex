@@ -13,29 +13,33 @@ fn compare_i32 : i32 -> i32 -> Order = \a b ->
   if a < b then Lt else if a == b then Eq else Gt;
 
 fn split_alt : List i32 -> (List i32, List i32) = \xs ->
-  match xs
-    when [] -> ([], [])
-    when [x] -> ([x], [])
+  match xs {
+    when [] -> ([], []);
+    when [x] -> ([x], []);
     when x::y::rest ->
       let (xs1, ys1) = split_alt rest in (Cons x xs1, Cons y ys1);
+  };
 
 fn merge : List i32 -> List i32 -> List i32 = \xs ys ->
-  match (xs, ys)
-    when ([], _) -> ys
-    when (_, []) -> xs
+  match (xs, ys) {
+    when ([], _) -> ys;
+    when (_, []) -> xs;
     when (x::xt, y::yt) ->
-      match (compare_i32 x y)
-        when Lt -> Cons x (merge xt ys)
-        when Eq -> Cons x (Cons y (merge xt yt))
+      match (compare_i32 x y) {
+        when Lt -> Cons x (merge xt ys);
+        when Eq -> Cons x (Cons y (merge xt yt));
         when Gt -> Cons y (merge xs yt);
+      };
+  };
 
 fn mergesort : List i32 -> List i32 = \xs ->
-  match xs
-    when [] -> []
-    when [x] -> [x]
+  match xs {
+    when [] -> [];
+    when [x] -> [x];
     when _ ->
       let (left, right) = split_alt xs in
       merge (mergesort left) (mergesort right);
+  };
 
 let
   input = [9, 1, 7, 3, 2, 8, 6, 4, 5]

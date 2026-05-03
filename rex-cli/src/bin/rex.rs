@@ -523,7 +523,7 @@ mod tests {
         )
         .expect("write bar.rex");
         let source = r#"
-            import foo.bar
+            import foo.bar;
 
             bar.add (bar.triple 10) 2
         "#;
@@ -552,7 +552,7 @@ mod tests {
 
         let main = root.join("main.rex");
         let source = r#"
-            import foo.bar as Bar
+            import foo.bar as Bar;
 
             Bar.inc 41
         "#;

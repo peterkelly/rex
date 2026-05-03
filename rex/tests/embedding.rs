@@ -67,8 +67,8 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
     )
     .eval_snippet(
         r#"
-            import sample (Label, Left, Right, Wrong, render_label)
-            import sample as Sample
+            import sample (Label, Left, Right, Wrong, render_label);
+            import sample as Sample;
             (
                 render_label (Label { text = "left", side = Left }),
                 render_label (Label { text = "right", side = (Right is Sample.Side) }),
@@ -137,7 +137,7 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
     )
     .eval_snippet(
         r#"
-            import sample (Label, Left, render_label)
+            import sample (Label, Left, render_label);
             render_label (Label { text = "left", side = Left })
         "#,
     )
@@ -170,12 +170,13 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     )
     .eval_snippet(
         r#"
-            import sample (Right, Wrong)
-            import sample as Sample
+            import sample (Right, Wrong);
+            import sample as Sample;
             let x = (Right is Sample.Correctness) in
-            match (x is Sample.Correctness)
-              when Right -> true
-              when Wrong -> false
+            match (x is Sample.Correctness) {
+              when Right -> true;
+              when Wrong -> false;
+            }
             "#,
     )
     .await

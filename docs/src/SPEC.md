@@ -35,13 +35,14 @@ expression result.
 Top-level imports support three forms:
 
 ```rex
-import foo.bar as Bar
-import foo.bar (*)
-import foo.bar (x, y, z as q)
+import foo.bar as Bar;
+import foo.bar (*);
+import foo.bar (x, y, z as q);
 ```
 
 Rules:
 
+- Import declarations are terminated by explicit semicolons.
 - `import <module> as <Alias>` imports the module namespace and requires qualified access
   (`Alias.member`).
 - `import <module> (*)` imports all exported values, types, and classes into unqualified scope.
@@ -104,9 +105,11 @@ Rules:
 
 ## Top-Level Declaration Terminators
 
-Top-level `type`, `fn`, and `declare fn` declarations are terminated by explicit semicolons:
+Top-level `type`, `fn`, `declare fn`, and `import` declarations are terminated by explicit
+semicolons:
 
 ```rex
+import math.core as Math;
 type Box a = Box a;
 fn inc : i32 -> i32 = \x -> x + 1;
 declare fn host_value : i32;
@@ -205,9 +208,10 @@ This enables the common pattern:
 type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
-match s
-  when A {x} -> { s with { x = x + 1 } }
-  when B {x} -> { s with { x = x + 2 } }
+match s {
+  when A {x} -> { s with { x = x + 1 } };
+  when B {x} -> { s with { x = x + 2 } };
+}
 ```
 
 ### Evaluation
@@ -243,7 +247,7 @@ Regression: `spec_typeclass_instance_overlap_is_rejected` (`rex/tests/spec_seman
 The class name in an instance header may be qualified through a module alias:
 
 ```rex
-import dep as D
+import dep as D;
 
 instance D.Pick i32 where {
   pick = 7;

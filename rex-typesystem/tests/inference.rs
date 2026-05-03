@@ -497,9 +497,10 @@ fn infer_project_in_match_arm() {
             let
                 x = MyVariant1 { field1 = 1 }
             in
-                match x
-                    when MyVariant1 { field1 } -> x.field1
-                    when MyVariant2 _ -> 0
+                match x {
+                    when MyVariant1 { field1 } -> x.field1;
+                    when MyVariant2 _ -> 0;
+                }
             "#,
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
@@ -525,9 +526,10 @@ fn infer_nested_let_lambda_match_option() {
                     in
                         Some val
             in
-                match (build true)
-                    when Some x -> x
-                    when None -> 0
+                match (build true) {
+                    when Some x -> x;
+                    when None -> 0;
+                }
             "#,
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
@@ -566,10 +568,11 @@ fn infer_nested_result_option_match() {
         r#"
             let
                 unwrap = \x ->
-                    match x
-                        when Ok (Some v) -> v
-                        when Ok None -> 0
-                        when Err _ -> 0
+                    match x {
+                        when Ok (Some v) -> v;
+                        when Ok None -> 0;
+                        when Err _ -> 0;
+                    }
             in
                 unwrap (Ok (Some 5))
             "#,
@@ -585,9 +588,10 @@ fn infer_head_or_list_match() {
         r#"
             let
                 head_or = \fallback xs ->
-                    match xs
-                        when [] -> fallback
-                        when x::xs -> x
+                    match xs {
+                        when [] -> fallback;
+                        when x::xs -> x;
+                    }
             in
                 (head_or 0 [1, 2, 3], head_or 0 [])
             "#,
@@ -607,9 +611,10 @@ fn infer_head_or_list_match_cons_constructor_form() {
         r#"
             let
                 head_or = \fallback xs ->
-                    match xs
-                        when [] -> fallback
-                        when Cons x xs1 -> x
+                    match xs {
+                        when [] -> fallback;
+                        when Cons x xs1 -> x;
+                    }
             in
                 (head_or 0 (Cons 1 (Cons 2 Empty)), head_or 0 Empty)
             "#,
@@ -630,8 +635,9 @@ fn infer_record_pattern_in_lambda() {
             type Pair = Pair { left: i32, right: i32 };
             let
                 sum = \p ->
-                    match p
-                        when Pair { left, right } -> left + right
+                    match p {
+                        when Pair { left, right } -> left + right;
+                    }
             in
                 sum (Pair { left = 1, right = 2 })
             "#,
@@ -873,7 +879,7 @@ fn infer_if_branch_type_mismatch_error() {
 
 #[test]
 fn infer_unknown_pattern_constructor_error() {
-    let expr = parse_expr("match 1 when Nope -> 1");
+    let expr = parse_expr("match 1 { when Nope -> 1; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(
@@ -951,14 +957,14 @@ fn infer_dict_value_mismatch_error() {
 
 #[test]
 fn infer_match_list_on_non_list_error() {
-    let expr = parse_expr("match 1 when [x] -> x");
+    let expr = parse_expr("match 1 { when [x] -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     assert!(infer(&mut ts, expr.as_ref()).is_err());
 }
 
 #[test]
 fn infer_pattern_constructor_arity_error() {
-    let expr = parse_expr("match (Ok 1) when Ok x y -> x");
+    let expr = parse_expr("match (Ok 1) { when Ok x y -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(
@@ -969,7 +975,7 @@ fn infer_pattern_constructor_arity_error() {
 
 #[test]
 fn infer_match_arm_type_mismatch_error() {
-    let expr = parse_expr(r#"match 1 when _ -> 1 when _ -> "no""#);
+    let expr = parse_expr(r#"match 1 { when _ -> 1; when _ -> "no"; }"#);
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
@@ -983,14 +989,14 @@ fn infer_match_arm_type_mismatch_error() {
 
 #[test]
 fn infer_match_option_on_non_option_error() {
-    let expr = parse_expr("match 1 when Some x -> x");
+    let expr = parse_expr("match 1 { when Some x -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     assert!(infer(&mut ts, expr.as_ref()).is_err());
 }
 
 #[test]
 fn infer_dict_pattern_on_non_dict_error() {
-    let expr = parse_expr("match 1 when {a} -> a");
+    let expr = parse_expr("match 1 { when {a} -> a; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
@@ -998,7 +1004,7 @@ fn infer_dict_pattern_on_non_dict_error() {
 
 #[test]
 fn infer_cons_pattern_on_non_list_error() {
-    let expr = parse_expr("match 1 when x::xs -> x");
+    let expr = parse_expr("match 1 { when x::xs -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     assert!(infer(&mut ts, expr.as_ref()).is_err());
 }
@@ -1037,7 +1043,7 @@ fn infer_operator_type_mismatch_error() {
 
 #[test]
 fn infer_non_exhaustive_match_is_error() {
-    let expr = parse_expr("match (Ok 1) when Ok x -> x");
+    let expr = parse_expr("match (Ok 1) { when Ok x -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
@@ -1045,7 +1051,7 @@ fn infer_non_exhaustive_match_is_error() {
 
 #[test]
 fn infer_non_exhaustive_match_on_bound_var_error() {
-    let expr = parse_expr("let x = Ok 1 in match x when Ok y -> y");
+    let expr = parse_expr("let x = Ok 1 in match x { when Ok y -> y; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
@@ -1053,7 +1059,7 @@ fn infer_non_exhaustive_match_on_bound_var_error() {
 
 #[test]
 fn infer_non_exhaustive_match_in_lambda_error() {
-    let expr = parse_expr("\\x -> match x when Ok y -> y");
+    let expr = parse_expr("\\x -> match x { when Ok y -> y; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
@@ -1061,7 +1067,7 @@ fn infer_non_exhaustive_match_in_lambda_error() {
 
 #[test]
 fn infer_non_exhaustive_option_match_error() {
-    let expr = parse_expr("match (Some 1) when Some x -> x");
+    let expr = parse_expr("match (Some 1) { when Some x -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
@@ -1074,7 +1080,7 @@ fn infer_non_exhaustive_option_match_error() {
 
 #[test]
 fn infer_non_exhaustive_result_match_error() {
-    let expr = parse_expr("match (Err 1) when Ok x -> x");
+    let expr = parse_expr("match (Err 1) { when Ok x -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
@@ -1087,7 +1093,7 @@ fn infer_non_exhaustive_result_match_error() {
 
 #[test]
 fn infer_non_exhaustive_list_missing_empty_error() {
-    let expr = parse_expr("match [1, 2] when x::xs -> x");
+    let expr = parse_expr("match [1, 2] { when x::xs -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
@@ -1100,7 +1106,7 @@ fn infer_non_exhaustive_list_missing_empty_error() {
 
 #[test]
 fn infer_non_exhaustive_list_match_on_bound_var_error() {
-    let expr = parse_expr("let xs = [1, 2] in match xs when x::xs -> x");
+    let expr = parse_expr("let xs = [1, 2] in match xs { when x::xs -> x; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
@@ -1108,7 +1114,7 @@ fn infer_non_exhaustive_list_match_on_bound_var_error() {
 
 #[test]
 fn infer_non_exhaustive_list_missing_cons_error() {
-    let expr = parse_expr("match [1] when [] -> 0");
+    let expr = parse_expr("match [1] { when [] -> 0; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
@@ -1121,7 +1127,7 @@ fn infer_non_exhaustive_list_missing_cons_error() {
 
 #[test]
 fn infer_match_list_patterns_on_result_error() {
-    let expr = parse_expr("match (Ok 1) when [] -> 0 when x::xs -> 1");
+    let expr = parse_expr("match (Ok 1) { when [] -> 0; when x::xs -> 1; }");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
@@ -1223,9 +1229,10 @@ fn record_update_allowed_after_match_refines_variant() {
             type Foo = Bar { x: i32 } | Baz { x: i32 };
             let
               f = \ (foo : Foo) ->
-                match foo
-                  when Bar {x} -> { foo with { x = x + 1 } }
-                  when Baz {x} -> { foo with { x = x + 2 } }
+                match foo {
+                  when Bar {x} -> { foo with { x = x + 1 } };
+                  when Baz {x} -> { foo with { x = x + 2 } };
+                }
             in
               f (Bar { x = 1 })
             "#,

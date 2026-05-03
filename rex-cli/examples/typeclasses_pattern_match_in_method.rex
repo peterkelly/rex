@@ -3,9 +3,10 @@ class Head a where {
 }
 instance Head i32 where {
     head_or = \fallback xs ->
-        match xs
-            when [] -> fallback
+        match xs {
+            when [] -> fallback;
             when x::rest -> x;
+        };
 }
 let
     a = head_or 0 [1, 2, 3],

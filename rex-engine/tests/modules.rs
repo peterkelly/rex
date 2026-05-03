@@ -80,7 +80,7 @@ async fn prelude_module_can_be_imported_explicitly() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import Prelude (map)
+        import Prelude (map);
         map ((+) 1) [1, 2]
         "#,
     )
@@ -176,7 +176,7 @@ async fn module_import_local_pub() {
     write_file(
         &main,
         r#"
-        import foo.bar as Bar
+        import foo.bar as Bar;
         Bar.add 1 2
 "#,
     );
@@ -210,7 +210,7 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     .eval_module_file(&module)
     .await
     .unwrap();
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -229,7 +229,7 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     .eval_module_file(&module)
     .await
     .unwrap();
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -250,7 +250,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -262,7 +262,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
     // Same module path, changed contents: import resolution must observe updated
     // source and invalidate stale per-module caches.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
+    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -289,7 +289,7 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
     write_file(
         &a,
         r#"
-        import b as B
+        import b as B;
         pub fn id x: B.Boxed -> B.Boxed = x;
         "#,
     );
@@ -299,8 +299,8 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
     let (value_ptr, _ty) = eval_snippet_at(
         &mut engine,
         r#"
-        import a (id)
-        import b (Boxed)
+        import a (id);
+        import b (Boxed);
         id (Boxed 1)
         "#,
         &importer,
@@ -343,7 +343,7 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
     let (value_ptr, ty) = eval_snippet_at(
         &mut engine,
         r#"
-        import dep as D
+        import dep as D;
 
         instance D.Pick i32 where {
             pick = 7;
@@ -381,7 +381,7 @@ async fn module_import_selected_clause_can_import_class_exports() {
     write_file(
         &main,
         r#"
-        import dep (Pick)
+        import dep (Pick);
 
         instance Pick i32 where {
             pick = 7;
@@ -421,7 +421,7 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
     let (value_ptr, ty) = eval_snippet_at(
         &mut engine,
         r#"
-        import dep as D
+        import dep as D;
 
         let f = \ (D : D.Boxed) -> 0 in
         0
@@ -448,7 +448,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
     write_file(
         &a,
         r#"
-        import b as B
+        import b as B;
         pub fn fa x: i32 -> i32 = if x == 0 then 0 else B.fb (x - 1);
         ()
 "#,
@@ -456,7 +456,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
     write_file(
         &b,
         r#"
-        import a as A
+        import a as A;
         pub fn fb x: i32 -> i32 = if x == 0 then 0 else A.fa (x - 1);
         ()
 "#,
@@ -464,7 +464,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
     write_file(
         &main,
         r#"
-        import a as A
+        import a as A;
         A.fa 6
 "#,
     );
@@ -500,7 +500,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import host.math (inc, double_async as d)
+        import host.math (inc, double_async as d);
         inc (d 20)
 "#,
     )
@@ -572,7 +572,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import host.ptrsync (pick, pick_typed, heap_i32)
+        import host.ptrsync (pick, pick_typed, heap_i32);
         (pick 10 42, pick_typed 5 99, heap_i32)
 "#,
     )
@@ -616,7 +616,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import host.over (id)
+        import host.over (id);
         (id 7, id "ok")
 "#,
     )
@@ -670,7 +670,7 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
     let (_value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import host.delay as Delay
+        import host.delay as Delay;
         let x: Delay.RunSpec = Delay.make_run_spec in
             0
         "#,
@@ -741,7 +741,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import host.ptrasync (pick_async, pick_typed_async as pta, heap_i32_async)
+        import host.ptrasync (pick_async, pick_typed_async as pta, heap_i32_async);
         (pick_async 7 21, pta 1 2, heap_i32_async)
 "#,
     )
@@ -833,7 +833,7 @@ async fn module_injected_from_rust_wildcard_import() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import host.ops (*)
+        import host.ops (*);
         add (triple 10) 2
 "#,
     )
@@ -878,7 +878,7 @@ async fn module_import_rejects_private_access() {
     write_file(
         &main,
         r#"
-        import foo.bar as Bar
+        import foo.bar as Bar;
         Bar.hidden 1
 "#,
     );
@@ -912,7 +912,7 @@ async fn module_import_include_roots() {
     write_file(
         &main,
         r#"
-        import lib.math as Math
+        import lib.math as Math;
         Math.inc 41
 "#,
     );
@@ -946,7 +946,7 @@ async fn snippet_can_import_with_explicit_base() {
     let (value_ptr, ty) = eval_snippet_at(
         &mut engine,
         r#"
-        import foo.bar as Bar
+        import foo.bar as Bar;
         Bar.add 20 22
 "#,
         dir.join("_snippet.rex"),
@@ -980,7 +980,7 @@ async fn module_import_wildcard_clause() {
     write_file(
         &main,
         r#"
-        import foo.bar (*)
+        import foo.bar (*);
         add (triple 10) 2
 "#,
     );
@@ -1013,7 +1013,7 @@ async fn module_import_selected_clause_with_alias() {
     write_file(
         &main,
         r#"
-        import foo.bar (add, triple as t)
+        import foo.bar (add, triple as t);
         add (t 10) 2
 "#,
     );
@@ -1045,7 +1045,7 @@ async fn module_import_selected_clause_missing_export() {
     write_file(
         &main,
         r#"
-        import foo.bar (missing)
+        import foo.bar (missing);
         missing 1 2
 "#,
     );
@@ -1076,7 +1076,7 @@ async fn module_import_selected_clause_can_import_type_exports() {
     write_file(
         &main,
         r#"
-        import dep (Status, Ready)
+        import dep (Status, Ready);
 
         let id: Status -> Status = \x -> x in
         id Ready
@@ -1111,7 +1111,7 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
     write_file(
         &main,
         r#"
-        import dep (Token)
+        import dep (Token);
 
         let id: Token -> Token = \x -> x in
         id Token
@@ -1146,7 +1146,7 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
     write_file(
         &main,
         r#"
-        import dep (Token as Wrapped)
+        import dep (Token as Wrapped);
 
         let wrap: Wrapped = Wrapped in
         wrap
@@ -1181,7 +1181,7 @@ async fn module_import_wildcard_clause_imports_type_exports_too() {
     write_file(
         &main,
         r#"
-        import dep (*)
+        import dep (*);
 
         let id: Status -> Status = \x -> x in
         id Ready
@@ -1218,7 +1218,7 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
     write_file(
         &main,
         r#"
-        import dep (*)
+        import dep (*);
 
         instance Pick i32 where {
             pick = 11;
@@ -1254,8 +1254,8 @@ async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
     write_file(
         &main,
         r#"
-        import dep as D
-        import dep (Status, Ready)
+        import dep as D;
+        import dep (Status, Ready);
 
         let from_alias: D.Status = D.Ready in
         let from_item: Status = Ready in
@@ -1301,7 +1301,7 @@ async fn module_import_selected_clause_type_name_does_not_create_value_facet() {
     write_file(
         &main,
         r#"
-        import dep (Status)
+        import dep (Status);
         Status
 "#,
     );
@@ -1334,7 +1334,7 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
     write_file(
         &main,
         r#"
-        import dep (Pick)
+        import dep (Pick);
         let x: Pick = 1 in
         x
 "#,
@@ -1374,7 +1374,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
     let (value_ptr, _ty) = eval_snippet(
         &mut engine,
         r#"
-        import host.types (RunSpec, pending)
+        import host.types (RunSpec, pending);
         let x: RunSpec = pending in
         x
 "#,
@@ -1408,7 +1408,7 @@ async fn module_import_missing_class_export_in_instance_header() {
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         instance D.Missing i32 where {
             missing = 1;
@@ -1445,7 +1445,7 @@ async fn module_import_missing_type_export_in_fn_signature() {
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         fn id x: D.Missing -> D.Missing = x;
 
@@ -1482,7 +1482,7 @@ async fn module_import_missing_type_export_in_instance_head() {
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         instance D.Marker D.Missing where {
             marker = 1;
@@ -1521,7 +1521,7 @@ async fn module_import_missing_class_export_in_fn_where_constraint() {
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         fn id x: i32 -> i32 where D.Missing i32 = x;
 
@@ -1558,7 +1558,7 @@ async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         declare fn id x: i32 -> i32 where D.Missing i32;
 
@@ -1595,7 +1595,7 @@ async fn module_import_missing_class_export_in_class_super_constraint() {
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         class Local a <= D.Missing a where {
             local : a;
@@ -1633,7 +1633,7 @@ async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         let rec D: D.Missing = 1 in
         0
@@ -1668,8 +1668,8 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
     write_file(
         &main,
         r#"
-        import dep as D
-        import dep (Num)
+        import dep as D;
+        import dep (Num);
 
         let rec D: D.Num -> i32 = \_ -> 0 in
         0
@@ -1703,7 +1703,7 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         let D: D.Num -> i32 = \_ -> 0 in
         0
@@ -1737,7 +1737,7 @@ async fn module_import_missing_type_export_in_let_annotation_with_alias_named_bi
     write_file(
         &main,
         r#"
-        import dep as D
+        import dep as D;
 
         let D: D.Missing = 1 in
         0
@@ -1779,8 +1779,8 @@ async fn module_import_selected_clause_duplicate_name() {
     write_file(
         &main,
         r#"
-        import foo.left (add)
-        import foo.right (mul as add)
+        import foo.left (add);
+        import foo.right (mul as add);
         add 1 2
 "#,
     );
@@ -1811,7 +1811,7 @@ async fn module_import_selected_clause_conflicts_with_local() {
     write_file(
         &main,
         r#"
-        import foo.bar (add)
+        import foo.bar (add);
         fn add x: i32 -> y: i32 -> i32 = x - y;
         add 10 2
 "#,
@@ -1834,13 +1834,14 @@ async fn std_json_encode_decode_smoke() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import std.json as Json
+        import std.json as Json;
 
         let
           b_ok =
-            match (Json.from_json (Json.to_json true))
-              when Ok b -> if b then 1 else 0
-              when Err _ -> -1
+            match (Json.from_json (Json.to_json true)) {
+              when Ok b -> if b then 1 else 0;
+              when Err _ -> -1;
+            }
         in
           b_ok
 "#,
@@ -1859,7 +1860,7 @@ async fn std_json_roundtrip_nested() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import std.json as Json
+        import std.json as Json;
 
         let
           xs: List (Option (Result i32 string)) =
@@ -1870,17 +1871,19 @@ async fn std_json_roundtrip_nested() {
             ],
 
           xs_ok =
-            match (Json.from_json (Json.to_json xs))
-              when Ok ys -> if ys == xs then 1 else 0
-              when Err _ -> -1,
+            match (Json.from_json (Json.to_json xs)) {
+              when Ok ys -> if ys == xs then 1 else 0;
+              when Err _ -> -1;
+            },
 
           arr: Array (Result i32 string) =
             prim_array_from_list [Ok (1 is i32), Err "bad", Ok (3 is i32)],
 
           arr_ok =
-            match (Json.from_json (Json.to_json arr))
-              when Ok ys -> if ys == arr then 1 else 0
-              when Err _ -> -1
+            match (Json.from_json (Json.to_json arr)) {
+              when Ok ys -> if ys == arr then 1 else 0;
+              when Err _ -> -1;
+            }
         in
           (xs_ok, arr_ok)
 "#,
@@ -1917,34 +1920,38 @@ async fn std_json_decode_errors_have_useful_messages() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import std.json as Json
+        import std.json as Json;
 
         let
           both =
             let v = Json.Object { ok = Json.Number (prim_to_f64 (1 is i32)), err = Json.String "bad" } in
-            match (Json.from_json v)
-              when Ok r -> let _r: Result i32 string = r in "unexpected ok"
-              when Err e -> e.message,
+            match (Json.from_json v) {
+              when Ok r -> let _r: Result i32 string = r in "unexpected ok";
+              when Err e -> e.message;
+            },
 
           neither =
             let v = Json.Object {} in
-            match (Json.from_json v)
-              when Ok r -> let _r: Result i32 string = r in "unexpected ok"
-              when Err e -> e.message,
+            match (Json.from_json v) {
+              when Ok r -> let _r: Result i32 string = r in "unexpected ok";
+              when Err e -> e.message;
+            },
 
           wrong_kind =
             let v = Json.Bool true in
-            match (Json.from_json v)
-              when Ok xs -> let _xs: List i32 = xs in "unexpected ok"
-              when Err e -> e.message,
+            match (Json.from_json v) {
+              when Ok xs -> let _xs: List i32 = xs in "unexpected ok";
+              when Err e -> e.message;
+            },
 
           bad_list_elem =
             let v =
               Json.Array (prim_array_from_list [Json.Number (prim_to_f64 (1 is i32)), Json.String "oops"])
             in
-            match (Json.from_json v)
-              when Ok xs -> let _xs: List i32 = xs in "unexpected ok"
-              when Err e -> e.message
+            match (Json.from_json v) {
+              when Ok xs -> let _xs: List i32 = xs in "unexpected ok";
+              when Err e -> e.message;
+            }
         in
           (both, neither, wrong_kind, bad_list_elem)
 "#,
@@ -1987,18 +1994,20 @@ async fn std_json_numeric_decode_errors() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import std.json as Json
+        import std.json as Json;
 
         let
           u8_overflow =
-            match (Json.from_json (Json.Number (prim_to_f64 (256 is i32))))
-              when Ok n -> let _n: u8 = n in "unexpected ok"
-              when Err e -> e.message,
+            match (Json.from_json (Json.Number (prim_to_f64 (256 is i32)))) {
+              when Ok n -> let _n: u8 = n in "unexpected ok";
+              when Err e -> e.message;
+            },
 
           i32_fractional =
-            match (Json.from_json (Json.Number (prim_to_f64 1.5)))
-              when Ok n -> let _n: i32 = n in "unexpected ok"
-              when Err e -> e.message
+            match (Json.from_json (Json.Number (prim_to_f64 1.5))) {
+              when Ok n -> let _n: i32 = n in "unexpected ok";
+              when Err e -> e.message;
+            }
         in
           (u8_overflow, i32_fractional)
 "#,
@@ -2037,7 +2046,7 @@ async fn std_json_show_renders_valid_json() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import std.json as Json
+        import std.json as Json;
 
         let
           v =
@@ -2089,7 +2098,7 @@ async fn std_json_parse_and_from_string_roundtrip() {
     let (value_ptr, ty) = eval_snippet(
         &mut engine,
         r#"
-        import std.json as Json
+        import std.json as Json;
 
         let
           v =
@@ -2100,27 +2109,31 @@ async fn std_json_parse_and_from_string_roundtrip() {
             },
 
           parsed_ok =
-            match (Json.parse (show v))
-              when Ok v2 -> if show v2 == show v then 1 else 0
-              when Err _ -> -1,
+            match (Json.parse (show v)) {
+              when Ok v2 -> if show v2 == show v then 1 else 0;
+              when Err _ -> -1;
+            },
 
           xs: List i32 = [(1 is i32), (2 is i32), (3 is i32)],
           s = Json.stringify (Json.to_json xs),
           decoded_ok =
-            match (Json.parse s)
-              when Err _ -> -1
+            match (Json.parse s) {
+              when Err _ -> -1;
               when Ok v0 ->
                 (
-                  match (Json.from_json v0)
-                    when Ok ys -> if ys == xs then 1 else 0
-                    when Err _ -> -2
-                ),
+                  match (Json.from_json v0) {
+                    when Ok ys -> if ys == xs then 1 else 0;
+                    when Err _ -> -2;
+                  }
+                );
+            },
 
           bad_s = "{",
           parse_err =
-            match (Json.parse bad_s)
-              when Ok _ -> 0
-              when Err e -> if e.message != "" then 1 else 0
+            match (Json.parse bad_s) {
+              when Ok _ -> 0;
+              when Err e -> if e.message != "" then 1 else 0;
+            }
         in
           (parsed_ok, decoded_ok, parse_err)
 "#,

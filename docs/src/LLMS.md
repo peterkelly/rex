@@ -35,9 +35,10 @@ fn classify_ph : f32 -> string = \ph ->
   else "stable";
 
 fn qc_label_from_sensor : string -> Result string string = \raw ->
-  match (parse_ph raw)
-    when Ok ph -> Ok (classify_ph ph)
+  match (parse_ph raw) {
+    when Ok ph -> Ok (classify_ph ph);
     when Err e -> Err e;
+  };
 
 let sensor_reading = "7.3" in
 let qc_label : Result string string = ? in
@@ -388,10 +389,11 @@ For small enums and ADTs, write an explicit equality helper:
 
 ```rex
 node_eq = \a b ->
-  match (a, b)
-    when (A, A) -> true
-    when (B, B) -> true
-    when _ -> false
+  match (a, b) {
+    when (A, A) -> true;
+    when (B, B) -> true;
+    when _ -> false;
+  }
 ```
 
 Related: avoid checking list emptiness with direct equality like `xs == []` in generic code. Prefer
@@ -410,9 +412,10 @@ type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 let
   t0: Tree = Empty
 in
-  match t0
-    when Empty -> 0
-    when Node {key, left, right} -> key
+  match t0 {
+    when Empty -> 0;
+    when Node {key, left, right} -> key;
+  }
 ```
 
 #### 5) Reserved identifiers

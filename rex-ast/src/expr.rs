@@ -979,17 +979,15 @@ impl Display for Expr {
             Self::Match(_span, scrutinee, arms) => {
                 "match ".fmt(f)?;
                 scrutinee.fmt(f)?;
-                ' '.fmt(f)?;
-                for (i, (pat, expr)) in arms.iter().enumerate() {
+                " { ".fmt(f)?;
+                for (pat, expr) in arms {
                     "when ".fmt(f)?;
                     pat.fmt(f)?;
                     " -> ".fmt(f)?;
                     expr.fmt(f)?;
-                    if i + 1 < arms.len() {
-                        ' '.fmt(f)?;
-                    }
+                    "; ".fmt(f)?;
                 }
-                Ok(())
+                "}".fmt(f)
             }
             Self::Project(_span, base, field) => {
                 base.fmt(f)?;

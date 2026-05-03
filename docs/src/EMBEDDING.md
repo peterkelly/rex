@@ -201,7 +201,7 @@ let modules = Arc::new(HashMap::from([
     ),
     (
         "acme.main".to_string(),
-        "import acme.math (inc)\npub fn main : i32 = inc 41;".to_string(),
+        "import acme.math (inc);\npub fn main : i32 = inc 41;".to_string(),
     ),
 ]));
 
@@ -218,7 +218,7 @@ engine.add_resolver("host-map", {
     }
 });
 let value = engine
-    .eval_snippet("import acme.main (main)\nmain")
+    .eval_snippet("import acme.main (main);\nmain")
     .await?;
 println!("{value}");
 ```
@@ -263,7 +263,7 @@ math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
 engine.inject_module(math)?;
 let value = engine
-    .eval_snippet("import acme.math (inc, double_async as d)\ninc (d 20)")
+    .eval_snippet("import acme.math (inc, double_async as d);\ninc (d 20)")
     .await?;
 println!("{value}");
 ```
@@ -284,12 +284,13 @@ engine.inject_module(m)?;
 Then Rex code can import and use those names from the module:
 
 ```rex
-import acme.status (Status, Failed)
+import acme.status (Status, Failed);
 
 let fail: string -> Status = \msg -> Failed msg in
-match (fail "boom")
-  when Failed msg -> length msg
-  when _ -> 0
+match (fail "boom") {
+  when Failed msg -> length msg;
+  when _ -> 0;
+}
 ```
 
 `Status` is used here in type position, while `Failed` is used in expression/pattern positions.
@@ -347,7 +348,7 @@ engine.inject_module(m)?;
 let value = engine
     .eval_snippet(
         r#"
-        import sample (Label, Left, Right, render_label)
+        import sample (Label, Left, Right, render_label);
         (
             render_label (Label { text = "left", side = Left }),
             render_label (Label { text = "right", side = Right })
@@ -426,7 +427,7 @@ If you evaluate ad-hoc Rex snippets that contain imports, use `eval_snippet_at` 
 
 ```rust
 let value = engine
-    .eval_snippet_at("import foo.bar as Bar\nBar.add 1 2", "/tmp/workflow/_snippet.rex")
+    .eval_snippet_at("import foo.bar as Bar;\nBar.add 1 2", "/tmp/workflow/_snippet.rex")
     .await?;
 ```
 
@@ -504,9 +505,10 @@ program point where representation changes. This preserves ergonomics while
 avoiding hidden work:
 
 ```rex
-match (to_list bytes) with
-    when Cons head _ -> head
-    when Empty -> 0
+match (to_list bytes) {
+    when Cons head _ -> head;
+    when Empty -> 0;
+}
 ```
 
 ## Typecheck Without Evaluating
@@ -562,9 +564,10 @@ class Size a where {
 }
 instance Size (List t) where {
     size = \xs ->
-        match xs
-            when Empty -> 0
+        match xs {
+            when Empty -> 0;
             when Cons _ rest -> 1 + size rest;
+        };
 }
 size [1, 2, 3]
 "#;
@@ -601,9 +604,10 @@ class Size a where {
 }
 instance Size (List t) where {
     size = \xs ->
-        match xs
-            when Empty -> 0
+        match xs {
+            when Empty -> 0;
             when Cons _ rest -> 1 + size rest;
+        };
 }
 (size [1, 2, 3], size [])
 "#;

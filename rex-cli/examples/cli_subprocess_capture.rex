@@ -7,8 +7,8 @@ This spawns a subprocess, waits for it to exit, then forwards its captured
 stdout/stderr to the CLI stdout/stderr.
 -}
 
-import std.process
-import std.io
+import std.process;
+import std.io;
 
 let p = process.spawn { cmd = "sh", args = ["-c", "printf hi; printf err 1>&2; exit 7"] } in
 let code = process.wait p in

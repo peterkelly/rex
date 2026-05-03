@@ -124,9 +124,10 @@ async fn mutual_list_cycle_let_rec() {
           a = Cons 1 b,
           b = Cons 2 a
         in
-        match b
-          when Cons h _t -> h
-          when Empty -> 0
+        match b {
+          when Cons h _t -> h;
+          when Empty -> 0;
+        }
     "#;
     assert_i32_result(expr, 2).await;
 }
@@ -135,9 +136,10 @@ async fn mutual_list_cycle_let_rec() {
 async fn self_referential_list_let_rec() {
     let expr = r#"
         let rec xs = Cons 1 xs in
-        match xs
-          when Cons head _tail -> head
-          when Empty -> 0
+        match xs {
+          when Cons head _tail -> head;
+          when Empty -> 0;
+        }
     "#;
     assert_i32_result(expr, 1).await;
 }
@@ -148,8 +150,9 @@ async fn factorial_plain_let() {
         type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
-          match r
-            when Rec f -> f
+          match r {
+            when Rec f -> f;
+          }
         in
         let fix = \f ->
           let g = \x -> f (\v -> unrec x x v) in
@@ -170,8 +173,9 @@ async fn mutual_even_odd_plain_let() {
         type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
-          match r
-            when Rec f -> f
+          match r {
+            when Rec f -> f;
+          }
         in
         let fix = \f ->
           let g = \x -> f (\v -> unrec x x v) in
@@ -193,8 +197,9 @@ async fn mutual_list_cycle_plain_let() {
         type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
-          match r
-            when Rec f -> f
+          match r {
+            when Rec f -> f;
+          }
         in
         let fix = \f ->
           let g = \x -> f (\v -> unrec x x v) in
@@ -219,8 +224,9 @@ async fn self_referential_list_plain_let() {
         type Rec a b = Rec ((Rec a b) -> a -> b);
 
         let unrec = \r ->
-          match r
-            when Rec f -> f
+          match r {
+            when Rec f -> f;
+          }
         in
         let fix = \f ->
           let g = \x -> f (\v -> unrec x x v) in

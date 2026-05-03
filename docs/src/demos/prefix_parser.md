@@ -11,36 +11,39 @@ type Tok = TNum i32 | TPlus | TMul | TNeg;
 type Expr = Num i32 | Add Expr Expr | Mul Expr Expr | Neg Expr;
 
 fn parse_expr : List Tok -> (Expr, List Tok) = \toks ->
-  match toks
-    when [] -> (Num 0, [])
-    when TNum n::rest -> (Num n, rest)
+  match toks {
+    when [] -> (Num 0, []);
+    when TNum n::rest -> (Num n, rest);
     when TPlus::rest ->
       let
         (lhs, rest1) = parse_expr rest,
         (rhs, rest2) = parse_expr rest1
       in
-        (Add lhs rhs, rest2)
+        (Add lhs rhs, rest2);
     when TMul::rest ->
       let
         (lhs, rest1) = parse_expr rest,
         (rhs, rest2) = parse_expr rest1
       in
-        (Mul lhs rhs, rest2)
+        (Mul lhs rhs, rest2);
     when TNeg::rest ->
       let (inner, rest1) = parse_expr rest in
       (Neg inner, rest1);
+  };
 
 fn eval : Expr -> i32 = \expr ->
-  match expr
-    when Num n -> n
-    when Add a b -> eval a + eval b
-    when Mul a b -> eval a * eval b
+  match expr {
+    when Num n -> n;
+    when Add a b -> eval a + eval b;
+    when Mul a b -> eval a * eval b;
     when Neg x -> 0 - eval x;
+  };
 
 fn is_empty : List a -> bool = \xs ->
-  match xs
-    when [] -> true
+  match xs {
+    when [] -> true;
     when _::_ -> false;
+  };
 
 let
   toks1 = [TPlus, TNum 2, TMul, TNum 3, TNum 4],

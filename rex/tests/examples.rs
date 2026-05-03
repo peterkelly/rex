@@ -98,9 +98,10 @@ async fn example_match() {
             type Sum = A { x: i32 } | B { x: i32 };
 
             let v: Sum = A { x = 7 } in
-              match v
-                when A {x} -> x
-                when B {x} -> x + 100
+              match v {
+                when A {x} -> x;
+                when B {x} -> x + 100;
+              }
         "#,
         7,
         Type::builtin(BuiltinTypeId::I32),

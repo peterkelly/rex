@@ -36,9 +36,10 @@ let xs = 1::2::3::[] in xs
 ```
 
 ```rex,interactive
-match [1, 2, 3]
-  when Empty -> 0
-  when Cons h t -> h
+match [1, 2, 3] {
+  when Empty -> 0;
+  when Cons h t -> h;
+}
 ```
 
 ### List patterns (sugar)
@@ -46,10 +47,11 @@ match [1, 2, 3]
 Rex also supports list-pattern sugar:
 
 ```rex,interactive
-match [1, 2, 3]
-  when [] -> 0
-  when [x] -> x
-  when x::xs -> x
+match [1, 2, 3] {
+  when [] -> 0;
+  when [x] -> x;
+  when x::xs -> x;
+}
 ```
 
 ## Lists vs Arrays
@@ -79,9 +81,10 @@ let
   {- We use to_array here to simulate a host function result of type Array i32. -}
   data = to_array [1, 2, 3]
 in
-  match (to_list data)
-    when x::xs -> x
-    when [] -> -1
+  match (to_list data) {
+    when x::xs -> x;
+    when [] -> -1;
+  }
 ```
 
 The same shape without `to_list` fails with a type mismatch (array vs list):
@@ -91,9 +94,10 @@ let
   {- We use to_array here to simulate a host function result of type Array i32. -}
   data = to_array [1, 2, 3]
 in
-  match data
-    when x::xs -> x
-    when [] -> -1
+  match data {
+    when x::xs -> x;
+    when [] -> -1;
+  }
 ```
 
 Use the quick fix on the error and choose `Convert expression to list with to_list`; this rewrites
@@ -159,10 +163,11 @@ Dictionary patterns check for key presence and bind those keys to variables:
 
 ```rex,interactive
 let d = ({ a = 1, b = 2 }) is Dict i32 in
-match d
-  when {a, b} -> a + b
-  when {a} -> a
-  when {} -> 0
+match d {
+  when {a, b} -> a + b;
+  when {a} -> a;
+  when {} -> 0;
+}
 ```
 
 `{}` is useful as a fallback: it requires no keys, so it matches any dict.

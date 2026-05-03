@@ -28,9 +28,10 @@ async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
         let rec fact = \n ->
             if n == 0 then 1 else n * fact (n - 1)
         in
-            match (Some (pick 4))
-                when Some x -> fact x
-                when None -> 0
+            match (Some (pick 4)) {
+                when Some x -> fact x;
+                when None -> 0;
+            }
         "#,
     )
     .await

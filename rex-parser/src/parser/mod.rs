@@ -1500,10 +1500,86 @@ impl Parser {
             }
         };
 
-        let scrutinee = self.parse_atom_expr()?;
+        let scrutinee_start = self.token_cursor;
+        let mut depth = 0usize;
+        let mut block_candidates = Vec::new();
+        for i in scrutinee_start..self.tokens.len() {
+            match &self.tokens[i] {
+                Token::BraceL(..) if depth == 0 => {
+                    block_candidates.push(i);
+                    depth += 1;
+                }
+                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
+                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
+                    depth = depth.saturating_sub(1)
+                }
+                _ => {}
+            }
+        }
+        let mut saw_leading_brace = false;
+        let mut selected = None;
+        for candidate in block_candidates {
+            if candidate == scrutinee_start {
+                saw_leading_brace = true;
+                continue;
+            }
+
+            let mut next = candidate + 1;
+            while matches!(self.tokens.get(next), Some(Token::WhitespaceNewline(..))) {
+                next += 1;
+            }
+            if !matches!(
+                self.tokens.get(next),
+                Some(Token::When(..)) | Some(Token::BraceR(..))
+            ) {
+                continue;
+            }
+
+            if let Ok(scrutinee) = self.parse_expr_slice(&self.tokens[scrutinee_start..candidate]) {
+                selected = Some((candidate, scrutinee));
+                break;
+            }
+        }
+
+        let (block_start, scrutinee) = selected.ok_or_else(|| {
+            if saw_leading_brace {
+                let span = self
+                    .tokens
+                    .get(scrutinee_start)
+                    .map(|t| *t.span())
+                    .unwrap_or(self.eof);
+                ParserErr::new(span, "expected match scrutinee before `{`")
+            } else {
+                ParserErr::new(self.eof, "expected `{` after match scrutinee".to_string())
+            }
+        })?;
+        self.token_cursor = block_start;
+
+        match self.current_token() {
+            Token::BraceL(..) => self.next_token(),
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    "expected `{` after match scrutinee",
+                ));
+            }
+        }
+
         let mut arms = Vec::new();
         loop {
             match self.current_token() {
+                Token::BraceR(span, ..) if arms.is_empty() => {
+                    return Err(ParserErr::new(span, "expected match arm"));
+                }
+                Token::BraceR(span, ..) => {
+                    self.next_token();
+                    let span_end = span.end;
+                    return Ok(Expr::Match(
+                        Span::from_begin_end(span_begin, span_end),
+                        Arc::new(scrutinee),
+                        arms,
+                    ));
+                }
                 Token::When(..) => {
                     self.next_token();
                 }
@@ -1527,25 +1603,24 @@ impl Parser {
                 }
             }
 
-            let expr = self.parse_expr()?;
+            let body_start = self.token_cursor;
+            let body_end = find_block_item_end(&self.tokens, body_start).ok_or_else(|| {
+                ParserErr::new(self.eof, "expected `;` after match arm expression")
+            })?;
+            let expr = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
+            self.token_cursor = body_end;
             arms.push((pattern, Arc::new(expr)));
 
             match self.current_token() {
-                Token::When(..) => continue,
-                _ => break,
+                Token::SemiColon(..) => self.next_token(),
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        "expected `;` after match arm expression",
+                    ));
+                }
             }
         }
-
-        let span_end = arms
-            .last()
-            .map(|(_, expr)| expr.span().end)
-            .unwrap_or_else(|| scrutinee.span().end);
-
-        Ok(Expr::Match(
-            Span::from_begin_end(span_begin, span_end),
-            Arc::new(scrutinee),
-            arms,
-        ))
     }
 
     fn eof_for_slice(&self, slice: &[Token]) -> Span {
@@ -2802,7 +2877,10 @@ impl Parser {
             }
         };
 
-        let clause = if matches!(self.current_token(), Token::ParenL(..)) {
+        let clause_next = self.peek_token(1);
+        let clause_can_start = matches!(clause_next, Token::Ident(..))
+            || Self::operator_token_name(&clause_next).is_some();
+        let clause = if matches!(self.current_token(), Token::ParenL(..)) && clause_can_start {
             self.next_token();
             if matches!(self.current_token(), Token::Mul(..)) {
                 self.next_token();
@@ -2888,9 +2966,8 @@ impl Parser {
             }
             self.next_token();
             match self.current_token() {
-                Token::Ident(name, span, ..) => {
+                Token::Ident(name, _span, ..) => {
                     self.next_token();
-                    span_end = span_end.max(span.end);
                     Symbol::intern(&name)
                 }
                 token => {
@@ -2911,7 +2988,19 @@ impl Parser {
                 })?
         };
 
-        self.skip_newlines();
+        span_end = match self.current_token() {
+            Token::SemiColon(span, ..) => {
+                self.next_token();
+                span.end
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    "expected `;` after import declaration",
+                ));
+            }
+        };
+
         Ok(ImportDecl {
             span: Span::from_begin_end(span_begin, span_end),
             is_pub,

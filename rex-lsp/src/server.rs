@@ -2134,16 +2134,20 @@ fn code_actions_for_diagnostic(
     }
 
     if diagnostic.message.starts_with("non-exhaustive match for ") {
-        let newline = if diagnostic.range.start.line == diagnostic.range.end.line {
-            " "
-        } else {
-            "\n"
-        };
+        let (insert_pos, new_text) = wildcard_match_arm_insert(text, diagnostic.range)
+            .unwrap_or_else(|| {
+                let newline = if diagnostic.range.start.line == diagnostic.range.end.line {
+                    " "
+                } else {
+                    "\n"
+                };
+                (diagnostic.range.end, format!("{newline}when _ -> null;"))
+            });
         actions.push(code_action_insert(
             "Add wildcard arm to match".to_string(),
             uri,
-            diagnostic.range.end,
-            format!("{newline}when _ -> null"),
+            insert_pos,
+            new_text,
             diagnostic.clone(),
         ));
     }
@@ -6888,6 +6892,49 @@ fn offset_at(text: &str, position: Position) -> Option<usize> {
         Some(offset)
     } else {
         None
+    }
+}
+
+fn position_at_offset(text: &str, target: usize) -> Position {
+    let mut line = 0u32;
+    let mut character = 0u32;
+
+    for (offset, ch) in text.char_indices() {
+        if offset >= target {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            character = 0;
+        } else {
+            character += 1;
+        }
+    }
+
+    Position { line, character }
+}
+
+fn wildcard_match_arm_insert(text: &str, range: Range) -> Option<(Position, String)> {
+    let end = offset_at(text, range.end)?;
+    let search = &text[..end.min(text.len())];
+    let close_offset = search.rfind('}')?;
+    let line_start = text[..close_offset]
+        .rfind('\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let closing_prefix = &text[line_start..close_offset];
+
+    if closing_prefix.chars().all(char::is_whitespace) {
+        let arm_indent = format!("{closing_prefix}  ");
+        Some((
+            position_at_offset(text, line_start),
+            format!("{arm_indent}when _ -> null;\n"),
+        ))
+    } else {
+        Some((
+            position_at_offset(text, close_offset),
+            " when _ -> null;".to_string(),
+        ))
     }
 }
 

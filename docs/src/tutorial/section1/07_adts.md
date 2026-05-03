@@ -29,9 +29,10 @@ type Maybe a = Just a | Nothing;
 
 let
   fromMaybe = \d m ->
-    match m
-      when Just x -> x
-      when Nothing -> d
+    match m {
+      when Just x -> x;
+      when Nothing -> d;
+    }
 in
   fromMaybe 0 (Just 5)
 ```

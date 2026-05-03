@@ -82,8 +82,8 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
 fn stdlib_imports_typecheck_for_non_file_uri() {
     let uri = Url::parse("untitled:Test.rex").expect("uri");
     let text = r#"
-import std.io
-import std.process
+import std.io;
+import std.process;
 
 let _ = io.debug "hi" in
 let p = process.spawn { cmd = "sh", args = ["-c"] } in
@@ -110,7 +110,7 @@ pub type Boxed = Boxed i32;
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 let x : D.Boxed = D.Boxed 1 in
 x is D.Boxed
@@ -172,7 +172,7 @@ pub class Pick a where {
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 instance D.Pick i32 where {
     pick = 7;
@@ -218,7 +218,7 @@ pub class Present a where {
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 instance D.Missing i32 where {
     missing = 1;
@@ -251,7 +251,7 @@ pub type Present = Present i32;
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 fn id x: D.Missing -> D.Missing = x;
 
@@ -285,7 +285,7 @@ pub class Marker a where {
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 instance D.Marker D.Missing where {
     marker = 1;
@@ -320,7 +320,7 @@ pub class Present a where {
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 fn id x: i32 -> i32 where D.Missing i32 = x;
 
@@ -354,7 +354,7 @@ pub class Present a where {
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 declare fn id x: i32 -> i32 where D.Missing i32;
 
@@ -388,7 +388,7 @@ pub class Present a where {
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 class Local a <= D.Missing a where {
     local : a;
@@ -421,7 +421,7 @@ pub type Boxed = Boxed i32;
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 let f = \ (D : D.Boxed) -> 0 in
 0
@@ -449,7 +449,7 @@ pub type Present = Present i32;
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 let rec D: D.Missing = 1 in
 0
@@ -481,8 +481,8 @@ pub type Num = Num i32;
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
-import dep (Num)
+import dep as D;
+import dep (Num);
 
 let rec D: D.Num -> i32 = \_ -> 0 in
 0
@@ -508,7 +508,7 @@ pub type Num = Num i32;
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 let D: D.Num -> i32 = \_ -> 0 in
 0
@@ -536,7 +536,7 @@ pub type Present = Present i32;
 
     let uri = Url::from_file_path(&main).expect("main file uri");
     let source = r#"
-import dep as D
+import dep as D;
 
 let D: D.Missing = 1 in
 0
@@ -585,8 +585,8 @@ fn diagnostics_use_compiler_path_for_local_constructor_names() {
 type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 
 fn insert : i32 -> Tree -> Tree = \k t ->
-  match t
-    when Empty -> Node { key = k, left = Empty, right = Empty }
+  match t {
+    when Empty -> Node { key = k, left = Empty, right = Empty };
     when Node {key, left, right} ->
       if k < key then
         Node { key = key, left = insert k left, right = right }
@@ -594,6 +594,7 @@ fn insert : i32 -> Tree -> Tree = \k t ->
         Node { key = key, left = left, right = insert k right }
       else
         t;
+  };
 
 insert 1 Empty
 "#;
@@ -936,7 +937,7 @@ in
 
 #[test]
 fn code_actions_offer_non_exhaustive_match_fix() {
-    let text = "match (Some 1) when Some x -> x";
+    let text = "match (Some 1) { when Some x -> x; }";
     let actions = code_actions_for_source_public(text, 0, 2);
     let titles: Vec<String> = actions
         .into_iter()
@@ -2173,7 +2174,7 @@ fn golden_flow_complex_bulk_preview_then_apply_same_projection() {
 let
   y = z
 in
-  match y when Some x -> x
+  match y { when Some x -> x; }
 "#;
     let preview = execute_semantic_loop_apply_best_quick_fixes(
         &uri,
@@ -2298,7 +2299,7 @@ fn bulk_strategy_complex_returns_step_telemetry_for_each_step() {
 let
   y = z
 in
-  match y when Some x -> x
+  match y { when Some x -> x; }
 "#;
     let out = execute_semantic_loop_apply_best_quick_fixes(
         &uri,
@@ -2364,7 +2365,7 @@ fn bulk_strategy_stops_after_requested_step_limit() {
 let
   y = z
 in
-  match y when Some x -> x
+  match y { when Some x -> x; }
 "#;
     let out = execute_semantic_loop_apply_best_quick_fixes(
         &uri,

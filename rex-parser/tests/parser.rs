@@ -111,7 +111,7 @@ fn test_max_nesting_cons_pattern_chain() {
         .map(|i| format!("x{i}"))
         .collect::<Vec<_>>()
         .join(" :: ");
-    let code = format!("match xs when {pattern} -> xs");
+    let code = format!("match xs {{ when {pattern} -> xs; }}");
     let mut parser = Parser::new(Token::tokenize(&code).unwrap());
     parser.set_limits(ParserLimits {
         max_nesting: Some(5),
@@ -1034,7 +1034,7 @@ fn test_type_annotations() {
 
 #[test]
 fn test_match_named_patterns() {
-    let expr = parse("match named when Ok x -> x when Err e -> e when _ -> default");
+    let expr = parse("match named { when Ok x -> x; when Err e -> e; when _ -> default; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("named"),
@@ -1065,7 +1065,7 @@ fn test_match_named_patterns() {
 #[test]
 fn test_match_list_patterns() {
     let expr = parse(
-        "match list when [] -> empty when [x] -> x when [x, y, z] -> z when x::xs -> xs when _ -> fallback",
+        "match list { when [] -> empty; when [x] -> x; when [x, y, z] -> z; when x::xs -> xs; when _ -> fallback; }",
     );
     let expected = Arc::new(Expr::Match(
         Span::default(),
@@ -1104,7 +1104,8 @@ fn test_match_list_patterns() {
 
 #[test]
 fn test_match_nested_patterns() {
-    let expr = parse("match t when Cons x (Cons _ xs) -> xs when Pair (Just a) (Just b) -> a");
+    let expr =
+        parse("match t { when Cons x (Cons _ xs) -> xs; when Pair (Just a) (Just b) -> a; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("t"),
@@ -1154,7 +1155,7 @@ fn test_match_nested_patterns() {
 
 #[test]
 fn test_match_dict_pattern() {
-    let expr = parse("match obj when {foo, bar} -> foo bar");
+    let expr = parse("match obj { when {foo, bar} -> foo bar; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("obj"),
@@ -1175,7 +1176,7 @@ fn test_match_dict_pattern() {
 
 #[test]
 fn test_match_cons_associativity() {
-    let expr = parse("match xs when h::t::u -> u");
+    let expr = parse("match xs { when h::t::u -> u; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("xs"),
@@ -1198,7 +1199,7 @@ fn test_match_cons_associativity() {
 
 #[test]
 fn test_match_wildcard_cons() {
-    let expr = parse("match xs when (_::_) -> xs");
+    let expr = parse("match xs { when (_::_) -> xs; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("xs"),
@@ -1217,7 +1218,7 @@ fn test_match_wildcard_cons() {
 
 #[test]
 fn test_match_empty_dict_pattern() {
-    let expr = parse("match obj when {} -> obj");
+    let expr = parse("match obj { when {} -> obj; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("obj"),
@@ -1228,8 +1229,54 @@ fn test_match_empty_dict_pattern() {
 }
 
 #[test]
+fn test_match_scrutinee_can_contain_braces() {
+    let expr = parse("match { foo = 1 } { when {foo} -> foo; }");
+    match expr.as_ref() {
+        Expr::Match(_, scrutinee, _) => assert!(matches!(scrutinee.as_ref(), Expr::Dict(..))),
+        other => panic!("expected match, got {other:?}"),
+    }
+
+    let expr = parse("match { foo with { x = 1 } } { when _ -> 0; }");
+    match expr.as_ref() {
+        Expr::Match(_, scrutinee, _) => {
+            assert!(matches!(scrutinee.as_ref(), Expr::RecordUpdate(..)));
+        }
+        other => panic!("expected match, got {other:?}"),
+    }
+
+    let expr = parse("match if true then { foo = 1 } else { foo = 2 } { when {foo} -> foo; }");
+    match expr.as_ref() {
+        Expr::Match(_, scrutinee, _) => assert!(matches!(scrutinee.as_ref(), Expr::Ite(..))),
+        other => panic!("expected match, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_match_requires_braced_arms() {
+    let mut parser = Parser::new(Token::tokenize("match xs when [] -> empty").unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("expected `{` after match scrutinee")),
+        "expected missing match block error, got: {errs:?}"
+    );
+}
+
+#[test]
+fn test_match_arms_require_semicolon() {
+    let mut parser = Parser::new(Token::tokenize("match xs { when [] -> empty }").unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("expected `;` after match arm expression")),
+        "expected missing match arm semicolon error, got: {errs:?}"
+    );
+}
+
+#[test]
 fn test_import_clause_all() {
-    let code = "import foo.bar (*)\n()";
+    let code = "import foo.bar (*);\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
@@ -1241,7 +1288,7 @@ fn test_import_clause_all() {
 
 #[test]
 fn test_import_clause_items_with_alias() {
-    let code = "import foo.bar (x, y as z)\n()";
+    let code = "import foo.bar (x, y as z);\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
@@ -1260,7 +1307,7 @@ fn test_import_clause_items_with_alias() {
 
 #[test]
 fn test_import_clause_rejects_module_alias_combo() {
-    let code = "import foo.bar (x) as Bar\n()";
+    let code = "import foo.bar (x) as Bar;\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     let err = parser.parse_program().unwrap_err();
     assert!(
@@ -1272,7 +1319,7 @@ fn test_import_clause_rejects_module_alias_combo() {
 
 #[test]
 fn test_import_clause_rejects_duplicate_local_names() {
-    let code = "import foo.bar (x, y as x)\n()";
+    let code = "import foo.bar (x, y as x);\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     let err = parser.parse_program().unwrap_err();
     assert!(err[0].message.contains("duplicate imported name `x`"));
@@ -1280,7 +1327,7 @@ fn test_import_clause_rejects_duplicate_local_names() {
 
 #[test]
 fn test_import_relative_current_dir_path() {
-    let code = "import ./foo/bar (x)\n()";
+    let code = "import ./foo/bar (x);\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
@@ -1301,7 +1348,7 @@ fn test_import_relative_current_dir_path() {
 
 #[test]
 fn test_import_relative_parent_dir_path() {
-    let code = "import ../../foo/bar as FB\n()";
+    let code = "import ../../foo/bar as FB;\n()";
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     let program = parser.parse_program().unwrap();
     let Decl::Import(import) = &program.decls[0] else {
@@ -1323,6 +1370,18 @@ fn test_import_relative_parent_dir_path() {
         other => panic!("expected local import path, got {other:?}"),
     }
     assert_eq!(import.alias, Symbol::intern("FB"));
+}
+
+#[test]
+fn test_import_requires_semicolon() {
+    let code = "import foo.bar\n()";
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("expected `;` after import declaration")),
+        "expected missing import semicolon error, got: {errs:?}"
+    );
 }
 
 #[test]

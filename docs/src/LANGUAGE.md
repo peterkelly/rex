@@ -29,16 +29,16 @@ in
 
 ## Modules and Imports
 
-Rex modules are `.rex` files. Imports are top-level declarations.
+Rex modules are `.rex` files. Imports are semicolon-terminated top-level declarations.
 Module files are declaration-only: they do not have a top-level expression result. To evaluate an
 expression, use snippet/REPL/program entrypoints.
 
 Supported forms:
 
 ```rex
-import foo.bar as Bar
-import foo.bar (*)
-import foo.bar (x, y as z)
+import foo.bar as Bar;
+import foo.bar (*);
+import foo.bar (x, y as z);
 ```
 
 Semantics:
@@ -70,7 +70,7 @@ Semantics:
 Examples:
 
 ```rex
-import sample (Boxed)
+import sample (Boxed);
 
 let id: Boxed -> Boxed = \x -> x in
 id (Boxed 1)
@@ -79,7 +79,7 @@ id (Boxed 1)
 Here `Boxed` is imported once, but it can be used in both type position and expression position.
 
 ```rex
-import sample (Status, Ready)
+import sample (Status, Ready);
 
 let id: Status -> Status = \x -> x in
 id Ready
@@ -222,12 +222,14 @@ in
 
 ### Pattern Matching
 
-`match` performs structural matching with one or more `when` arms:
+`match` performs structural matching with one or more semicolon-terminated `when` arms inside a
+braced arm block:
 
 ```rex
-match xs
-  when Empty -> 0
-  when Cons h t -> h
+match xs {
+  when Empty -> 0;
+  when Cons h t -> h;
+}
 ```
 
 Patterns include:
@@ -242,9 +244,10 @@ Patterns include:
 - record patterns on record-carrying constructors: `Bar {x, y}`
 
 ```rex,interactive
-match [1, 2, 3]
-  when h::t -> h
-  when [] -> 0
+match [1, 2, 3] {
+  when h::t -> h;
+  when [] -> 0;
+}
 ```
 
 Rex checks ADT matches for exhaustiveness and reports missing constructors.
@@ -316,7 +319,7 @@ let xs: List i32 = [1, 2, 3] in xs
 They can also use module-qualified type names:
 
 ```rex
-import dep as D
+import dep as D;
 fn id x: D.Boxed -> D.Boxed = x;
 ```
 
@@ -339,9 +342,10 @@ Example (multi-variant refinement via `match`):
 type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
-match s
-  when A {x} -> { s with { x = x + 1 } }
-  when B {x} -> { s with { x = x + 2 } }
+match s {
+  when A {x} -> { s with { x = x + 1 } };
+  when B {x} -> { s with { x = x + 2 } };
+}
 ```
 
 ## Declarations
@@ -410,9 +414,10 @@ class Size a where {
 }
 instance Size (List t) where {
   size = \xs ->
-    match xs
-      when Empty -> 0
+    match xs {
+      when Empty -> 0;
       when Cons _ rest -> 1 + size rest;
+    };
 }
 ```
 
@@ -425,7 +430,7 @@ instance Marker i32;
 The class in an instance header may be module-qualified:
 
 ```rex
-import dep as D
+import dep as D;
 
 instance D.Pick i32 where {
   pick = 7;

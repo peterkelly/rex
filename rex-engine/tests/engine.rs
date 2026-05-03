@@ -159,7 +159,7 @@ async fn repl_persists_import_aliases() {
         RuntimeEnv::new(engine.clone()),
         Compiler::new(engine.clone()),
     );
-    let program1 = parse_program("import foo.bar as Bar\n()");
+    let program1 = parse_program("import foo.bar as Bar;\n()");
     let (v1, t1) = evaluator
         .eval_repl_program(&program1, &mut state)
         .await
@@ -192,7 +192,7 @@ async fn repl_persists_imported_values() {
         RuntimeEnv::new(engine.clone()),
         Compiler::new(engine.clone()),
     );
-    let program1 = parse_program("import foo.bar (triple as t)\n()");
+    let program1 = parse_program("import foo.bar (triple as t);\n()");
     let (v1, t1) = evaluator
         .eval_repl_program(&program1, &mut state)
         .await
@@ -229,7 +229,7 @@ async fn injected_module_can_define_pub_adt_declarations() {
     )
     .eval_snippet(
         r#"
-            import acme.status (Failed)
+            import acme.status (Failed);
             Failed "boom"
             "#,
     )

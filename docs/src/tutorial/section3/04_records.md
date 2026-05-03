@@ -53,9 +53,10 @@ multi-variant ADT, you often refine it with `match` first:
 type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
-match s
-  when A {x} -> { s with { x = x + 1 } }
-  when B {x} -> { s with { x = x + 2 } }
+match s {
+  when A {x} -> { s with { x = x + 1 } };
+  when B {x} -> { s with { x = x + 2 } };
+}
 ```
 
 ## Worked examples
@@ -101,10 +102,11 @@ Problem: extend `Sum` with `C { x: i32 }` and keep updates valid.
 type Sum = A { x: i32 } | B { x: i32 } | C { x: i32 };
 
 let s: Sum = C { x = 1 } in
-match s
-  when A {x} -> { s with { x = x + 1 } }
-  when B {x} -> { s with { x = x + 2 } }
-  when C {x} -> { s with { x = x + 3 } }
+match s {
+  when A {x} -> { s with { x = x + 1 } };
+  when B {x} -> { s with { x = x + 2 } };
+  when C {x} -> { s with { x = x + 3 } };
+}
 ```
 
 Why this works: each arm refines `s` to a definite constructor, so the update is type-safe.

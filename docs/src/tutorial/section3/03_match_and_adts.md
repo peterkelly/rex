@@ -26,9 +26,10 @@ type Maybe a = Just a | Nothing;
 
 let
   fromMaybe = \d m ->
-    match m
-      when Just x -> x
-      when Nothing -> d
+    match m {
+      when Just x -> x;
+      when Nothing -> d;
+    }
 in
   ( fromMaybe 0 (Just 5)
   , fromMaybe 0 Nothing
@@ -47,9 +48,10 @@ type Maybe a = Just a | Nothing;
 
 let
   mapMaybe = \f m ->
-    match m
-      when Just x -> Just (f x)
-      when Nothing -> Nothing
+    match m {
+      when Just x -> Just (f x);
+      when Nothing -> Nothing;
+    }
 in
   ( mapMaybe ((+) 1) (Just 41)
   , mapMaybe ((+) 1) Nothing
@@ -65,9 +67,10 @@ type Maybe a = Just a | Nothing;
 
 let
   isJust = \m ->
-    match m
-      when Just _ -> true
-      when Nothing -> false
+    match m {
+      when Just _ -> true;
+      when Nothing -> false;
+    }
 in
   (isJust (Just 1), isJust Nothing)
 ```
@@ -88,9 +91,10 @@ type Maybe a = Just a | Nothing;
 
 let
   orElse = \ma mb ->
-    match ma
-      when Just x -> Just x
-      when Nothing -> mb
+    match ma {
+      when Just x -> Just x;
+      when Nothing -> mb;
+    }
 in
   (orElse (Just 1) (Just 2), orElse Nothing (Just 2))
 ```
@@ -106,9 +110,10 @@ type Maybe a = Just a | Nothing;
 
 let
   andThen = \f ma ->
-    match ma
-      when Just x -> f x
-      when Nothing -> Nothing,
+    match ma {
+      when Just x -> f x;
+      when Nothing -> Nothing;
+    },
   step = \x -> if x > 0 then Just (x + 1) else Nothing
 in
   (andThen step (Just 3), andThen step Nothing, andThen step (Just (0 - 1)))
@@ -125,10 +130,11 @@ type Maybe a = Just a | Nothing | Unknown;
 
 let
   fromMaybe = \d m ->
-    match m
-      when Just x -> x
-      when Nothing -> d
-      when Unknown -> d
+    match m {
+      when Just x -> x;
+      when Nothing -> d;
+      when Unknown -> d;
+    }
 in
   (fromMaybe 0 (Just 5), fromMaybe 0 Unknown)
 ```

@@ -15,9 +15,10 @@ type Blob = Blob { bytes: List i32 };
 
 instance Size (List t) where {
   size = \xs ->
-    match xs
-      when Empty -> 0
+    match xs {
+      when Empty -> 0;
       when Cons _ t -> 1 + size t;
+    };
 }
 instance Size Blob where {
   size = \b -> size b.bytes;
@@ -42,9 +43,10 @@ class Size a where {
 }
 instance Size (List t) where {
   size = \xs ->
-    match xs
-      when Empty -> 0
+    match xs {
+      when Empty -> 0;
       when Cons _ t -> 1 + size t;
+    };
 }
 let
   bigger = \(x: a) where Size a -> size x + 1
@@ -66,9 +68,10 @@ class Size a where {
 }
 instance Size (List t) where {
   size = \xs ->
-    match xs
-      when Empty -> 0
+    match xs {
+      when Empty -> 0;
       when Cons _ t -> 1 + size t;
+    };
 }
 let
   is_empty = \(x: a) where Size a -> size x == 0
@@ -88,9 +91,10 @@ class Size a where {
 }
 instance Size (List t) where {
   size = \xs ->
-    match xs
-      when Empty -> 0
+    match xs {
+      when Empty -> 0;
       when Cons _ t -> 1 + size t;
+    };
 }
 type Blob = Blob { name: string, bytes: List i32 };
 
@@ -112,9 +116,10 @@ class Size a where {
 }
 instance Size (List t) where {
   size = \xs ->
-    match xs
-      when Empty -> 0
+    match xs {
+      when Empty -> 0;
       when Cons _ t -> 1 + size t;
+    };
 }
 let
   total_size = \(xs: List a) where Size a ->

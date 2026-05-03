@@ -107,9 +107,10 @@ async fn pattern_field_renaming() {
 
         instance AdditiveMonoid Point where {
             zero = Point { x = 0.0, y = 0.0 };
-            + = \p q -> match (p, q)
+            + = \p q -> match (p, q) {
                 when (Point { x: x1, y: y1 }, Point { x: x2, y: y2 }) ->
                     Point { x = x1 + x2, y = y1 + y2 };
+            };
         }
         (Point { x = 1.0, y = 2.0 }) + (Point { x = 3.0, y = 4.0 })
         "#,
@@ -395,15 +396,17 @@ async fn hkt_functor_option_and_result() {
         }
         instance MyFunctor Option where {
             fmap = \f x ->
-                match x
-                    when Some v -> Some (f v)
+                match x {
+                    when Some v -> Some (f v);
                     when None -> None;
+                };
         }
         instance MyFunctor (Result e) where {
             fmap = \f x ->
-                match x
-                    when Ok v -> Ok (f v)
+                match x {
+                    when Ok v -> Ok (f v);
                     when Err err -> Err err;
+                };
         }
         let
             inc = \x -> x + 1,
@@ -440,9 +443,10 @@ async fn pattern_match_inside_method_body() {
         }
         instance Head i32 where {
             head_or = \fallback xs ->
-                match xs
-                    when [] -> fallback
+                match xs {
+                    when [] -> fallback;
                     when x::rest -> x;
+                };
         }
         (head_or 0 [1, 2, 3], head_or 7 [])
         "#,
@@ -469,21 +473,23 @@ async fn superclass_and_instance_context() {
 
         instance MyEq Color where {
             eq = \x y ->
-                match x
+                match x {
                     when Red ->
-                        let r = match y when Red -> true when _ -> false in r
+                        let r = match y { when Red -> true; when _ -> false; } in r;
                     when Green ->
-                        let r = match y when Green -> true when _ -> false in r
+                        let r = match y { when Green -> true; when _ -> false; } in r;
                     when Blue ->
-                        let r = match y when Blue -> true when _ -> false in r;
+                        let r = match y { when Blue -> true; when _ -> false; } in r;
+                };
         }
         instance MyOrd Color <= MyEq Color where {
             my_cmp = \x y ->
                 if eq x y then 0 else
-                match x
-                    when Red -> -1
-                    when Green -> if eq y Red then 1 else -1
+                match x {
+                    when Red -> -1;
+                    when Green -> if eq y Red then 1 else -1;
                     when Blue -> 1;
+                };
         }
         (eq Red Blue, eq Blue Blue, my_cmp Red Green, my_cmp Blue Red)
         "#,

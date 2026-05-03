@@ -9,8 +9,8 @@ Notes:
     and also emit a tracing log event at the corresponding level.
 -}
 
-import std.io
-import std.process
+import std.io;
+import std.process;
 
 let _ = io.debug "spawning..." in
 let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in

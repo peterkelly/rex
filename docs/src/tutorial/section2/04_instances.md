@@ -22,7 +22,7 @@ instance Show i32 where {
 Class names in instance headers can be module-qualified when imported via alias:
 
 ```rex
-import dep as D
+import dep as D;
 
 instance D.Show i32 where {
   show = \_ -> "<i32>";

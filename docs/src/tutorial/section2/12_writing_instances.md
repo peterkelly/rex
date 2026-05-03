@@ -22,8 +22,9 @@ type Box a = Box a;
 
 instance Functor Box where {
   map = \f bx ->
-    match bx
+    match bx {
       when Box x -> Box (f x);
+    };
 }
 ```
 
@@ -34,8 +35,9 @@ type Box a = Box a;
 
 instance Functor Box where {
   map = \f bx ->
-    match bx
+    match bx {
       when Box x -> Box (f x);
+    };
 }
 map ((+) 1) (Box 41)
 ```
@@ -47,14 +49,16 @@ type Box a = Box a;
 
 instance Functor Box where {
   map = \f bx ->
-    match bx
+    match bx {
       when Box x -> Box (f x);
+    };
 }
 instance Applicative Box <= Functor Box where {
   pure = \x -> Box x;
   ap = \bf bx ->
-    match bf
+    match bf {
       when Box f -> map f bx;
+    };
 }
 ```
 
@@ -65,14 +69,16 @@ type Box a = Box a;
 
 instance Functor Box where {
   map = \f bx ->
-    match bx
+    match bx {
       when Box x -> Box (f x);
+    };
 }
 instance Applicative Box <= Functor Box where {
   pure = \x -> Box x;
   ap = \bf bx ->
-    match bf
+    match bf {
       when Box f -> map f bx;
+    };
 }
 ap (Box ((*) 2)) (Box 21)
 ```
@@ -84,19 +90,22 @@ type Box a = Box a;
 
 instance Functor Box where {
   map = \f bx ->
-    match bx
+    match bx {
       when Box x -> Box (f x);
+    };
 }
 instance Applicative Box <= Functor Box where {
   pure = \x -> Box x;
   ap = \bf bx ->
-    match bf
+    match bf {
       when Box f -> map f bx;
+    };
 }
 instance Monad Box <= Applicative Box where {
   bind = \f bx ->
-    match bx
+    match bx {
       when Box x -> f x;
+    };
 }
 ```
 
@@ -107,19 +116,22 @@ type Box a = Box a;
 
 instance Functor Box where {
   map = \f bx ->
-    match bx
+    match bx {
       when Box x -> Box (f x);
+    };
 }
 instance Applicative Box <= Functor Box where {
   pure = \x -> Box x;
   ap = \bf bx ->
-    match bf
+    match bf {
       when Box f -> map f bx;
+    };
 }
 instance Monad Box <= Applicative Box where {
   bind = \f bx ->
-    match bx
+    match bx {
       when Box x -> f x;
+    };
 }
 bind (\x -> Box (x + 1)) (Box 41)
 ```

@@ -167,9 +167,10 @@ async fn to_list_allows_pattern_matching_host_arrays() {
 
     let (result, heap, ty) = eval_expr(
         engine,
-        r#"match (to_list (return_vec "abc"))
-            when Cons x _ -> x
-            when Empty -> -1"#,
+        r#"match (to_list (return_vec "abc")) {
+            when Cons x _ -> x;
+            when Empty -> -1;
+        }"#,
     )
     .await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));

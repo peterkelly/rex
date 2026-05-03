@@ -11,17 +11,19 @@ type Dist = Inf | Finite i32;
 type Graph = Graph { ab: i32, ac: i32, cb: i32 };
 
 fn add_weight : Dist -> i32 -> Dist = (\d w ->
-  match d
-    when Inf -> Inf
-    when Finite x -> Finite (x + w)
+  match d {
+    when Inf -> Inf;
+    when Finite x -> Finite (x + w);
+  }
 );
 
 fn min_dist : Dist -> Dist -> Dist = (\a b ->
-  match (a, b)
-    when (Inf, x) -> x
-    when (x, Inf) -> x
+  match (a, b) {
+    when (Inf, x) -> x;
+    when (x, Inf) -> x;
     when (Finite x, Finite y) ->
-      if x <= y then Finite x else Finite y
+      if x <= y then Finite x else Finite y;
+  }
 );
 
 fn shortest_a_to_b : Graph -> Dist = (\g ->
@@ -33,9 +35,10 @@ fn shortest_a_to_b : Graph -> Dist = (\g ->
 );
 
 fn as_i32 : Dist -> i32 = (\d ->
-  match d
-    when Inf -> -1
-    when Finite x -> x
+  match d {
+    when Inf -> -1;
+    when Finite x -> x;
+  }
 );
 
 let

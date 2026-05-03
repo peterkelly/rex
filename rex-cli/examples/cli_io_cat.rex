@@ -8,7 +8,7 @@ Notes:
   - write_all 1 writes bytes to stdout (fd 1).
 -}
 
-import std.io
+import std.io;
 
 let bytes = io.read_all 0 in
 let _ = io.write_all 1 bytes in

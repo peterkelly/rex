@@ -143,25 +143,28 @@ async fn test_let_tuple_destructuring() {
 
 #[tokio::test]
 async fn test_match_tuple_destructuring() {
-    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> x")
-        .await
-        .unwrap();
+    let (_heap, handle, ty) =
+        eval("let t = (1, \"Hello\", true) in match t { when (x, y, z) -> x; }")
+            .await
+            .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match handle.value().unwrap() {
         Value::I32(n) => assert_eq!(n, 1),
         _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> y")
-        .await
-        .unwrap();
+    let (_heap, handle, ty) =
+        eval("let t = (1, \"Hello\", true) in match t { when (x, y, z) -> y; }")
+            .await
+            .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     match handle.value().unwrap() {
         Value::String(s) => assert_eq!(s, "Hello"),
         _ => panic!("expected string, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true) in match t when (x, y, z) -> z")
-        .await
-        .unwrap();
+    let (_heap, handle, ty) =
+        eval("let t = (1, \"Hello\", true) in match t { when (x, y, z) -> z; }")
+            .await
+            .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
     match handle.value().unwrap() {
         Value::Bool(b) => assert!(b),

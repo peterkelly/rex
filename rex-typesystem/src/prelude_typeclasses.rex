@@ -312,28 +312,34 @@ instance Eq datetime where {
 }
 instance Eq (List a) <= Eq a where {
     == = \xs ys ->
-        match xs
+        match xs {
             when [] ->
-                (match ys
-                    when [] -> true
-                    when _ -> false)
+                (match ys {
+                    when [] -> true;
+                    when _ -> false;
+                });
             when x::xs1 ->
-                (match ys
-                    when y::ys1 -> if x == y then xs1 == ys1 else false
-                    when [] -> false);
+                (match ys {
+                    when y::ys1 -> if x == y then xs1 == ys1 else false;
+                    when [] -> false;
+                });
+        };
     != = \xs ys -> if xs == ys then false else true;
 }
 instance Eq (Option a) <= Eq a where {
     == = \x y ->
-        match x
+        match x {
             when Some a0 ->
-                (match y
-                    when Some b0 -> a0 == b0
-                    when None -> false)
+                (match y {
+                    when Some b0 -> a0 == b0;
+                    when None -> false;
+                });
             when None ->
-                (match y
-                    when None -> true
-                    when Some _ -> false);
+                (match y {
+                    when None -> true;
+                    when Some _ -> false;
+                });
+        };
     != = \x y -> if x == y then false else true;
 }
 instance Eq (Array a) <= Eq a where {
@@ -342,15 +348,18 @@ instance Eq (Array a) <= Eq a where {
 }
 instance Eq (Result a e) <= Eq a, Eq e where {
     == = \x y ->
-        match x
+        match x {
             when Ok a0 ->
-                (match y
-                    when Ok b0 -> a0 == b0
-                    when Err _ -> false)
+                (match y {
+                    when Ok b0 -> a0 == b0;
+                    when Err _ -> false;
+                });
             when Err e0 ->
-                (match y
-                    when Err e1 -> e0 == e1
-                    when Ok _ -> false);
+                (match y {
+                    when Err e1 -> e0 == e1;
+                    when Ok _ -> false;
+                });
+        };
     != = \x y -> if x == y then false else true;
 }
 {- Ord instances -}
@@ -525,13 +534,14 @@ instance Default (Result a e) <= Default a where {
 }
 instance Show (List a) <= Show a where {
     show = \xs ->
-        match xs
-            when [] -> "[]"
+        match xs {
+            when [] -> "[]";
             when x::xs1 ->
                 let
                     step = \out y -> out + ", " + show y
                 in
                     "[" + foldl step (show x) xs1 + "]";
+        };
 }
 instance Show (Array a) <= Show a where {
     show = \xs ->
@@ -546,15 +556,17 @@ instance Show (Array a) <= Show a where {
 }
 instance Show (Option a) <= Show a where {
     show = \x ->
-        match x
-            when Some a0 -> "Some(" + show a0 + ")"
+        match x {
+            when Some a0 -> "Some(" + show a0 + ")";
             when None -> "None";
+        };
 }
 instance Show (Result a e) <= Show a, Show e where {
     show = \x ->
-        match x
-            when Ok a0 -> "Ok(" + show a0 + ")"
+        match x {
+            when Ok a0 -> "Ok(" + show a0 + ")";
             when Err e0 -> "Err(" + show e0 + ")";
+        };
 }
 {- Functor / Applicative / Monad / Foldable / Filterable / Sequence / Alternative instances -}
 instance Functor List where {
@@ -576,9 +588,10 @@ instance Applicative List <= Functor List where {
 instance Applicative Option <= Functor Option where {
     pure = \x -> Some x;
     ap = \ff xx ->
-        match ff
-            when Some f -> map f xx
+        match ff {
+            when Some f -> map f xx;
             when None -> None;
+        };
 }
 instance Applicative Array <= Functor Array where {
     pure = prim_array_singleton;
@@ -587,9 +600,10 @@ instance Applicative Array <= Functor Array where {
 instance Applicative (Result e) <= Functor (Result e) where {
     pure = \x -> Ok x;
     ap = \rf rx ->
-        match rf
-            when Ok f -> map f rx
+        match rf {
+            when Ok f -> map f rx;
             when Err err -> Err err;
+        };
 }
 instance Monad List <= Applicative List where {
     bind = prim_flat_map;

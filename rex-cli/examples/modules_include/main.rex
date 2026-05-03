@@ -1,3 +1,3 @@
-import lib.math as Math
+import lib.math as Math;
 
 Math.inc 41

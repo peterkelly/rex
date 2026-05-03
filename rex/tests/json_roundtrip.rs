@@ -57,7 +57,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     let (value_handle, ty) = eval_snippet(
         &mut engine,
         r#"
-        import echo (EchoEnum, EchoRecord, Foo, BAR, echo)
+        import echo (EchoEnum, EchoRecord, Foo, BAR, echo);
 
         let
           foo_variant: EchoEnum = Foo,

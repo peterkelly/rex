@@ -49,9 +49,10 @@ Problem: return the first list element safely.
 ```rex,interactive
 let
   head = \xs ->
-    match xs
-      when [] -> None
-      when x::_ -> Some x
+    match xs {
+      when [] -> None;
+      when x::_ -> Some x;
+    }
 in
   (head [] is Option i32, head [10, 20, 30])
 ```

@@ -57,9 +57,10 @@ This is a common pattern:
 type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
-match s
-  when A {x} -> { s with { x = x + 1 } }
-  when B {x} -> { s with { x = x + 2 } }
+match s {
+  when A {x} -> { s with { x = x + 1 } };
+  when B {x} -> { s with { x = x + 2 } };
+}
 ```
 
 The `match` arms refine which constructor `s` has, allowing the update to typecheck.

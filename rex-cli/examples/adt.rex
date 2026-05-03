@@ -14,36 +14,43 @@ let
 
 in
     (
-        match v1
-            when MyCtor1 → 0
-            when MyCtor2 _ _ → 1
-            when MyCtor3 {field1} → field1,
-        match v2
-            when MyCtor1 → 0
-            when MyCtor2 x y → x + y
-            when MyCtor3 {field1} → field1,
-        match v3
-            when MyCtor1 → 0
-            when MyCtor2 _ _ → 1
-            when MyCtor3 {field1} → field1,
-        match v4
-            when MyOtherCtor1 x y → x + y
-            when MyOtherCtor2 _ _ → ""
-            when MyOtherCtor3 {field1} → field1
-            when MyOtherCtor4 {field1} → field1,
-        match v5
-            when MyOtherCtor1 _ _ → ""
-            when MyOtherCtor2 x y → x + y
-            when MyOtherCtor3 {field1} → field1
-            when MyOtherCtor4 {field1} → field1,
-        match v6
-            when MyOtherCtor1 _ _ → ""
-            when MyOtherCtor2 _ _ → ""
-            when MyOtherCtor3 {field1} → field1
-            when MyOtherCtor4 {field1} → field1,
-        match v7
-            when MyOtherCtor1 _ _ → ""      
-            when MyOtherCtor2 _ _ → ""
-            when MyOtherCtor3 {field1} → field1
-            when MyOtherCtor4 {field1} → field1
+        match v1 {
+            when MyCtor1 → 0;
+            when MyCtor2 _ _ → 1;
+            when MyCtor3 {field1} → field1;
+        },
+        match v2 {
+            when MyCtor1 → 0;
+            when MyCtor2 x y → x + y;
+            when MyCtor3 {field1} → field1;
+        },
+        match v3 {
+            when MyCtor1 → 0;
+            when MyCtor2 _ _ → 1;
+            when MyCtor3 {field1} → field1;
+        },
+        match v4 {
+            when MyOtherCtor1 x y → x + y;
+            when MyOtherCtor2 _ _ → "";
+            when MyOtherCtor3 {field1} → field1;
+            when MyOtherCtor4 {field1} → field1;
+        },
+        match v5 {
+            when MyOtherCtor1 _ _ → "";
+            when MyOtherCtor2 x y → x + y;
+            when MyOtherCtor3 {field1} → field1;
+            when MyOtherCtor4 {field1} → field1;
+        },
+        match v6 {
+            when MyOtherCtor1 _ _ → "";
+            when MyOtherCtor2 _ _ → "";
+            when MyOtherCtor3 {field1} → field1;
+            when MyOtherCtor4 {field1} → field1;
+        },
+        match v7 {
+            when MyOtherCtor1 _ _ → "";
+            when MyOtherCtor2 _ _ → "";
+            when MyOtherCtor3 {field1} → field1;
+            when MyOtherCtor4 {field1} → field1;
+        }
     )

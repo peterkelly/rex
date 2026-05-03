@@ -540,8 +540,8 @@ mod tests {
     #[tokio::test]
     async fn cli_prelude_typecheck_smoke() {
         let code = r#"
-            import std.process
-            import std.io
+            import std.process;
+            import std.io;
 
             let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in
               io.write_all 1 (process.stdout p)
@@ -562,7 +562,7 @@ mod tests {
     #[tokio::test]
     async fn cli_subprocess_captures_stdout_and_exit_code() {
         let code = r#"
-            import std.process
+            import std.process;
 
             let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in
               (process.wait p, process.stdout p, process.stderr p)

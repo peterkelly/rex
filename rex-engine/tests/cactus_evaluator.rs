@@ -168,11 +168,12 @@ async fn evaluator_handles_literals_sequences_and_records() {
             list = [1, 2, 3],
             foo2 = { foo with { x = 6 } },
             sum: Sum = A { x = 1 },
-            sum2 = match sum
-                when A {x} -> { sum with { x = x + 1 } }
-                when B {x} -> { sum with { x = x + 2 } }
+            sum2 = match sum {
+                when A {x} -> { sum with { x = x + 1 } };
+                when B {x} -> { sum with { x = x + 2 } };
+            }
         in
-            foo2.x + (match sum2 when A {x} -> x when B {x} -> x)
+            foo2.x + (match sum2 { when A {x} -> x; when B {x} -> x; })
         "#,
         Engine::with_prelude(()).unwrap(),
     )
@@ -208,8 +209,9 @@ async fn list_evaluation_starts_all_async_children() {
 async fn dict_evaluation_starts_all_async_children() {
     let (result, started_values) = eval_gated_i32(
         r#"
-        match { a = gate 1, b = gate 2 }
-            when {a, b} -> a + b
+        match { a = gate 1, b = gate 2 } {
+            when {a, b} -> a + b;
+        }
         "#,
         2,
     )
@@ -458,9 +460,10 @@ async fn gc_every_alloc_handles_broad_evaluator_paths() {
         }
 
         let rec sum_list = \xs ->
-            match xs
-                when Empty -> 0
-                when Cons h t -> h + sum_list t
+            match xs {
+                when Empty -> 0;
+                when Cons h t -> h + sum_list t;
+            }
         in
         let
             nums: List i32 = [
@@ -473,18 +476,20 @@ async fn gc_every_alloc_handles_broad_evaluator_paths() {
             evens = filter (\x -> x % 2 == 0) mapped,
             pairs = zip nums mapped,
             unzipped = unzip pairs,
-            lefts = match unzipped when (left, right) -> left,
+            lefts = match unzipped { when (left, right) -> left; },
             arr = to_array mapped,
             arr2 = map (\x -> x * 2) arr,
             flat: List i32 = bind (\x -> [x, x + 1]) [1, 2, 3],
             point: Point = Point { x = 10, y = 5 },
             point2: Point = { point with { y = 7 } },
             choice: Choice = Right { item = score point2 },
-            chosen = match choice
-                when Left {item} -> item
-                when Right {item} -> item + 1,
-            dict_val = match { foo = chosen, bar = foldl (\acc x -> acc + x) 0 evens }
-                when {foo, bar} -> foo + bar,
+            chosen = match choice {
+                when Left {item} -> item;
+                when Right {item} -> item + 1;
+            },
+            dict_val = match { foo = chosen, bar = foldl (\acc x -> acc + x) 0 evens } {
+                when {foo, bar} -> foo + bar;
+            },
             mixed = ("gc", 1.5, true),
             tuple_score = ((1 is i32), (2 is i32), (3 is i32)).2
         in
@@ -529,7 +534,7 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
             ys = map (\x -> x + 1) xs,
             zipped = zip xs ys,
             folded = foldl (\acc pair ->
-                match pair when (left, right) -> acc + left + right
+                match pair { when (left, right) -> acc + left + right; }
             ) 0 zipped
         in
             folded + sum arr
@@ -593,7 +598,7 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
         let
             rows = make_nested 16,
             row_score = \row ->
-                match row when (base, xs) -> base + sum xs
+                match row { when (base, xs) -> base + sum xs; }
         in
             sum (map row_score rows)
         "#,
@@ -610,12 +615,14 @@ async fn gc_every_alloc_handles_self_referential_data() {
         let rec
             xs = Cons 1 xs
         in
-            match xs
+            match xs {
                 when Cons h t ->
-                    (match t
-                        when Cons h2 _ -> h + h2
-                        when Empty -> 0)
-                when Empty -> 0
+                    (match t {
+                        when Cons h2 _ -> h + h2;
+                        when Empty -> 0;
+                    });
+                when Empty -> 0;
+            }
         "#,
         engine_collecting_on_every_alloc(),
     )
@@ -748,9 +755,10 @@ async fn evaluator_handles_control_flow_typeclasses_and_recursion() {
         let rec fact = \n ->
             if n == 0 then 1 else n * fact (n - 1)
         in
-            match (Some (pick 4))
-                when Some x -> fact x
-                when None -> 0
+            match (Some (pick 4)) {
+                when Some x -> fact x;
+                when None -> 0;
+            }
         "#,
         Engine::with_prelude(()).unwrap(),
     )
