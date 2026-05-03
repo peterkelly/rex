@@ -55,15 +55,15 @@ in
 #[tokio::test]
 async fn spec_typeclass_instance_overlap_is_rejected() {
     let code = r#"
-class C a
-    c : i32
-
-instance C i32
-    c = 0
-
-instance C i32
-    c = 1
-
+class C a where {
+    c : i32;
+}
+instance C i32 where {
+    c = 0;
+}
+instance C i32 where {
+    c = 1;
+}
 c
 "#;
     let err = match eval(code).await {
@@ -76,15 +76,15 @@ c
 #[tokio::test]
 async fn spec_typeclass_method_value_without_type_is_ambiguous() {
     let code = r#"
-class Pick a
-    pick : a
-
-instance Pick i32
-    pick = 0
-
-instance Pick bool
-    pick = true
-
+class Pick a where {
+    pick : a;
+}
+instance Pick i32 where {
+    pick = 0;
+}
+instance Pick bool where {
+    pick = true;
+}
 pick
 "#;
     let err = match eval(code).await {

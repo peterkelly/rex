@@ -30,8 +30,9 @@ Single constructor with unnamed fields:
 ```rex
 type Pair = Pair i32 bool
 
-instance Default Pair
-    default = Pair 42 true
+instance Default Pair where {
+    default = Pair 42 true;
+}
 ```
 
 Single constructor with named fields:
@@ -39,8 +40,9 @@ Single constructor with named fields:
 ```rex
 type Config = Config { retries: i32, enabled: bool }
 
-instance Default Config
-    default = Config { retries = 3, enabled = false }
+instance Default Config where {
+    default = Config { retries = 3, enabled = false };
+}
 ```
 
 Multiple variants (enum) with no fields:
@@ -48,8 +50,9 @@ Multiple variants (enum) with no fields:
 ```rex
 type Mode = Fast | Safe | Debug
 
-instance Default Mode
-    default = Safe
+instance Default Mode where {
+    default = Safe;
+}
 ```
 
 Multiple variants with mixed payload shapes:
@@ -57,8 +60,9 @@ Multiple variants with mixed payload shapes:
 ```rex
 type Token = Eof | IntLit i32 | Meta { line: i32, col: i32 }
 
-instance Default Token
-    default = Meta { line = 1, col = 1 }
+instance Default Token where {
+    default = Meta { line = 1, col = 1 };
+}
 ```
 
 Generic ADTs with constraints:
@@ -66,8 +70,9 @@ Generic ADTs with constraints:
 ```rex
 type Box a = Box a | Missing
 
-instance Default (Box a) <= Default a
-    default = Box default
+instance Default (Box a) <= Default a where {
+    default = Box default;
+}
 ```
 
 ### Ambiguous `default` calls and `is`
@@ -81,12 +86,12 @@ Failing example:
 type A = A { x: i32, y: i32 }
 type B = B { x: i32, y: i32 }
 
-instance Default A
-    default = A { x = 1, y = 2 }
-
-instance Default B
-    default = B { x = 10, y = 20 }
-
+instance Default A where {
+    default = A { x = 1, y = 2 };
+}
+instance Default B where {
+    default = B { x = 10, y = 20 };
+}
 { default with { x = 9 } }
 ```
 
@@ -99,12 +104,12 @@ Passing example (same setup, with explicit `is`):
 type A = A { x: i32, y: i32 }
 type B = B { x: i32, y: i32 }
 
-instance Default A
-    default = A { x = 1, y = 2 }
-
-instance Default B
-    default = B { x = 10, y = 20 }
-
+instance Default A where {
+    default = A { x = 1, y = 2 };
+}
+instance Default B where {
+    default = B { x = 10, y = 20 };
+}
 { (default is A) with { x = 9 } }
 ```
 
@@ -114,12 +119,12 @@ Another failing example (same ambiguity in a `let` binding):
 type A = A { x: i32, y: i32 }
 type B = B { x: i32, y: i32 }
 
-instance Default A
-    default = A { x = 1, y = 2 }
-
-instance Default B
-    default = B { x = 10, y = 20 }
-
+instance Default A where {
+    default = A { x = 1, y = 2 };
+}
+instance Default B where {
+    default = B { x = 10, y = 20 };
+}
 let
     a = { default with { x = 9 } },
     b = { default with { y = 8 } }

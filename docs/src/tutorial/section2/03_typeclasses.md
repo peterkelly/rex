@@ -8,29 +8,28 @@ dictionary resolution.
 ## Defining a class
 
 ```rex,interactive
-class Size a
-  size : a -> i32
+class Size a where {
+  size : a -> i32;
+}
 ```
 
 Method signatures can mention the class parameter `a` and any other types in scope.
 
-### Optional `where`
+### Empty Classes
 
-You may also see:
+Classes with methods use `where { ... }`. Marker classes with no methods use a semicolon:
 
 ```rex,interactive
-class Size a where
-  size : a -> i32
+class Marker a;
 ```
-
-Both forms are accepted.
 
 ## Operators as methods
 
 ```rex
-class Eq a
-  == : a -> a -> bool
-  != : a -> a -> bool
+class Eq a where {
+  == : a -> a -> bool;
+  != : a -> a -> bool;
+}
 ```
 
 ## Superclasses
@@ -38,8 +37,9 @@ class Eq a
 Superclasses use `<=` (read “requires”):
 
 ```rex
-class Ord a <= Eq a
-  < : a -> a -> bool
+class Ord a <= Eq a where {
+  < : a -> a -> bool;
+}
 ```
 
 If you have an `Ord a`, you also must have an `Eq a` instance.
@@ -51,8 +51,9 @@ Some prelude classes logically take multiple type parameters, such as `Indexable
 In Rex source you write:
 
 ```rex
-class Indexable t a
-  get : i32 -> t -> a
+class Indexable t a where {
+  get : i32 -> t -> a;
+}
 ```
 
 In `where` constraints, multi-parameter classes are written using a tuple:

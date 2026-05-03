@@ -53,9 +53,9 @@ Comments use `{- ... -}`:
 1 + 2
 ```
 
-## Whitespace and layout
+## Whitespace
 
-Most whitespace is insignificant, but some constructs are easiest to read in “layout style”:
+Most whitespace is insignificant, but multi-line expressions are often easier to read:
 
 ```rex,interactive
 let
@@ -66,23 +66,22 @@ in
 ```
 
 Commas between `let` bindings are required. The parser also accepts many one-line forms, but
-multi-line layout tends to be easier to debug.
+multi-line formatting tends to be easier to debug.
 
-Type-class and instance method blocks are also written by indentation:
-
-```rex,interactive
-class Size a
-  size : a -> i32
-```
-
-You may also see the optional `where` keyword in class/instance headers:
+Type-class and instance method blocks use explicit braces and semicolon-separated methods:
 
 ```rex,interactive
-class Size a where
-  size : a -> i32
+class Size a where {
+  size : a -> i32;
+}
 ```
 
-Both forms are accepted.
+An empty marker class or instance uses a semicolon:
+
+```rex,interactive
+class Marker a;
+instance Marker i32;
+```
 
 ## Your first “real” Rex file
 

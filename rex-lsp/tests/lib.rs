@@ -161,8 +161,9 @@ fn prepare_program_rewrites_imported_class_refs_in_instance_headers() {
     fs::write(
         &dep,
         r#"
-pub class Pick a where
-    pick : a
+pub class Pick a where {
+    pick : a;
+}
 ()
 "#,
     )
@@ -173,9 +174,9 @@ pub class Pick a where
     let source = r#"
 import dep as D
 
-instance D.Pick i32 where
-    pick = 7
-
+instance D.Pick i32 where {
+    pick = 7;
+}
 pick is i32
 "#;
     let tokens = Token::tokenize(source).expect("tokenize");
@@ -206,8 +207,9 @@ fn diagnostics_report_missing_class_export_in_instance_header() {
     fs::write(
         &dep,
         r#"
-pub class Present a where
-    present : a
+pub class Present a where {
+    present : a;
+}
 ()
 "#,
     )
@@ -218,9 +220,9 @@ pub class Present a where
     let source = r#"
 import dep as D
 
-instance D.Missing i32 where
-    missing = 1
-
+instance D.Missing i32 where {
+    missing = 1;
+}
 0
 "#;
     let diags = diagnostics_from_text(&uri, source);
@@ -272,8 +274,9 @@ fn diagnostics_report_missing_type_export_in_instance_head() {
     fs::write(
         &dep,
         r#"
-pub class Marker a where
-    marker : i32
+pub class Marker a where {
+    marker : i32;
+}
 ()
 "#,
     )
@@ -284,9 +287,9 @@ pub class Marker a where
     let source = r#"
 import dep as D
 
-instance D.Marker D.Missing where
-    marker = 1
-
+instance D.Marker D.Missing where {
+    marker = 1;
+}
 0
 "#;
     let diags = diagnostics_from_text(&uri, source);
@@ -306,8 +309,9 @@ fn diagnostics_report_missing_class_export_in_fn_where_constraint() {
     fs::write(
         &dep,
         r#"
-pub class Present a where
-    present : a
+pub class Present a where {
+    present : a;
+}
 ()
 "#,
     )
@@ -339,8 +343,9 @@ fn diagnostics_report_missing_class_export_in_declare_fn_where_constraint() {
     fs::write(
         &dep,
         r#"
-pub class Present a where
-    present : a
+pub class Present a where {
+    present : a;
+}
 ()
 "#,
     )
@@ -372,8 +377,9 @@ fn diagnostics_report_missing_class_export_in_class_super_constraint() {
     fs::write(
         &dep,
         r#"
-pub class Present a where
-    present : a
+pub class Present a where {
+    present : a;
+}
 ()
 "#,
     )
@@ -384,9 +390,9 @@ pub class Present a where
     let source = r#"
 import dep as D
 
-class Local a <= D.Missing a where
-    local : a
-
+class Local a <= D.Missing a where {
+    local : a;
+}
 0
 "#;
     let diags = diagnostics_from_text(&uri, source);
@@ -605,12 +611,12 @@ fn diagnostics_report_both_default_record_update_ambiguities() {
 type A = A { x: i32, y: i32 }
 type B = B { x: i32, y: i32 }
 
-instance Default A
-    default = A { x = 1, y = 2 }
-
-instance Default B
-    default = B { x = 10, y = 20 }
-
+instance Default A where {
+    default = A { x = 1, y = 2 };
+}
+instance Default B where {
+    default = B { x = 10, y = 20 };
+}
 let
     a = { default with { x = 9 } },
     b = { default with { y = 8 } }
@@ -638,12 +644,12 @@ async fn e2e_ambiguous_default_record_updates_two_quick_fix_styles_then_eval() {
     let text = r#"type A = A { x: i32, y: i32 }
 type B = B { x: i32, y: i32 }
 
-instance Default A
-    default = A { x = 1, y = 2 }
-
-instance Default B
-    default = B { x = 10, y = 20 }
-
+instance Default A where {
+    default = A { x = 1, y = 2 };
+}
+instance Default B where {
+    default = B { x = 10, y = 20 };
+}
 let
     a = { default with { x = 9 } },
     b = { default with { y = 8 } }
@@ -1041,12 +1047,12 @@ fn code_actions_offer_default_disambiguation_with_is_for_record_update() {
 type A = A { x: i32, y: i32 }
 type B = B { x: i32, y: i32 }
 
-instance Default A
-    default = A { x = 1, y = 2 }
-
-instance Default B
-    default = B { x = 10, y = 20 }
-
+instance Default A where {
+    default = A { x = 1, y = 2 };
+}
+instance Default B where {
+    default = B { x = 10, y = 20 };
+}
 let
     a = { default with { x = 9 } },
     b = { default with { y = 8 } }

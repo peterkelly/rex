@@ -3,8 +3,9 @@
 The prelude defines:
 
 ```rex
-class Functor f
-  map : (a -> b) -> f a -> f b
+class Functor f where {
+  map : (a -> b) -> f a -> f b;
+}
 ```
 
 `map` applies a pure function inside a container `f`.

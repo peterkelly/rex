@@ -1300,13 +1300,15 @@ fn test_errors() {
 }
 
 #[test]
-fn test_typeclass_where_is_optional() {
+fn test_typeclass_methods_use_explicit_brace_blocks() {
     let code = r#"
-class Default a
-    default : a
+class Default a where {
+    default : a;
+}
 
-instance Default i32
-    default = 0
+instance Default i32 where {
+    default = 0;
+}
 
 default
 "#;
@@ -1335,13 +1337,11 @@ default
 }
 
 #[test]
-fn test_typeclass_where_optional_does_not_force_method_block() {
-    // Without `where`, an indented expression after a class/instance header
-    // is not treated as a method block unless it looks like `name :` / `name =`.
+fn test_typeclass_empty_decls_use_semicolons() {
     let code = r#"
-class Marker a
+class Marker a;
 
-instance Marker i32
+instance Marker i32;
 
 true
 "#;
@@ -1353,10 +1353,33 @@ true
 }
 
 #[test]
+fn test_typeclass_layout_blocks_are_rejected() {
+    let code = r#"
+class Default a
+    default : a
+
+instance Default i32
+    default = 0
+
+default
+"#;
+
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter().any(|err| err
+            .message
+            .contains("expected `where { ... }` or `;` after class header")),
+        "expected layout class block rejection, got: {errs:?}"
+    );
+}
+
+#[test]
 fn test_parse_instance_with_qualified_class_name() {
     let code = r#"
-instance Sample.Default i32
-    default = 0
+instance Sample.Default i32 where {
+    default = 0;
+}
 
 default
 "#;

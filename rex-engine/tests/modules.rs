@@ -331,8 +331,9 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
     write_file(
         &dep,
         r#"
-        pub class Pick a where
-            pick : a
+        pub class Pick a where {
+            pick : a;
+        }
         ()
         "#,
     );
@@ -344,8 +345,9 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
         r#"
         import dep as D
 
-        instance D.Pick i32 where
-            pick = 7
+        instance D.Pick i32 where {
+            pick = 7;
+        }
 
         pick is i32
         "#,
@@ -370,8 +372,9 @@ async fn module_import_selected_clause_can_import_class_exports() {
     write_file(
         &dep,
         r#"
-        pub class Pick a where
-            pick : a
+        pub class Pick a where {
+            pick : a;
+        }
         ()
         "#,
     );
@@ -380,8 +383,9 @@ async fn module_import_selected_clause_can_import_class_exports() {
         r#"
         import dep (Pick)
 
-        instance Pick i32 where
-            pick = 7
+        instance Pick i32 where {
+            pick = 7;
+        }
 
         pick is i32
         "#,
@@ -1213,8 +1217,9 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
     write_file(
         &dep,
         r#"
-        pub class Pick a where
-            pick : a
+        pub class Pick a where {
+            pick : a;
+        }
         ()
 "#,
     );
@@ -1223,8 +1228,9 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
         r#"
         import dep (*)
 
-        instance Pick i32 where
-            pick = 11
+        instance Pick i32 where {
+            pick = 11;
+        }
 
         pick is i32
 "#,
@@ -1327,8 +1333,9 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
     write_file(
         &dep,
         r#"
-        pub class Pick a where
-            pick : a
+        pub class Pick a where {
+            pick : a;
+        }
         ()
 "#,
     );
@@ -1400,8 +1407,9 @@ async fn module_import_missing_class_export_in_instance_header() {
     write_file(
         &dep,
         r#"
-        pub class Present a where
-            present : a
+        pub class Present a where {
+            present : a;
+        }
         ()
 "#,
     );
@@ -1410,8 +1418,9 @@ async fn module_import_missing_class_export_in_instance_header() {
         r#"
         import dep as D
 
-        instance D.Missing i32 where
-            missing = 1
+        instance D.Missing i32 where {
+            missing = 1;
+        }
 
         0
 "#,
@@ -1472,8 +1481,9 @@ async fn module_import_missing_type_export_in_instance_head() {
     write_file(
         &dep,
         r#"
-        pub class Marker a where
-            marker : i32
+        pub class Marker a where {
+            marker : i32;
+        }
         ()
 "#,
     );
@@ -1482,8 +1492,9 @@ async fn module_import_missing_type_export_in_instance_head() {
         r#"
         import dep as D
 
-        instance D.Marker D.Missing where
-            marker = 1
+        instance D.Marker D.Missing where {
+            marker = 1;
+        }
 
         0
 "#,
@@ -1509,8 +1520,9 @@ async fn module_import_missing_class_export_in_fn_where_constraint() {
     write_file(
         &dep,
         r#"
-        pub class Present a where
-            present : a
+        pub class Present a where {
+            present : a;
+        }
         ()
 "#,
     );
@@ -1545,8 +1557,9 @@ async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
     write_file(
         &dep,
         r#"
-        pub class Present a where
-            present : a
+        pub class Present a where {
+            present : a;
+        }
         ()
 "#,
     );
@@ -1581,8 +1594,9 @@ async fn module_import_missing_class_export_in_class_super_constraint() {
     write_file(
         &dep,
         r#"
-        pub class Present a where
-            present : a
+        pub class Present a where {
+            present : a;
+        }
         ()
 "#,
     );
@@ -1591,8 +1605,9 @@ async fn module_import_missing_class_export_in_class_super_constraint() {
         r#"
         import dep as D
 
-        class Local a <= D.Missing a where
-            local : a
+        class Local a <= D.Missing a where {
+            local : a;
+        }
 
         0
 "#,

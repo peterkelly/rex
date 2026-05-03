@@ -11,11 +11,12 @@ An instance has three parts:
 ## A monomorphic instance
 
 ```rex
-class Show a
-  show : a -> string
-
-instance Show i32
-  show = \_ -> "<i32>"
+class Show a where {
+  show : a -> string;
+}
+instance Show i32 where {
+  show = \_ -> "<i32>";
+}
 ```
 
 Class names in instance headers can be module-qualified when imported via alias:
@@ -23,8 +24,9 @@ Class names in instance headers can be module-qualified when imported via alias:
 ```rex
 import dep as D
 
-instance D.Show i32
-  show = \_ -> "<i32>"
+instance D.Show i32 where {
+  show = \_ -> "<i32>";
+}
 ```
 
 ## A polymorphic instance with context
@@ -32,7 +34,7 @@ instance D.Show i32
 Instance contexts use `<=`:
 
 ```rex
-instance Show (List a) <= Show a
+instance Show (List a) <= Show a where {
   show = \xs ->
     let
       step = \out x ->
@@ -41,7 +43,8 @@ instance Show (List a) <= Show a
           else out + ", " + show x,
       out = foldl step "[" xs
     in
-      out + "]"
+      out + "]";
+}
 ```
 
 Read this as: “`Show (List a)` exists as long as `Show a` exists”.

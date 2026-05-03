@@ -228,8 +228,9 @@ The class name in an instance header may be qualified through a module alias:
 ```rex
 import dep as D
 
-instance D.Pick i32 where
-  pick = 7
+instance D.Pick i32 where {
+  pick = 7;
+}
 ```
 
 The alias member must be an exported class from the referenced module; otherwise import-use

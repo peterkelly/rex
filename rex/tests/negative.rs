@@ -172,8 +172,9 @@ async fn compile_rejects_invalid_programs() {
         (
             "invalid_class_arity",
             r#"
-            class C where
-                m : i32 -> i32
+            class C where {
+                m : i32 -> i32;
+            }
             0
             "#,
             |e| matches!(e, TypeError::InvalidClassArity { class, .. } if class.as_ref() == "C"),
@@ -181,10 +182,12 @@ async fn compile_rejects_invalid_programs() {
         (
             "duplicate_class_definition",
             r#"
-            class C a where
-                m : a -> a
-            class C a where
-                m : a -> a
+            class C a where {
+                m : a -> a;
+            }
+            class C a where {
+                m : a -> a;
+            }
             0
             "#,
             |e| matches!(e, TypeError::DuplicateClass(name) if name.as_ref() == "C"),
@@ -192,9 +195,10 @@ async fn compile_rejects_invalid_programs() {
         (
             "duplicate_class_method_definition",
             r#"
-            class C a where
-                m : a -> a
-                m : a -> a
+            class C a where {
+                m : a -> a;
+                m : a -> a;
+            }
             0
             "#,
             |e| matches!(e, TypeError::DuplicateClassMethod(name) if name.as_ref() == "m"),
@@ -202,8 +206,9 @@ async fn compile_rejects_invalid_programs() {
         (
             "unknown_class_in_instance",
             r#"
-            instance NoSuch i32 where
-                m = \x -> x
+            instance NoSuch i32 where {
+                m = \x -> x;
+            }
             0
             "#,
             |e| matches!(e, TypeError::UnknownClass(name) if name.as_ref() == "NoSuch"),
@@ -211,10 +216,12 @@ async fn compile_rejects_invalid_programs() {
         (
             "unknown_method_in_instance",
             r#"
-            class C a where
-                m : a -> a
-            instance C i32 where
-                n = \x -> x
+            class C a where {
+                m : a -> a;
+            }
+            instance C i32 where {
+                n = \x -> x;
+            }
             0
             "#,
             |e| matches!(e, TypeError::UnknownInstanceMethod { method, .. } if method.as_ref() == "n"),
@@ -222,11 +229,13 @@ async fn compile_rejects_invalid_programs() {
         (
             "missing_method_in_instance",
             r#"
-            class C a where
-                m : a -> a
-                n : a -> a
-            instance C i32 where
-                m = \x -> x
+            class C a where {
+                m : a -> a;
+                n : a -> a;
+            }
+            instance C i32 where {
+                m = \x -> x;
+            }
             0
             "#,
             |e| matches!(e, TypeError::MissingInstanceMethod { method, .. } if method.as_ref() == "n"),
@@ -251,8 +260,9 @@ async fn compile_rejects_invalid_programs() {
         (
             "no_instance_for_predicate",
             r#"
-            class C a where
-                m : a -> i32
+            class C a where {
+                m : a -> i32;
+            }
             let x = m 1 in x
             "#,
             |e| {

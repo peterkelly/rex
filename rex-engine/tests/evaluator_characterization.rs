@@ -17,11 +17,13 @@ async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
     let (value, ty) = eval_snippet(
         &mut engine,
         r#"
-        class Pick a where
-            pick : a -> a
+        class Pick a where {
+            pick : a -> a;
+        }
 
-        instance Pick i32 where
-            pick = \x -> x
+        instance Pick i32 where {
+            pick = \x -> x;
+        }
 
         let rec fact = \n ->
             if n == 0 then 1 else n * fact (n - 1)

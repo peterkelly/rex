@@ -1,8 +1,8 @@
 type Foo = Foo { x: i32, y: i32 } | Bar { z: f32 }
 
-instance Default Foo where
-    default = Bar { z = 0.0 }
-
+instance Default Foo where {
+    default = Bar { z = 0.0 };
+}
 fn reduce : (a -> a -> a) -> t a -> a where Foldable t, Default a =
     \f xs -> foldl f default xs
 

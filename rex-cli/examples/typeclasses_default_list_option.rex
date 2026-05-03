@@ -1,8 +1,8 @@
 type Point = Point { x: i32, y: i32 }
 
-instance Default Point where
-    default = Point { x = default, y = default }
-
+instance Default Point where {
+    default = Point { x = default, y = default };
+}
 fn new_point : i32 -> Point = \x -> Point { x = x, y = default }
 
 let

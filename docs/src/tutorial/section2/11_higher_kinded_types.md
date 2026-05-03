@@ -25,8 +25,9 @@ In informal kind notation:
 The class is defined as:
 
 ```rex
-class Functor f
-  map : (a -> b) -> f a -> f b
+class Functor f where {
+  map : (a -> b) -> f a -> f b;
+}
 ```
 
 `f` here stands for a unary type constructor like `List`, `Option`, or `Promise`.
@@ -36,8 +37,9 @@ class Functor f
 The prelude has an instance:
 
 ```rex
-instance Functor (Result e)
-  map = prim_map
+instance Functor (Result e) where {
+  map = prim_map;
+}
 ```
 
 `Result e` means: “fix the error type to `e`, leaving one type parameter for the `Ok` value”.

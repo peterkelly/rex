@@ -16,12 +16,12 @@ pub type Value
 
 	pub type DecodeError = DecodeError { message: string }
 
-pub class EncodeJson a where
-    encode_json : a -> Value
-
- 	pub class DecodeJson a where
- 	    decode_json : Value -> Result a DecodeError
-
+pub class EncodeJson a where {
+    encode_json : a -> Value;
+}
+	pub class DecodeJson a where {
+	    decode_json : Value -> Result a DecodeError;
+	}
 pub fn to_json : a -> Value where EncodeJson a
     = encode_json
 
@@ -38,9 +38,9 @@ pub fn parse : string -> Result Value DecodeError
             when Err msg -> Err (DecodeError { message = msg })
       )
 
-instance Show Value
-    show = stringify
-
+instance Show Value where {
+    show = stringify;
+}
 fn fail : string -> Result a DecodeError
     = \msg -> Err (DecodeError { message = msg })
 
@@ -57,43 +57,43 @@ fn kind : Value -> string
 fn expected : string -> Value -> DecodeError
     = \want got -> DecodeError { message = "expected " + want + ", got " + kind got }
 
-instance EncodeJson Value
-    encode_json = \v -> v
-
-	instance DecodeJson Value
-	    decode_json = \v -> Ok v
-
-instance EncodeJson bool
-    encode_json = \b -> Bool b
-
-	instance DecodeJson bool
+instance EncodeJson Value where {
+    encode_json = \v -> v;
+}
+	instance DecodeJson Value where {
+	    decode_json = \v -> Ok v;
+	}
+instance EncodeJson bool where {
+    encode_json = \b -> Bool b;
+}
+	instance DecodeJson bool where {
 	    decode_json = \v ->
 	        match v
 	            when Bool b -> Ok b
-	            when _ -> Err (expected "bool" v)
-
-instance EncodeJson string
-    encode_json = \s -> String s
-
-	instance DecodeJson string
+	            when _ -> Err (expected "bool" v);
+	}
+instance EncodeJson string where {
+    encode_json = \s -> String s;
+}
+	instance DecodeJson string where {
 	    decode_json = \v ->
 	        match v
 	            when String s -> Ok s
-	            when _ -> Err (expected "string" v)
-
-instance EncodeJson f64
-    encode_json = \n -> Number n
-
-	instance DecodeJson f64
+	            when _ -> Err (expected "string" v);
+	}
+instance EncodeJson f64 where {
+    encode_json = \n -> Number n;
+}
+	instance DecodeJson f64 where {
 	    decode_json = \v ->
 	        match v
 	            when Number n -> Ok n
-	            when _ -> Err (expected "number" v)
-
-instance EncodeJson f32
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson f32
+	            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson f32 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson f32 where {
 	    decode_json = \v ->
 	        match v
 	            when Number n -> (
@@ -101,12 +101,12 @@ instance EncodeJson f32
 	                    when Some x -> Ok x
 	                    when None -> fail "expected finite f64 representable as f32"
 	              )
-	            when _ -> Err (expected "number" v)
-
-instance EncodeJson u8
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson u8
+	            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson u8 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson u8 where {
 	    decode_json = \v ->
 	        match v
 	            when Number n -> (
@@ -114,12 +114,12 @@ instance EncodeJson u8
 	                    when Some x -> Ok x
 	                    when None -> fail "expected integer number representable as u8"
 	              )
-	            when _ -> Err (expected "number" v)
-
-instance EncodeJson u16
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson u16
+	            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson u16 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson u16 where {
 	    decode_json = \v ->
 	        match v
 	            when Number n -> (
@@ -127,12 +127,12 @@ instance EncodeJson u16
 	                    when Some x -> Ok x
 	                    when None -> fail "expected integer number representable as u16"
               )
-            when _ -> Err (expected "number" v)
-
-instance EncodeJson u32
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson u32
+            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson u32 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson u32 where {
 	    decode_json = \v ->
 	        match v
             when Number n -> (
@@ -140,12 +140,12 @@ instance EncodeJson u32
                     when Some x -> Ok x
                     when None -> fail "expected integer number representable as u32"
               )
-            when _ -> Err (expected "number" v)
-
-instance EncodeJson u64
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson u64
+            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson u64 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson u64 where {
 	    decode_json = \v ->
 	        match v
             when Number n -> (
@@ -153,12 +153,12 @@ instance EncodeJson u64
                     when Some x -> Ok x
                     when None -> fail "expected integer number representable as u64"
               )
-            when _ -> Err (expected "number" v)
-
-instance EncodeJson i8
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson i8
+            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson i8 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson i8 where {
 	    decode_json = \v ->
 	        match v
             when Number n -> (
@@ -166,12 +166,12 @@ instance EncodeJson i8
                     when Some x -> Ok x
                     when None -> fail "expected integer number representable as i8"
               )
-            when _ -> Err (expected "number" v)
-
-instance EncodeJson i16
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson i16
+            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson i16 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson i16 where {
 	    decode_json = \v ->
 	        match v
             when Number n -> (
@@ -179,12 +179,12 @@ instance EncodeJson i16
                     when Some x -> Ok x
                     when None -> fail "expected integer number representable as i16"
               )
-            when _ -> Err (expected "number" v)
-
-instance EncodeJson i32
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson i32
+            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson i32 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson i32 where {
 	    decode_json = \v ->
 	        match v
             when Number n -> (
@@ -192,12 +192,12 @@ instance EncodeJson i32
                     when Some x -> Ok x
                     when None -> fail "expected integer number representable as i32"
               )
-            when _ -> Err (expected "number" v)
-
-instance EncodeJson i64
-    encode_json = \n -> Number (prim_to_f64 n)
-
-	instance DecodeJson i64
+            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson i64 where {
+    encode_json = \n -> Number (prim_to_f64 n);
+}
+	instance DecodeJson i64 where {
 	    decode_json = \v ->
 	        match v
             when Number n -> (
@@ -205,12 +205,12 @@ instance EncodeJson i64
                     when Some x -> Ok x
                     when None -> fail "expected integer number representable as i64"
               )
-            when _ -> Err (expected "number" v)
-
-instance EncodeJson uuid
-    encode_json = \u -> String (show u)
-
-	instance DecodeJson uuid
+            when _ -> Err (expected "number" v);
+	}
+instance EncodeJson uuid where {
+    encode_json = \u -> String (show u);
+}
+	instance DecodeJson uuid where {
 	    decode_json = \v ->
 	        match v
             when String s -> (
@@ -218,12 +218,12 @@ instance EncodeJson uuid
                     when Some u -> Ok u
                     when None -> fail "expected uuid string"
               )
-            when _ -> Err (expected "string" v)
-
-instance EncodeJson datetime
-    encode_json = \d -> String (show d)
-
-	instance DecodeJson datetime
+            when _ -> Err (expected "string" v);
+	}
+instance EncodeJson datetime where {
+    encode_json = \d -> String (show d);
+}
+	instance DecodeJson datetime where {
 	    decode_json = \v ->
 	        match v
             when String s -> (
@@ -231,30 +231,30 @@ instance EncodeJson datetime
                     when Some d -> Ok d
                     when None -> fail "expected RFC3339 datetime string"
               )
-            when _ -> Err (expected "string" v)
-
-instance EncodeJson (Option a) <= EncodeJson a
+            when _ -> Err (expected "string" v);
+	}
+instance EncodeJson (Option a) <= EncodeJson a where {
     encode_json = \opt ->
         match opt
             when Some x -> to_json x
-            when None -> Null
-
-	instance DecodeJson (Option a) <= DecodeJson a
+            when None -> Null;
+}
+	instance DecodeJson (Option a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v
 	            when Null -> Ok None
 	            when _ ->
 	                match (from_json v)
 	                    when Ok x -> Ok (Some x)
-	                    when Err e -> Err e
-
-	instance EncodeJson (Result a e) <= EncodeJson a, EncodeJson e
+	                    when Err e -> Err e;
+	}
+	instance EncodeJson (Result a e) <= EncodeJson a, EncodeJson e where {
 	    encode_json = \r ->
 	        match r
 	            when Ok x -> Object { ok = to_json x }
-	            when Err e0 -> Object { err = to_json e0 }
-
-	instance DecodeJson (Result a e) <= DecodeJson a, DecodeJson e
+	            when Err e0 -> Object { err = to_json e0 };
+	}
+	instance DecodeJson (Result a e) <= DecodeJson a, DecodeJson e where {
 	    decode_json = \v ->
 	        match v
 	            when Object d -> (
@@ -272,13 +272,13 @@ instance EncodeJson (Option a) <= EncodeJson a
 	                      )
 	                    when {} -> fail "expected object with {ok} or {err}"
 	              )
-	            when _ -> Err (expected "object" v)
-
-instance EncodeJson (List a) <= EncodeJson a
+	            when _ -> Err (expected "object" v);
+	}
+instance EncodeJson (List a) <= EncodeJson a where {
     encode_json = \xs ->
-        Array (prim_array_from_list (map (\x -> to_json x) xs))
-
-	instance DecodeJson (List a) <= DecodeJson a
+        Array (prim_array_from_list (map (\x -> to_json x) xs));
+}
+	instance DecodeJson (List a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v
 	            when Array xs ->
@@ -290,12 +290,12 @@ instance EncodeJson (List a) <= EncodeJson a
 	                                when Ok y -> Ok (Cons y out)
 	                in
 	                    foldr step (Ok []) xs
-	            when _ -> Err (expected "array" v)
-
-instance EncodeJson (Array a) <= EncodeJson a
-    encode_json = \xs -> Array (map (\x -> to_json x) xs)
-
-	instance DecodeJson (Array a) <= DecodeJson a
+	            when _ -> Err (expected "array" v);
+	}
+instance EncodeJson (Array a) <= EncodeJson a where {
+    encode_json = \xs -> Array (map (\x -> to_json x) xs);
+}
+	instance DecodeJson (Array a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v
 	            when Array xs ->
@@ -311,13 +311,14 @@ instance EncodeJson (Array a) <= EncodeJson a
                             when Err e -> Err e
                             when Ok ys -> Ok (prim_array_from_list ys)
                     )
-            when _ -> Err (expected "array" v)
-
-instance EncodeJson (Dict a) <= EncodeJson a
-    encode_json = \d -> Object (prim_dict_map (\x -> to_json x) d)
-
-	instance DecodeJson (Dict a) <= DecodeJson a
+            when _ -> Err (expected "array" v);
+	}
+instance EncodeJson (Dict a) <= EncodeJson a where {
+    encode_json = \d -> Object (prim_dict_map (\x -> to_json x) d);
+}
+	instance DecodeJson (Dict a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v
 	            when Object d -> prim_dict_traverse_result (\x -> from_json x) d
-	            when _ -> Err (expected "object" v)
+	            when _ -> Err (expected "object" v);
+	}

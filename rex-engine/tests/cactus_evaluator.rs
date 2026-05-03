@@ -449,11 +449,13 @@ async fn gc_every_alloc_handles_broad_evaluator_paths() {
         type Point = Point { x: i32, y: i32 }
         type Choice = Left { item: i32 } | Right { item: i32 }
 
-        class Score a where
-            score : a -> i32
+        class Score a where {
+            score : a -> i32;
+        }
 
-        instance Score Point where
-            score = \p -> p.x + p.y
+        instance Score Point where {
+            score = \p -> p.x + p.y;
+        }
 
         let rec sum_list = \xs ->
             match xs
@@ -652,14 +654,17 @@ async fn gc_every_alloc_handles_typeclass_cached_values() {
         r#"
         type Box = Box { value: i32 }
 
-        class Score a where
-            score : a -> i32
+        class Score a where {
+            score : a -> i32;
+        }
 
-        instance Score Box where
-            score = \box -> box.value + 1
+        instance Score Box where {
+            score = \box -> box.value + 1;
+        }
 
-        instance Score i32 where
-            score = \x -> x * 2
+        instance Score i32 where {
+            score = \x -> x * 2;
+        }
 
         let
             boxes: List Box = [
@@ -732,11 +737,13 @@ async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
 async fn evaluator_handles_control_flow_typeclasses_and_recursion() {
     let result = eval_i32(
         r#"
-        class Pick a where
-            pick : a -> a
+        class Pick a where {
+            pick : a -> a;
+        }
 
-        instance Pick i32 where
-            pick = \x -> x
+        instance Pick i32 where {
+            pick = \x -> x;
+        }
 
         let rec fact = \n ->
             if n == 0 then 1 else n * fact (n - 1)

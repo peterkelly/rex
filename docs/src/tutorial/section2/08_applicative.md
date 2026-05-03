@@ -3,9 +3,10 @@
 An `Applicative` is a `Functor` that can inject values and apply wrapped functions:
 
 ```rex
-class Applicative f <= Functor f
-  pure : a -> f a
-  ap : f (a -> b) -> f a -> f b
+class Applicative f <= Functor f where {
+  pure : a -> f a;
+  ap : f (a -> b) -> f a -> f b;
+}
 ```
 
 Applicatives are great when you want to combine independent computations that live “in a

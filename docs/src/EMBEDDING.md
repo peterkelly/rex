@@ -557,15 +557,15 @@ Users can declare new type classes and instances directly in Rex source. As the 
 use rex::{Parser, Token, TypeSystem, infer};
 
 let code = r#"
-class Size a
-    size : a -> i32
-
-instance Size (List t)
+class Size a where {
+    size : a -> i32;
+}
+instance Size (List t) where {
     size = \xs ->
         match xs
             when Empty -> 0
-            when Cons _ rest -> 1 + size rest
-
+            when Cons _ rest -> 1 + size rest;
+}
 size [1, 2, 3]
 "#;
 
@@ -596,15 +596,15 @@ use rex_engine::{Engine, EngineError};
 use rex::{Parser, Token};
 
 let code = r#"
-class Size a
-    size : a -> i32
-
-instance Size (List t)
+class Size a where {
+    size : a -> i32;
+}
+instance Size (List t) where {
     size = \xs ->
         match xs
             when Empty -> 0
-            when Cons _ rest -> 1 + size rest
-
+            when Cons _ rest -> 1 + size rest;
+}
 (size [1, 2, 3], size [])
 "#;
 

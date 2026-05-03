@@ -425,11 +425,13 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
     let program = compiler
         .compile_snippet(
             r#"
-            class Pick a where
-                pick : a -> a
+            class Pick a where {
+                pick : a -> a;
+            }
 
-            instance Pick i32 where
-                pick = \x -> x
+            instance Pick i32 where {
+                pick = \x -> x;
+            }
 
             pick 1
             "#,

@@ -370,22 +370,31 @@ even 10
 Type classes declare overloaded operations. Method signatures live in the class:
 
 ```rex,interactive
-class Size a
-  size : a -> i32
+class Size a where {
+  size : a -> i32;
+}
+```
+
+Classes with no methods are terminated with a semicolon:
+
+```rex
+class Marker a;
 ```
 
 Methods can be operators (use parentheses to refer to them as values if needed):
 
 ```rex
-class Eq a
-  == : a -> a -> bool
+class Eq a where {
+  == : a -> a -> bool;
+}
 ```
 
 Superclasses use `<=` (read “requires”):
 
 ```rex
-class Ord a <= Eq a
-  < : a -> a -> bool
+class Ord a <= Eq a where {
+  < : a -> a -> bool;
+}
 ```
 
 ### Instances (`instance`)
@@ -393,14 +402,21 @@ class Ord a <= Eq a
 Instances attach method implementations to a concrete head type, optionally with constraints:
 
 ```rex,interactive
-class Size a
-  size : a -> i32
-
-instance Size (List t)
+class Size a where {
+  size : a -> i32;
+}
+instance Size (List t) where {
   size = \xs ->
     match xs
       when Empty -> 0
-      when Cons _ rest -> 1 + size rest
+      when Cons _ rest -> 1 + size rest;
+}
+```
+
+Instances with no method implementations are also terminated with a semicolon:
+
+```rex
+instance Marker i32;
 ```
 
 The class in an instance header may be module-qualified:
@@ -408,20 +424,21 @@ The class in an instance header may be module-qualified:
 ```rex
 import dep as D
 
-instance D.Pick i32 where
-  pick = 7
+instance D.Pick i32 where {
+  pick = 7;
+}
 ```
 
 Instance contexts use `<=`:
 
 ```rex
-class Show a
-  show : a -> string
-
-instance Show i32
-  show = \_ -> "<i32>"
-
-instance Show (List a) <= Show a
+class Show a where {
+  show : a -> string;
+}
+instance Show i32 where {
+  show = \_ -> "<i32>";
+}
+instance Show (List a) <= Show a where {
   show = \xs ->
     let
       step = \out x ->
@@ -430,7 +447,8 @@ instance Show (List a) <= Show a
           else out + ", " + show x,
       out = foldl step "[" xs
     in
-      out + "]"
+      out + "]";
+}
 ```
 
 Notes:

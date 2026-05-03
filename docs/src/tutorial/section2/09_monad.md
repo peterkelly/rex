@@ -5,8 +5,9 @@ Monads are about *sequencing* computations where the next step depends on the pr
 In Rex, the core monad operation is `bind`:
 
 ```rex
-class Monad m <= Applicative m
-  bind : (a -> m b) -> m a -> m b
+class Monad m <= Applicative m where {
+  bind : (a -> m b) -> m a -> m b;
+}
 ```
 
 Note the argument order: function first, then the monadic value.

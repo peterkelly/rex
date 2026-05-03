@@ -76,9 +76,9 @@ async fn default_record_dispatch() {
         r#"
         type Foo = Foo { x: i32, y: i32 } | Bar { z: f32 }
 
-        instance Default Foo
-            default = Bar { z = 0.0 }
-
+        instance Default Foo where {
+            default = Bar { z = 0.0 };
+        }
         let x: Foo = default in x
         "#,
         "Bar {z = 0f32}",
@@ -105,12 +105,12 @@ async fn pattern_field_renaming() {
         r#"
         type Point = Point { x: f32, y: f32 }
 
-        instance AdditiveMonoid Point
-            zero = Point { x = 0.0, y = 0.0 }
+        instance AdditiveMonoid Point where {
+            zero = Point { x = 0.0, y = 0.0 };
             + = \p q -> match (p, q)
                 when (Point { x: x1, y: y1 }, Point { x: x2, y: y2 }) ->
-                    Point { x = x1 + x2, y = y1 + y2 }
-
+                    Point { x = x1 + x2, y = y1 + y2 };
+        }
         (Point { x = 1.0, y = 2.0 }) + (Point { x = 3.0, y = 4.0 })
         "#,
         "Point {x = 4f32, y = 6f32}",
@@ -137,9 +137,9 @@ async fn default_custom_adt_single_ctor_unnamed_fields() {
         r#"
         type Pair = Pair i32 bool
 
-        instance Default Pair
-            default = Pair 42 true
-
+        instance Default Pair where {
+            default = Pair 42 true;
+        }
         let x: Pair = default in x
         "#,
         "Pair 42i32 true",
@@ -154,9 +154,9 @@ async fn default_custom_adt_single_ctor_named_fields() {
         r#"
         type Config = Config { retries: i32, enabled: bool }
 
-        instance Default Config
-            default = Config { retries = 3, enabled = false }
-
+        instance Default Config where {
+            default = Config { retries = 3, enabled = false };
+        }
         let x: Config = default in x
         "#,
         "Config {enabled = false, retries = 3i32}",
@@ -171,9 +171,9 @@ async fn default_custom_adt_enum_unit_variants() {
         r#"
         type Mode = Fast | Safe | Debug
 
-        instance Default Mode
-            default = Safe
-
+        instance Default Mode where {
+            default = Safe;
+        }
         let x: Mode = default in x
         "#,
         "Safe",
@@ -188,9 +188,9 @@ async fn default_custom_adt_enum_mixed_variant_payloads() {
         r#"
         type Token = Eof | IntLit i32 | Meta { line: i32, col: i32 }
 
-        instance Default Token
-            default = Meta { line = 1, col = 1 }
-
+        instance Default Token where {
+            default = Meta { line = 1, col = 1 };
+        }
         let x: Token = default in x
         "#,
         "Meta {col = 1i32, line = 1i32}",
@@ -205,9 +205,9 @@ async fn default_custom_adt_generic_instance_uses_constraint() {
         r#"
         type Box a = Box a | Missing
 
-        instance Default (Box a) <= Default a
-            default = Box default
-
+        instance Default (Box a) <= Default a where {
+            default = Box default;
+        }
         let x: Box i32 = default in x
         "#,
         "Box 0i32",
@@ -225,12 +225,12 @@ async fn default_multiple_adts_same_named_fields_then_record_update_without_is_f
         type A = A { x: i32, y: i32 }
         type B = B { x: i32, y: i32 }
 
-        instance Default A
-            default = A { x = 1, y = 2 }
-
-        instance Default B
-            default = B { x = 10, y = 20 }
-
+        instance Default A where {
+            default = A { x = 1, y = 2 };
+        }
+        instance Default B where {
+            default = B { x = 10, y = 20 };
+        }
         let
             a = { default with { x = 9 } },
             b = { default with { y = 8 } }
@@ -251,12 +251,12 @@ async fn default_multiple_adts_same_named_fields_then_record_update_uses_let_ann
         type A = A { x: i32, y: i32 }
         type B = B { x: i32, y: i32 }
 
-        instance Default A
-            default = A { x = 1, y = 2 }
-
-        instance Default B
-            default = B { x = 10, y = 20 }
-
+        instance Default A where {
+            default = A { x = 1, y = 2 };
+        }
+        instance Default B where {
+            default = B { x = 10, y = 20 };
+        }
         let
             a: A = { default with { x = 9 } },
             b: B = { default with { y = 8 } }
@@ -278,12 +278,12 @@ async fn default_multiple_adts_same_named_fields_then_record_update() {
         type A = A { x: i32, y: i32 }
         type B = B { x: i32, y: i32 }
 
-        instance Default A
-            default = A { x = 1, y = 2 }
-
-        instance Default B
-            default = B { x = 10, y = 20 }
-
+        instance Default A where {
+            default = A { x = 1, y = 2 };
+        }
+        instance Default B where {
+            default = B { x = 10, y = 20 };
+        }
         let
             a: A = { (default is A) with { x = 9 } },
             b: B = { (default is B) with { y = 8 } }
@@ -306,12 +306,12 @@ async fn default_multiple_adts_same_named_fields_with_is_disambiguates_without_l
         type A = A { x: i32, y: i32 }
         type B = B { x: i32, y: i32 }
 
-        instance Default A
-            default = A { x = 1, y = 2 }
-
-        instance Default B
-            default = B { x = 10, y = 20 }
-
+        instance Default A where {
+            default = A { x = 1, y = 2 };
+        }
+        instance Default B where {
+            default = B { x = 10, y = 20 };
+        }
         let
             a = { (default is A) with { x = 9 } },
             b = { (default is B) with { y = 8 } }
@@ -328,18 +328,18 @@ async fn default_multiple_adts_same_named_fields_with_is_disambiguates_without_l
 async fn methods_can_call_other_methods() {
     assert_eval(
         r#"
-        class PairOps p
-            first : p -> i32
-            second : p -> i32
-            sum_pair : p -> i32
-
+        class PairOps p where {
+            first : p -> i32;
+            second : p -> i32;
+            sum_pair : p -> i32;
+        }
         type Pair = Pair { a: i32, b: i32 }
 
-        instance PairOps Pair
-            first = \p -> p.a
-            second = \p -> p.b
-            sum_pair = \p -> (first p) + (second p)
-
+        instance PairOps Pair where {
+            first = \p -> p.a;
+            second = \p -> p.b;
+            sum_pair = \p -> (first p) + (second p);
+        }
         sum_pair (Pair { a = 19, b = 23 })
         "#,
         "42i32",
@@ -352,12 +352,12 @@ async fn methods_can_call_other_methods() {
 async fn method_can_return_function() {
     assert_eval(
         r#"
-        class Builder a
-            make_adder : a -> i32 -> i32
-
-        instance Builder i32
-            make_adder = \n x -> x + n
-
+        class Builder a where {
+            make_adder : a -> i32 -> i32;
+        }
+        instance Builder i32 where {
+            make_adder = \n x -> x + n;
+        }
         let f = make_adder (5 is i32) in f (37 is i32)
         "#,
         "42i32",
@@ -372,12 +372,12 @@ async fn instance_method_can_reference_global_fn() {
         r#"
         fn inc (x: i32) -> i32 = x + 1
 
-        class Bump a
-            bump : a -> a
-
-        instance Bump i32
-            bump = inc
-
+        class Bump a where {
+            bump : a -> a;
+        }
+        instance Bump i32 where {
+            bump = inc;
+        }
         bump 41
         "#,
         "42i32",
@@ -390,21 +390,21 @@ async fn instance_method_can_reference_global_fn() {
 async fn hkt_functor_option_and_result() {
     assert_eval(
         r#"
-        class MyFunctor f
-            fmap : (a -> b) -> f a -> f b
-
-        instance MyFunctor Option
+        class MyFunctor f where {
+            fmap : (a -> b) -> f a -> f b;
+        }
+        instance MyFunctor Option where {
             fmap = \f x ->
                 match x
                     when Some v -> Some (f v)
-                    when None -> None
-
-        instance MyFunctor (Result e)
+                    when None -> None;
+        }
+        instance MyFunctor (Result e) where {
             fmap = \f x ->
                 match x
                     when Ok v -> Ok (f v)
-                    when Err err -> Err err
-
+                    when Err err -> Err err;
+        }
         let
             inc = \x -> x + 1,
             a = fmap inc (Some 1),
@@ -435,15 +435,15 @@ async fn hkt_functor_option_and_result() {
 async fn pattern_match_inside_method_body() {
     assert_eval(
         r#"
-        class Head a
-            head_or : a -> List a -> a
-
-        instance Head i32
+        class Head a where {
+            head_or : a -> List a -> a;
+        }
+        instance Head i32 where {
             head_or = \fallback xs ->
                 match xs
                     when [] -> fallback
-                    when x::rest -> x
-
+                    when x::rest -> x;
+        }
         (head_or 0 [1, 2, 3], head_or 7 [])
         "#,
         "(1i32, 7i32)",
@@ -459,15 +459,15 @@ async fn pattern_match_inside_method_body() {
 async fn superclass_and_instance_context() {
     assert_eval(
         r#"
-        class MyEq a
-            eq : a -> a -> bool
-
-        class MyOrd a <= MyEq a
-            my_cmp : a -> a -> i32
-
+        class MyEq a where {
+            eq : a -> a -> bool;
+        }
+        class MyOrd a <= MyEq a where {
+            my_cmp : a -> a -> i32;
+        }
         type Color = Red | Green | Blue
 
-        instance MyEq Color
+        instance MyEq Color where {
             eq = \x y ->
                 match x
                     when Red ->
@@ -475,16 +475,16 @@ async fn superclass_and_instance_context() {
                     when Green ->
                         let r = match y when Green -> true when _ -> false in r
                     when Blue ->
-                        let r = match y when Blue -> true when _ -> false in r
-
-        instance MyOrd Color <= MyEq Color
+                        let r = match y when Blue -> true when _ -> false in r;
+        }
+        instance MyOrd Color <= MyEq Color where {
             my_cmp = \x y ->
                 if eq x y then 0 else
                 match x
                     when Red -> -1
                     when Green -> if eq y Red then 1 else -1
-                    when Blue -> 1
-
+                    when Blue -> 1;
+        }
         (eq Red Blue, eq Blue Blue, my_cmp Red Green, my_cmp Blue Red)
         "#,
         "(false, true, -1i32, 1i32)",
@@ -502,10 +502,10 @@ async fn superclass_and_instance_context() {
 async fn missing_instance_method_is_error() {
     assert_err_contains(
         r#"
-        class NeedsMethod a
-            needs : a
-
-        instance NeedsMethod i32
+        class NeedsMethod a where {
+            needs : a;
+        }
+        instance NeedsMethod i32;
         0
         "#,
         "missing implementation of `needs`",
@@ -517,11 +517,12 @@ async fn missing_instance_method_is_error() {
 async fn unknown_instance_method_is_error() {
     assert_err_contains(
         r#"
-        class NeedsMethod a
-            needs : a
-
-        instance NeedsMethod i32
-            not_a_method = 0
+        class NeedsMethod a where {
+            needs : a;
+        }
+        instance NeedsMethod i32 where {
+            not_a_method = 0;
+        }
         0
         "#,
         "unknown method `not_a_method`",
@@ -533,11 +534,12 @@ async fn unknown_instance_method_is_error() {
 async fn missing_instance_constraint_is_error() {
     assert_err_contains(
         r#"
-        class NeedsCtx a
-            make : a
-
-        instance NeedsCtx (List a)
-            make = [make]
+        class NeedsCtx a where {
+            make : a;
+        }
+        instance NeedsCtx (List a) where {
+            make = [make];
+        }
         0
         "#,
         "not in the instance context",
@@ -549,15 +551,15 @@ async fn missing_instance_constraint_is_error() {
 async fn duplicate_instances_are_rejected() {
     assert_err_contains(
         r#"
-        class Dup a
-            dup : a
-
-        instance Dup i32
-            dup = 0
-
-        instance Dup i32
-            dup = 1
-
+        class Dup a where {
+            dup : a;
+        }
+        instance Dup i32 where {
+            dup = 0;
+        }
+        instance Dup i32 where {
+            dup = 1;
+        }
         0
         "#,
         "duplicate type class instance",
@@ -569,12 +571,12 @@ async fn duplicate_instances_are_rejected() {
 async fn ambiguous_class_method_use_is_error() {
     assert_err_contains(
         r#"
-        class Pick a
-            pick : a
-
-        instance Pick i32
-            pick = 0
-
+        class Pick a where {
+            pick : a;
+        }
+        instance Pick i32 where {
+            pick = 0;
+        }
         pick
         "#,
         "ambiguous overload",

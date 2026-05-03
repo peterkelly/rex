@@ -8,20 +8,20 @@ Use a type class to define a common “size” operation across different data t
 hard-coding the type at every call site.
 
 ```rex,interactive
-class Size a
-  size : a -> i32
-
+class Size a where {
+  size : a -> i32;
+}
 type Blob = Blob { bytes: List i32 }
 
-instance Size (List t)
+instance Size (List t) where {
   size = \xs ->
     match xs
       when Empty -> 0
-      when Cons _ t -> 1 + size t
-
-instance Size Blob
-  size = \b -> size b.bytes
-
+      when Cons _ t -> 1 + size t;
+}
+instance Size Blob where {
+  size = \b -> size b.bytes;
+}
 size (Blob { bytes = [1, 2, 3, 4] })
 ```
 
@@ -37,15 +37,15 @@ size (Blob { bytes = [1, 2, 3, 4] })
 Once you have a class, you can write functions that work for *any* type that has an instance:
 
 ```rex,interactive
-class Size a
-  size : a -> i32
-
-instance Size (List t)
+class Size a where {
+  size : a -> i32;
+}
+instance Size (List t) where {
   size = \xs ->
     match xs
       when Empty -> 0
-      when Cons _ t -> 1 + size t
-
+      when Cons _ t -> 1 + size t;
+}
 let
   bigger = \(x: a) where Size a -> size x + 1
 in
@@ -61,15 +61,15 @@ The `where Size a` constraint says: “this function is valid as long as `Size a
 Problem: write a generic emptiness check from `size`.
 
 ```rex,interactive
-class Size a
-  size : a -> i32
-
-instance Size (List t)
+class Size a where {
+  size : a -> i32;
+}
+instance Size (List t) where {
   size = \xs ->
     match xs
       when Empty -> 0
-      when Cons _ t -> 1 + size t
-
+      when Cons _ t -> 1 + size t;
+}
 let
   is_empty = \(x: a) where Size a -> size x == 0
 in
@@ -83,20 +83,20 @@ Why this works: any type with a `Size` instance can reuse the same `is_empty` lo
 Problem: add a `name` field and keep size based on bytes only.
 
 ```rex,interactive
-class Size a
-  size : a -> i32
-
-instance Size (List t)
+class Size a where {
+  size : a -> i32;
+}
+instance Size (List t) where {
   size = \xs ->
     match xs
       when Empty -> 0
-      when Cons _ t -> 1 + size t
-
+      when Cons _ t -> 1 + size t;
+}
 type Blob = Blob { name: string, bytes: List i32 }
 
-instance Size Blob
-  size = \b -> size b.bytes
-
+instance Size Blob where {
+  size = \b -> size b.bytes;
+}
 size (Blob { name = "payload", bytes = [1, 2, 3, 4] })
 ```
 
@@ -107,15 +107,15 @@ Why this works: `Size Blob` delegates to the `bytes` list, so metadata does not 
 Problem: sum sizes of a list of values.
 
 ```rex,interactive
-class Size a
-  size : a -> i32
-
-instance Size (List t)
+class Size a where {
+  size : a -> i32;
+}
+instance Size (List t) where {
   size = \xs ->
     match xs
       when Empty -> 0
-      when Cons _ t -> 1 + size t
-
+      when Cons _ t -> 1 + size t;
+}
 let
   total_size = \(xs: List a) where Size a ->
     foldl (\acc x -> acc + size x) 0 xs

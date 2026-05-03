@@ -15,17 +15,17 @@ We’ll build it up in layers:
 4. (optional) add a container instance (`List a`)
 
 ```rex,interactive
-class DemoShow a
-  demo_show : a -> string
-
+class DemoShow a where {
+  demo_show : a -> string;
+}
 type Point = Point { x: i32, y: i32 }
 
-instance DemoShow i32
-  demo_show = \_ -> "<i32>"
-
-instance DemoShow Point
-  demo_show = \p -> "Point(" + demo_show p.x + ", " + demo_show p.y + ")"
-
+instance DemoShow i32 where {
+  demo_show = \_ -> "<i32>";
+}
+instance DemoShow Point where {
+  demo_show = \p -> "Point(" + demo_show p.x + ", " + demo_show p.y + ")";
+}
 demo_show (Point { x = 1, y = 2 })
 ```
 
@@ -39,13 +39,13 @@ and call `demo_show [Point { x = 1, y = 2 }]`.
 Here is the list instance from the repo example, with commentary:
 
 ```rex,interactive
-class DemoShow a
-  demo_show : a -> string
-
-instance DemoShow i32
-  demo_show = \_ -> "<i32>"
-
-instance DemoShow (List a) <= DemoShow a
+class DemoShow a where {
+  demo_show : a -> string;
+}
+instance DemoShow i32 where {
+  demo_show = \_ -> "<i32>";
+}
+instance DemoShow (List a) <= DemoShow a where {
   demo_show = \xs ->
     let
       step = \out x ->
@@ -54,7 +54,8 @@ instance DemoShow (List a) <= DemoShow a
           else out + ", " + demo_show x,
       out = foldl step "[" xs
     in
-      out + "]"
+      out + "]";
+}
 ```
 
 ### Why the `<= DemoShow a` constraint?
@@ -68,13 +69,13 @@ Because the implementation calls `demo_show x` for list elements, so it requires
 Problem: format list output with semicolons.
 
 ```rex,interactive
-class DemoShow a
-  demo_show : a -> string
-
-instance DemoShow i32
-  demo_show = \_ -> "<i32>"
-
-instance DemoShow (List a) <= DemoShow a
+class DemoShow a where {
+  demo_show : a -> string;
+}
+instance DemoShow i32 where {
+  demo_show = \_ -> "<i32>";
+}
+instance DemoShow (List a) <= DemoShow a where {
   demo_show = \xs ->
     let
       step = \out x ->
@@ -83,8 +84,8 @@ instance DemoShow (List a) <= DemoShow a
           else out + "; " + demo_show x,
       out = foldl step "[" xs
     in
-      out + "]"
-
+      out + "]";
+}
 demo_show [1, 2, 3]
 ```
 
@@ -95,12 +96,12 @@ Why this works: only the separator string changed; the fold structure stays the 
 Problem: add show-print support for booleans.
 
 ```rex,interactive
-class DemoShow a
-  demo_show : a -> string
-
-instance DemoShow bool
-  demo_show = \b -> if b then "true!" else "false!"
-
+class DemoShow a where {
+  demo_show : a -> string;
+}
+instance DemoShow bool where {
+  demo_show = \b -> if b then "true!" else "false!";
+}
 (demo_show true, demo_show false)
 ```
 
@@ -111,18 +112,18 @@ Why this works: the instance defines one method body specialized to `bool`.
 Problem: print `Some(...)` and `None` for options.
 
 ```rex,interactive
-class DemoShow a
-  demo_show : a -> string
-
-instance DemoShow i32
-  demo_show = \_ -> "<i32>"
-
-instance DemoShow (Option a) <= DemoShow a
+class DemoShow a where {
+  demo_show : a -> string;
+}
+instance DemoShow i32 where {
+  demo_show = \_ -> "<i32>";
+}
+instance DemoShow (Option a) <= DemoShow a where {
   demo_show = \ox ->
     match ox
       when Some x -> "Some(" + demo_show x + ")"
-      when None -> "None"
-
+      when None -> "None";
+}
 (demo_show (Some 1), demo_show None)
 ```
 
