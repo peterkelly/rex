@@ -1129,7 +1129,7 @@ async fn eval_user_adt_declaration() {
 async fn eval_fn_decl_simple() {
     let program = parse_program(
         r#"
-        fn add (x: i32, y: i32) -> i32 = x + y
+        fn add (x: i32, y: i32) -> i32 = x + y;
         add 1 2
         "#,
     );
@@ -1144,7 +1144,7 @@ async fn eval_fn_decl_simple() {
 async fn eval_fn_decl_with_where_constraints() {
     let program = parse_program(
         r#"
-        fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y
+        fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y;
         my_add 1 2
         "#,
     );

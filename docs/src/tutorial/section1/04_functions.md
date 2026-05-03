@@ -57,22 +57,23 @@ let add1 = (+) 1 in add1 41
 
 ## Top-level functions (`fn`)
 
-Top-level functions require an explicit type signature:
+Top-level functions require an explicit type signature and a semicolon terminator:
 
 ```rex,interactive
-fn add : i32 -> i32 -> i32 = \x y -> x + y
+fn add : i32 -> i32 -> i32 = \x y -> x + y;
 ```
 
-This declares a function that takes an `i32` and returns another function `i32 -> i32`.
+This declares a function that takes an `i32` and returns another function `i32 -> i32`. The
+semicolon terminates the top-level declaration, so multi-line bodies do not depend on indentation.
 
 Top-level `fn` declarations are mutually recursive, so they can reference each other:
 
 ```rex,interactive
 fn even : i32 -> bool = \n ->
-  if n == 0 then true else odd (n - 1)
+  if n == 0 then true else odd (n - 1);
 
 fn odd : i32 -> bool = \n ->
-  if n == 0 then false else even (n - 1)
+  if n == 0 then false else even (n - 1);
 
 even 10
 ```
@@ -82,17 +83,17 @@ even 10
 The parser still accepts older forms that put parameter names/types in the header:
 
 ```rex,interactive
-fn inc (x: i32) -> i32 = x + 1
+fn inc (x: i32) -> i32 = x + 1;
 ```
 
 ```rex,interactive
-fn inc x: i32 -> i32 = x + 1
+fn inc x: i32 -> i32 = x + 1;
 ```
 
 For multiple parameters, the “named arrows” form looks like:
 
 ```rex,interactive
-fn add x: i32 -> y: i32 -> i32 = x + y
+fn add x: i32 -> y: i32 -> i32 = x + y;
 ```
 
 ### `fn` constraints with `where`
@@ -100,7 +101,7 @@ fn add x: i32 -> y: i32 -> i32 = x + y
 Top-level functions can also have type-class constraints:
 
 ```rex,interactive
-fn sum_list : List i32 -> i32 where Foldable List = \xs -> foldl (+) 0 xs
+fn sum_list : List i32 -> i32 where Foldable List = \xs -> foldl (+) 0 xs;
 ```
 
 If you haven’t seen `where` constraints before, Section 2 covers them in detail.

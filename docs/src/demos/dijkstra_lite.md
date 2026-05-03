@@ -14,7 +14,7 @@ fn add_weight : Dist -> i32 -> Dist = (\d w ->
   match d
     when Inf -> Inf
     when Finite x -> Finite (x + w)
-)
+);
 
 fn min_dist : Dist -> Dist -> Dist = (\a b ->
   match (a, b)
@@ -22,7 +22,7 @@ fn min_dist : Dist -> Dist -> Dist = (\a b ->
     when (x, Inf) -> x
     when (Finite x, Finite y) ->
       if x <= y then Finite x else Finite y
-)
+);
 
 fn shortest_a_to_b : Graph -> Dist = (\g ->
   let
@@ -30,13 +30,13 @@ fn shortest_a_to_b : Graph -> Dist = (\g ->
     via_c = add_weight (Finite g.ac) g.cb
   in
     min_dist direct via_c
-)
+);
 
 fn as_i32 : Dist -> i32 = (\d ->
   match d
     when Inf -> -1
     when Finite x -> x
-)
+);
 
 let
   g1 = Graph { ab = 10, ac = 3, cb = 4 },

@@ -209,7 +209,7 @@ fn infer_depth_limit_is_enforced() {
 fn declare_fn_injects_scheme_for_use_sites() {
     let program = parse_program(
         r#"
-            declare fn id x: a -> a
+            declare fn id x: a -> a;
             id 1
             "#,
     );
@@ -243,7 +243,7 @@ fn declare_fn_is_noop_when_matching_existing_scheme() {
 
     let program = parse_program(
         r#"
-            declare fn foo x: i32 -> i32
+            declare fn foo x: i32 -> i32;
             0
             "#,
     );
@@ -257,7 +257,7 @@ fn declare_fn_is_noop_when_matching_existing_scheme() {
 fn unit_type_parses_and_infers() {
     let program = parse_program(
         r#"
-            fn unit_id x: () -> () = x
+            fn unit_id x: () -> () = x;
             unit_id ()
             "#,
     );
@@ -650,7 +650,7 @@ fn infer_record_pattern_in_lambda() {
 fn infer_fn_decl_simple() {
     let program = parse_program(
         r#"
-            fn add (x: i32, y: i32) -> i32 = x + y
+            fn add (x: i32, y: i32) -> i32 = x + y;
             add 1 2
             "#,
     );
@@ -664,7 +664,7 @@ fn infer_fn_decl_simple() {
 fn infer_fn_decl_signature_form() {
     let program = parse_program(
         r#"
-            fn add : i32 -> i32 -> i32 = \x y -> x + y
+            fn add : i32 -> i32 -> i32 = \x y -> x + y;
             add 1 2
             "#,
     );
@@ -678,7 +678,7 @@ fn infer_fn_decl_signature_form() {
 fn infer_fn_decl_polymorphic_where_constraints() {
     let program = parse_program(
         r#"
-            fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y
+            fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y;
             (my_add 1 2, my_add 1.0 2.0)
             "#,
     );

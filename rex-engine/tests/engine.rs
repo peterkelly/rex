@@ -129,7 +129,7 @@ async fn repl_persists_function_definitions() {
         Compiler::new(engine.clone()),
     );
 
-    let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1\ninc 1");
+    let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1;\ninc 1");
     let (v1, t1) = evaluator
         .eval_repl_program(&program1, &mut state)
         .await

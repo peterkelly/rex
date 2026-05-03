@@ -370,7 +370,7 @@ async fn method_can_return_function() {
 async fn instance_method_can_reference_global_fn() {
     assert_eval(
         r#"
-        fn inc (x: i32) -> i32 = x + 1
+        fn inc (x: i32) -> i32 = x + 1;
 
         class Bump a where {
             bump : a -> a;

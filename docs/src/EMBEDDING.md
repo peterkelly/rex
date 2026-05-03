@@ -197,11 +197,11 @@ engine.add_default_resolvers();
 let modules = Arc::new(HashMap::from([
     (
         "acme.math".to_string(),
-        "pub fn inc : i32 -> i32 = \\x -> x + 1".to_string(),
+        "pub fn inc : i32 -> i32 = \\x -> x + 1;".to_string(),
     ),
     (
         "acme.main".to_string(),
-        "import acme.math (inc)\npub fn main : i32 = inc 41".to_string(),
+        "import acme.math (inc)\npub fn main : i32 = inc 41;".to_string(),
     ),
 ]));
 

@@ -16,47 +16,47 @@ fn node_eq : Node -> Node -> bool = \a b ->
     when (B, B) -> true
     when (C, C) -> true
     when (D, D) -> true
-    when _ -> false
+    when _ -> false;
 
 fn contains : List Node -> Node -> bool = \xs x ->
   match xs
     when [] -> false
-    when y::ys -> if node_eq y x then true else contains ys x
+    when y::ys -> if node_eq y x then true else contains ys x;
 
 fn append : List Node -> List Node -> List Node = \xs ys ->
   match xs
     when [] -> ys
-    when h::t -> Cons h (append t ys)
+    when h::t -> Cons h (append t ys);
 
 fn reverse_go : List Node -> List Node -> List Node = \rest acc ->
   match rest
     when [] -> acc
-    when h::t -> reverse_go t (Cons h acc)
+    when h::t -> reverse_go t (Cons h acc);
 
 fn reverse : List Node -> List Node = \xs ->
-  reverse_go xs []
+  reverse_go xs [];
 
 fn is_empty : List a -> bool = \xs ->
   match xs
     when [] -> true
-    when _::_ -> false
+    when _::_ -> false;
 
 fn remove_outgoing : List Edge -> Node -> List Edge = \edges n ->
   match edges
     when [] -> []
     when Edge from to::rest ->
       if node_eq from n then remove_outgoing rest n
-      else Cons (Edge from to) (remove_outgoing rest n)
+      else Cons (Edge from to) (remove_outgoing rest n);
 
 fn in_degree : List Edge -> Node -> i32 = \edges n ->
   match edges
     when [] -> 0
     when Edge from to::rest ->
       let tail = in_degree rest n in
-      if node_eq to n then 1 + tail else tail
+      if node_eq to n then 1 + tail else tail;
 
 fn push_unique : List Node -> Node -> List Node = \queue n ->
-  if contains queue n then queue else append queue [n]
+  if contains queue n then queue else append queue [n];
 
 fn enqueue_zeros : List Node -> List Node -> List Node -> List Edge -> List Node = \nodes queue seen edges ->
   match nodes
@@ -70,7 +70,7 @@ fn enqueue_zeros : List Node -> List Node -> List Node -> List Edge -> List Node
         else
           queue
       in
-        enqueue_zeros rest queue1 seen edges
+        enqueue_zeros rest queue1 seen edges;
 
 fn kahn : List Node -> List Node -> List Node -> List Edge -> List Node -> List Node = \queue seen order edges nodes ->
   match queue
@@ -85,7 +85,7 @@ fn kahn : List Node -> List Node -> List Node -> List Edge -> List Node -> List 
         seen1 = Cons n seen,
         queue1 = enqueue_zeros nodes rest seen1 edges1
       in
-        kahn queue1 seen1 (Cons n order) edges1 nodes
+        kahn queue1 seen1 (Cons n order) edges1 nodes;
 
 let
   nodes = [A, B, C, D],

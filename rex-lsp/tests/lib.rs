@@ -253,7 +253,7 @@ pub type Present = Present i32
     let source = r#"
 import dep as D
 
-fn id x: D.Missing -> D.Missing = x
+fn id x: D.Missing -> D.Missing = x;
 
 0
 "#;
@@ -322,7 +322,7 @@ pub class Present a where {
     let source = r#"
 import dep as D
 
-fn id x: i32 -> i32 where D.Missing i32 = x
+fn id x: i32 -> i32 where D.Missing i32 = x;
 
 0
 "#;
@@ -356,7 +356,7 @@ pub class Present a where {
     let source = r#"
 import dep as D
 
-declare fn id x: i32 -> i32 where D.Missing i32
+declare fn id x: i32 -> i32 where D.Missing i32;
 
 0
 "#;
@@ -593,7 +593,7 @@ fn insert : i32 -> Tree -> Tree = \k t ->
       else if k > key then
         Node { key = key, left = left, right = insert k right }
       else
-        t
+        t;
 
 insert 1 Empty
 "#;
@@ -771,7 +771,7 @@ in
 fn diagnostics_for_decl_type_errors_are_not_whole_document() {
     let text = r#"
 fn parse_ph : string -> Result string f64 = \raw ->
-  if raw == "7.3" then Ok 7.3 else Err "bad reading"
+  if raw == "7.3" then Ok 7.3 else Err "bad reading";
 "#;
     let uri = in_memory_doc_uri();
     clear_parse_cache(&uri);
@@ -790,9 +790,9 @@ fn parse_ph : string -> Result string f64 = \raw ->
 #[test]
 fn diagnostics_for_llms_playground_decl_error_are_not_whole_document() {
     let text = r#"fn parse_i32 : string -> Result string i32 = \s ->
-  if s == "42" then Ok 42 else Err "bad-int"
+  if s == "42" then Ok 42 else Err "bad-int";
 
-fn plus1 : i32 -> i32 = \n -> n + 1
+fn plus1 : i32 -> i32 = \n -> n + 1;
 
 let input = "42" in
 let out : Result string i32 = ? in
@@ -850,7 +850,7 @@ in
 fn document_symbols_returns_top_level_items() {
     let text = r#"
 type T = A | B
-fn f : i32 -> i32 = \x -> x + 1
+fn f : i32 -> i32 = \x -> x + 1;
 let x = 0 in f x
 "#;
     let symbols = document_symbols_for_source_public(text);
@@ -1122,7 +1122,7 @@ in
 #[test]
 fn code_actions_offer_hole_fill_candidates() {
     let text = r#"
-fn aa_mk : i32 -> i32 = \x -> x
+fn aa_mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let actions = code_actions_for_source_public(text, 2, 14);
@@ -1144,7 +1144,7 @@ let y : i32 = ? in y
 #[test]
 fn code_actions_offer_hole_fill_even_with_diagnostics_present() {
     let text = r#"
-fn aa_mk : i32 -> i32 = \x -> x
+fn aa_mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let uri = in_memory_doc_uri();
@@ -1185,7 +1185,7 @@ let y : i32 = ? in y
 #[test]
 fn code_actions_offer_hole_fill_for_real_typed_hole_diagnostic() {
     let text = r#"
-fn aa_mk : i32 -> i32 = \x -> x
+fn aa_mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let uri = in_memory_doc_uri();
@@ -1239,7 +1239,7 @@ fn expected_type_reports_function_argument_type() {
 #[test]
 fn functions_producing_expected_type_include_user_fn() {
     let text = r#"
-fn mk : i32 -> i32 = \x -> x
+fn mk : i32 -> i32 = \x -> x;
 if true then 0 else 1
 "#;
     let items = functions_producing_expected_type_for_source_public(text, 2, 13);
@@ -1343,7 +1343,7 @@ fn execute_expected_type_command_returns_object() {
 fn execute_functions_command_returns_items() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn mk : i32 -> i32 = \x -> x
+fn mk : i32 -> i32 = \x -> x;
 if true then 0 else 1
 "#;
     let out = execute_query_command_for_document(
@@ -1375,7 +1375,7 @@ fn semantic_functions_command_caps_items_count() {
     let uri = in_memory_doc_uri();
     let mut lines = Vec::new();
     for i in 0..200usize {
-        lines.push(format!("fn mk_{i} : i32 -> i32 = \\x -> x"));
+        lines.push(format!("fn mk_{i} : i32 -> i32 = \\x -> x;"));
     }
     lines.push("let y : i32 = ? in y".to_string());
     let line = (lines.len() - 1) as u32;
@@ -1406,7 +1406,7 @@ fn semantic_functions_command_caps_items_count() {
 fn execute_functions_accepting_inferred_type_command_returns_items() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn use_bool : bool -> i32 = \x -> 0
+fn use_bool : bool -> i32 = \x -> 0;
 let x = true in x
 "#;
     let out = execute_query_command_for_document(
@@ -1442,7 +1442,7 @@ let x = true in x
 fn execute_adapters_from_inferred_to_expected_command_returns_items() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn id_i32 : i32 -> i32 = \x -> x
+fn id_i32 : i32 -> i32 = \x -> x;
 let x = 1 in let y : i32 = x in y
 "#;
     let out = execute_query_command_for_document(
@@ -1509,7 +1509,7 @@ fn semantic_holes_command_caps_hole_count() {
 fn execute_functions_compatible_with_in_scope_values_command_returns_items() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn to_string_i32 : i32 -> string = \x -> "ok"
+fn to_string_i32 : i32 -> string = \x -> "ok";
 let x = 1 in let y : string = ? in y
 "#;
     let out = execute_query_command_for_document(
@@ -1541,7 +1541,7 @@ fn semantic_loop_step_caps_in_scope_values() {
     let uri = in_memory_doc_uri();
     let mut lines = Vec::new();
     for i in 0..160usize {
-        lines.push(format!("fn x{i} : i32 -> i32 = \\v -> v"));
+        lines.push(format!("fn x{i} : i32 -> i32 = \\v -> v;"));
     }
     lines.push("let y : i32 = ? in y".to_string());
     let line = (lines.len() - 1) as u32;
@@ -1614,7 +1614,7 @@ fn execute_holes_command_returns_holes_array() {
 fn semantic_loop_step_reports_expected_type_and_candidates() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn mk : i32 -> i32 = \x -> x
+fn mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let out = execute_semantic_loop_step(
@@ -1744,7 +1744,7 @@ fn semantic_loop_step_reports_local_diagnostics_and_fixes() {
 fn semantic_loop_step_json_contract_is_stable() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn mk : i32 -> i32 = \x -> x
+fn mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let out = execute_semantic_loop_step(
@@ -2085,7 +2085,7 @@ fn semantic_loop_step_parse_error_still_returns_contract_shape() {
 fn golden_flow_hole_to_apply_by_id_reduces_hole_count() {
     let uri = in_memory_doc_uri();
     let text = r#"
-fn mk : i32 -> i32 = \x -> x
+fn mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let step = execute_semantic_loop_step(

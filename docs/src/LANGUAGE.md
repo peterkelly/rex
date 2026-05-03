@@ -19,7 +19,7 @@ A Rex program consists of:
 Example:
 
 ```rex,interactive
-fn inc : i32 -> i32 = \x -> x + 1
+fn inc : i32 -> i32 = \x -> x + 1;
 
 let
   xs = [1, 2, 3]
@@ -99,7 +99,9 @@ Path resolution:
 
 ### Whitespace and Comments
 
-- Whitespace (including newlines) is generally insignificant.
+- Whitespace, including newlines, is generally insignificant and indentation has no syntactic
+  meaning. Top-level `fn` declarations, `declare fn` declarations, marker classes/instances,
+  and class/instance items use explicit semicolon terminators.
 - Comments use `{- ... -}` and are stripped before parsing.
 - Nested block comments are not supported in current Rex builds.
 
@@ -315,7 +317,7 @@ They can also use module-qualified type names:
 
 ```rex
 import dep as D
-fn id x: D.Boxed -> D.Boxed = x
+fn id x: D.Boxed -> D.Boxed = x;
 ```
 
 ## Records: Projection and Update
@@ -346,10 +348,11 @@ match s
 
 ### Functions (`fn`)
 
-Top-level functions are declared with an explicit type signature and a value (typically a lambda):
+Top-level functions are declared with an explicit type signature and a value (typically a lambda).
+Each top-level `fn` declaration is terminated by a semicolon:
 
 ```rex,interactive
-fn add : i32 -> i32 -> i32 = \x y -> x + y
+fn add : i32 -> i32 -> i32 = \x y -> x + y;
 ```
 
 Top-level `fn` declarations are mutually recursive, so they can refer to each other in the same
@@ -357,10 +360,10 @@ module:
 
 ```rex,interactive
 fn even : i32 -> bool = \n ->
-  if n == 0 then true else odd (n - 1)
+  if n == 0 then true else odd (n - 1);
 
 fn odd : i32 -> bool = \n ->
-  if n == 0 then false else even (n - 1)
+  if n == 0 then false else even (n - 1);
 
 even 10
 ```

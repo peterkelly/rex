@@ -110,8 +110,8 @@ async fn mutual_even_odd_let_rec() {
 #[tokio::test]
 async fn mutual_even_odd_top_level_fn_decls() {
     let expr = r#"
-        fn even (n: i32) -> bool = if n == 0 then true else odd (n - 1)
-        fn odd (n: i32) -> bool = if n == 0 then false else even (n - 1)
+        fn even (n: i32) -> bool = if n == 0 then true else odd (n - 1);
+        fn odd (n: i32) -> bool = if n == 0 then false else even (n - 1);
         (even 10, odd 10, even 11, odd 11)
     "#;
     assert_even_odd_tuple(expr).await;

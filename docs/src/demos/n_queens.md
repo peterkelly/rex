@@ -8,7 +8,7 @@ Related reading: [N-queens problem](https://en.wikipedia.org/wiki/Eight_queens_p
 
 ```rex,interactive
 fn abs_i32 : i32 -> i32 = \x ->
-  if x < 0 then 0 - x else x
+  if x < 0 then 0 - x else x;
 
 fn is_safe : i32 -> List i32 -> i32 -> bool = \col placed dist ->
   match placed
@@ -19,13 +19,13 @@ fn is_safe : i32 -> List i32 -> i32 -> bool = \col placed dist ->
       else if abs_i32 (col - c) == dist then
         false
       else
-        is_safe col rest (dist + 1)
+        is_safe col rest (dist + 1);
 
 fn count_from : i32 -> i32 -> List i32 -> i32 = \row n placed ->
   if row == n then
     1
   else
-    try_cols row n placed 0
+    try_cols row n placed 0;
 
 fn try_cols : i32 -> i32 -> List i32 -> i32 -> i32 = \row n placed col ->
   if col == n then
@@ -35,10 +35,10 @@ fn try_cols : i32 -> i32 -> List i32 -> i32 -> i32 = \row n placed col ->
     if is_safe col placed 1 then
       count_from (row + 1) n (Cons col placed) + rest
     else
-      rest
+      rest;
 
 fn solve : i32 -> i32 = \n ->
-  count_from 0 n []
+  count_from 0 n [];
 
 (solve 4, solve 5)
 ```

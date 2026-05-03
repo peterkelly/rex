@@ -10,7 +10,7 @@ The implementation is centered on `fact`, which uses an `if` expression to separ
 fn fact : i32 -> i32 = \n ->
   if n == 0
   then 1
-  else n * fact (n - 1)
+  else n * fact (n - 1);
 
 fact 6
 ```

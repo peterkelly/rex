@@ -27,17 +27,17 @@ expected type at the hole, retrieve candidate repairs, and select one.
 
 ```rex,interactive
 fn parse_ph : string -> Result f32 string = \raw ->
-  if raw == "7.3" then Ok 7.3 else Err "bad reading"
+  if raw == "7.3" then Ok 7.3 else Err "bad reading";
 
 fn classify_ph : f32 -> string = \ph ->
   if ph < 6.8 then "acidic"
   else if ph > 7.8 then "alkaline"
-  else "stable"
+  else "stable";
 
 fn qc_label_from_sensor : string -> Result string string = \raw ->
   match (parse_ph raw)
     when Ok ph -> Ok (classify_ph ph)
-    when Err e -> Err e
+    when Err e -> Err e;
 
 let sensor_reading = "7.3" in
 let qc_label : Result string string = ? in
@@ -76,7 +76,7 @@ This does not prove semantic correctness. It proves local type plausibility and 
 efficiency. The mechanism narrows the action space; it does not replace domain reasoning.
 
 ```rex,interactive
-fn mk : i32 -> string = \n -> "value"
+fn mk : i32 -> string = \n -> "value";
 let x = 1 in
 let y : string = ? in
 y
@@ -115,9 +115,9 @@ and semantic suggestions.
 
 ```rex,interactive
 fn parse_i32 : string -> Result string i32 = \s ->
-  if s == "42" then Ok 42 else Err "bad-int"
+  if s == "42" then Ok 42 else Err "bad-int";
 
-fn plus1 : i32 -> i32 = \n -> n + 1
+fn plus1 : i32 -> i32 = \n -> n + 1;
 
 let input = "42" in
 let out : Result string i32 = ? in
@@ -339,6 +339,7 @@ Before returning generated Rex code:
 #### 1) Recursion model
 
 - Top-level `fn` declarations are mutually recursive.
+- Top-level `fn` declarations end with `;`; indentation and newlines do not terminate them.
 - Single recursive local helper: `let rec`
 - Mutually recursive local helpers: `let rec` with commas between bindings.
 
@@ -346,10 +347,10 @@ Top-level mutual recursion:
 
 ```rex,interactive
 fn even : i32 -> bool = \n ->
-  if n == 0 then true else odd (n - 1)
+  if n == 0 then true else odd (n - 1);
 
 fn odd : i32 -> bool = \n ->
-  if n == 0 then false else even (n - 1)
+  if n == 0 then false else even (n - 1);
 
 even 10
 ```

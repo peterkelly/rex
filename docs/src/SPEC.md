@@ -102,6 +102,22 @@ Rules:
 - `let rec` entries are separated by commas.
 - `let rec` bindings must bind variables (not arbitrary patterns).
 
+## Top-Level Declaration Terminators
+
+Top-level `fn` declarations and `declare fn` declarations are terminated by explicit semicolons:
+
+```rex
+fn inc : i32 -> i32 = \x -> x + 1;
+declare fn host_value : i32;
+```
+
+Rules:
+
+- The semicolon terminates the declaration, not the body expression itself.
+- The terminating semicolon is found at top-level expression/type depth; semicolons nested inside
+  parentheses, brackets, braces, or blocks do not terminate the declaration.
+- Indentation and newlines do not delimit declarations.
+
 ## Top-Level `fn` Recursion
 
 Top-level `fn` declarations are mutually recursive within a module.

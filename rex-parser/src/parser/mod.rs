@@ -254,65 +254,6 @@ impl Parser {
         None
     }
 
-    fn find_same_line_end(&self, start_idx: usize) -> Result<usize, ParserErr> {
-        let start_line = self
-            .tokens
-            .get(start_idx)
-            .ok_or_else(|| ParserErr::new(self.eof, "unexpected EOF".to_string()))?
-            .span()
-            .begin
-            .line;
-
-        let mut depth = 0usize;
-        let mut end_idx = start_idx;
-        for i in start_idx..self.tokens.len() {
-            let tok = &self.tokens[i];
-            if depth == 0 && tok.span().begin.line > start_line {
-                break;
-            }
-            match tok {
-                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                    depth = depth.saturating_sub(1)
-                }
-                _ => {}
-            }
-            end_idx = i + 1;
-        }
-        Ok(end_idx)
-    }
-
-    fn find_dedent_end(&self, start_idx: usize, base_indent: usize) -> Result<usize, ParserErr> {
-        let mut depth = 0usize;
-        let mut end_idx = start_idx;
-        for i in start_idx..self.tokens.len() {
-            let tok = &self.tokens[i];
-            match tok {
-                Token::ParenL(..) | Token::BracketL(..) | Token::BraceL(..) => depth += 1,
-                Token::ParenR(..) | Token::BracketR(..) | Token::BraceR(..) => {
-                    depth = depth.saturating_sub(1)
-                }
-                Token::WhitespaceNewline(..) if depth == 0 => {
-                    let mut j = i + 1;
-                    while j < self.tokens.len()
-                        && matches!(self.tokens[j], Token::WhitespaceNewline(..))
-                    {
-                        j += 1;
-                    }
-                    if j >= self.tokens.len() {
-                        return Ok(i);
-                    }
-                    if self.tokens[j].span().begin.column <= base_indent {
-                        return Ok(i);
-                    }
-                }
-                _ => {}
-            }
-            end_idx = i + 1;
-        }
-        Ok(end_idx)
-    }
-
     fn paren_group_has_top_level_comma(&self, paren_start: usize) -> bool {
         let mut depth = 0usize;
         for i in (paren_start + 1)..self.tokens.len() {
@@ -2023,7 +1964,7 @@ impl Parser {
         let mut params: Vec<(Var, TypeExpr)> = Vec::new();
 
         // Signature form:
-        //   fn add : i32 -> i32 -> i32 = \x y -> x + y
+        //   fn add : i32 -> i32 -> i32 = \x y -> x + y;
         //
         // This desugars back into the existing `FnDecl { params, ret, body }` shape by:
         // - flattening the signature `a -> b -> c` into param types `[a, b]` and ret `c`
@@ -2051,13 +1992,30 @@ impl Parser {
             // `=`
             self.expect_assign()?;
 
-            // Parse a body expression until dedent back to the function's indentation.
+            // Parse a body expression until the declaration terminator.
             let body_start = self.token_cursor;
-            let body_end = self.find_dedent_end(body_start, span_begin.column)?;
+            let body_end = self
+                .find_token_at_depth0(body_start, self.tokens.len(), |t| {
+                    matches!(t, Token::SemiColon(..))
+                })
+                .ok_or_else(|| {
+                    ParserErr::new(self.eof, "expected `;` after function body".to_string())
+                })?;
             let body_expr = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
             self.token_cursor = body_end;
+            let semi_end = match self.current_token() {
+                Token::SemiColon(span, ..) => {
+                    self.next_token();
+                    span.end
+                }
+                token => {
+                    return Err(ParserErr::new(
+                        *token.span(),
+                        "expected `;` after function body",
+                    ));
+                }
+            };
             let body = Arc::new(body_expr);
-            let span_end = body.span().end;
 
             // Flatten `a -> b -> c` into params=[a,b], ret=c so downstream code can
             // reconstruct the same function type.
@@ -2132,7 +2090,7 @@ impl Parser {
             constraints.extend(body_constraints);
 
             return Ok(FnDecl {
-                span: Span::from_begin_end(span_begin, span_end),
+                span: Span::from_begin_end(span_begin, semi_end),
                 is_pub,
                 name: name_var,
                 params,
@@ -2152,12 +2110,12 @@ impl Parser {
         };
 
         // Params (new syntax):
-        //   fn foo x: a -> y: b -> i32 = ...
-        //   fn foo (x: a) -> (y: b) -> i32 = ...
-        //   fn foo (x: a) (y: b) -> i32 = ...
+        //   fn foo x: a -> y: b -> i32 = ...;
+        //   fn foo (x: a) -> (y: b) -> i32 = ...;
+        //   fn foo (x: a) (y: b) -> i32 = ...;
         //
         // Params (legacy syntax, still accepted):
-        //   fn foo (x: a, y: b) -> i32 = ...
+        //   fn foo (x: a, y: b) -> i32 = ...;
         // First, handle the legacy multi-parameter paren list `(x: a, y: b) -> ...`.
         if matches!(self.current_token(), Token::ParenL(..)) {
             // `()` is also treated as the legacy group syntax (nullary functions).
@@ -2301,12 +2259,29 @@ impl Parser {
         // `=`
         self.expect_assign()?;
 
-        // Parse a body expression, delimited by newline (unless inside parens/brackets/braces).
+        // Parse a body expression until the declaration terminator.
         let body_start = self.token_cursor;
-        let body_end = self.find_same_line_end(body_start)?;
+        let body_end = self
+            .find_token_at_depth0(body_start, self.tokens.len(), |t| {
+                matches!(t, Token::SemiColon(..))
+            })
+            .ok_or_else(|| {
+                ParserErr::new(self.eof, "expected `;` after function body".to_string())
+            })?;
         let body = self.parse_expr_slice(&self.tokens[body_start..body_end])?;
         self.token_cursor = body_end;
-        let span_end = body.span().end;
+        let span_end = match self.current_token() {
+            Token::SemiColon(span, ..) => {
+                self.next_token();
+                span.end
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    "expected `;` after function body",
+                ));
+            }
+        };
 
         Ok(FnDecl {
             span: Span::from_begin_end(span_begin, span_end),
@@ -2321,8 +2296,17 @@ impl Parser {
 
     fn parse_declare_fn_decl_toplevel(&mut self, is_pub: bool) -> Result<DeclareFnDecl, ParserErr> {
         let start_idx = self.token_cursor;
-        // `declare fn` has no body, so we parse only the declaration line.
-        let end_idx = self.find_same_line_end(start_idx)?;
+        // `declare fn` has no body, so parse until its explicit terminator.
+        let end_idx = self
+            .find_token_at_depth0(start_idx, self.tokens.len(), |t| {
+                matches!(t, Token::SemiColon(..))
+            })
+            .ok_or_else(|| {
+                ParserErr::new(
+                    self.eof,
+                    "expected `;` after declare fn declaration".to_string(),
+                )
+            })?;
 
         let eof = self
             .tokens
@@ -2334,7 +2318,7 @@ impl Parser {
             eof,
         };
         let mut parser = Parser::new(tokens);
-        let decl = parser.parse_declare_fn_decl(is_pub)?;
+        let mut decl = parser.parse_declare_fn_decl(is_pub)?;
         match parser.current_token() {
             Token::Eof(..) => {}
             token => {
@@ -2346,6 +2330,19 @@ impl Parser {
         }
 
         self.token_cursor = end_idx;
+        let semi_end = match self.current_token() {
+            Token::SemiColon(span, ..) => {
+                self.next_token();
+                span.end
+            }
+            token => {
+                return Err(ParserErr::new(
+                    *token.span(),
+                    "expected `;` after declare fn declaration",
+                ));
+            }
+        };
+        decl.span = Span::from_begin_end(decl.span.begin, semi_end);
         self.skip_newlines();
         Ok(decl)
     }
@@ -2391,7 +2388,7 @@ impl Parser {
         let mut params: Vec<(Var, TypeExpr)> = Vec::new();
 
         // Allow an optional signature delimiter:
-        //   declare fn id : a -> a
+        //   declare fn id : a -> a;
         if matches!(self.current_token(), Token::Colon(..)) {
             self.next_token();
         }
@@ -2407,7 +2404,7 @@ impl Parser {
 
         // `declare fn` supports two surface syntaxes:
         //  1) A full `fn`-style header with named parameters.
-        //  2) A bare type signature (like class methods): `declare fn id a -> a`.
+        //  2) A bare type signature (like class methods): `declare fn id a -> a;`.
         let tok = self.current_token();
         let next = self.peek_token(1);
         let next2 = self.peek_token(2);
@@ -2488,11 +2485,11 @@ impl Parser {
         }
 
         // Params (new syntax):
-        //   declare fn foo x: a -> y: b -> i32 where ...
-        //   declare fn foo (x: a) -> (y: b) -> i32
+        //   declare fn foo x: a -> y: b -> i32 where ...;
+        //   declare fn foo (x: a) -> (y: b) -> i32;
         //
         // Params (legacy syntax, still accepted):
-        //   declare fn foo (x: a, y: b) -> i32
+        //   declare fn foo (x: a, y: b) -> i32;
         if matches!(self.current_token(), Token::ParenL(..)) {
             // `()` is also treated as the legacy group syntax (nullary functions).
             if self.paren_group_has_top_level_comma(self.token_cursor)

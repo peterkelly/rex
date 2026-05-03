@@ -4,7 +4,7 @@ instance Default Foo where {
     default = Bar { z = 0.0 };
 }
 fn reduce : (a -> a -> a) -> t a -> a where Foldable t, Default a =
-    \f xs -> foldl f default xs
+    \f xs -> foldl f default xs;
 
 let 
     x: Foo = default,

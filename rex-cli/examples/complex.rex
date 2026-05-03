@@ -4,8 +4,8 @@ type Tree
     = Leaf { value: i32 }
     | Node { left: Tree, right: Tree }
 
-fn foo : i32 → i32 → i32 = λ x y → x * 2
-fn bar : i32 → i32 → i32 = λ x y → x * 2
+fn foo : i32 → i32 → i32 = λ x y → x * 2;
+fn bar : i32 → i32 → i32 = λ x y → x * 2;
 
 let
     t = Node { 

@@ -215,7 +215,7 @@ fn test_parse_type_decl() {
 #[test]
 fn test_parse_fn_decl_simple() {
     let code = r#"
-    fn add x: i32 -> y: i32 -> i32 = x + y
+    fn add x: i32 -> y: i32 -> i32 = x + y;
     add 1 2
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -245,7 +245,7 @@ fn test_parse_fn_decl_simple() {
 #[test]
 fn test_parse_fn_decl_signature_form_with_lambda_body() {
     let code = r#"
-    fn add : i32 -> i32 -> i32 = \x y -> x + y
+    fn add : i32 -> i32 -> i32 = \x y -> x + y;
     add 1 2
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -277,7 +277,7 @@ fn test_parse_fn_decl_signature_form_with_lambda_body() {
 fn test_parse_fn_sig_multiline_lambda() {
     let code = r#"
     fn f : i32 -> i32 = \x ->
-      x + 1
+      x + 1;
     f 1
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -299,9 +299,44 @@ fn test_parse_fn_sig_multiline_lambda() {
 }
 
 #[test]
+fn test_parse_fn_sig_body_uses_semicolon_not_indentation() {
+    let code = r#"
+    fn f : i32 -> i32 = \x ->
+x + 1;
+    f 1
+    "#;
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let program = parser.parse_program().unwrap();
+    assert_eq!(program.decls.len(), 1);
+    match &program.decls[0] {
+        Decl::Fn(fd) => {
+            assert_eq!(fd.name.name, Symbol::intern("f"));
+            assert_eq!(fd.params.len(), 1);
+            assert!(matches!(fd.ret, TypeExpr::Name(_, ref n) if n.as_ref() == "i32"));
+        }
+        other => panic!("expected fn decl, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_parse_fn_decl_requires_semicolon() {
+    let code = r#"
+    fn inc : i32 -> i32 = \x -> x + 1
+    inc 1
+    "#;
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|err| err.message.contains("expected `;` after function body")),
+        "expected missing semicolon error, got: {errs:?}"
+    );
+}
+
+#[test]
 fn test_parse_fn_decl_signature_form_eta_expands_non_lambda_body() {
     let code = r#"
-    fn inc : i32 -> i32 = add 1
+    fn inc : i32 -> i32 = add 1;
     inc
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -325,7 +360,7 @@ fn test_parse_fn_decl_signature_form_eta_expands_non_lambda_body() {
 #[test]
 fn test_parse_fn_decl_signature_form_where_constraints() {
     let code = r#"
-    fn my_fun : a -> b -> c where Iterable (a, b) = \x y -> x
+    fn my_fun : a -> b -> c where Iterable (a, b) = \x y -> x;
     my_fun
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -347,7 +382,7 @@ fn test_parse_fn_decl_signature_form_where_constraints() {
 #[test]
 fn test_parse_fn_decl_signature_form_rejects_mismatched_lambda_arity() {
     let code = r#"
-    fn add : i32 -> i32 -> i32 = \x -> x
+    fn add : i32 -> i32 -> i32 = \x -> x;
     add
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -357,7 +392,7 @@ fn test_parse_fn_decl_signature_form_rejects_mismatched_lambda_arity() {
 #[test]
 fn test_parse_fn_decl_where_constraints() {
     let code = r#"
-    fn my_fun x: a -> y: b -> c where Iterable (a, b) = x
+    fn my_fun x: a -> y: b -> c where Iterable (a, b) = x;
     my_fun
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -387,7 +422,7 @@ fn test_parse_fn_decl_where_constraints() {
 #[test]
 fn test_parse_declare_fn_decl_where_constraints() {
     let code = r#"
-    declare fn my_fun x: a -> y: b -> c where Iterable (a, b)
+    declare fn my_fun x: a -> y: b -> c where Iterable (a, b);
     42
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -418,7 +453,7 @@ fn test_parse_declare_fn_decl_where_constraints() {
 #[test]
 fn test_parse_declare_fn_decl_bare_signature() {
     let code = r#"
-    declare fn info a -> string where Show a
+    declare fn info a -> string where Show a;
     0
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -449,7 +484,7 @@ fn test_parse_declare_fn_decl_bare_signature() {
 #[test]
 fn test_parse_declare_fn_decl_bare_signature_with_colon() {
     let code = r#"
-    declare fn info : a -> string where Show a
+    declare fn info : a -> string where Show a;
     0
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -478,9 +513,25 @@ fn test_parse_declare_fn_decl_bare_signature_with_colon() {
 }
 
 #[test]
+fn test_parse_declare_fn_decl_requires_semicolon() {
+    let code = r#"
+    declare fn info : a -> string
+    0
+    "#;
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter().any(|err| err
+            .message
+            .contains("expected `;` after declare fn declaration")),
+        "expected missing declare fn semicolon error, got: {errs:?}"
+    );
+}
+
+#[test]
 fn test_parse_declare_fn_decl_rejects_body() {
     let code = r#"
-    declare fn my_fun x: a -> a = x
+    declare fn my_fun x: a -> a = x;
     0
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -490,7 +541,7 @@ fn test_parse_declare_fn_decl_rejects_body() {
 #[test]
 fn test_parse_fn_decl_param_fun_type_requires_parens() {
     let code = r#"
-    fn apply x: (a -> c) -> y: a -> c = x y
+    fn apply x: (a -> c) -> y: a -> c = x y;
     apply
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -516,7 +567,7 @@ fn test_parse_fn_decl_param_fun_type_requires_parens() {
 #[test]
 fn test_parse_fn_decl_parenthesized_params_allow_fun_types() {
     let code = r#"
-    fn reduce (f: a -> a -> a) -> (x: t a) -> a = x
+    fn reduce (f: a -> a -> a) -> (x: t a) -> a = x;
     reduce
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -539,7 +590,7 @@ fn test_parse_fn_decl_parenthesized_params_allow_fun_types() {
 #[test]
 fn test_parse_fn_decl_parenthesized_params_require_arrow_delimiter() {
     let code = r#"
-    fn reduce (f: a -> a -> a) (x: t a) -> a = x
+    fn reduce (f: a -> a -> a) (x: t a) -> a = x;
     reduce
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
@@ -549,7 +600,7 @@ fn test_parse_fn_decl_parenthesized_params_require_arrow_delimiter() {
 #[test]
 fn test_parse_unit_type() {
     let code = r#"
-    fn unit_id x: () -> () = x
+    fn unit_id x: () -> () = x;
     unit_id ()
     "#;
     let mut parser = Parser::new(Token::tokenize(code).unwrap());

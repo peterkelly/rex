@@ -42,7 +42,7 @@ If you hit a parse error:
 
 1. Reduce the program to the smallest failing snippet.
 2. Add parentheses to disambiguate application vs infix operators.
-3. Prefer layout-style `let`/`match` while debugging.
+3. Prefer multi-line `let`/`match` while debugging.
 
 ## “Missing typeclass impl”
 

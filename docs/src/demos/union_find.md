@@ -14,27 +14,27 @@ fn get_parent : UF -> i32 -> i32 = \uf x ->
   else if x == 1 then uf.p1
   else if x == 2 then uf.p2
   else if x == 3 then uf.p3
-  else uf.p4
+  else uf.p4;
 
 fn set_parent : UF -> i32 -> i32 -> UF = \uf x p ->
   if x == 0 then { uf with { p0 = p } }
   else if x == 1 then { uf with { p1 = p } }
   else if x == 2 then { uf with { p2 = p } }
   else if x == 3 then { uf with { p3 = p } }
-  else { uf with { p4 = p } }
+  else { uf with { p4 = p } };
 
 fn find : UF -> i32 -> i32 = \uf x ->
   let px = get_parent uf x in
-  if px == x then x else find uf px
+  if px == x then x else find uf px;
 
 fn union : UF -> i32 -> i32 -> UF = \uf a b ->
   let
     ra = find uf a,
     rb = find uf b
   in
-    if ra == rb then uf else set_parent uf rb ra
+    if ra == rb then uf else set_parent uf rb ra;
 
-fn connected : UF -> i32 -> i32 -> bool = \uf a b -> find uf a == find uf b
+fn connected : UF -> i32 -> i32 -> bool = \uf a b -> find uf a == find uf b;
 
 let
   uf0 = UF { p0 = 0, p1 = 1, p2 = 2, p3 = 3, p4 = 4 },

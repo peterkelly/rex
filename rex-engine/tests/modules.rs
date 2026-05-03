@@ -168,8 +168,8 @@ async fn module_import_local_pub() {
     write_file(
         &module,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
-        fn hidden x: i32 -> i32 = x + 1
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
+        fn hidden x: i32 -> i32 = x + 1;
         ()
 "#,
     );
@@ -202,7 +202,7 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
-    write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let _ = Evaluator::new_with_compiler(
         RuntimeEnv::new(engine.clone()),
         Compiler::new(engine.clone()),
@@ -221,7 +221,7 @@ async fn eval_module_file_reloads_when_local_file_changes() {
 
     // Edit the same local module path and ensure the engine invalidates path-keyed
     // module cache entries before reloading.
-    write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
     let _ = Evaluator::new_with_compiler(
         RuntimeEnv::new(engine.clone()),
         Compiler::new(engine.clone()),
@@ -246,7 +246,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
     let importer = dir.join("main.rex");
     write_file(&importer, "()");
 
-    write_file(&module, "pub fn value x: i32 -> i32 = x + 1");
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
 
@@ -261,7 +261,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
 
     // Same module path, changed contents: import resolution must observe updated
     // source and invalidate stale per-module caches.
-    write_file(&module, "pub fn value x: i32 -> i32 = x + 2");
+    write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
     let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value)\nvalue 0", &importer)
         .await
         .unwrap();
@@ -290,7 +290,7 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
         &a,
         r#"
         import b as B
-        pub fn id x: B.Boxed -> B.Boxed = x
+        pub fn id x: B.Boxed -> B.Boxed = x;
         "#,
     );
 
@@ -449,7 +449,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
         &a,
         r#"
         import b as B
-        pub fn fa x: i32 -> i32 = if x == 0 then 0 else B.fb (x - 1)
+        pub fn fa x: i32 -> i32 = if x == 0 then 0 else B.fb (x - 1);
         ()
 "#,
     );
@@ -457,7 +457,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
         &b,
         r#"
         import a as A
-        pub fn fb x: i32 -> i32 = if x == 0 then 0 else A.fa (x - 1)
+        pub fn fb x: i32 -> i32 = if x == 0 then 0 else A.fa (x - 1);
         ()
 "#,
     );
@@ -870,8 +870,8 @@ async fn module_import_rejects_private_access() {
     write_file(
         &module,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
-        fn hidden x: i32 -> i32 = x + 1
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
+        fn hidden x: i32 -> i32 = x + 1;
         ()
 "#,
     );
@@ -904,7 +904,7 @@ async fn module_import_include_roots() {
     write_file(
         &module,
         r#"
-        pub fn inc x: i32 -> i32 = x + 1
+        pub fn inc x: i32 -> i32 = x + 1;
         ()
 "#,
     );
@@ -936,7 +936,7 @@ async fn snippet_can_import_with_explicit_base() {
     write_file(
         &module,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
         ()
 "#,
     );
@@ -971,9 +971,9 @@ async fn module_import_wildcard_clause() {
     write_file(
         &module,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
-        pub fn triple x: i32 -> i32 = x * 3
-        fn hidden x: i32 -> i32 = x + 1
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
+        pub fn triple x: i32 -> i32 = x * 3;
+        fn hidden x: i32 -> i32 = x + 1;
         ()
 "#,
     );
@@ -1005,8 +1005,8 @@ async fn module_import_selected_clause_with_alias() {
     write_file(
         &module,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
-        pub fn triple x: i32 -> i32 = x * 3
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
+        pub fn triple x: i32 -> i32 = x * 3;
         ()
 "#,
     );
@@ -1038,7 +1038,7 @@ async fn module_import_selected_clause_missing_export() {
     write_file(
         &module,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
         ()
 "#,
     );
@@ -1455,7 +1455,7 @@ async fn module_import_missing_type_export_in_fn_signature() {
         r#"
         import dep as D
 
-        fn id x: D.Missing -> D.Missing = x
+        fn id x: D.Missing -> D.Missing = x;
 
         0
 "#,
@@ -1531,7 +1531,7 @@ async fn module_import_missing_class_export_in_fn_where_constraint() {
         r#"
         import dep as D
 
-        fn id x: i32 -> i32 where D.Missing i32 = x
+        fn id x: i32 -> i32 where D.Missing i32 = x;
 
         0
 "#,
@@ -1568,7 +1568,7 @@ async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
         r#"
         import dep as D
 
-        declare fn id x: i32 -> i32 where D.Missing i32
+        declare fn id x: i32 -> i32 where D.Missing i32;
 
         0
 "#,
@@ -1773,14 +1773,14 @@ async fn module_import_selected_clause_duplicate_name() {
     write_file(
         &left,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
         ()
 "#,
     );
     write_file(
         &right,
         r#"
-        pub fn mul x: i32 -> y: i32 -> i32 = x * y
+        pub fn mul x: i32 -> y: i32 -> i32 = x * y;
         ()
 "#,
     );
@@ -1812,7 +1812,7 @@ async fn module_import_selected_clause_conflicts_with_local() {
     write_file(
         &module,
         r#"
-        pub fn add x: i32 -> y: i32 -> i32 = x + y
+        pub fn add x: i32 -> y: i32 -> i32 = x + y;
         ()
 "#,
     );
@@ -1820,7 +1820,7 @@ async fn module_import_selected_clause_conflicts_with_local() {
         &main,
         r#"
         import foo.bar (add)
-        fn add x: i32 -> y: i32 -> i32 = x - y
+        fn add x: i32 -> y: i32 -> i32 = x - y;
         add 10 2
 "#,
     );

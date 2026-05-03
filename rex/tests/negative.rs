@@ -243,8 +243,8 @@ async fn compile_rejects_invalid_programs() {
         (
             "duplicate_function_declaration",
             r#"
-            fn f (x: i32) -> i32 = x
-            fn f (x: i32) -> i32 = x
+            fn f (x: i32) -> i32 = x;
+            fn f (x: i32) -> i32 = x;
             f 1
             "#,
             |e| matches!(e, TypeError::DuplicateValue(name) if name.as_ref() == "f"),
@@ -252,7 +252,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "function_body_must_match_declared_return_type",
             r#"
-            fn f (x: i32) -> bool = x
+            fn f (x: i32) -> bool = x;
             f 1
             "#,
             |e| matches!(e, TypeError::Unification(..)),
@@ -341,7 +341,7 @@ async fn compile_rejects_invalid_programs() {
             "constraint_kind_mismatch_rejected",
             r#"
             fn my_fn (x: t i32) -> i32 where Foldable t, Default t =
-                0
+                0;
 
             my_fn [1, 2, 3]
             "#,
@@ -351,7 +351,7 @@ async fn compile_rejects_invalid_programs() {
             "fn_decl_missing_required_constraint_is_error",
             r#"
             fn my_fn (x: t a) -> a where Foldable t =
-                foldl (\_ acc -> acc) (default) x
+                foldl (\_ acc -> acc) (default) x;
 
             my_fn [[1, 2], [3]]
             "#,
@@ -392,7 +392,7 @@ async fn compile_rejects_invalid_programs_engine_errors() {
             "ambiguous_type_variable_only_in_constraints",
             r#"
             fn my_fn (x: i32) -> i32 where Default b =
-                let y: b = default in x
+                let y: b = default in x;
 
             my_fn 1
             "#,

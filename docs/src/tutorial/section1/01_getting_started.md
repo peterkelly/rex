@@ -32,7 +32,7 @@ you’ll get a parse/type/eval error (often with a span).
 Even with declarations, the program result is the final expression:
 
 ```rex,interactive
-fn inc : i32 -> i32 = \x -> x + 1
+fn inc : i32 -> i32 = \x -> x + 1;
 
 let xs = [1, 2, 3] in
   map inc xs
@@ -55,7 +55,8 @@ Comments use `{- ... -}`:
 
 ## Whitespace
 
-Most whitespace is insignificant, but multi-line expressions are often easier to read:
+Most whitespace is insignificant, and indentation has no syntactic meaning. Multi-line expressions
+are often easier to read:
 
 ```rex,interactive
 let
@@ -65,7 +66,8 @@ in
   x + y
 ```
 
-Commas between `let` bindings are required. The parser also accepts many one-line forms, but
+Commas between `let` bindings are required. Top-level function declarations end with semicolons,
+so multi-line bodies do not depend on indentation. The parser also accepts many one-line forms, but
 multi-line formatting tends to be easier to debug.
 
 Type-class and instance method blocks use explicit braces and semicolon-separated methods:

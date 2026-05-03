@@ -517,8 +517,8 @@ mod tests {
         std::fs::write(
             root.join("foo/bar.rex"),
             r#"
-                pub fn add : i32 -> i32 -> i32 = \x y -> x + y
-                pub fn triple : i32 -> i32 = \x -> x * 3
+                pub fn add : i32 -> i32 -> i32 = \x y -> x + y;
+                pub fn triple : i32 -> i32 = \x -> x * 3;
             "#,
         )
         .expect("write bar.rex");
@@ -545,7 +545,7 @@ mod tests {
         std::fs::write(
             root.join("foo/bar.rex"),
             r#"
-                pub fn inc : i32 -> i32 = \x -> x + 1
+                pub fn inc : i32 -> i32 = \x -> x + 1;
             "#,
         )
         .expect("write bar.rex");
