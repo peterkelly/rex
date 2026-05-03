@@ -94,14 +94,7 @@ impl Parser {
     pub fn new(tokens: Tokens) -> Parser {
         let mut parser = Parser {
             token_cursor: 0,
-            tokens: tokens
-                .items
-                .into_iter()
-                .filter_map(|token| match token {
-                    Token::Whitespace(..) => None,
-                    token => Some(token),
-                })
-                .collect(),
+            tokens: tokens.items,
             eof: tokens.eof,
             errors: Vec::new(),
             limits: ParserLimits::default(),
@@ -135,18 +128,7 @@ impl Parser {
         res
     }
 
-    fn skip_newlines(&mut self) {
-        while self.token_cursor < self.tokens.len() {
-            if matches!(self.tokens[self.token_cursor], Token::WhitespaceNewline(..)) {
-                self.token_cursor += 1;
-                continue;
-            }
-            break;
-        }
-    }
-
     fn current_token(&mut self) -> Token {
-        self.skip_newlines();
         if self.token_cursor < self.tokens.len() {
             return self.tokens[self.token_cursor].clone();
         }
@@ -154,14 +136,9 @@ impl Parser {
     }
 
     fn peek_token(&mut self, n: usize) -> Token {
-        self.skip_newlines();
         let mut cursor = self.token_cursor;
         let mut seen = 0usize;
         while cursor < self.tokens.len() {
-            if matches!(self.tokens[cursor], Token::WhitespaceNewline(..)) {
-                cursor += 1;
-                continue;
-            }
             if seen == n {
                 return self.tokens[cursor].clone();
             }
@@ -173,7 +150,6 @@ impl Parser {
 
     fn next_token(&mut self) {
         self.token_cursor += 1;
-        self.skip_newlines();
     }
 
     fn expect_colon(&mut self) -> Result<(), ParserErr> {
@@ -2410,7 +2386,6 @@ impl Parser {
             }
         };
         decl.span = Span::from_begin_end(decl.span.begin, semi_end);
-        self.skip_newlines();
         Ok(decl)
     }
 

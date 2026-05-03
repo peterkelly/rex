@@ -5777,12 +5777,7 @@ fn function_defs_from_tokens(tokens: &Tokens) -> HashMap<String, CompletionItemK
     let items = &tokens.items;
     let mut index = 0usize;
 
-    let next_non_ws = |mut i: usize| -> Option<usize> {
-        while i < items.len() && items[i].is_whitespace() {
-            i += 1;
-        }
-        (i < items.len()).then_some(i)
-    };
+    let next_non_ws = |i: usize| -> Option<usize> { (i < items.len()).then_some(i) };
 
     while index < items.len() {
         if matches!(items[index], Token::Fn(..)) {
@@ -6366,10 +6361,7 @@ fn imported_projection_at_position(
     position: Position,
 ) -> Option<(String, String)> {
     fn is_trivia(token: &Token) -> bool {
-        matches!(
-            token,
-            Token::Whitespace(..) | Token::CommentL(..) | Token::CommentR(..)
-        )
+        matches!(token, Token::CommentL(..) | Token::CommentR(..))
     }
 
     fn prev_non_trivia(tokens: &Tokens, start: usize) -> Option<usize> {

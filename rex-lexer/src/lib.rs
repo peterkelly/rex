@@ -98,8 +98,6 @@ pub enum Token {
     Pipe(Span),
     Question(Span),
     SemiColon(Span),
-    Whitespace(Span),
-    WhitespaceNewline(Span),
 
     // Literals
     Bool(bool, Span),
@@ -244,10 +242,10 @@ impl Token {
                     Token::Question(span)
                 } else if capture.name("SemiColon").is_some() {
                     Token::SemiColon(span)
-                } else if capture.name("Whitespace").is_some() {
-                    Token::Whitespace(span)
-                } else if capture.name("WhitespaceNewline").is_some() {
-                    Token::WhitespaceNewline(span)
+                } else if capture.name("SkipSpace").is_some()
+                    || capture.name("SkipLineBreak").is_some()
+                {
+                    continue;
                 }
 
                 // Operators
@@ -336,12 +334,8 @@ impl Token {
             tokens.push(token)
         }
 
-        // Filter whitespace
         Ok(Tokens {
-            items: tokens
-                .into_iter()
-                .filter(|token| !matches!(*token, Token::Whitespace(..)))
-                .collect(),
+            items: tokens,
             eof: Span::new(line, column, line, column),
         })
     }
@@ -396,8 +390,8 @@ impl Token {
                 r"(?P<ParenR>\))|",
                 r"(?P<Question>\?)|",
                 r"(?P<SemiColon>;)|",
-                r"(?P<Whitespace>( |\t))|",
-                r"(?P<WhitespaceNewline>(\n|\r))|",
+                r"(?P<SkipSpace>( |\t))|",
+                r"(?P<SkipLineBreak>(\n|\r))|",
                 // Operators
                 r"(?P<Concat>\+\+)|",
                 r"(?P<Add>\+)|",
@@ -453,10 +447,6 @@ impl Token {
             _ => Precedence::lowest(),
         }
     }
-
-    pub fn is_whitespace(&self) -> bool {
-        matches!(self, Token::Whitespace(..) | Token::WhitespaceNewline(..))
-    }
 }
 
 impl Spanned for Token {
@@ -508,8 +498,6 @@ impl Spanned for Token {
             Pipe(span, ..) => span,
             Question(span, ..) => span,
             SemiColon(span, ..) => span,
-            Whitespace(span, ..) => span,
-            WhitespaceNewline(span, ..) => span,
 
             // Operators
             Add(span, ..) => span,
@@ -591,8 +579,6 @@ impl Spanned for Token {
             Pipe(span, ..) => span,
             Question(span, ..) => span,
             SemiColon(span, ..) => span,
-            Whitespace(span, ..) => span,
-            WhitespaceNewline(span, ..) => span,
 
             // Operators
             Add(span, ..) => span,
@@ -676,8 +662,6 @@ impl Display for Token {
             Pipe(..) => write!(f, "|"),
             Question(..) => write!(f, "?"),
             SemiColon(..) => write!(f, ";"),
-            Whitespace(..) => write!(f, " "),
-            WhitespaceNewline(..) => writeln!(f),
 
             // Operators
             Add(..) => write!(f, "+"),
