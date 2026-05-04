@@ -1,53 +1,62 @@
 # Canonical PEG format
 
-This file defines the canonical textual format for rendering `Grammar<R>` and
-`Peg<R>` values. `grammar_to_string` must emit exactly this format, and the
-`.peg` parser must parse this format back into structurally comparable grammar
-data.
+This file defines the canonical textual format for rendering `Grammar<R>`,
+`Item<R>`, and `Peg<R>` values. `grammar_to_string` must emit exactly this
+format, and the `.peg` parser must parse this format back into structurally
+comparable grammar data.
 
 The accepted syntax is specified in `peg.peg`; `peg_syntax_grammar()` is the
 Rust-side structural mirror of that file.
 
 The format is intentionally a serialization of the Rust grammar data, not a
-general documentation notation. Human commentary belongs outside generated
-grammar files.
+general documentation notation. Comments in generated grammar files are
+`Grammar` items and round-trip as part of the structural comparison.
 
 ## File shape
 
-A file is a sequence of rule definitions. The first rule definition is the
-grammar start rule. For the Rex grammar this is `Program`.
+A file is a sequence of rule definitions and comment blocks. The first rule
+definition is the grammar start rule. For the Rex grammar this is `Program`.
 
 Rules are emitted in stable grammar order. The canonical Rex grammar order is
 the `Grammar::rules()` order, which follows the `RexRule` ordering.
 
-Each rule is rendered on one logical line unless wrapping is needed:
+Each rule is rendered on one logical line unless wrapping is needed. Rule names
+are padded so every `<-` starts in the same column, one space after the longest
+rule name in the grammar:
 
 ```peg
-RuleName <- expression
+Short          <- expression
+LongerRuleName <- expression
 ```
 
 The canonical renderer may insert line breaks inside long sequences or choices,
 but it must do so deterministically.
 
-Generated files contain no comments. A parser may accept comments for diagnostics
-or hand-written tests, but comments are not part of canonical output.
+Comment items render as comment blocks separated from rule definitions by blank
+lines. Every line of comment text is prefixed with `# `. The parser strips that
+single separator space when present and preserves the remaining comment text
+exactly, including internal newlines and leading spaces after the separator.
 
 ## Names
 
-Rule references and token references are both bare identifiers. Their spellings
-come from `Display` for the Rust enum values.
+Rule references and token references are both bare identifiers. Rule spellings
+come from `Display` for the Rust rule enum values. Token spellings come from
+an explicit token-name mapping used by `Display` and the `.peg` grammar loader:
+Rust variants stay in CamelCase, while canonical `.peg` token names are upper
+snake case.
 
 ```peg
-Program <- Decl* Expr? Eof
-ImportDecl <- Import ImportPath SemiColon
+Program    <- Decl* Expr? EOF
+ImportDecl <- IMPORT ImportPath SEMI_COLON
 ```
 
 The grammar loader resolves left-hand side identifiers as rule names. A
 right-hand side identifier must resolve to exactly one rule or token name. If a
 name exists in both namespaces, loading the grammar is an error.
 
-Token references use `TokenKind` names, not Rex source spellings. For example,
-use `Import`, `ArrowR`, and `ParenL`, not `'import'`, `'->'`, or `'('`.
+Token references use canonical token names, not Rex source spellings. For
+example, use `IMPORT`, `ARROW_R`, and `PAREN_L`, not `'import'`, `'->'`, or
+`'('`.
 
 ## Operators
 
@@ -67,8 +76,8 @@ The renderer must add parentheses whenever omitting them would change the parsed
 `Peg::Token(kind)` renders as the token name:
 
 ```peg
-Ident
-ArrowR
+IDENT
+ARROW_R
 ```
 
 `Peg::Rule(rule)` renders as the rule name:
@@ -81,7 +90,7 @@ TypeExpr
 `Peg::Seq(items)` renders as a whitespace-separated sequence:
 
 ```peg
-Import ImportPath ImportClause? ImportAlias? SemiColon
+IMPORT ImportPath ImportClause? ImportAlias? SEMI_COLON
 ```
 
 Canonical grammar data should not contain nested `Seq` values or one-item
@@ -117,13 +126,13 @@ MatchArm+
 `Peg::And(item)` renders as prefix `&`:
 
 ```peg
-&Ident
+&IDENT
 ```
 
 `Peg::Not(item)` renders as prefix `!`:
 
 ```peg
-!Assign
+!ASSIGN
 ```
 
 `Peg::Cut(item)` renders as a function form:
@@ -136,7 +145,7 @@ cut(Expr)
 literal:
 
 ```peg
-label("expected `;` after function body", SemiColon)
+label("expected `;` after function body", SEMI_COLON)
 ```
 
 String literals use Rust escaping rules for `\`, `"`, newlines, tabs, and other

@@ -122,7 +122,7 @@ impl TokenKind {
         Self::ALL
             .iter()
             .copied()
-            .find(|kind| kind.to_string() == name)
+            .find(|kind| kind.peg_name() == name)
     }
 
     pub(crate) fn matches(self, token: &Token) -> bool {
@@ -234,11 +234,66 @@ impl TokenKind {
             TokenKind::Eof => "EOF",
         }
     }
+
+    fn peg_name(self) -> &'static str {
+        match self {
+            TokenKind::As => "AS",
+            TokenKind::Class => "CLASS",
+            TokenKind::Declare => "DECLARE",
+            TokenKind::Else => "ELSE",
+            TokenKind::Fn => "FN",
+            TokenKind::If => "IF",
+            TokenKind::Import => "IMPORT",
+            TokenKind::Is => "IS",
+            TokenKind::Instance => "INSTANCE",
+            TokenKind::Match => "MATCH",
+            TokenKind::Pub => "PUB",
+            TokenKind::Type => "TYPE",
+            TokenKind::When => "WHEN",
+            TokenKind::Then => "THEN",
+            TokenKind::With => "WITH",
+            TokenKind::Where => "WHERE",
+            TokenKind::Div => "DIV",
+            TokenKind::Dot => "DOT",
+            TokenKind::Le => "LE",
+            TokenKind::Mul => "MUL",
+            TokenKind::Sub => "SUB",
+            TokenKind::ArrowR => "ARROW_R",
+            TokenKind::Assign => "ASSIGN",
+            TokenKind::BackSlash => "BACK_SLASH",
+            TokenKind::BraceL => "BRACE_L",
+            TokenKind::BraceR => "BRACE_R",
+            TokenKind::BracketL => "BRACKET_L",
+            TokenKind::BracketR => "BRACKET_R",
+            TokenKind::Colon => "COLON",
+            TokenKind::ColonColon => "COLON_COLON",
+            TokenKind::Comma => "COMMA",
+            TokenKind::DotDot => "DOT_DOT",
+            TokenKind::HashTag => "HASH_TAG",
+            TokenKind::In => "IN",
+            TokenKind::Let => "LET",
+            TokenKind::Rec => "REC",
+            TokenKind::ParenL => "PAREN_L",
+            TokenKind::ParenR => "PAREN_R",
+            TokenKind::Pipe => "PIPE",
+            TokenKind::Question => "QUESTION",
+            TokenKind::SemiColon => "SEMI_COLON",
+            TokenKind::Bool => "BOOL",
+            TokenKind::Float => "FLOAT",
+            TokenKind::Int => "INT",
+            TokenKind::String => "STRING",
+            TokenKind::HttpsUrl => "HTTPS_URL",
+            TokenKind::Ident => "IDENT",
+            TokenKind::ValueOperator => "VALUE_OPERATOR",
+            TokenKind::BinaryOperator => "BINARY_OPERATOR",
+            TokenKind::Eof => "EOF",
+        }
+    }
 }
 
 impl fmt::Display for TokenKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self:?}")
+        f.write_str(self.peg_name())
     }
 }
 
@@ -278,17 +333,44 @@ pub(crate) enum Peg<R, K = TokenKind> {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Grammar<R, K = TokenKind> {
     start: R,
-    rules: BTreeMap<R, Peg<R, K>>,
+    items: Vec<Item<R, K>>,
+    rule_indexes: BTreeMap<R, usize>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Item<R, K = TokenKind> {
+    Rule(R, Peg<R, K>),
+    Comment(String),
 }
 
 impl<R, K> Grammar<R, K>
 where
     R: Copy + Ord,
 {
+    #[cfg(test)]
     pub(crate) fn new(start: R, rules: impl IntoIterator<Item = (R, Peg<R, K>)>) -> Self {
+        Self::from_items(
+            start,
+            rules
+                .into_iter()
+                .map(|(rule, expression)| Item::Rule(rule, expression)),
+        )
+    }
+
+    pub(crate) fn from_items(start: R, items: impl IntoIterator<Item = Item<R, K>>) -> Self {
+        let items = items.into_iter().collect::<Vec<_>>();
+        let mut rule_indexes = BTreeMap::new();
+
+        for (index, item) in items.iter().enumerate() {
+            if let Item::Rule(rule, _) = item {
+                rule_indexes.insert(*rule, index);
+            }
+        }
+
         Self {
             start,
-            rules: rules.into_iter().collect(),
+            items,
+            rule_indexes,
         }
     }
 
@@ -297,16 +379,24 @@ where
     }
 
     pub(crate) fn expression(&self, rule: R) -> Option<&Peg<R, K>> {
-        self.rules.get(&rule)
+        let index = *self.rule_indexes.get(&rule)?;
+        match self.items.get(index)? {
+            Item::Rule(_, expression) => Some(expression),
+            Item::Comment(_) => unreachable!("rule index points at a rule item"),
+        }
     }
 
     #[cfg(test)]
-    pub(crate) fn rules(
-        &self,
-    ) -> impl DoubleEndedIterator<Item = (R, &Peg<R, K>)> + ExactSizeIterator + '_ {
-        self.rules
-            .iter()
-            .map(|(&rule, expression)| (rule, expression))
+    pub(crate) fn items(&self) -> impl DoubleEndedIterator<Item = &Item<R, K>> {
+        self.items.iter()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rules(&self) -> impl DoubleEndedIterator<Item = (R, &Peg<R, K>)> + '_ {
+        self.items.iter().filter_map(|item| match item {
+            Item::Rule(rule, expression) => Some((*rule, expression)),
+            Item::Comment(_) => None,
+        })
     }
 }
 
@@ -824,15 +914,41 @@ where
     K: fmt::Display,
 {
     let mut output = String::new();
+    let rule_column = grammar
+        .rules()
+        .map(|(rule, _)| rule.to_string().len())
+        .max()
+        .unwrap_or(0)
+        + 1;
 
-    for (rule, expression) in grammar.rules() {
-        output.push_str(&rule.to_string());
-        output.push_str(" <- ");
-        output.push_str(&peg_to_string(expression));
-        output.push('\n');
+    for item in grammar.items() {
+        match item {
+            Item::Rule(rule, expression) => {
+                let name = rule.to_string();
+                output.push_str(&name);
+                output.push_str(&" ".repeat(rule_column - name.len()));
+                output.push_str("<- ");
+                output.push_str(&peg_to_string(expression));
+                output.push('\n');
+            }
+            Item::Comment(comment) => render_comment(comment, &mut output),
+        }
     }
 
     output
+}
+
+#[cfg(test)]
+fn render_comment(comment: &str, output: &mut String) {
+    output.push('\n');
+
+    for line in comment.split('\n') {
+        output.push_str("# ");
+        output.push_str(line);
+        output.push('\n');
+    }
+
+    output.push('\n');
 }
 
 #[cfg(test)]
@@ -988,14 +1104,10 @@ mod tests {
 
     #[test]
     fn grammar_to_string_renders_rules_in_stable_order() {
-        let grammar = Grammar::new(
+        let grammar = Grammar::from_items(
             TestRule::Start,
             [
-                (
-                    TestRule::Term,
-                    choice([tok(TokenKind::Int), tok(TokenKind::String)]),
-                ),
-                (
+                Item::Rule(
                     TestRule::Start,
                     seq([
                         tok(TokenKind::Ident),
@@ -1003,12 +1115,16 @@ mod tests {
                         tok(TokenKind::Eof),
                     ]),
                 ),
+                Item::Rule(
+                    TestRule::Term,
+                    choice([tok(TokenKind::Int), tok(TokenKind::String)]),
+                ),
             ],
         );
 
         assert_eq!(
             grammar_to_string(&grammar),
-            "Start <- Ident Term* Eof\nTerm <- Int / String\n"
+            "Start <- IDENT Term* EOF\nTerm  <- INT / STRING\n"
         );
     }
 
@@ -1029,7 +1145,7 @@ mod tests {
 
         assert_eq!(
             grammar_to_string(&grammar),
-            "Start <- (Ident / Int) (String Bool)? (&Float)* &Question?\n"
+            "Start <- (IDENT / INT) (STRING BOOL)? (&FLOAT)* &QUESTION?\n"
         );
     }
 
@@ -1048,7 +1164,23 @@ mod tests {
 
         assert_eq!(
             grammar_to_string(&grammar),
-            "Start <- cut(label(\"expected \\\"thing\\\"\\n\", Ident SemiColon))\n"
+            "Start <- cut(label(\"expected \\\"thing\\\"\\n\", IDENT SEMI_COLON))\n"
+        );
+    }
+
+    #[test]
+    fn grammar_to_string_renders_comment_items() {
+        let grammar = Grammar::from_items(
+            TestRule::Start,
+            [
+                Item::Comment("Group heading\n  detail".to_string()),
+                Item::Rule(TestRule::Start, tok(TokenKind::Eof)),
+            ],
+        );
+
+        assert_eq!(
+            grammar_to_string(&grammar),
+            "\n# Group heading\n#   detail\n\nStart <- EOF\n"
         );
     }
 }

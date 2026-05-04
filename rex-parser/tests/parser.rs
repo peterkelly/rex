@@ -29,20 +29,43 @@ fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
 #[test]
 fn test_parser_exposes_target_peg_grammar() {
     let grammar = Parser::grammar();
-    for rule in [
-        "Program <-",
-        "Decl <-",
-        "TypeExpr <-",
-        "Expr <-",
-        "Pattern <-",
-    ] {
-        assert!(grammar.contains(rule), "missing grammar rule {rule}");
+    let rule_lines = grammar
+        .lines()
+        .filter(|line| line.contains("<-"))
+        .collect::<Vec<_>>();
+    let arrow_column = rule_lines
+        .first()
+        .and_then(|line| line.find("<-"))
+        .expect("grammar has rule lines");
+    let longest_rule_name = rule_lines
+        .iter()
+        .map(|line| line.split_whitespace().next().unwrap().len())
+        .max()
+        .unwrap();
+
+    assert_eq!(arrow_column, longest_rule_name + 1);
+    assert!(
+        rule_lines
+            .iter()
+            .all(|line| line.find("<-") == Some(arrow_column)),
+        "all grammar arrows should be aligned"
+    );
+
+    for rule in ["Program", "Decl", "TypeExpr", "Expr", "Pattern"] {
+        assert!(
+            rule_lines
+                .iter()
+                .any(|line| line.split_whitespace().next() == Some(rule)),
+            "missing grammar rule {rule}"
+        );
     }
-    assert!(grammar.starts_with("Program <- Decl* Expr? Eof\n"));
-    assert!(grammar.contains("ImportDecl <- Import cut("));
-    assert!(grammar.contains("label(\"expected `;` after function body\", SemiColon)"));
+    assert!(grammar.starts_with("\n# Program\n\nProgram            <- Decl* Expr? EOF\n"));
+    assert!(grammar.contains("\n# Declarations\n\nDecl               <-"));
+    assert!(grammar.contains("\n# Expressions\n\nExpr               <-"));
+    assert!(grammar.contains("\n# Patterns\n\nPattern            <-"));
+    assert!(grammar.contains("ImportDecl         <- IMPORT cut("));
+    assert!(grammar.contains("label(\"expected `;` after function body\", SEMI_COLON)"));
     assert!(!grammar.contains("'import'"));
-    assert!(!grammar.contains("#"));
 }
 
 #[test]

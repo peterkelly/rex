@@ -5,12 +5,12 @@
 //! supplies the `.peg` lexer, grammar, and CST-to-syntax conversion while
 //! reusing the same generic PEG interpreter as the Rex parser.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, fmt};
 
 use rex_lexer::span::Span as RexSpan;
 
 use crate::{
-    grammar::{Cst, CstNode, Grammar, GrammarParser, Peg, Terminal},
+    grammar::{Cst, CstNode, Grammar, GrammarParser, Item as GrammarItem, Peg, Terminal},
     peg::{Engine, EngineToken, Failure},
 };
 
@@ -46,6 +46,7 @@ impl EngineToken for Token {
 pub(crate) enum TokenKind {
     Ident(String),
     String(String),
+    Comment(String),
     Cut,
     Label,
     Arrow,
@@ -66,6 +67,7 @@ pub(crate) enum TokenKind {
 enum TerminalKind {
     Ident,
     String,
+    CommentLine,
     Cut,
     Label,
     Arrow,
@@ -86,6 +88,7 @@ impl TerminalKind {
     const ALL: &'static [Self] = &[
         Self::Ident,
         Self::String,
+        Self::CommentLine,
         Self::Cut,
         Self::Label,
         Self::Arrow,
@@ -103,28 +106,38 @@ impl TerminalKind {
     ];
 
     fn from_name(name: &str) -> Option<Self> {
-        Self::ALL.iter().copied().find(|kind| kind.name() == name)
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.peg_name() == name)
     }
 
-    fn name(self) -> &'static str {
+    fn peg_name(self) -> &'static str {
         match self {
-            Self::Ident => "Ident",
-            Self::String => "String",
-            Self::Cut => "Cut",
-            Self::Label => "Label",
-            Self::Arrow => "Arrow",
-            Self::Slash => "Slash",
-            Self::Star => "Star",
-            Self::Plus => "Plus",
-            Self::Question => "Question",
-            Self::Amp => "Amp",
-            Self::Bang => "Bang",
-            Self::ParenL => "ParenL",
-            Self::ParenR => "ParenR",
-            Self::Comma => "Comma",
-            Self::Newline => "Newline",
-            Self::Eof => "Eof",
+            Self::Ident => "IDENT",
+            Self::String => "STRING",
+            Self::CommentLine => "COMMENT_LINE",
+            Self::Cut => "CUT",
+            Self::Label => "LABEL",
+            Self::Arrow => "ARROW",
+            Self::Slash => "SLASH",
+            Self::Star => "STAR",
+            Self::Plus => "PLUS",
+            Self::Question => "QUESTION",
+            Self::Amp => "AMP",
+            Self::Bang => "BANG",
+            Self::ParenL => "PAREN_L",
+            Self::ParenR => "PAREN_R",
+            Self::Comma => "COMMA",
+            Self::Newline => "NEWLINE",
+            Self::Eof => "EOF",
         }
+    }
+}
+
+impl fmt::Display for TerminalKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.peg_name())
     }
 }
 
@@ -133,6 +146,7 @@ impl Terminal<Token> for TerminalKind {
         match self {
             TerminalKind::Ident => "identifier",
             TerminalKind::String => "string literal",
+            TerminalKind::CommentLine => "comment",
             TerminalKind::Cut => "`cut`",
             TerminalKind::Label => "`label`",
             TerminalKind::Arrow => "`<-`",
@@ -155,6 +169,7 @@ impl Terminal<Token> for TerminalKind {
             (self, &token.kind),
             (TerminalKind::Ident, TokenKind::Ident(_))
                 | (TerminalKind::String, TokenKind::String(_))
+                | (TerminalKind::CommentLine, TokenKind::Comment(_))
                 | (TerminalKind::Cut, TokenKind::Cut)
                 | (TerminalKind::Label, TokenKind::Label)
                 | (TerminalKind::Arrow, TokenKind::Arrow)
@@ -176,6 +191,8 @@ impl Terminal<Token> for TerminalKind {
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 enum RuleKind {
     Grammar,
+    Item,
+    Comment,
     Rule,
     Choice,
     Sequence,
@@ -191,6 +208,8 @@ enum RuleKind {
 impl RuleKind {
     const ALL: &'static [Self] = &[
         Self::Grammar,
+        Self::Item,
+        Self::Comment,
         Self::Rule,
         Self::Choice,
         Self::Sequence,
@@ -210,6 +229,8 @@ impl RuleKind {
     fn name(self) -> &'static str {
         match self {
             Self::Grammar => "Grammar",
+            Self::Item => "Item",
+            Self::Comment => "Comment",
             Self::Rule => "Rule",
             Self::Choice => "Choice",
             Self::Sequence => "Sequence",
@@ -221,6 +242,12 @@ impl RuleKind {
             Self::Name => "Name",
             Self::Group => "Group",
         }
+    }
+}
+
+impl fmt::Display for RuleKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -249,7 +276,22 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token>, LexError> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SyntaxGrammar {
-    pub(crate) rules: Vec<SyntaxRule>,
+    pub(crate) items: Vec<SyntaxItem>,
+}
+
+impl SyntaxGrammar {
+    pub(crate) fn rules(&self) -> impl DoubleEndedIterator<Item = &SyntaxRule> {
+        self.items.iter().filter_map(|item| match item {
+            SyntaxItem::Rule(rule) => Some(rule),
+            SyntaxItem::Comment(_) => None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SyntaxItem {
+    Rule(SyntaxRule),
+    Comment(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -327,43 +369,60 @@ pub(crate) fn parse(source: &str) -> Result<SyntaxGrammar, ParseError> {
 pub(crate) const PEG_PEG_GRAMMAR: &str = include_str!("peg.peg");
 
 pub(crate) fn peg_syntax_grammar() -> SyntaxGrammar {
+    use TerminalKind as T;
+
     SyntaxGrammar {
-        rules: vec![
-            syntax_rule(
+        items: vec![
+            SyntaxItem::Rule(syntax_rule(
                 "Grammar",
                 seq([
-                    rep(name("Newline")),
-                    name("Rule"),
-                    rep(seq([rep1(name("Newline")), name("Rule")])),
-                    rep(name("Newline")),
-                    name("Eof"),
+                    rep(terminal(T::Newline)),
+                    name("Item"),
+                    rep(seq([rep1(terminal(T::Newline)), name("Item")])),
+                    rep(terminal(T::Newline)),
+                    terminal(T::Eof),
                 ]),
-            ),
-            syntax_rule("Rule", seq([name("Ident"), name("Arrow"), name("Choice")])),
-            syntax_rule(
+            )),
+            SyntaxItem::Rule(syntax_rule("Item", choice([name("Comment"), name("Rule")]))),
+            SyntaxItem::Rule(syntax_rule(
+                "Comment",
+                seq([
+                    terminal(T::CommentLine),
+                    rep(seq([terminal(T::Newline), terminal(T::CommentLine)])),
+                ]),
+            )),
+            SyntaxItem::Rule(syntax_rule(
+                "Rule",
+                seq([terminal(T::Ident), terminal(T::Arrow), name("Choice")]),
+            )),
+            SyntaxItem::Rule(syntax_rule(
                 "Choice",
                 seq([
                     name("Sequence"),
-                    rep(seq([name("Slash"), name("Sequence")])),
+                    rep(seq([terminal(T::Slash), name("Sequence")])),
                 ]),
-            ),
-            syntax_rule("Sequence", rep1(name("Prefix"))),
-            syntax_rule(
+            )),
+            SyntaxItem::Rule(syntax_rule("Sequence", rep1(name("Prefix")))),
+            SyntaxItem::Rule(syntax_rule(
                 "Prefix",
                 choice([
-                    seq([name("Amp"), name("Prefix")]),
-                    seq([name("Bang"), name("Prefix")]),
+                    seq([terminal(T::Amp), name("Prefix")]),
+                    seq([terminal(T::Bang), name("Prefix")]),
                     name("Postfix"),
                 ]),
-            ),
-            syntax_rule(
+            )),
+            SyntaxItem::Rule(syntax_rule(
                 "Postfix",
                 seq([
                     name("Atom"),
-                    rep(choice([name("Question"), name("Star"), name("Plus")])),
+                    rep(choice([
+                        terminal(T::Question),
+                        terminal(T::Star),
+                        terminal(T::Plus),
+                    ])),
                 ]),
-            ),
-            syntax_rule(
+            )),
+            SyntaxItem::Rule(syntax_rule(
                 "Atom",
                 choice([
                     name("CutExpr"),
@@ -371,27 +430,32 @@ pub(crate) fn peg_syntax_grammar() -> SyntaxGrammar {
                     name("Name"),
                     name("Group"),
                 ]),
-            ),
-            syntax_rule(
+            )),
+            SyntaxItem::Rule(syntax_rule(
                 "CutExpr",
-                seq([name("Cut"), name("ParenL"), name("Choice"), name("ParenR")]),
-            ),
-            syntax_rule(
+                seq([
+                    terminal(T::Cut),
+                    terminal(T::ParenL),
+                    name("Choice"),
+                    terminal(T::ParenR),
+                ]),
+            )),
+            SyntaxItem::Rule(syntax_rule(
                 "LabelExpr",
                 seq([
-                    name("Label"),
-                    name("ParenL"),
-                    name("String"),
-                    name("Comma"),
+                    terminal(T::Label),
+                    terminal(T::ParenL),
+                    terminal(T::String),
+                    terminal(T::Comma),
                     name("Choice"),
-                    name("ParenR"),
+                    terminal(T::ParenR),
                 ]),
-            ),
-            syntax_rule("Name", name("Ident")),
-            syntax_rule(
+            )),
+            SyntaxItem::Rule(syntax_rule("Name", terminal(T::Ident))),
+            SyntaxItem::Rule(syntax_rule(
                 "Group",
-                seq([name("ParenL"), name("Choice"), name("ParenR")]),
-            ),
+                seq([terminal(T::ParenL), name("Choice"), terminal(T::ParenR)]),
+            )),
         ],
     }
 }
@@ -405,6 +469,10 @@ fn syntax_rule(name: &str, expression: SyntaxExpr) -> SyntaxRule {
 
 fn name(name: &str) -> SyntaxExpr {
     SyntaxExpr::Name(name.to_string())
+}
+
+fn terminal(kind: TerminalKind) -> SyntaxExpr {
+    name(kind.peg_name())
 }
 
 fn seq(items: impl IntoIterator<Item = SyntaxExpr>) -> SyntaxExpr {
@@ -437,8 +505,8 @@ fn rep1(item: SyntaxExpr) -> SyntaxExpr {
 
 fn parser_grammar_from_syntax(syntax: &SyntaxGrammar) -> Result<ParserGrammar, GrammarLoadError> {
     let first_rule = syntax
-        .rules
-        .first()
+        .rules()
+        .next()
         .ok_or_else(|| GrammarLoadError::new("expected rule definition"))?;
     let start = resolve_rule_name(&first_rule.name)?;
     let expected = parser_grammar();
@@ -446,36 +514,46 @@ fn parser_grammar_from_syntax(syntax: &SyntaxGrammar) -> Result<ParserGrammar, G
     if start != expected.start() {
         return Err(GrammarLoadError::new(format!(
             "expected start rule `{}`, found `{}`",
-            expected.start().name(),
-            start.name()
+            expected.start(),
+            start
         )));
     }
 
     let mut seen = BTreeSet::new();
-    let mut rules = Vec::with_capacity(syntax.rules.len());
+    let mut items = Vec::with_capacity(syntax.items.len());
 
-    for syntax_rule in &syntax.rules {
-        let rule = resolve_rule_name(&syntax_rule.name)?;
-        if !seen.insert(rule) {
-            return Err(GrammarLoadError::new(format!(
-                "duplicate rule definition `{}`",
-                rule.name()
-            )));
+    for item in &syntax.items {
+        match item {
+            SyntaxItem::Rule(syntax_rule) => {
+                let rule = resolve_rule_name(&syntax_rule.name)?;
+                if !seen.insert(rule) {
+                    return Err(GrammarLoadError::new(format!(
+                        "duplicate rule definition `{}`",
+                        rule
+                    )));
+                }
+
+                items.push(GrammarItem::Rule(
+                    rule,
+                    resolve_expr(&syntax_rule.expression)?,
+                ));
+            }
+            SyntaxItem::Comment(comment) => {
+                items.push(GrammarItem::Comment(comment.clone()));
+            }
         }
-
-        rules.push((rule, resolve_expr(&syntax_rule.expression)?));
     }
 
     for (expected_rule, _) in expected.rules() {
         if !seen.contains(&expected_rule) {
             return Err(GrammarLoadError::new(format!(
                 "missing rule definition `{}`",
-                expected_rule.name()
+                expected_rule
             )));
         }
     }
 
-    Ok(Grammar::new(start, rules))
+    Ok(Grammar::from_items(start, items))
 }
 
 fn resolve_rule_name(name: &str) -> Result<RuleKind, GrammarLoadError> {
@@ -558,10 +636,18 @@ fn parser_grammar() -> ParserGrammar {
                 R::Grammar,
                 p_seq([
                     p_rep(p_tok(T::Newline)),
-                    p_rule(R::Rule),
-                    p_rep(p_seq([p_rep1(p_tok(T::Newline)), p_rule(R::Rule)])),
+                    p_rule(R::Item),
+                    p_rep(p_seq([p_rep1(p_tok(T::Newline)), p_rule(R::Item)])),
                     p_rep(p_tok(T::Newline)),
                     p_tok(T::Eof),
+                ]),
+            ),
+            (R::Item, p_choice([p_rule(R::Comment), p_rule(R::Rule)])),
+            (
+                R::Comment,
+                p_seq([
+                    p_tok(T::CommentLine),
+                    p_rep(p_seq([p_tok(T::Newline), p_tok(T::CommentLine)])),
                 ]),
             ),
             (
@@ -660,10 +746,36 @@ fn p_rep1(item: ParserPeg) -> ParserPeg {
 fn syntax_grammar_from_cst(node: &ParserCstNode) -> SyntaxGrammar {
     debug_assert_eq!(node.rule, RuleKind::Grammar);
     SyntaxGrammar {
-        rules: child_rules(node, RuleKind::Rule)
-            .map(syntax_rule_from_cst)
+        items: child_rules(node, RuleKind::Item)
+            .map(syntax_item_from_cst)
             .collect(),
     }
+}
+
+fn syntax_item_from_cst(node: &ParserCstNode) -> SyntaxItem {
+    debug_assert_eq!(node.rule, RuleKind::Item);
+
+    if let Some(comment) = first_rule(node, RuleKind::Comment) {
+        SyntaxItem::Comment(comment_from_cst(comment))
+    } else {
+        SyntaxItem::Rule(syntax_rule_from_cst(expect_rule(node, RuleKind::Rule)))
+    }
+}
+
+fn comment_from_cst(node: &ParserCstNode) -> String {
+    debug_assert_eq!(node.rule, RuleKind::Comment);
+
+    node.children
+        .iter()
+        .filter_map(|child| match child {
+            Cst::Token(Token {
+                kind: TokenKind::Comment(line),
+                ..
+            }) => Some(line.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn syntax_rule_from_cst(node: &ParserCstNode) -> SyntaxRule {
@@ -848,6 +960,7 @@ fn is_expression_start_failure(failure: &Failure) -> bool {
 struct Lexer<'source> {
     source: &'source str,
     cursor: usize,
+    line_has_code: bool,
     tokens: Vec<Token>,
 }
 
@@ -856,6 +969,7 @@ impl<'source> Lexer<'source> {
         Self {
             source,
             cursor: 0,
+            line_has_code: false,
             tokens: Vec::new(),
         }
     }
@@ -869,9 +983,16 @@ impl<'source> Lexer<'source> {
                 '\r' | '\n' => {
                     let end = self.bump_newline();
                     self.push(TokenKind::Newline, start, end);
+                    self.line_has_code = false;
                 }
                 '#' => {
-                    self.skip_comment();
+                    if self.line_has_code {
+                        self.skip_comment();
+                    } else {
+                        let token = self.comment(start);
+                        self.tokens.push(token);
+                        self.line_has_code = true;
+                    }
                 }
                 '<' => {
                     self.bump();
@@ -943,6 +1064,9 @@ impl<'source> Lexer<'source> {
     }
 
     fn push(&mut self, kind: TokenKind, start: usize, end: usize) {
+        if !matches!(kind, TokenKind::Newline) {
+            self.line_has_code = true;
+        }
         self.tokens.push(Token {
             kind,
             span: Span::new(start, end),
@@ -969,6 +1093,28 @@ impl<'source> Lexer<'source> {
 
         Token {
             kind,
+            span: Span::new(start, self.cursor),
+        }
+    }
+
+    fn comment(&mut self, start: usize) -> Token {
+        self.bump();
+        let text_start = if self.peek().is_some_and(|(_, ch)| ch == ' ') {
+            self.bump();
+            self.cursor
+        } else {
+            self.cursor
+        };
+
+        while let Some((_, ch)) = self.peek() {
+            if ch == '\r' || ch == '\n' {
+                break;
+            }
+            self.bump();
+        }
+
+        Token {
+            kind: TokenKind::Comment(self.source[text_start..self.cursor].to_string()),
             span: Span::new(start, self.cursor),
         }
     }
@@ -1163,9 +1309,19 @@ mod tests {
     }
 
     #[test]
+    fn terminal_names_are_upper_snake_case() {
+        assert_eq!(TerminalKind::ParenL.to_string(), "PAREN_L");
+        assert_eq!(
+            TerminalKind::from_name("PAREN_L"),
+            Some(TerminalKind::ParenL)
+        );
+        assert_eq!(TerminalKind::from_name("ParenL"), None);
+    }
+
+    #[test]
     fn lexes_canonical_peg_syntax() {
         assert_eq!(
-            kinds("Program <- Decl* Expr? Eof\n").unwrap(),
+            kinds("Program <- Decl* Expr? EOF\n").unwrap(),
             vec![
                 TokenKind::Ident("Program".to_string()),
                 TokenKind::Arrow,
@@ -1173,7 +1329,7 @@ mod tests {
                 TokenKind::Star,
                 TokenKind::Ident("Expr".to_string()),
                 TokenKind::Question,
-                TokenKind::Ident("Eof".to_string()),
+                TokenKind::Ident("EOF".to_string()),
                 TokenKind::Newline,
                 TokenKind::Eof,
             ]
@@ -1183,7 +1339,7 @@ mod tests {
     #[test]
     fn lexes_function_forms_and_lookahead() {
         assert_eq!(
-            kinds("Rule <- cut(label(\"x\", &(Ident / Int)))\n").unwrap(),
+            kinds("Rule <- cut(label(\"x\", &(IDENT / INT)))\n").unwrap(),
             vec![
                 TokenKind::Ident("Rule".to_string()),
                 TokenKind::Arrow,
@@ -1195,9 +1351,9 @@ mod tests {
                 TokenKind::Comma,
                 TokenKind::Amp,
                 TokenKind::ParenL,
-                TokenKind::Ident("Ident".to_string()),
+                TokenKind::Ident("IDENT".to_string()),
                 TokenKind::Slash,
-                TokenKind::Ident("Int".to_string()),
+                TokenKind::Ident("INT".to_string()),
                 TokenKind::ParenR,
                 TokenKind::ParenR,
                 TokenKind::ParenR,
@@ -1216,6 +1372,7 @@ mod tests {
                 TokenKind::Arrow,
                 TokenKind::Ident("B".to_string()),
                 TokenKind::Newline,
+                TokenKind::Comment("whole-line comment".to_string()),
                 TokenKind::Newline,
                 TokenKind::Ident("C".to_string()),
                 TokenKind::Arrow,
@@ -1264,20 +1421,20 @@ mod tests {
     #[test]
     fn parses_sequence_choice_prefix_postfix_and_grouping() {
         assert_eq!(
-            parse("Start <- (Ident / Int) (String Bool)? (&Float)* &Question?\n").unwrap(),
+            parse("Start <- (IDENT / INT) (STRING BOOL)? (&FLOAT)* &QUESTION?\n").unwrap(),
             SyntaxGrammar {
-                rules: vec![SyntaxRule {
+                items: vec![SyntaxItem::Rule(SyntaxRule {
                     name: "Start".to_string(),
                     expression: SyntaxExpr::Seq(vec![
-                        SyntaxExpr::Choice(vec![name("Ident"), name("Int")]),
+                        SyntaxExpr::Choice(vec![name("IDENT"), name("INT")]),
                         SyntaxExpr::Optional(Box::new(SyntaxExpr::Seq(vec![
-                            name("String"),
-                            name("Bool")
+                            name("STRING"),
+                            name("BOOL")
                         ]))),
-                        SyntaxExpr::Repeat(Box::new(SyntaxExpr::And(Box::new(name("Float"))))),
-                        SyntaxExpr::And(Box::new(SyntaxExpr::Optional(Box::new(name("Question"))))),
+                        SyntaxExpr::Repeat(Box::new(SyntaxExpr::And(Box::new(name("FLOAT"))))),
+                        SyntaxExpr::And(Box::new(SyntaxExpr::Optional(Box::new(name("QUESTION"))))),
                     ]),
-                }]
+                })]
             }
         );
     }
@@ -1285,15 +1442,16 @@ mod tests {
     #[test]
     fn parses_cut_and_label_function_forms() {
         assert_eq!(
-            parse("Start <- cut(label(\"expected \\\"thing\\\"\\n\", Ident SemiColon))\n").unwrap(),
+            parse("Start <- cut(label(\"expected \\\"thing\\\"\\n\", IDENT SEMI_COLON))\n")
+                .unwrap(),
             SyntaxGrammar {
-                rules: vec![SyntaxRule {
+                items: vec![SyntaxItem::Rule(SyntaxRule {
                     name: "Start".to_string(),
                     expression: SyntaxExpr::Cut(Box::new(SyntaxExpr::Label(
                         "expected \"thing\"\n".to_string(),
-                        Box::new(SyntaxExpr::Seq(vec![name("Ident"), name("SemiColon")]))
+                        Box::new(SyntaxExpr::Seq(vec![name("IDENT"), name("SEMI_COLON")]))
                     ))),
-                }]
+                })]
             }
         );
     }
@@ -1303,15 +1461,31 @@ mod tests {
         assert_eq!(
             parse("\n\nStart <- A\n\nTerm <- B").unwrap(),
             SyntaxGrammar {
-                rules: vec![
-                    SyntaxRule {
+                items: vec![
+                    SyntaxItem::Rule(SyntaxRule {
                         name: "Start".to_string(),
                         expression: name("A"),
-                    },
-                    SyntaxRule {
+                    }),
+                    SyntaxItem::Rule(SyntaxRule {
                         name: "Term".to_string(),
                         expression: name("B"),
-                    },
+                    }),
+                ]
+            }
+        );
+    }
+
+    #[test]
+    fn parses_comment_blocks_without_losing_text() {
+        assert_eq!(
+            parse("# Heading\n#   detail\n\nStart <- A\n").unwrap(),
+            SyntaxGrammar {
+                items: vec![
+                    SyntaxItem::Comment("Heading\n  detail".to_string()),
+                    SyntaxItem::Rule(SyntaxRule {
+                        name: "Start".to_string(),
+                        expression: name("A"),
+                    }),
                 ]
             }
         );
@@ -1320,29 +1494,39 @@ mod tests {
     #[test]
     fn parses_checked_in_rex_grammar_syntax() {
         let grammar = parse(crate::rex::REX_PEG_GRAMMAR).unwrap();
+        let rules = grammar.rules().collect::<Vec<_>>();
 
-        assert_eq!(grammar.rules.len(), 90);
-        assert_eq!(grammar.rules.first().unwrap().name, "Program");
-        assert_eq!(grammar.rules.last().unwrap().name, "ValueName");
+        assert_eq!(rules.len(), 90);
+        assert_eq!(rules.first().unwrap().name, "Program");
+        assert_eq!(rules.last().unwrap().name, "ValueName");
     }
 
     #[test]
     fn parses_checked_in_peg_grammar_syntax() {
         let grammar = parse(PEG_PEG_GRAMMAR).unwrap();
+        let resolved = parser_grammar_from_syntax(&grammar).unwrap();
 
         assert_eq!(grammar, peg_syntax_grammar());
+        assert_eq!(resolved, parser_grammar());
         assert_eq!(
-            parser_grammar_from_syntax(&grammar).unwrap(),
-            parser_grammar()
+            PEG_PEG_GRAMMAR,
+            crate::grammar::grammar_to_string(&parser_grammar()),
+            "checked-in peg.peg must be regenerated from parser_grammar()"
         );
-        assert_eq!(grammar.rules.len(), 11);
-        assert_eq!(grammar.rules.first().unwrap().name, "Grammar");
-        assert_eq!(grammar.rules.last().unwrap().name, "Group");
+        assert_eq!(
+            crate::grammar::grammar_to_string(&resolved),
+            PEG_PEG_GRAMMAR,
+            "loaded parser grammar must render back to canonical peg.peg text"
+        );
+        let rules = grammar.rules().collect::<Vec<_>>();
+        assert_eq!(rules.len(), 13);
+        assert_eq!(rules.first().unwrap().name, "Grammar");
+        assert_eq!(rules.last().unwrap().name, "Group");
     }
 
     #[test]
     fn peg_grammar_resolution_rejects_unknown_symbols() {
-        let source = PEG_PEG_GRAMMAR.replacen("Grammar <- Newline*", "Grammar <- Missing*", 1);
+        let source = PEG_PEG_GRAMMAR.replacen("Grammar   <- NEWLINE*", "Grammar   <- Missing*", 1);
         let grammar = parse(&source).unwrap();
         let err = parser_grammar_from_syntax(&grammar).unwrap_err();
 
@@ -1351,7 +1535,7 @@ mod tests {
 
     #[test]
     fn peg_grammar_resolution_rejects_duplicate_rules() {
-        let source = format!("{PEG_PEG_GRAMMAR}Grammar <- Eof\n");
+        let source = format!("{PEG_PEG_GRAMMAR}Grammar <- EOF\n");
         let grammar = parse(&source).unwrap();
         let err = parser_grammar_from_syntax(&grammar).unwrap_err();
 
@@ -1360,7 +1544,7 @@ mod tests {
 
     #[test]
     fn peg_grammar_resolution_rejects_missing_rules() {
-        let source = PEG_PEG_GRAMMAR.replace("Group <- ParenL Choice ParenR\n", "");
+        let source = PEG_PEG_GRAMMAR.replace("Group     <- PAREN_L Choice PAREN_R\n", "");
         let grammar = parse(&source).unwrap();
         let err = parser_grammar_from_syntax(&grammar).unwrap_err();
 
@@ -1369,7 +1553,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_arrow() {
-        let err = parse("Start Ident\n").unwrap_err();
+        let err = parse("Start IDENT\n").unwrap_err();
 
         assert_eq!(err.message, "expected `<-`");
     }
@@ -1383,7 +1567,7 @@ mod tests {
 
     #[test]
     fn rejects_missing_label_comma() {
-        let err = parse("Start <- label(\"message\" Ident)\n").unwrap_err();
+        let err = parse("Start <- label(\"message\" IDENT)\n").unwrap_err();
 
         assert_eq!(err.message, "expected `,`");
     }

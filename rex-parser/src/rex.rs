@@ -8,7 +8,8 @@ use crate::{
 };
 
 use crate::grammar::{
-    Grammar, TokenKind, and, choice, cut, label, not, opt, rep, rep1, rule, seq, tok,
+    Grammar, Item as GrammarItem, Peg as GrammarPeg, TokenKind, and, choice, cut, label, not, opt,
+    rep, rep1, rule, seq, tok,
 };
 
 pub(crate) const AST_BOUNDARY: &str = include_str!("AST_BOUNDARY.md");
@@ -249,8 +250,8 @@ pub(crate) fn rex_grammar_from_peg(source: &str) -> Result<Grammar<RexRule>, Gra
 #[cfg(test)]
 fn syntax_to_rex_grammar(syntax: &SyntaxGrammar) -> Result<Grammar<RexRule>, GrammarLoadError> {
     let first_rule = syntax
-        .rules
-        .first()
+        .rules()
+        .next()
         .ok_or_else(|| GrammarLoadError::new("expected rule definition"))?;
     let start = resolve_rule_name(&first_rule.name)?;
     let expected = rex_grammar();
@@ -263,17 +264,27 @@ fn syntax_to_rex_grammar(syntax: &SyntaxGrammar) -> Result<Grammar<RexRule>, Gra
     }
 
     let mut seen = BTreeSet::new();
-    let mut rules = Vec::with_capacity(syntax.rules.len());
+    let mut items = Vec::with_capacity(syntax.items.len());
 
-    for syntax_rule in &syntax.rules {
-        let rule = resolve_rule_name(&syntax_rule.name)?;
-        if !seen.insert(rule) {
-            return Err(GrammarLoadError::new(format!(
-                "duplicate rule definition `{rule}`"
-            )));
+    for item in &syntax.items {
+        match item {
+            peg_syntax::SyntaxItem::Rule(syntax_rule) => {
+                let rule = resolve_rule_name(&syntax_rule.name)?;
+                if !seen.insert(rule) {
+                    return Err(GrammarLoadError::new(format!(
+                        "duplicate rule definition `{rule}`"
+                    )));
+                }
+
+                items.push(GrammarItem::Rule(
+                    rule,
+                    resolve_expr(&syntax_rule.expression)?,
+                ));
+            }
+            peg_syntax::SyntaxItem::Comment(comment) => {
+                items.push(GrammarItem::Comment(comment.clone()));
+            }
         }
-
-        rules.push((rule, resolve_expr(&syntax_rule.expression)?));
     }
 
     for (expected_rule, _) in expected.rules() {
@@ -284,7 +295,7 @@ fn syntax_to_rex_grammar(syntax: &SyntaxGrammar) -> Result<Grammar<RexRule>, Gra
         }
     }
 
-    Ok(Grammar::new(start, rules))
+    Ok(Grammar::from_items(start, items))
 }
 
 #[cfg(test)]
@@ -359,21 +370,31 @@ fn resolve_choice(items: &[SyntaxExpr]) -> Result<Peg<RexRule>, GrammarLoadError
     })
 }
 
+fn grammar_comment(text: &str) -> GrammarItem<RexRule> {
+    GrammarItem::Comment(text.to_string())
+}
+
+fn grammar_rule(rule: RexRule, expression: GrammarPeg<RexRule>) -> GrammarItem<RexRule> {
+    GrammarItem::Rule(rule, expression)
+}
+
 pub(crate) fn rex_grammar() -> Grammar<RexRule> {
     use RexRule as R;
     use TokenKind as T;
 
-    Grammar::new(
+    Grammar::from_items(
         R::Program,
         vec![
-            (
+            grammar_comment("Program"),
+            grammar_rule(
                 R::Program,
                 seq([rep(rule(R::Decl)), opt(rule(R::Expr)), tok(T::Eof)]),
             ),
-            (R::Decl, choice([rule(R::PublicDecl), rule(R::PrivateDecl)])),
-            (R::PublicDecl, seq([tok(T::Pub), rule(R::DeclBody)])),
-            (R::PrivateDecl, rule(R::DeclBody)),
-            (
+            grammar_comment("Declarations"),
+            grammar_rule(R::Decl, choice([rule(R::PublicDecl), rule(R::PrivateDecl)])),
+            grammar_rule(R::PublicDecl, seq([tok(T::Pub), rule(R::DeclBody)])),
+            grammar_rule(R::PrivateDecl, rule(R::DeclBody)),
+            grammar_rule(
                 R::DeclBody,
                 choice([
                     rule(R::ImportDecl),
@@ -384,7 +405,8 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::InstanceDecl),
                 ]),
             ),
-            (
+            grammar_comment("Imports"),
+            grammar_rule(
                 R::ImportDecl,
                 seq([
                     tok(T::Import),
@@ -396,7 +418,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::ImportPath,
                 choice([
                     rule(R::RemoteImportPath),
@@ -404,8 +426,8 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::DottedImportPath),
                 ]),
             ),
-            (R::RemoteImportPath, tok(T::HttpsUrl)),
-            (
+            grammar_rule(R::RemoteImportPath, tok(T::HttpsUrl)),
+            grammar_rule(
                 R::DottedImportPath,
                 seq([
                     tok(T::Ident),
@@ -413,7 +435,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     opt(rule(R::HashSuffix)),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::RelativeImportPath,
                 seq([
                     rule(R::RelativePrefix),
@@ -422,22 +444,22 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     opt(rule(R::HashSuffix)),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::RelativePrefix,
                 rep1(choice([
                     seq([tok(T::Dot), tok(T::Div)]),
                     seq([tok(T::DotDot), tok(T::Div)]),
                 ])),
             ),
-            (
+            grammar_rule(
                 R::ImportPathSegment,
                 seq([choice([tok(T::Dot), tok(T::Div)]), tok(T::Ident)]),
             ),
-            (
+            grammar_rule(
                 R::HashSuffix,
                 seq([tok(T::HashTag), choice([tok(T::Ident), tok(T::Int)])]),
             ),
-            (
+            grammar_rule(
                 R::ImportClause,
                 choice([
                     seq([tok(T::ParenL), tok(T::Mul), tok(T::ParenR)]),
@@ -449,12 +471,13 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ]),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::ImportItem,
                 seq([rule(R::ValueName), opt(seq([tok(T::As), tok(T::Ident)]))]),
             ),
-            (R::ImportAlias, seq([tok(T::As), tok(T::Ident)])),
-            (
+            grammar_rule(R::ImportAlias, seq([tok(T::As), tok(T::Ident)])),
+            grammar_comment("Type declarations"),
+            grammar_rule(
                 R::TypeDecl,
                 seq([
                     tok(T::Type),
@@ -468,9 +491,10 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (R::TypeParam, tok(T::Ident)),
-            (R::TypeVariant, seq([tok(T::Ident), rep(rule(R::TypeAtom))])),
-            (
+            grammar_rule(R::TypeParam, tok(T::Ident)),
+            grammar_rule(R::TypeVariant, seq([tok(T::Ident), rep(rule(R::TypeAtom))])),
+            grammar_comment("Function declarations"),
+            grammar_rule(
                 R::FnDecl,
                 seq([
                     tok(T::Fn),
@@ -480,7 +504,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::FnSignatureDecl,
                 seq([
                     tok(T::Colon),
@@ -491,7 +515,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     label("expected `;` after function body", tok(T::SemiColon)),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::FnParamDecl,
                 seq([
                     rule(R::FnParams),
@@ -503,7 +527,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     label("expected `;` after function body", tok(T::SemiColon)),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::FnParams,
                 choice([
                     seq([
@@ -513,15 +537,15 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::LegacyParamGroup),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::ArrowParam,
                 choice([rule(R::ParenParam), rule(R::NamedParam)]),
             ),
-            (
+            grammar_rule(
                 R::NamedParam,
                 seq([tok(T::Ident), tok(T::Colon), rule(R::TypeApp)]),
             ),
-            (
+            grammar_rule(
                 R::ParenParam,
                 seq([
                     tok(T::ParenL),
@@ -531,7 +555,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::ParenR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::LegacyParamGroup,
                 seq([
                     tok(T::ParenL),
@@ -542,11 +566,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::ParenR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::LegacyParam,
                 seq([tok(T::Ident), tok(T::Colon), rule(R::TypeExpr)]),
             ),
-            (
+            grammar_rule(
                 R::DeclareFnDecl,
                 seq([
                     tok(T::Declare),
@@ -562,7 +586,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::DeclareParamSig,
                 seq([
                     rule(R::FnParams),
@@ -571,11 +595,12 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     opt(rule(R::WhereConstraints)),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::BareFnSig,
                 seq([rule(R::TypeExpr), opt(rule(R::WhereConstraints))]),
             ),
-            (
+            grammar_comment("Type classes and instances"),
+            grammar_rule(
                 R::ClassDecl,
                 seq([
                     tok(T::Class),
@@ -590,8 +615,8 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (R::SuperClause, seq([tok(T::Le), rule(R::TypeConstraints)])),
-            (
+            grammar_rule(R::SuperClause, seq([tok(T::Le), rule(R::TypeConstraints)])),
+            grammar_rule(
                 R::ClassBlock,
                 seq([
                     tok(T::Where),
@@ -607,11 +632,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::BraceR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::ClassMethod,
                 seq([rule(R::ValueName), tok(T::Colon), rule(R::TypeExpr)]),
             ),
-            (
+            grammar_rule(
                 R::InstanceDecl,
                 seq([
                     tok(T::Instance),
@@ -626,11 +651,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::InstanceContext,
                 seq([tok(T::Le), rule(R::TypeConstraints)]),
             ),
-            (
+            grammar_rule(
                 R::InstanceBlock,
                 seq([
                     tok(T::Where),
@@ -646,41 +671,42 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::BraceR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::InstanceMethod,
                 seq([rule(R::ValueName), tok(T::Assign), rule(R::Expr)]),
             ),
-            (
+            grammar_rule(
                 R::WhereConstraints,
                 seq([tok(T::Where), rule(R::TypeConstraints)]),
             ),
-            (
+            grammar_rule(
                 R::TypeConstraints,
                 seq([
                     rule(R::TypeConstraint),
                     rep(seq([tok(T::Comma), rule(R::TypeConstraint)])),
                 ]),
             ),
-            (R::TypeConstraint, seq([rule(R::NameRef), rule(R::TypeApp)])),
-            (R::TypeExpr, rule(R::TypeFun)),
-            (
+            grammar_rule(R::TypeConstraint, seq([rule(R::NameRef), rule(R::TypeApp)])),
+            grammar_comment("Type expressions"),
+            grammar_rule(R::TypeExpr, rule(R::TypeFun)),
+            grammar_rule(
                 R::TypeFun,
                 seq([
                     rule(R::TypeApp),
                     opt(seq([tok(T::ArrowR), rule(R::TypeFun)])),
                 ]),
             ),
-            (R::TypeApp, rep1(rule(R::TypeAtom))),
-            (
+            grammar_rule(R::TypeApp, rep1(rule(R::TypeAtom))),
+            grammar_rule(
                 R::TypeAtom,
                 choice([rule(R::NameRef), rule(R::TypeParen), rule(R::TypeRecord)]),
             ),
-            (
+            grammar_rule(
                 R::TypeParen,
                 choice([rule(R::UnitType), rule(R::TupleType), rule(R::GroupedType)]),
             ),
-            (R::UnitType, seq([tok(T::ParenL), tok(T::ParenR)])),
-            (
+            grammar_rule(R::UnitType, seq([tok(T::ParenL), tok(T::ParenR)])),
+            grammar_rule(
                 R::TupleType,
                 seq([
                     tok(T::ParenL),
@@ -693,11 +719,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::GroupedType,
                 seq([tok(T::ParenL), rule(R::TypeExpr), tok(T::ParenR)]),
             ),
-            (
+            grammar_rule(
                 R::TypeRecord,
                 seq([
                     tok(T::BraceL),
@@ -708,26 +734,27 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::BraceR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::TypeField,
                 seq([tok(T::Ident), tok(T::Colon), rule(R::TypeExpr)]),
             ),
-            (
+            grammar_comment("Expressions"),
+            grammar_rule(
                 R::Expr,
                 seq([
                     rule(R::UnaryExpr),
                     rep(seq([rule(R::BinaryOp), cut(rule(R::UnaryExpr))])),
                 ]),
             ),
-            (R::BinaryOp, tok(T::BinaryOperator)),
-            (
+            grammar_rule(R::BinaryOp, tok(T::BinaryOperator)),
+            grammar_rule(
                 R::UnaryExpr,
                 seq([
                     rule(R::ApplicationExpr),
                     rep(seq([tok(T::Is), rule(R::TypeExpr)])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::ApplicationExpr,
                 seq([
                     rule(R::PostfixExpr),
@@ -751,15 +778,15 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::PostfixExpr,
                 seq([
                     rule(R::AtomExpr),
                     rep(seq([tok(T::Dot), rule(R::FieldName)])),
                 ]),
             ),
-            (R::FieldName, choice([tok(T::Ident), tok(T::Int)])),
-            (
+            grammar_rule(R::FieldName, choice([tok(T::Ident), tok(T::Int)])),
+            grammar_rule(
                 R::AtomExpr,
                 choice([
                     seq([and(tok(T::ParenL)), cut(rule(R::ParenExpr))]),
@@ -778,13 +805,13 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     seq([and(tok(T::Sub)), cut(rule(R::NegExpr))]),
                 ]),
             ),
-            (R::HoleExpr, tok(T::Question)),
-            (R::IdentExpr, tok(T::Ident)),
-            (
+            grammar_rule(R::HoleExpr, tok(T::Question)),
+            grammar_rule(R::IdentExpr, tok(T::Ident)),
+            grammar_rule(
                 R::BraceExpr,
                 choice([rule(R::DictExpr), rule(R::RecordUpdateExpr)]),
             ),
-            (
+            grammar_rule(
                 R::ParenExpr,
                 choice([
                     rule(R::UnitExpr),
@@ -793,12 +820,12 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::GroupedExpr),
                 ]),
             ),
-            (R::UnitExpr, seq([tok(T::ParenL), tok(T::ParenR)])),
-            (
+            grammar_rule(R::UnitExpr, seq([tok(T::ParenL), tok(T::ParenR)])),
+            grammar_rule(
                 R::OperatorNameExpr,
                 seq([tok(T::ParenL), tok(T::ValueOperator), tok(T::ParenR)]),
             ),
-            (
+            grammar_rule(
                 R::TupleExpr,
                 seq([
                     tok(T::ParenL),
@@ -812,11 +839,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::ParenR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::GroupedExpr,
                 seq([tok(T::ParenL), rule(R::Expr), tok(T::ParenR)]),
             ),
-            (
+            grammar_rule(
                 R::ListExpr,
                 seq([
                     tok(T::BracketL),
@@ -828,7 +855,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::BracketR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::DictExpr,
                 seq([
                     tok(T::BraceL),
@@ -847,12 +874,12 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ]),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::DictItem,
                 seq([tok(T::Ident), tok(T::Assign), rule(R::Expr)]),
             ),
-            (R::BadDictItem, seq([tok(T::Ident), not(tok(T::Assign))])),
-            (
+            grammar_rule(R::BadDictItem, seq([tok(T::Ident), not(tok(T::Assign))])),
+            grammar_rule(
                 R::RecordUpdateExpr,
                 seq([
                     tok(T::BraceL),
@@ -862,8 +889,8 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::BraceR),
                 ]),
             ),
-            (R::NegExpr, seq([tok(T::Sub), cut(rule(R::Expr))])),
-            (
+            grammar_rule(R::NegExpr, seq([tok(T::Sub), cut(rule(R::Expr))])),
+            grammar_rule(
                 R::LambdaExpr,
                 seq([
                     tok(T::BackSlash),
@@ -875,7 +902,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::LambdaParam,
                 choice([
                     seq([tok(T::Ident), opt(seq([tok(T::Colon), rule(R::TypeExpr)]))]),
@@ -888,7 +915,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ]),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::LetExpr,
                 seq([
                     tok(T::Let),
@@ -909,7 +936,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::LetBinding,
                 seq([
                     rule(R::Pattern),
@@ -918,7 +945,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::Expr),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::LetRecBinding,
                 seq([
                     rule(R::Pattern),
@@ -927,7 +954,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::Expr),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::IfExpr,
                 seq([
                     tok(T::If),
@@ -940,7 +967,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::MatchExpr,
                 seq([
                     tok(T::Match),
@@ -958,7 +985,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::MatchArm,
                 seq([
                     tok(T::When),
@@ -968,21 +995,22 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     label("expected `;` after match arm expression", tok(T::SemiColon)),
                 ]),
             ),
-            (
+            grammar_comment("Patterns"),
+            grammar_rule(
                 R::Pattern,
                 seq([
                     rule(R::AppPattern),
                     opt(seq([tok(T::ColonColon), rule(R::Pattern)])),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::AppPattern,
                 choice([
                     seq([rule(R::NameRef), rep(rule(R::PatternAtom))]),
                     rule(R::PatternAtom),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::PatternAtom,
                 choice([
                     tok(T::Ident),
@@ -991,7 +1019,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::ParenPattern),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::ListPattern,
                 seq([
                     tok(T::BracketL),
@@ -1002,7 +1030,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::BracketR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::DictPattern,
                 seq([
                     tok(T::BraceL),
@@ -1013,11 +1041,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::BraceR),
                 ]),
             ),
-            (
+            grammar_rule(
                 R::DictPatternField,
                 seq([tok(T::Ident), opt(seq([tok(T::Colon), rule(R::Pattern)]))]),
             ),
-            (
+            grammar_rule(
                 R::ParenPattern,
                 choice([
                     seq([tok(T::ParenL), tok(T::ParenR)]),
@@ -1034,11 +1062,12 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     seq([tok(T::ParenL), rule(R::Pattern), tok(T::ParenR)]),
                 ]),
             ),
-            (
+            grammar_comment("Names"),
+            grammar_rule(
                 R::NameRef,
                 seq([tok(T::Ident), rep(seq([tok(T::Dot), tok(T::Ident)]))]),
             ),
-            (R::ValueName, choice([tok(T::Ident), tok(T::ValueOperator)])),
+            grammar_rule(R::ValueName, choice([tok(T::Ident), tok(T::ValueOperator)])),
         ],
     )
 }
@@ -1098,8 +1127,10 @@ mod tests {
     #[test]
     fn grammar_symbols_have_stable_print_names() {
         assert_eq!(RexRule::Program.to_string(), "Program");
-        assert_eq!(TokenKind::Import.to_string(), "Import");
-        assert_eq!(TokenKind::ArrowR.to_string(), "ArrowR");
+        assert_eq!(TokenKind::Import.to_string(), "IMPORT");
+        assert_eq!(TokenKind::ArrowR.to_string(), "ARROW_R");
+        assert_eq!(TokenKind::from_name("PAREN_L"), Some(TokenKind::ParenL));
+        assert_eq!(TokenKind::from_name("ParenL"), None);
     }
 
     #[test]
@@ -1107,12 +1138,13 @@ mod tests {
         let rendered = grammar_to_string(&rex_grammar());
 
         assert_eq!(rendered, grammar_to_string(&rex_grammar()));
-        assert!(rendered.starts_with("Program <- Decl* Expr? Eof\n"));
-        assert!(
-            rendered
-                .contains("ImportDecl <- Import cut(ImportPath ImportClause? ImportAlias? label(")
-        );
-        assert!(rendered.contains("ValueName <- Ident / ValueOperator\n"));
+        assert!(rendered.starts_with("\n# Program\n\nProgram            <- Decl* Expr? EOF\n"));
+        assert!(rendered.contains("\n# Declarations\n\nDecl               <-"));
+        assert!(rendered.contains("\n# Expressions\n\nExpr               <-"));
+        assert!(rendered.contains(
+            "ImportDecl         <- IMPORT cut(ImportPath ImportClause? ImportAlias? label("
+        ));
+        assert!(rendered.contains("ValueName          <- IDENT / VALUE_OPERATOR\n"));
         assert!(!rendered.contains("'import'"));
     }
 
@@ -1123,7 +1155,11 @@ mod tests {
 
     #[test]
     fn rex_grammar_resolution_rejects_unknown_symbols() {
-        let source = REX_PEG_GRAMMAR.replacen("Program <- Decl*", "Program <- Missing*", 1);
+        let source = REX_PEG_GRAMMAR.replacen(
+            "Program            <- Decl*",
+            "Program            <- Missing*",
+            1,
+        );
         let err = rex_grammar_from_peg(&source).unwrap_err();
 
         assert_eq!(err.message, "unknown grammar symbol `Missing`");
@@ -1131,7 +1167,7 @@ mod tests {
 
     #[test]
     fn rex_grammar_resolution_rejects_duplicate_rules() {
-        let source = format!("{REX_PEG_GRAMMAR}Program <- Eof\n");
+        let source = format!("{REX_PEG_GRAMMAR}Program <- EOF\n");
         let err = rex_grammar_from_peg(&source).unwrap_err();
 
         assert_eq!(err.message, "duplicate rule definition `Program`");
@@ -1139,7 +1175,7 @@ mod tests {
 
     #[test]
     fn rex_grammar_resolution_rejects_missing_rules() {
-        let source = REX_PEG_GRAMMAR.replace("ValueName <- Ident / ValueOperator\n", "");
+        let source = REX_PEG_GRAMMAR.replace("ValueName          <- IDENT / VALUE_OPERATOR\n", "");
         let err = rex_grammar_from_peg(&source).unwrap_err();
 
         assert_eq!(err.message, "missing rule definition `ValueName`");
@@ -1147,7 +1183,7 @@ mod tests {
 
     #[test]
     fn rex_grammar_resolution_rejects_wrong_start_rule() {
-        let source = REX_PEG_GRAMMAR.replacen("Program <-", "Decl <-", 1);
+        let source = REX_PEG_GRAMMAR.replacen("Program            <-", "Decl               <-", 1);
         let err = rex_grammar_from_peg(&source).unwrap_err();
 
         assert_eq!(err.message, "expected start rule `Program`, found `Decl`");
