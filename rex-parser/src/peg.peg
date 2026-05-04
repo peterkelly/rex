@@ -1,0 +1,11 @@
+Grammar <- Newline* Rule (Newline+ Rule)* Newline* Eof
+Rule <- Ident Arrow Choice
+Choice <- Sequence (Slash Sequence)*
+Sequence <- Prefix+
+Prefix <- Amp Prefix / Bang Prefix / Postfix
+Postfix <- Atom (Question / Star / Plus)*
+Atom <- CutExpr / LabelExpr / Name / Group
+CutExpr <- Cut ParenL Choice ParenR
+LabelExpr <- Label ParenL String Comma Choice ParenR
+Name <- Ident
+Group <- ParenL Choice ParenR

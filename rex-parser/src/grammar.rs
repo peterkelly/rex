@@ -1,787 +1,1054 @@
-use crate::formal::{
-    Grammar, Peg, TokenKind, and, choice, cut, label, not, opt, rep, rep1, rule, seq, tok,
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    sync::Arc,
 };
 
-pub(crate) const AST_BOUNDARY: &str = include_str!("AST_BOUNDARY.md");
-pub(crate) const REX_PEG_GRAMMAR: &str = include_str!("grammar.peg");
+use rex_lexer::{Token, span::Span};
+
+use crate::peg::{Engine, EngineToken, Failure, FailureTracker, Mark, MemoEntry, Pos, span_at};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum RexRule {
-    Program,
-    Decl,
-    PublicDecl,
-    PrivateDecl,
-    DeclBody,
-    ImportDecl,
-    ImportPath,
-    RemoteImportPath,
-    DottedImportPath,
-    RelativeImportPath,
-    RelativePrefix,
-    ImportPathSegment,
-    HashSuffix,
-    ImportClause,
-    ImportItem,
-    ImportAlias,
-    TypeDecl,
-    TypeParam,
-    TypeVariant,
-    FnDecl,
-    FnSignatureDecl,
-    FnParamDecl,
-    FnParams,
-    ArrowParam,
-    NamedParam,
-    ParenParam,
-    LegacyParamGroup,
-    LegacyParam,
-    DeclareFnDecl,
-    DeclareParamSig,
-    BareFnSig,
-    ClassDecl,
-    SuperClause,
-    ClassBlock,
-    ClassMethod,
-    InstanceDecl,
-    InstanceContext,
-    InstanceBlock,
-    InstanceMethod,
-    WhereConstraints,
-    TypeConstraints,
-    TypeConstraint,
-    TypeExpr,
-    TypeFun,
-    TypeApp,
-    TypeAtom,
-    TypeParen,
-    UnitType,
-    TupleType,
-    GroupedType,
-    TypeRecord,
-    TypeField,
-    Expr,
-    BinaryOp,
-    UnaryExpr,
-    ApplicationExpr,
-    PostfixExpr,
-    FieldName,
-    AtomExpr,
-    HoleExpr,
-    IdentExpr,
-    BraceExpr,
-    ParenExpr,
-    UnitExpr,
-    OperatorNameExpr,
-    TupleExpr,
-    GroupedExpr,
-    ListExpr,
-    DictExpr,
-    DictItem,
-    BadDictItem,
-    RecordUpdateExpr,
-    NegExpr,
-    LambdaExpr,
-    LambdaParam,
-    LetExpr,
-    LetBinding,
-    LetRecBinding,
-    IfExpr,
-    MatchExpr,
-    MatchArm,
-    Pattern,
-    AppPattern,
-    PatternAtom,
-    ListPattern,
-    DictPattern,
-    DictPatternField,
-    ParenPattern,
-    NameRef,
-    ValueName,
+pub(crate) enum TokenKind {
+    As,
+    Class,
+    Declare,
+    Else,
+    Fn,
+    If,
+    Import,
+    Is,
+    Instance,
+    Match,
+    Pub,
+    Type,
+    When,
+    Then,
+    With,
+    Where,
+    Div,
+    Dot,
+    Le,
+    Mul,
+    Sub,
+    ArrowR,
+    Assign,
+    BackSlash,
+    BraceL,
+    BraceR,
+    BracketL,
+    BracketR,
+    Colon,
+    ColonColon,
+    Comma,
+    DotDot,
+    HashTag,
+    In,
+    Let,
+    Rec,
+    ParenL,
+    ParenR,
+    Pipe,
+    Question,
+    SemiColon,
+    Bool,
+    Float,
+    Int,
+    String,
+    HttpsUrl,
+    Ident,
+    ValueOperator,
+    BinaryOperator,
+    Eof,
 }
 
-pub(crate) fn rex_grammar() -> Grammar<RexRule> {
-    use RexRule as R;
-    use TokenKind as T;
+impl TokenKind {
+    #[cfg(test)]
+    pub(crate) const ALL: &'static [Self] = &[
+        Self::As,
+        Self::Class,
+        Self::Declare,
+        Self::Else,
+        Self::Fn,
+        Self::If,
+        Self::Import,
+        Self::Is,
+        Self::Instance,
+        Self::Match,
+        Self::Pub,
+        Self::Type,
+        Self::When,
+        Self::Then,
+        Self::With,
+        Self::Where,
+        Self::Div,
+        Self::Dot,
+        Self::Le,
+        Self::Mul,
+        Self::Sub,
+        Self::ArrowR,
+        Self::Assign,
+        Self::BackSlash,
+        Self::BraceL,
+        Self::BraceR,
+        Self::BracketL,
+        Self::BracketR,
+        Self::Colon,
+        Self::ColonColon,
+        Self::Comma,
+        Self::DotDot,
+        Self::HashTag,
+        Self::In,
+        Self::Let,
+        Self::Rec,
+        Self::ParenL,
+        Self::ParenR,
+        Self::Pipe,
+        Self::Question,
+        Self::SemiColon,
+        Self::Bool,
+        Self::Float,
+        Self::Int,
+        Self::String,
+        Self::HttpsUrl,
+        Self::Ident,
+        Self::ValueOperator,
+        Self::BinaryOperator,
+        Self::Eof,
+    ];
 
-    Grammar::new(
-        R::Program,
-        vec![
-            (
-                R::Program,
-                seq([rep(rule(R::Decl)), opt(rule(R::Expr)), tok(T::Eof)]),
-            ),
-            (R::Decl, choice([rule(R::PublicDecl), rule(R::PrivateDecl)])),
-            (R::PublicDecl, seq([tok(T::Pub), rule(R::DeclBody)])),
-            (R::PrivateDecl, rule(R::DeclBody)),
-            (
-                R::DeclBody,
-                choice([
-                    rule(R::ImportDecl),
-                    rule(R::TypeDecl),
-                    rule(R::FnDecl),
-                    rule(R::DeclareFnDecl),
-                    rule(R::ClassDecl),
-                    rule(R::InstanceDecl),
-                ]),
-            ),
-            (
-                R::ImportDecl,
-                seq([
-                    tok(T::Import),
-                    cut(seq([
-                        rule(R::ImportPath),
-                        opt(rule(R::ImportClause)),
-                        opt(rule(R::ImportAlias)),
-                        label("expected `;` after import declaration", tok(T::SemiColon)),
-                    ])),
-                ]),
-            ),
-            (
-                R::ImportPath,
-                choice([
-                    rule(R::RemoteImportPath),
-                    rule(R::RelativeImportPath),
-                    rule(R::DottedImportPath),
-                ]),
-            ),
-            (R::RemoteImportPath, tok(T::HttpsUrl)),
-            (
-                R::DottedImportPath,
-                seq([
-                    tok(T::Ident),
-                    rep(seq([tok(T::Dot), tok(T::Ident)])),
-                    opt(rule(R::HashSuffix)),
-                ]),
-            ),
-            (
-                R::RelativeImportPath,
-                seq([
-                    rule(R::RelativePrefix),
-                    tok(T::Ident),
-                    rep(rule(R::ImportPathSegment)),
-                    opt(rule(R::HashSuffix)),
-                ]),
-            ),
-            (
-                R::RelativePrefix,
-                rep1(choice([
-                    seq([tok(T::Dot), tok(T::Div)]),
-                    seq([tok(T::DotDot), tok(T::Div)]),
-                ])),
-            ),
-            (
-                R::ImportPathSegment,
-                seq([choice([tok(T::Dot), tok(T::Div)]), tok(T::Ident)]),
-            ),
-            (
-                R::HashSuffix,
-                seq([tok(T::HashTag), choice([tok(T::Ident), tok(T::Int)])]),
-            ),
-            (
-                R::ImportClause,
-                choice([
-                    seq([tok(T::ParenL), tok(T::Mul), tok(T::ParenR)]),
-                    seq([
-                        tok(T::ParenL),
-                        rule(R::ImportItem),
-                        rep(seq([tok(T::Comma), rule(R::ImportItem)])),
-                        tok(T::ParenR),
-                    ]),
-                ]),
-            ),
-            (
-                R::ImportItem,
-                seq([rule(R::ValueName), opt(seq([tok(T::As), tok(T::Ident)]))]),
-            ),
-            (R::ImportAlias, seq([tok(T::As), tok(T::Ident)])),
-            (
-                R::TypeDecl,
-                seq([
-                    tok(T::Type),
-                    cut(seq([
-                        tok(T::Ident),
-                        rep(rule(R::TypeParam)),
-                        tok(T::Assign),
-                        rule(R::TypeVariant),
-                        rep(seq([tok(T::Pipe), rule(R::TypeVariant)])),
-                        label("expected `;` after type declaration", tok(T::SemiColon)),
-                    ])),
-                ]),
-            ),
-            (R::TypeParam, tok(T::Ident)),
-            (R::TypeVariant, seq([tok(T::Ident), rep(rule(R::TypeAtom))])),
-            (
-                R::FnDecl,
-                seq([
-                    tok(T::Fn),
-                    cut(seq([
-                        tok(T::Ident),
-                        choice([rule(R::FnSignatureDecl), rule(R::FnParamDecl)]),
-                    ])),
-                ]),
-            ),
-            (
-                R::FnSignatureDecl,
-                seq([
-                    tok(T::Colon),
-                    rule(R::TypeExpr),
-                    opt(rule(R::WhereConstraints)),
-                    tok(T::Assign),
-                    rule(R::Expr),
-                    label("expected `;` after function body", tok(T::SemiColon)),
-                ]),
-            ),
-            (
-                R::FnParamDecl,
-                seq([
-                    rule(R::FnParams),
-                    tok(T::ArrowR),
-                    rule(R::TypeExpr),
-                    opt(rule(R::WhereConstraints)),
-                    tok(T::Assign),
-                    rule(R::Expr),
-                    label("expected `;` after function body", tok(T::SemiColon)),
-                ]),
-            ),
-            (
-                R::FnParams,
-                choice([
-                    seq([
-                        rule(R::ArrowParam),
-                        rep(seq([tok(T::ArrowR), rule(R::ArrowParam)])),
-                    ]),
-                    rule(R::LegacyParamGroup),
-                ]),
-            ),
-            (
-                R::ArrowParam,
-                choice([rule(R::ParenParam), rule(R::NamedParam)]),
-            ),
-            (
-                R::NamedParam,
-                seq([tok(T::Ident), tok(T::Colon), rule(R::TypeApp)]),
-            ),
-            (
-                R::ParenParam,
-                seq([
-                    tok(T::ParenL),
-                    tok(T::Ident),
-                    tok(T::Colon),
-                    rule(R::TypeExpr),
-                    tok(T::ParenR),
-                ]),
-            ),
-            (
-                R::LegacyParamGroup,
-                seq([
-                    tok(T::ParenL),
-                    opt(seq([
-                        rule(R::LegacyParam),
-                        rep(seq([tok(T::Comma), rule(R::LegacyParam)])),
-                    ])),
-                    tok(T::ParenR),
-                ]),
-            ),
-            (
-                R::LegacyParam,
-                seq([tok(T::Ident), tok(T::Colon), rule(R::TypeExpr)]),
-            ),
-            (
-                R::DeclareFnDecl,
-                seq([
-                    tok(T::Declare),
-                    cut(seq([
-                        tok(T::Fn),
-                        tok(T::Ident),
-                        opt(tok(T::Colon)),
-                        choice([rule(R::DeclareParamSig), rule(R::BareFnSig)]),
-                        label(
-                            "expected `;` after declare fn declaration",
-                            tok(T::SemiColon),
-                        ),
-                    ])),
-                ]),
-            ),
-            (
-                R::DeclareParamSig,
-                seq([
-                    rule(R::FnParams),
-                    tok(T::ArrowR),
-                    rule(R::TypeExpr),
-                    opt(rule(R::WhereConstraints)),
-                ]),
-            ),
-            (
-                R::BareFnSig,
-                seq([rule(R::TypeExpr), opt(rule(R::WhereConstraints))]),
-            ),
-            (
-                R::ClassDecl,
-                seq([
-                    tok(T::Class),
-                    cut(seq([
-                        tok(T::Ident),
-                        rep(rule(R::TypeParam)),
-                        opt(rule(R::SuperClause)),
-                        label(
-                            "expected `where { ... }` or `;` after class header",
-                            choice([rule(R::ClassBlock), tok(T::SemiColon)]),
-                        ),
-                    ])),
-                ]),
-            ),
-            (R::SuperClause, seq([tok(T::Le), rule(R::TypeConstraints)])),
-            (
-                R::ClassBlock,
-                seq([
-                    tok(T::Where),
-                    label(
-                        "expected `{` after `where` in class declaration",
-                        tok(T::BraceL),
-                    ),
-                    opt(seq([
-                        rule(R::ClassMethod),
-                        rep(seq([tok(T::SemiColon), rule(R::ClassMethod)])),
-                        opt(tok(T::SemiColon)),
-                    ])),
-                    tok(T::BraceR),
-                ]),
-            ),
-            (
-                R::ClassMethod,
-                seq([rule(R::ValueName), tok(T::Colon), rule(R::TypeExpr)]),
-            ),
-            (
-                R::InstanceDecl,
-                seq([
-                    tok(T::Instance),
-                    cut(seq([
-                        rule(R::NameRef),
-                        rule(R::TypeApp),
-                        opt(rule(R::InstanceContext)),
-                        label(
-                            "expected `where { ... }` or `;` after instance header",
-                            choice([rule(R::InstanceBlock), tok(T::SemiColon)]),
-                        ),
-                    ])),
-                ]),
-            ),
-            (
-                R::InstanceContext,
-                seq([tok(T::Le), rule(R::TypeConstraints)]),
-            ),
-            (
-                R::InstanceBlock,
-                seq([
-                    tok(T::Where),
-                    label(
-                        "expected `{` after `where` in instance declaration",
-                        tok(T::BraceL),
-                    ),
-                    opt(seq([
-                        rule(R::InstanceMethod),
-                        rep(seq([tok(T::SemiColon), rule(R::InstanceMethod)])),
-                        opt(tok(T::SemiColon)),
-                    ])),
-                    tok(T::BraceR),
-                ]),
-            ),
-            (
-                R::InstanceMethod,
-                seq([rule(R::ValueName), tok(T::Assign), rule(R::Expr)]),
-            ),
-            (
-                R::WhereConstraints,
-                seq([tok(T::Where), rule(R::TypeConstraints)]),
-            ),
-            (
-                R::TypeConstraints,
-                seq([
-                    rule(R::TypeConstraint),
-                    rep(seq([tok(T::Comma), rule(R::TypeConstraint)])),
-                ]),
-            ),
-            (R::TypeConstraint, seq([rule(R::NameRef), rule(R::TypeApp)])),
-            (R::TypeExpr, rule(R::TypeFun)),
-            (
-                R::TypeFun,
-                seq([
-                    rule(R::TypeApp),
-                    opt(seq([tok(T::ArrowR), rule(R::TypeFun)])),
-                ]),
-            ),
-            (R::TypeApp, rep1(rule(R::TypeAtom))),
-            (
-                R::TypeAtom,
-                choice([rule(R::NameRef), rule(R::TypeParen), rule(R::TypeRecord)]),
-            ),
-            (
-                R::TypeParen,
-                choice([rule(R::UnitType), rule(R::TupleType), rule(R::GroupedType)]),
-            ),
-            (R::UnitType, seq([tok(T::ParenL), tok(T::ParenR)])),
-            (
-                R::TupleType,
-                seq([
-                    tok(T::ParenL),
-                    rule(R::TypeExpr),
-                    tok(T::Comma),
-                    cut(seq([
-                        rule(R::TypeExpr),
-                        rep(seq([tok(T::Comma), cut(rule(R::TypeExpr))])),
-                        tok(T::ParenR),
-                    ])),
-                ]),
-            ),
-            (
-                R::GroupedType,
-                seq([tok(T::ParenL), rule(R::TypeExpr), tok(T::ParenR)]),
-            ),
-            (
-                R::TypeRecord,
-                seq([
-                    tok(T::BraceL),
-                    opt(seq([
-                        rule(R::TypeField),
-                        rep(seq([tok(T::Comma), cut(rule(R::TypeField))])),
-                    ])),
-                    tok(T::BraceR),
-                ]),
-            ),
-            (
-                R::TypeField,
-                seq([tok(T::Ident), tok(T::Colon), rule(R::TypeExpr)]),
-            ),
-            (
-                R::Expr,
-                seq([
-                    rule(R::UnaryExpr),
-                    rep(seq([rule(R::BinaryOp), cut(rule(R::UnaryExpr))])),
-                ]),
-            ),
-            (R::BinaryOp, tok(T::BinaryOperator)),
-            (
-                R::UnaryExpr,
-                seq([
-                    rule(R::ApplicationExpr),
-                    rep(seq([tok(T::Is), rule(R::TypeExpr)])),
-                ]),
-            ),
-            (
-                R::ApplicationExpr,
-                seq([
-                    rule(R::PostfixExpr),
-                    rep(seq([
-                        and(choice([
-                            tok(T::ParenL),
-                            tok(T::BracketL),
-                            tok(T::BraceL),
-                            tok(T::Bool),
-                            tok(T::Float),
-                            tok(T::Int),
-                            tok(T::String),
-                            tok(T::Question),
-                            tok(T::Ident),
-                            tok(T::BackSlash),
-                            tok(T::Let),
-                            tok(T::If),
-                            tok(T::Match),
-                        ])),
-                        cut(rule(R::PostfixExpr)),
-                    ])),
-                ]),
-            ),
-            (
-                R::PostfixExpr,
-                seq([
-                    rule(R::AtomExpr),
-                    rep(seq([tok(T::Dot), rule(R::FieldName)])),
-                ]),
-            ),
-            (R::FieldName, choice([tok(T::Ident), tok(T::Int)])),
-            (
-                R::AtomExpr,
-                choice([
-                    seq([and(tok(T::ParenL)), cut(rule(R::ParenExpr))]),
-                    seq([and(tok(T::BracketL)), cut(rule(R::ListExpr))]),
-                    seq([and(tok(T::BraceL)), cut(rule(R::BraceExpr))]),
-                    tok(T::Bool),
-                    tok(T::Float),
-                    tok(T::Int),
-                    tok(T::String),
-                    rule(R::HoleExpr),
-                    rule(R::IdentExpr),
-                    seq([and(tok(T::BackSlash)), cut(rule(R::LambdaExpr))]),
-                    seq([and(tok(T::Let)), cut(rule(R::LetExpr))]),
-                    seq([and(tok(T::If)), cut(rule(R::IfExpr))]),
-                    seq([and(tok(T::Match)), cut(rule(R::MatchExpr))]),
-                    seq([and(tok(T::Sub)), cut(rule(R::NegExpr))]),
-                ]),
-            ),
-            (R::HoleExpr, tok(T::Question)),
-            (R::IdentExpr, tok(T::Ident)),
-            (
-                R::BraceExpr,
-                choice([rule(R::DictExpr), rule(R::RecordUpdateExpr)]),
-            ),
-            (
-                R::ParenExpr,
-                choice([
-                    rule(R::UnitExpr),
-                    rule(R::OperatorNameExpr),
-                    rule(R::TupleExpr),
-                    rule(R::GroupedExpr),
-                ]),
-            ),
-            (R::UnitExpr, seq([tok(T::ParenL), tok(T::ParenR)])),
-            (
-                R::OperatorNameExpr,
-                seq([tok(T::ParenL), tok(T::ValueOperator), tok(T::ParenR)]),
-            ),
-            (
-                R::TupleExpr,
-                seq([
-                    tok(T::ParenL),
-                    rule(R::Expr),
-                    tok(T::Comma),
-                    opt(seq([
-                        rule(R::Expr),
-                        rep(seq([tok(T::Comma), rule(R::Expr)])),
-                        opt(tok(T::Comma)),
-                    ])),
-                    tok(T::ParenR),
-                ]),
-            ),
-            (
-                R::GroupedExpr,
-                seq([tok(T::ParenL), rule(R::Expr), tok(T::ParenR)]),
-            ),
-            (
-                R::ListExpr,
-                seq([
-                    tok(T::BracketL),
-                    opt(seq([
-                        rule(R::Expr),
-                        rep(seq([tok(T::Comma), rule(R::Expr)])),
-                        opt(tok(T::Comma)),
-                    ])),
-                    tok(T::BracketR),
-                ]),
-            ),
-            (
-                R::DictExpr,
-                seq([
-                    tok(T::BraceL),
-                    choice([
-                        tok(T::BraceR),
-                        seq([
-                            and(seq([tok(T::Ident), tok(T::Assign)])),
-                            rule(R::DictItem),
-                            rep(seq([
-                                tok(T::Comma),
-                                choice([rule(R::DictItem), rule(R::BadDictItem)]),
-                            ])),
-                            opt(tok(T::Comma)),
-                            tok(T::BraceR),
-                        ]),
-                    ]),
-                ]),
-            ),
-            (
-                R::DictItem,
-                seq([tok(T::Ident), tok(T::Assign), rule(R::Expr)]),
-            ),
-            (R::BadDictItem, seq([tok(T::Ident), not(tok(T::Assign))])),
-            (
-                R::RecordUpdateExpr,
-                seq([
-                    tok(T::BraceL),
-                    rule(R::Expr),
-                    label("expected `with`", tok(T::With)),
-                    rule(R::DictExpr),
-                    tok(T::BraceR),
-                ]),
-            ),
-            (R::NegExpr, seq([tok(T::Sub), cut(rule(R::Expr))])),
-            (
-                R::LambdaExpr,
-                seq([
-                    tok(T::BackSlash),
-                    cut(seq([
-                        rep(rule(R::LambdaParam)),
-                        opt(rule(R::WhereConstraints)),
-                        tok(T::ArrowR),
-                        rule(R::Expr),
-                    ])),
-                ]),
-            ),
-            (
-                R::LambdaParam,
-                choice([
-                    seq([tok(T::Ident), opt(seq([tok(T::Colon), rule(R::TypeExpr)]))]),
-                    seq([
-                        tok(T::ParenL),
-                        tok(T::Ident),
-                        tok(T::Colon),
-                        rule(R::TypeExpr),
-                        tok(T::ParenR),
-                    ]),
-                ]),
-            ),
-            (
-                R::LetExpr,
-                seq([
-                    tok(T::Let),
-                    cut(seq([
-                        choice([
-                            seq([
-                                tok(T::Rec),
-                                rule(R::LetRecBinding),
-                                rep(seq([tok(T::Comma), rule(R::LetRecBinding)])),
-                            ]),
-                            seq([
-                                rule(R::LetBinding),
-                                rep(seq([tok(T::Comma), rule(R::LetBinding)])),
-                            ]),
-                        ]),
-                        tok(T::In),
-                        rule(R::Expr),
-                    ])),
-                ]),
-            ),
-            (
-                R::LetBinding,
-                seq([
-                    rule(R::Pattern),
-                    opt(seq([tok(T::Colon), rule(R::TypeExpr)])),
-                    tok(T::Assign),
-                    rule(R::Expr),
-                ]),
-            ),
-            (
-                R::LetRecBinding,
-                seq([
-                    rule(R::Pattern),
-                    opt(seq([tok(T::Colon), rule(R::TypeExpr)])),
-                    tok(T::Assign),
-                    rule(R::Expr),
-                ]),
-            ),
-            (
-                R::IfExpr,
-                seq([
-                    tok(T::If),
-                    cut(seq([
-                        rule(R::Expr),
-                        tok(T::Then),
-                        rule(R::Expr),
-                        tok(T::Else),
-                        rule(R::Expr),
-                    ])),
-                ]),
-            ),
-            (
-                R::MatchExpr,
-                seq([
-                    tok(T::Match),
-                    cut(seq([
-                        label(
-                            "expected `with {` after match scrutinee",
-                            seq([rule(R::Expr), tok(T::With)]),
-                        ),
-                        label(
-                            "expected `{` after `with` in match expression",
-                            tok(T::BraceL),
-                        ),
-                        rep1(rule(R::MatchArm)),
-                        tok(T::BraceR),
-                    ])),
-                ]),
-            ),
-            (
-                R::MatchArm,
-                seq([
-                    tok(T::When),
-                    rule(R::Pattern),
-                    tok(T::ArrowR),
-                    rule(R::Expr),
-                    label("expected `;` after match arm expression", tok(T::SemiColon)),
-                ]),
-            ),
-            (
-                R::Pattern,
-                seq([
-                    rule(R::AppPattern),
-                    opt(seq([tok(T::ColonColon), rule(R::Pattern)])),
-                ]),
-            ),
-            (
-                R::AppPattern,
-                choice([
-                    seq([rule(R::NameRef), rep(rule(R::PatternAtom))]),
-                    rule(R::PatternAtom),
-                ]),
-            ),
-            (
-                R::PatternAtom,
-                choice([
-                    tok(T::Ident),
-                    rule(R::ListPattern),
-                    rule(R::DictPattern),
-                    rule(R::ParenPattern),
-                ]),
-            ),
-            (
-                R::ListPattern,
-                seq([
-                    tok(T::BracketL),
-                    opt(seq([
-                        rule(R::Pattern),
-                        rep(seq([tok(T::Comma), cut(rule(R::Pattern))])),
-                    ])),
-                    tok(T::BracketR),
-                ]),
-            ),
-            (
-                R::DictPattern,
-                seq([
-                    tok(T::BraceL),
-                    opt(seq([
-                        rule(R::DictPatternField),
-                        rep(seq([tok(T::Comma), cut(rule(R::DictPatternField))])),
-                    ])),
-                    tok(T::BraceR),
-                ]),
-            ),
-            (
-                R::DictPatternField,
-                seq([tok(T::Ident), opt(seq([tok(T::Colon), rule(R::Pattern)]))]),
-            ),
-            (
-                R::ParenPattern,
-                choice([
-                    seq([tok(T::ParenL), tok(T::ParenR)]),
-                    seq([
-                        tok(T::ParenL),
-                        rule(R::Pattern),
-                        tok(T::Comma),
-                        cut(seq([
-                            rule(R::Pattern),
-                            rep(seq([tok(T::Comma), cut(rule(R::Pattern))])),
-                            tok(T::ParenR),
-                        ])),
-                    ]),
-                    seq([tok(T::ParenL), rule(R::Pattern), tok(T::ParenR)]),
-                ]),
-            ),
-            (
-                R::NameRef,
-                seq([tok(T::Ident), rep(seq([tok(T::Dot), tok(T::Ident)]))]),
-            ),
-            (R::ValueName, choice([tok(T::Ident), tok(T::ValueOperator)])),
-        ],
-    )
+    #[cfg(test)]
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|kind| kind.to_string() == name)
+    }
+
+    pub(crate) fn matches(self, token: &Token) -> bool {
+        match self {
+            TokenKind::As => matches!(token, Token::As(..)),
+            TokenKind::Class => matches!(token, Token::Class(..)),
+            TokenKind::Declare => matches!(token, Token::Declare(..)),
+            TokenKind::Else => matches!(token, Token::Else(..)),
+            TokenKind::Fn => matches!(token, Token::Fn(..)),
+            TokenKind::If => matches!(token, Token::If(..)),
+            TokenKind::Import => matches!(token, Token::Import(..)),
+            TokenKind::Is => matches!(token, Token::Is(..)),
+            TokenKind::Instance => matches!(token, Token::Instance(..)),
+            TokenKind::Match => matches!(token, Token::Match(..)),
+            TokenKind::Pub => matches!(token, Token::Pub(..)),
+            TokenKind::Type => matches!(token, Token::Type(..)),
+            TokenKind::When => matches!(token, Token::When(..)),
+            TokenKind::Then => matches!(token, Token::Then(..)),
+            TokenKind::With => matches!(token, Token::With(..)),
+            TokenKind::Where => matches!(token, Token::Where(..)),
+            TokenKind::Div => matches!(token, Token::Div(..)),
+            TokenKind::Dot => matches!(token, Token::Dot(..)),
+            TokenKind::Le => matches!(token, Token::Le(..)),
+            TokenKind::Mul => matches!(token, Token::Mul(..)),
+            TokenKind::Sub => matches!(token, Token::Sub(..)),
+            TokenKind::ArrowR => matches!(token, Token::ArrowR(..)),
+            TokenKind::Assign => matches!(token, Token::Assign(..)),
+            TokenKind::BackSlash => matches!(token, Token::BackSlash(..)),
+            TokenKind::BraceL => matches!(token, Token::BraceL(..)),
+            TokenKind::BraceR => matches!(token, Token::BraceR(..)),
+            TokenKind::BracketL => matches!(token, Token::BracketL(..)),
+            TokenKind::BracketR => matches!(token, Token::BracketR(..)),
+            TokenKind::Colon => matches!(token, Token::Colon(..)),
+            TokenKind::ColonColon => matches!(token, Token::ColonColon(..)),
+            TokenKind::Comma => matches!(token, Token::Comma(..)),
+            TokenKind::DotDot => matches!(token, Token::DotDot(..)),
+            TokenKind::HashTag => matches!(token, Token::HashTag(..)),
+            TokenKind::In => matches!(token, Token::In(..)),
+            TokenKind::Let => matches!(token, Token::Let(..)),
+            TokenKind::Rec => matches!(token, Token::Rec(..)),
+            TokenKind::ParenL => matches!(token, Token::ParenL(..)),
+            TokenKind::ParenR => matches!(token, Token::ParenR(..)),
+            TokenKind::Pipe => matches!(token, Token::Pipe(..)),
+            TokenKind::Question => matches!(token, Token::Question(..)),
+            TokenKind::SemiColon => matches!(token, Token::SemiColon(..)),
+            TokenKind::Bool => matches!(token, Token::Bool(..)),
+            TokenKind::Float => matches!(token, Token::Float(..)),
+            TokenKind::Int => matches!(token, Token::Int(..)),
+            TokenKind::String => matches!(token, Token::String(..)),
+            TokenKind::HttpsUrl => matches!(token, Token::HttpsUrl(..)),
+            TokenKind::Ident => matches!(token, Token::Ident(..)),
+            TokenKind::ValueOperator => operator_token_name(token).is_some(),
+            TokenKind::BinaryOperator => binary_operator_token_name(token).is_some(),
+            TokenKind::Eof => matches!(token, Token::Eof(..)),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            TokenKind::As => "`as`",
+            TokenKind::Class => "`class`",
+            TokenKind::Declare => "`declare`",
+            TokenKind::Else => "`else`",
+            TokenKind::Fn => "`fn`",
+            TokenKind::If => "`if`",
+            TokenKind::Import => "`import`",
+            TokenKind::Is => "`is`",
+            TokenKind::Instance => "`instance`",
+            TokenKind::Match => "`match`",
+            TokenKind::Pub => "`pub`",
+            TokenKind::Type => "`type`",
+            TokenKind::When => "`when`",
+            TokenKind::Then => "`then`",
+            TokenKind::With => "`with`",
+            TokenKind::Where => "`where`",
+            TokenKind::Div => "`/`",
+            TokenKind::Dot => "`.`",
+            TokenKind::Le => "`<=`",
+            TokenKind::Mul => "`*`",
+            TokenKind::Sub => "`-`",
+            TokenKind::ArrowR => "`->`",
+            TokenKind::Assign => "`=`",
+            TokenKind::BackSlash => "`\\`",
+            TokenKind::BraceL => "`{`",
+            TokenKind::BraceR => "`}`",
+            TokenKind::BracketL => "`[`",
+            TokenKind::BracketR => "`]`",
+            TokenKind::Colon => "`:`",
+            TokenKind::ColonColon => "`::`",
+            TokenKind::Comma => "`,`",
+            TokenKind::DotDot => "`..`",
+            TokenKind::HashTag => "`#`",
+            TokenKind::In => "`in`",
+            TokenKind::Let => "`let`",
+            TokenKind::Rec => "`rec`",
+            TokenKind::ParenL => "`(`",
+            TokenKind::ParenR => "`)`",
+            TokenKind::Pipe => "`|`",
+            TokenKind::Question => "`?`",
+            TokenKind::SemiColon => "`;`",
+            TokenKind::Bool => "bool",
+            TokenKind::Float => "float",
+            TokenKind::Int => "int",
+            TokenKind::String => "string",
+            TokenKind::HttpsUrl => "URL",
+            TokenKind::Ident => "identifier",
+            TokenKind::ValueOperator => "operator name",
+            TokenKind::BinaryOperator => "binary operator",
+            TokenKind::Eof => "EOF",
+        }
+    }
 }
 
-#[allow(dead_code)]
-fn _peg_type_check(_: Peg<RexRule>) {}
+impl fmt::Display for TokenKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+// A grammar terminal is separate from a concrete token. This lets the same
+// iterative PEG interpreter run over Rex lexer tokens and over the test-only
+// `.peg` lexer tokens without teaching either lexer about the other.
+pub(crate) trait Terminal<T>: Copy {
+    fn label(self) -> &'static str;
+    fn matches(self, token: &T) -> bool;
+}
+
+impl Terminal<Token> for TokenKind {
+    fn label(self) -> &'static str {
+        self.label()
+    }
+
+    fn matches(self, token: &Token) -> bool {
+        self.matches(token)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Peg<R, K = TokenKind> {
+    Token(K),
+    Rule(R),
+    Seq(Vec<Peg<R, K>>),
+    Choice(Vec<Peg<R, K>>),
+    Optional(Box<Peg<R, K>>),
+    Repeat(Box<Peg<R, K>>),
+    Repeat1(Box<Peg<R, K>>),
+    And(Box<Peg<R, K>>),
+    Not(Box<Peg<R, K>>),
+    Label(String, Box<Peg<R, K>>),
+    Cut(Box<Peg<R, K>>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Grammar<R, K = TokenKind> {
+    start: R,
+    rules: BTreeMap<R, Peg<R, K>>,
+}
+
+impl<R, K> Grammar<R, K>
+where
+    R: Copy + Ord,
+{
+    pub(crate) fn new(start: R, rules: impl IntoIterator<Item = (R, Peg<R, K>)>) -> Self {
+        Self {
+            start,
+            rules: rules.into_iter().collect(),
+        }
+    }
+
+    pub(crate) fn start(&self) -> R {
+        self.start
+    }
+
+    pub(crate) fn expression(&self, rule: R) -> Option<&Peg<R, K>> {
+        self.rules.get(&rule)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn rules(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (R, &Peg<R, K>)> + ExactSizeIterator + '_ {
+        self.rules
+            .iter()
+            .map(|(&rule, expression)| (rule, expression))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Cst<R, T = Token> {
+    Node(Arc<CstNode<R, T>>),
+    Token(T),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct CstNode<R, T = Token> {
+    pub(crate) rule: R,
+    pub(crate) span: Span,
+    pub(crate) children: Vec<Cst<R, T>>,
+}
+
+impl<R, T> Drop for CstNode<R, T> {
+    fn drop(&mut self) {
+        let mut stack = std::mem::take(&mut self.children);
+        while let Some(child) = stack.pop() {
+            if let Cst::Node(mut node) = child
+                && let Some(node) = Arc::get_mut(&mut node)
+            {
+                stack.extend(std::mem::take(&mut node.children));
+            }
+        }
+    }
+}
+
+enum Work<'peg, R, K, T> {
+    Eval(&'peg Peg<R, K>),
+    Ready(Result<Vec<Cst<R, T>>, Failure>),
+    PushAndEval(Frame<'peg, R, K, T>, &'peg Peg<R, K>),
+}
+
+enum Frame<'peg, R, K, T> {
+    Rule {
+        rule: R,
+        start: Pos,
+        mark: Mark,
+    },
+    Seq {
+        items: &'peg [Peg<R, K>],
+        next: usize,
+        children: Vec<Cst<R, T>>,
+        mark: Mark,
+    },
+    Choice {
+        alternatives: &'peg [Peg<R, K>],
+        next: usize,
+        mark: Mark,
+        failures: FailureTracker,
+        failure: Option<Failure>,
+    },
+    Optional {
+        mark: Mark,
+        failures: FailureTracker,
+    },
+    Repeat {
+        item: &'peg Peg<R, K>,
+        children: Vec<Cst<R, T>>,
+        start: Pos,
+        mark: Mark,
+        failures: FailureTracker,
+    },
+    Repeat1 {
+        item: &'peg Peg<R, K>,
+    },
+    And {
+        mark: Mark,
+        failures: FailureTracker,
+    },
+    Not {
+        mark: Mark,
+        failures: FailureTracker,
+    },
+    Label {
+        label: &'peg str,
+    },
+    Cut,
+}
+
+type CstMemo<R, T> = BTreeMap<(R, Pos), MemoEntry<Arc<CstNode<R, T>>>>;
+
+pub(crate) struct GrammarParser<'grammar, 'engine, 'input, R, K = TokenKind, T = Token>
+where
+    T: EngineToken,
+{
+    grammar: &'grammar Grammar<R, K>,
+    engine: &'engine mut Engine<'input, T>,
+    memo: CstMemo<R, T>,
+}
+
+impl<'grammar, 'engine, 'input, R, K, T> GrammarParser<'grammar, 'engine, 'input, R, K, T>
+where
+    R: Copy + Ord,
+    K: Copy + Terminal<T>,
+    T: EngineToken,
+{
+    pub(crate) fn new(
+        grammar: &'grammar Grammar<R, K>,
+        engine: &'engine mut Engine<'input, T>,
+    ) -> Self {
+        Self {
+            grammar,
+            engine,
+            memo: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn parse_start(&mut self) -> Result<Arc<CstNode<R, T>>, Failure> {
+        self.parse_rule(self.grammar.start())
+    }
+
+    pub(crate) fn parse_rule(&mut self, rule: R) -> Result<Arc<CstNode<R, T>>, Failure> {
+        let root: Peg<R, K> = Peg::Rule(rule);
+        let mut children = self.parse_expr_iterative(&root)?;
+        match children.pop() {
+            Some(Cst::Node(node)) if children.is_empty() => Ok(node),
+            _ => Err(self.engine.fail("grammar rule")),
+        }
+    }
+
+    fn parse_expr_iterative(&mut self, root: &Peg<R, K>) -> Result<Vec<Cst<R, T>>, Failure> {
+        let mut work = Work::Eval(root);
+        let mut frames = Vec::new();
+
+        loop {
+            match work {
+                Work::PushAndEval(frame, expr) => {
+                    frames.push(frame);
+                    work = Work::Eval(expr);
+                }
+                Work::Eval(expr) => match expr {
+                    Peg::Token(kind) => {
+                        let expected = kind.label();
+                        let result = self
+                            .engine
+                            .expect(expected, |token| kind.matches(token))
+                            .map(|token| vec![Cst::Token(token)]);
+                        work = Work::Ready(result);
+                    }
+                    Peg::Rule(rule) => {
+                        let start = self.engine.pos();
+                        if let Some(entry) = self.memo.get(&(*rule, start)).cloned() {
+                            match entry {
+                                MemoEntry::Success { value, next } => {
+                                    self.engine.restore_pos(next);
+                                    work = Work::Ready(Ok(vec![Cst::Node(value)]));
+                                }
+                                MemoEntry::Failure(failure) => {
+                                    self.engine.restore_pos(start);
+                                    self.engine.record_failure(failure.clone());
+                                    work = Work::Ready(Err(failure));
+                                }
+                            }
+                            continue;
+                        }
+
+                        let mark = self.engine.mark();
+                        let Some(rule_expr) = self.grammar.expression(*rule) else {
+                            let failure = self.engine.fail("grammar rule");
+                            self.memo
+                                .insert((*rule, start), MemoEntry::Failure(failure.clone()));
+                            work = Work::Ready(Err(failure));
+                            continue;
+                        };
+
+                        frames.push(Frame::Rule {
+                            rule: *rule,
+                            start,
+                            mark,
+                        });
+                        work = Work::Eval(rule_expr);
+                    }
+                    Peg::Seq(items) => {
+                        if items.is_empty() {
+                            work = Work::Ready(Ok(Vec::new()));
+                        } else {
+                            frames.push(Frame::Seq {
+                                items,
+                                next: 1,
+                                children: Vec::new(),
+                                mark: self.engine.mark(),
+                            });
+                            work = Work::Eval(&items[0]);
+                        }
+                    }
+                    Peg::Choice(alternatives) => {
+                        if alternatives.is_empty() {
+                            work = Work::Ready(Err(self.engine.fail("alternative")));
+                        } else {
+                            let mark = self.engine.mark();
+                            let failures = self.engine.failure_checkpoint();
+                            frames.push(Frame::Choice {
+                                alternatives,
+                                next: 1,
+                                mark,
+                                failures: failures.clone(),
+                                failure: None,
+                            });
+                            self.engine.restore(mark);
+                            self.engine.restore_failures(failures);
+                            work = Work::Eval(&alternatives[0]);
+                        }
+                    }
+                    Peg::Optional(item) => {
+                        frames.push(Frame::Optional {
+                            mark: self.engine.mark(),
+                            failures: self.engine.failure_checkpoint(),
+                        });
+                        work = Work::Eval(item);
+                    }
+                    Peg::Repeat(item) => {
+                        let mark = self.engine.mark();
+                        let failures = self.engine.failure_checkpoint();
+                        let start = self.engine.pos();
+                        frames.push(Frame::Repeat {
+                            item,
+                            children: Vec::new(),
+                            start,
+                            mark,
+                            failures,
+                        });
+                        work = Work::Eval(item);
+                    }
+                    Peg::Repeat1(item) => {
+                        frames.push(Frame::Repeat1 { item });
+                        work = Work::Eval(item);
+                    }
+                    Peg::And(item) => {
+                        frames.push(Frame::And {
+                            mark: self.engine.mark(),
+                            failures: self.engine.failure_checkpoint(),
+                        });
+                        work = Work::Eval(item);
+                    }
+                    Peg::Not(item) => {
+                        frames.push(Frame::Not {
+                            mark: self.engine.mark(),
+                            failures: self.engine.failure_checkpoint(),
+                        });
+                        work = Work::Eval(item);
+                    }
+                    Peg::Label(label, item) => {
+                        frames.push(Frame::Label { label });
+                        work = Work::Eval(item);
+                    }
+                    Peg::Cut(item) => {
+                        frames.push(Frame::Cut);
+                        work = Work::Eval(item);
+                    }
+                },
+                Work::Ready(result) => {
+                    let Some(frame) = frames.pop() else {
+                        return result;
+                    };
+                    work = self.apply_frame(frame, result);
+                }
+            }
+        }
+    }
+
+    fn apply_frame<'peg>(
+        &mut self,
+        frame: Frame<'peg, R, K, T>,
+        result: Result<Vec<Cst<R, T>>, Failure>,
+    ) -> Work<'peg, R, K, T> {
+        match frame {
+            Frame::Rule { rule, start, mark } => match result {
+                Ok(children) => {
+                    let next = self.engine.pos();
+                    let node = Arc::new(CstNode {
+                        rule,
+                        span: self.span_from_positions(start, next),
+                        children,
+                    });
+                    self.memo.insert(
+                        (rule, start),
+                        MemoEntry::Success {
+                            value: node.clone(),
+                            next,
+                        },
+                    );
+                    Work::Ready(Ok(vec![Cst::Node(node)]))
+                }
+                Err(failure) => {
+                    self.engine.restore(mark);
+                    self.memo
+                        .insert((rule, start), MemoEntry::Failure(failure.clone()));
+                    Work::Ready(Err(failure))
+                }
+            },
+            Frame::Seq {
+                items,
+                next,
+                mut children,
+                mark,
+            } => match result {
+                Ok(mut new_children) => {
+                    children.append(&mut new_children);
+                    if let Some(item) = items.get(next) {
+                        Work::PushAndEval(
+                            Frame::Seq {
+                                items,
+                                next: next + 1,
+                                children,
+                                mark,
+                            },
+                            item,
+                        )
+                    } else {
+                        Work::Ready(Ok(children))
+                    }
+                }
+                Err(failure) => {
+                    self.engine.restore(mark);
+                    Work::Ready(Err(failure))
+                }
+            },
+            Frame::Choice {
+                alternatives,
+                next,
+                mark,
+                failures,
+                mut failure,
+            } => match result {
+                Ok(children) => Work::Ready(Ok(children)),
+                Err(err) if err.committed => Work::Ready(Err(err)),
+                Err(err) => {
+                    merge_failure(&mut failure, err);
+                    if let Some(alternative) = alternatives.get(next) {
+                        self.engine.restore(mark);
+                        self.engine.restore_failures(failures.clone());
+                        Work::PushAndEval(
+                            Frame::Choice {
+                                alternatives,
+                                next: next + 1,
+                                mark,
+                                failures,
+                                failure,
+                            },
+                            alternative,
+                        )
+                    } else {
+                        self.engine.restore(mark);
+                        self.engine.restore_failures(failures);
+                        let failure = failure.unwrap_or_else(|| self.engine.fail("alternative"));
+                        self.engine.record_failure(failure.clone());
+                        Work::Ready(Err(failure))
+                    }
+                }
+            },
+            Frame::Optional { mark, failures } => match result {
+                Ok(children) => Work::Ready(Ok(children)),
+                Err(err) if err.committed => Work::Ready(Err(err)),
+                Err(_) => {
+                    self.engine.restore(mark);
+                    self.engine.restore_failures(failures);
+                    Work::Ready(Ok(Vec::new()))
+                }
+            },
+            Frame::Repeat {
+                item,
+                mut children,
+                start,
+                mark,
+                failures,
+            } => match result {
+                Ok(mut new_children) => {
+                    let advanced = self.engine.pos() != start;
+                    children.append(&mut new_children);
+                    if advanced {
+                        let start = self.engine.pos();
+                        let mark = self.engine.mark();
+                        let failures = self.engine.failure_checkpoint();
+                        Work::PushAndEval(
+                            Frame::Repeat {
+                                item,
+                                children,
+                                start,
+                                mark,
+                                failures,
+                            },
+                            item,
+                        )
+                    } else {
+                        Work::Ready(Ok(children))
+                    }
+                }
+                Err(err) if err.committed => Work::Ready(Err(err)),
+                Err(_) => {
+                    self.engine.restore(mark);
+                    self.engine.restore_failures(failures);
+                    Work::Ready(Ok(children))
+                }
+            },
+            Frame::Repeat1 { item } => match result {
+                Ok(children) => {
+                    let start = self.engine.pos();
+                    let mark = self.engine.mark();
+                    let failures = self.engine.failure_checkpoint();
+                    Work::PushAndEval(
+                        Frame::Repeat {
+                            item,
+                            children,
+                            start,
+                            mark,
+                            failures,
+                        },
+                        item,
+                    )
+                }
+                Err(failure) => Work::Ready(Err(failure)),
+            },
+            Frame::And { mark, failures } => {
+                self.engine.restore(mark);
+                self.engine.restore_failures(failures);
+                match result {
+                    Ok(_) => Work::Ready(Ok(Vec::new())),
+                    Err(_) => Work::Ready(Err(self.engine.fail("lookahead"))),
+                }
+            }
+            Frame::Not { mark, failures } => {
+                self.engine.restore(mark);
+                self.engine.restore_failures(failures);
+                match result {
+                    Ok(_) => Work::Ready(Err(self.engine.fail("negative lookahead"))),
+                    Err(_) => Work::Ready(Ok(Vec::new())),
+                }
+            }
+            Frame::Label { label } => {
+                Work::Ready(result.map_err(|failure| self.labeled_failure(failure, label)))
+            }
+            Frame::Cut => Work::Ready(result.map_err(mark_committed)),
+        }
+    }
+
+    fn span_from_positions(&self, start: Pos, end: Pos) -> Span {
+        if start.0 < end.0 {
+            let begin = span_at(self.engine.tokens(), self.engine.eof_span(), start.0).begin;
+            let end = span_at(self.engine.tokens(), self.engine.eof_span(), end.0 - 1).end;
+            Span::from_begin_end(begin, end)
+        } else {
+            span_at(self.engine.tokens(), self.engine.eof_span(), start.0)
+        }
+    }
+
+    fn labeled_failure(&mut self, failure: Failure, label: &str) -> Failure {
+        let mut expected = BTreeSet::new();
+        expected.insert(label.to_string());
+        let labeled = Failure {
+            pos: failure.pos,
+            span: failure.span,
+            expected,
+            committed: failure.committed,
+        };
+        self.engine.record_failure(labeled.clone());
+        labeled
+    }
+}
+
+pub(crate) fn tok<R, K>(kind: K) -> Peg<R, K> {
+    Peg::Token(kind)
+}
+
+pub(crate) fn rule<R, K>(rule: R) -> Peg<R, K> {
+    Peg::Rule(rule)
+}
+
+pub(crate) fn seq<R, K>(items: impl IntoIterator<Item = Peg<R, K>>) -> Peg<R, K> {
+    Peg::Seq(items.into_iter().collect())
+}
+
+pub(crate) fn choice<R, K>(items: impl IntoIterator<Item = Peg<R, K>>) -> Peg<R, K> {
+    Peg::Choice(items.into_iter().collect())
+}
+
+pub(crate) fn opt<R, K>(item: Peg<R, K>) -> Peg<R, K> {
+    Peg::Optional(Box::new(item))
+}
+
+pub(crate) fn rep<R, K>(item: Peg<R, K>) -> Peg<R, K> {
+    Peg::Repeat(Box::new(item))
+}
+
+pub(crate) fn rep1<R, K>(item: Peg<R, K>) -> Peg<R, K> {
+    Peg::Repeat1(Box::new(item))
+}
+
+pub(crate) fn and<R, K>(item: Peg<R, K>) -> Peg<R, K> {
+    Peg::And(Box::new(item))
+}
+
+pub(crate) fn not<R, K>(item: Peg<R, K>) -> Peg<R, K> {
+    Peg::Not(Box::new(item))
+}
+
+pub(crate) fn label<R, K>(message: impl Into<String>, item: Peg<R, K>) -> Peg<R, K> {
+    Peg::Label(message.into(), Box::new(item))
+}
+
+pub(crate) fn cut<R, K>(item: Peg<R, K>) -> Peg<R, K> {
+    Peg::Cut(Box::new(item))
+}
+
+// This renderer is intentionally a verifier, not part of runtime parsing. The
+// Rex grammar source of truth is the Rust `Grammar<R>` value; tests render it
+// to canonical text and compare that text with checked `.peg` files so those
+// human-readable specs cannot drift silently.
+#[cfg(test)]
+pub(crate) fn grammar_to_string<R, K>(grammar: &Grammar<R, K>) -> String
+where
+    R: Copy + Ord + fmt::Display,
+    K: fmt::Display,
+{
+    let mut output = String::new();
+
+    for (rule, expression) in grammar.rules() {
+        output.push_str(&rule.to_string());
+        output.push_str(" <- ");
+        output.push_str(&peg_to_string(expression));
+        output.push('\n');
+    }
+
+    output
+}
+
+#[cfg(test)]
+fn peg_to_string<R, K>(expression: &Peg<R, K>) -> String
+where
+    R: fmt::Display,
+    K: fmt::Display,
+{
+    render_peg(expression, RenderPrecedence::Choice)
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum RenderPrecedence {
+    Choice,
+    Sequence,
+    Prefix,
+    Postfix,
+    Atom,
+}
+
+#[cfg(test)]
+fn render_peg<R, K>(expression: &Peg<R, K>, context: RenderPrecedence) -> String
+where
+    R: fmt::Display,
+    K: fmt::Display,
+{
+    let precedence = render_precedence(expression);
+    let rendered = match expression {
+        Peg::Token(kind) => kind.to_string(),
+        Peg::Rule(rule) => rule.to_string(),
+        Peg::Seq(items) => {
+            assert!(
+                !items.is_empty(),
+                "empty PEG sequences are not supported by the canonical renderer"
+            );
+            items
+                .iter()
+                .map(|item| render_peg(item, RenderPrecedence::Sequence))
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+        Peg::Choice(items) => {
+            assert!(
+                !items.is_empty(),
+                "empty PEG choices are not supported by the canonical renderer"
+            );
+            items
+                .iter()
+                .map(|item| render_peg(item, RenderPrecedence::Choice))
+                .collect::<Vec<_>>()
+                .join(" / ")
+        }
+        Peg::Optional(item) => format!("{}?", render_peg(item, RenderPrecedence::Atom)),
+        Peg::Repeat(item) => format!("{}*", render_peg(item, RenderPrecedence::Atom)),
+        Peg::Repeat1(item) => format!("{}+", render_peg(item, RenderPrecedence::Atom)),
+        Peg::And(item) => format!("&{}", render_peg(item, RenderPrecedence::Prefix)),
+        Peg::Not(item) => format!("!{}", render_peg(item, RenderPrecedence::Prefix)),
+        Peg::Label(message, item) => format!(
+            "label({}, {})",
+            rust_string_literal(message),
+            render_peg(item, RenderPrecedence::Choice)
+        ),
+        Peg::Cut(item) => format!("cut({})", render_peg(item, RenderPrecedence::Choice)),
+    };
+
+    if precedence < context {
+        format!("({rendered})")
+    } else {
+        rendered
+    }
+}
+
+#[cfg(test)]
+fn render_precedence<R, K>(expression: &Peg<R, K>) -> RenderPrecedence {
+    match expression {
+        Peg::Choice(_) => RenderPrecedence::Choice,
+        Peg::Seq(_) => RenderPrecedence::Sequence,
+        Peg::And(_) | Peg::Not(_) => RenderPrecedence::Prefix,
+        Peg::Optional(_) | Peg::Repeat(_) | Peg::Repeat1(_) => RenderPrecedence::Postfix,
+        Peg::Token(_) | Peg::Rule(_) | Peg::Label(_, _) | Peg::Cut(_) => RenderPrecedence::Atom,
+    }
+}
+
+#[cfg(test)]
+fn rust_string_literal(message: &str) -> String {
+    format!("{message:?}")
+}
+
+fn merge_failure(target: &mut Option<Failure>, failure: Failure) {
+    match target {
+        Some(existing) => {
+            if failure.pos > existing.pos {
+                *existing = failure;
+            } else if failure.pos == existing.pos {
+                existing.expected.extend(failure.expected);
+                existing.committed |= failure.committed;
+            }
+        }
+        None => *target = Some(failure),
+    }
+}
+
+fn mark_committed(mut failure: Failure) -> Failure {
+    failure.committed = true;
+    failure
+}
+
+fn operator_token_name(token: &Token) -> Option<&'static str> {
+    match token {
+        Token::Add(..) => Some("+"),
+        Token::And(..) => Some("&&"),
+        Token::Concat(..) => Some("++"),
+        Token::Div(..) => Some("/"),
+        Token::Eq(..) => Some("=="),
+        Token::Ne(..) => Some("!="),
+        Token::Ge(..) => Some(">="),
+        Token::Gt(..) => Some(">"),
+        Token::Le(..) => Some("<="),
+        Token::Lt(..) => Some("<"),
+        Token::Mod(..) => Some("%"),
+        Token::Mul(..) => Some("*"),
+        Token::Or(..) => Some("||"),
+        Token::Sub(..) => Some("-"),
+        _ => None,
+    }
+}
+
+fn binary_operator_token_name(token: &Token) -> Option<&'static str> {
+    match token {
+        Token::ColonColon(..) => Some("::"),
+        _ => operator_token_name(token),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fmt;
+
+    use super::*;
+
+    #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+    enum TestRule {
+        Start,
+        Term,
+    }
+
+    impl fmt::Display for TestRule {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "{self:?}")
+        }
+    }
+
+    #[test]
+    fn grammar_to_string_renders_rules_in_stable_order() {
+        let grammar = Grammar::new(
+            TestRule::Start,
+            [
+                (
+                    TestRule::Term,
+                    choice([tok(TokenKind::Int), tok(TokenKind::String)]),
+                ),
+                (
+                    TestRule::Start,
+                    seq([
+                        tok(TokenKind::Ident),
+                        rep(rule(TestRule::Term)),
+                        tok(TokenKind::Eof),
+                    ]),
+                ),
+            ],
+        );
+
+        assert_eq!(
+            grammar_to_string(&grammar),
+            "Start <- Ident Term* Eof\nTerm <- Int / String\n"
+        );
+    }
+
+    #[test]
+    fn grammar_to_string_parenthesizes_to_preserve_structure() {
+        let grammar = Grammar::new(
+            TestRule::Start,
+            [(
+                TestRule::Start,
+                seq([
+                    choice([tok(TokenKind::Ident), tok(TokenKind::Int)]),
+                    opt(seq([tok(TokenKind::String), tok(TokenKind::Bool)])),
+                    rep(and(tok(TokenKind::Float))),
+                    and(opt(tok(TokenKind::Question))),
+                ]),
+            )],
+        );
+
+        assert_eq!(
+            grammar_to_string(&grammar),
+            "Start <- (Ident / Int) (String Bool)? (&Float)* &Question?\n"
+        );
+    }
+
+    #[test]
+    fn grammar_to_string_renders_cut_and_label() {
+        let grammar = Grammar::new(
+            TestRule::Start,
+            [(
+                TestRule::Start,
+                cut(label(
+                    "expected \"thing\"\n",
+                    seq([tok(TokenKind::Ident), tok(TokenKind::SemiColon)]),
+                )),
+            )],
+        );
+
+        assert_eq!(
+            grammar_to_string(&grammar),
+            "Start <- cut(label(\"expected \\\"thing\\\"\\n\", Ident SemiColon))\n"
+        );
+    }
+}

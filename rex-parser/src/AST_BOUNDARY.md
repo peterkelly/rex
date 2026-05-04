@@ -1,8 +1,10 @@
 # Rex PEG parser tree boundary
 
-The PEG parser is grammar-driven. `grammar.rs` defines the formal Rex grammar
-as Rust data, `formal.rs` interprets that grammar over lexer tokens, and
+The PEG parser is grammar-driven. `rex.rs` defines the formal Rex grammar
+as Rust data, `grammar.rs` interprets that grammar over lexer tokens, and
 `ast_builder.rs` converts the resulting CST into `rex_ast::expr` values.
+`PEG_FORMAT.md` defines the canonical text format used when this Rust grammar
+is rendered to a checked `.peg` file.
 
 This boundary exists for three reasons:
 

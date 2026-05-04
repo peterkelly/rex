@@ -31,8 +31,8 @@ impl Input {
         (self.tokens, self.eof)
     }
 
-    pub(crate) fn engine(&self) -> Engine<'_> {
-        Engine::new(&self.tokens, self.eof)
+    pub(crate) fn engine(&self) -> Engine<'_, Token> {
+        Engine::new(&self.tokens, Token::Eof(self.eof))
     }
 }
 
@@ -124,15 +124,39 @@ pub(crate) type PegResult<T> = Result<T, Failure>;
 #[allow(dead_code)]
 pub(crate) type ParseResult<T> = Result<(T, Pos), Failure>;
 
-pub(crate) struct Engine<'input> {
-    tokens: &'input [Token],
-    eof: Span,
+// The cursor/failure engine is deliberately token-agnostic. Rex source and
+// checked `.peg` grammar files have different lexers, but packrat bookkeeping
+// only needs to clone tokens, recognize EOF, and map positions back to spans.
+pub(crate) trait EngineToken: Clone {
+    fn is_eof(&self) -> bool;
+    fn span(&self) -> Span;
+}
+
+impl EngineToken for Token {
+    fn is_eof(&self) -> bool {
+        matches!(self, Token::Eof(..))
+    }
+
+    fn span(&self) -> Span {
+        *Spanned::span(self)
+    }
+}
+
+pub(crate) struct Engine<'input, T = Token>
+where
+    T: EngineToken,
+{
+    tokens: &'input [T],
+    eof: T,
     cursor: Pos,
     failures: FailureTracker,
 }
 
-impl<'input> Engine<'input> {
-    pub(crate) fn new(tokens: &'input [Token], eof: Span) -> Self {
+impl<'input, T> Engine<'input, T>
+where
+    T: EngineToken,
+{
+    pub(crate) fn new(tokens: &'input [T], eof: T) -> Self {
         Self {
             tokens,
             eof,
@@ -145,12 +169,12 @@ impl<'input> Engine<'input> {
         self.cursor
     }
 
-    pub(crate) fn tokens(&self) -> &[Token] {
+    pub(crate) fn tokens(&self) -> &[T] {
         self.tokens
     }
 
     pub(crate) fn eof_span(&self) -> Span {
-        self.eof
+        self.eof.span()
     }
 
     pub(crate) fn mark(&self) -> Mark {
@@ -166,19 +190,19 @@ impl<'input> Engine<'input> {
     }
 
     pub(crate) fn current_span(&self) -> Span {
-        span_at(self.tokens, self.eof, self.cursor.0)
+        span_at(self.tokens, self.eof_span(), self.cursor.0)
     }
 
-    pub(crate) fn current_token(&self) -> Token {
+    pub(crate) fn current_token(&self) -> T {
         self.tokens
             .get(self.cursor.0)
             .cloned()
-            .unwrap_or(Token::Eof(self.eof))
+            .unwrap_or_else(|| self.eof.clone())
     }
 
-    pub(crate) fn bump(&mut self) -> Token {
+    pub(crate) fn bump(&mut self) -> T {
         let token = self.current_token();
-        if !matches!(token, Token::Eof(..)) {
+        if !token.is_eof() {
             self.cursor.0 += 1;
         }
         token
@@ -212,14 +236,14 @@ impl<'input> Engine<'input> {
         self.failures.record_failure(failure);
     }
 
-    pub(crate) fn satisfy<T>(
+    pub(crate) fn satisfy<U>(
         &mut self,
         expected: impl Into<String>,
-        predicate: impl FnOnce(&Token) -> Option<T>,
-    ) -> PegResult<T> {
+        predicate: impl FnOnce(&T) -> Option<U>,
+    ) -> PegResult<U> {
         let token = self.current_token();
         if let Some(value) = predicate(&token) {
-            if !matches!(token, Token::Eof(..)) {
+            if !token.is_eof() {
                 self.cursor.0 += 1;
             }
             Ok(value)
@@ -231,8 +255,8 @@ impl<'input> Engine<'input> {
     pub(crate) fn expect(
         &mut self,
         expected: impl Into<String>,
-        predicate: impl FnOnce(&Token) -> bool,
-    ) -> PegResult<Token> {
+        predicate: impl FnOnce(&T) -> bool,
+    ) -> PegResult<T> {
         self.satisfy(expected, |token| {
             if predicate(token) {
                 Some(token.clone())
@@ -243,13 +267,13 @@ impl<'input> Engine<'input> {
     }
 
     pub(crate) fn eof(&mut self) -> PegResult<()> {
-        self.satisfy("EOF", |token| matches!(token, Token::Eof(..)).then_some(()))
+        self.satisfy("EOF", |token| token.is_eof().then_some(()))
     }
 
-    pub(crate) fn sequence<T>(
+    pub(crate) fn sequence<O>(
         &mut self,
-        parser: impl FnOnce(&mut Self) -> PegResult<T>,
-    ) -> PegResult<T> {
+        parser: impl FnOnce(&mut Self) -> PegResult<O>,
+    ) -> PegResult<O> {
         let mark = self.mark();
         match parser(self) {
             Ok(value) => Ok(value),
@@ -260,10 +284,10 @@ impl<'input> Engine<'input> {
         }
     }
 
-    pub(crate) fn choice<T>(
+    pub(crate) fn choice<O>(
         &mut self,
-        build: impl FnOnce(&mut Choice<'_, 'input, T>),
-    ) -> PegResult<T> {
+        build: impl FnOnce(&mut Choice<'_, 'input, T, O>),
+    ) -> PegResult<O> {
         let start = self.mark();
         let failures = self.failures.clone();
         let mut choice = Choice {
@@ -277,10 +301,10 @@ impl<'input> Engine<'input> {
         choice.finish()
     }
 
-    pub(crate) fn optional<T>(
+    pub(crate) fn optional<O>(
         &mut self,
-        parser: impl FnOnce(&mut Self) -> PegResult<T>,
-    ) -> PegResult<Option<T>> {
+        parser: impl FnOnce(&mut Self) -> PegResult<O>,
+    ) -> PegResult<Option<O>> {
         let mark = self.mark();
         let failures = self.failures.clone();
         match parser(self) {
@@ -293,10 +317,10 @@ impl<'input> Engine<'input> {
         }
     }
 
-    pub(crate) fn repeat<T>(
+    pub(crate) fn repeat<O>(
         &mut self,
-        mut parser: impl FnMut(&mut Self) -> PegResult<T>,
-    ) -> Vec<T> {
+        mut parser: impl FnMut(&mut Self) -> PegResult<O>,
+    ) -> Vec<O> {
         let mut values = Vec::new();
         loop {
             let mark = self.mark();
@@ -319,20 +343,20 @@ impl<'input> Engine<'input> {
         values
     }
 
-    pub(crate) fn repeat1<T>(
+    pub(crate) fn repeat1<O>(
         &mut self,
-        mut parser: impl FnMut(&mut Self) -> PegResult<T>,
-    ) -> PegResult<Vec<T>> {
+        mut parser: impl FnMut(&mut Self) -> PegResult<O>,
+    ) -> PegResult<Vec<O>> {
         let first = parser(self)?;
         let mut values = vec![first];
         values.extend(self.repeat(parser));
         Ok(values)
     }
 
-    pub(crate) fn and_predicate<T>(
+    pub(crate) fn and_predicate<O>(
         &mut self,
         expected: impl Into<String>,
-        parser: impl FnOnce(&mut Self) -> PegResult<T>,
+        parser: impl FnOnce(&mut Self) -> PegResult<O>,
     ) -> PegResult<()> {
         let mark = self.mark();
         let failures = self.failures.clone();
@@ -345,10 +369,10 @@ impl<'input> Engine<'input> {
         }
     }
 
-    pub(crate) fn not_predicate<T>(
+    pub(crate) fn not_predicate<O>(
         &mut self,
         expected: impl Into<String>,
-        parser: impl FnOnce(&mut Self) -> PegResult<T>,
+        parser: impl FnOnce(&mut Self) -> PegResult<O>,
     ) -> PegResult<()> {
         let mark = self.mark();
         let failures = self.failures.clone();
@@ -361,11 +385,11 @@ impl<'input> Engine<'input> {
         }
     }
 
-    pub(crate) fn label<T>(
+    pub(crate) fn label<O>(
         &mut self,
         expected: impl Into<String>,
-        parser: impl FnOnce(&mut Self) -> PegResult<T>,
-    ) -> PegResult<T> {
+        parser: impl FnOnce(&mut Self) -> PegResult<O>,
+    ) -> PegResult<O> {
         let expected = expected.into();
         match parser(self) {
             Ok(value) => Ok(value),
@@ -378,16 +402,25 @@ impl<'input> Engine<'input> {
     }
 }
 
-pub(crate) struct Choice<'engine, 'input, T> {
-    engine: &'engine mut Engine<'input>,
+pub(crate) struct Choice<'engine, 'input, Tok, T>
+where
+    Tok: EngineToken,
+{
+    engine: &'engine mut Engine<'input, Tok>,
     start: Mark,
     base_failures: FailureTracker,
     result: Option<T>,
     failure: Option<Failure>,
 }
 
-impl<'input, T> Choice<'_, 'input, T> {
-    pub(crate) fn alternative(&mut self, parser: impl FnOnce(&mut Engine<'input>) -> PegResult<T>) {
+impl<'input, Tok, T> Choice<'_, 'input, Tok, T>
+where
+    Tok: EngineToken,
+{
+    pub(crate) fn alternative(
+        &mut self,
+        parser: impl FnOnce(&mut Engine<'input, Tok>) -> PegResult<T>,
+    ) {
         if self.result.is_some() {
             return;
         }
@@ -447,12 +480,15 @@ where
     K: Copy + Ord,
     T: Clone,
 {
-    pub(crate) fn rule<'input>(
+    pub(crate) fn rule<'input, Tok>(
         &mut self,
-        engine: &mut Engine<'input>,
+        engine: &mut Engine<'input, Tok>,
         rule: K,
-        parser: impl FnOnce(&mut Engine<'input>) -> PegResult<T>,
-    ) -> PegResult<T> {
+        parser: impl FnOnce(&mut Engine<'input, Tok>) -> PegResult<T>,
+    ) -> PegResult<T>
+    where
+        Tok: EngineToken,
+    {
         let start = engine.pos();
         self.stats.entry(rule).or_default().calls += 1;
 
@@ -507,8 +543,11 @@ pub(crate) struct RuleStats {
     pub(crate) stores: usize,
 }
 
-pub(crate) fn span_at(tokens: &[Token], eof: Span, pos: usize) -> Span {
-    tokens.get(pos).map(|t| *t.span()).unwrap_or(eof)
+pub(crate) fn span_at<T>(tokens: &[T], eof: Span, pos: usize) -> Span
+where
+    T: EngineToken,
+{
+    tokens.get(pos).map(EngineToken::span).unwrap_or(eof)
 }
 
 #[cfg(test)]

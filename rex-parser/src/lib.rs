@@ -11,9 +11,13 @@ pub mod error;
 pub mod op;
 
 mod ast_builder;
-mod formal;
 mod grammar;
 mod peg;
+mod rex;
+// The `.peg` file parser is a test-time verifier for checked grammar specs.
+// Runtime Rex parsing uses the Rust data structure in `rex.rs` directly.
+#[cfg(test)]
+mod peg_syntax;
 
 use rex_ast::expr::Program;
 use rex_lexer::Tokens;
@@ -49,11 +53,11 @@ pub struct Parser {
 
 impl Parser {
     pub fn ast_boundary() -> &'static str {
-        grammar::AST_BOUNDARY
+        rex::AST_BOUNDARY
     }
 
     pub fn grammar() -> &'static str {
-        grammar::REX_PEG_GRAMMAR
+        rex::REX_PEG_GRAMMAR
     }
 
     pub fn new(tokens: Tokens) -> Parser {

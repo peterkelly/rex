@@ -38,7 +38,11 @@ fn test_parser_exposes_target_peg_grammar() {
     ] {
         assert!(grammar.contains(rule), "missing grammar rule {rule}");
     }
-    assert!(grammar.contains("readable mirror of the formal Rust grammar"));
+    assert!(grammar.starts_with("Program <- Decl* Expr? Eof\n"));
+    assert!(grammar.contains("ImportDecl <- Import cut("));
+    assert!(grammar.contains("label(\"expected `;` after function body\", SemiColon)"));
+    assert!(!grammar.contains("'import'"));
+    assert!(!grammar.contains("#"));
 }
 
 #[test]

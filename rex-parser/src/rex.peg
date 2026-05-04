@@ -1,0 +1,90 @@
+Program <- Decl* Expr? Eof
+Decl <- PublicDecl / PrivateDecl
+PublicDecl <- Pub DeclBody
+PrivateDecl <- DeclBody
+DeclBody <- ImportDecl / TypeDecl / FnDecl / DeclareFnDecl / ClassDecl / InstanceDecl
+ImportDecl <- Import cut(ImportPath ImportClause? ImportAlias? label("expected `;` after import declaration", SemiColon))
+ImportPath <- RemoteImportPath / RelativeImportPath / DottedImportPath
+RemoteImportPath <- HttpsUrl
+DottedImportPath <- Ident (Dot Ident)* HashSuffix?
+RelativeImportPath <- RelativePrefix Ident ImportPathSegment* HashSuffix?
+RelativePrefix <- (Dot Div / DotDot Div)+
+ImportPathSegment <- (Dot / Div) Ident
+HashSuffix <- HashTag (Ident / Int)
+ImportClause <- ParenL Mul ParenR / ParenL ImportItem (Comma ImportItem)* ParenR
+ImportItem <- ValueName (As Ident)?
+ImportAlias <- As Ident
+TypeDecl <- Type cut(Ident TypeParam* Assign TypeVariant (Pipe TypeVariant)* label("expected `;` after type declaration", SemiColon))
+TypeParam <- Ident
+TypeVariant <- Ident TypeAtom*
+FnDecl <- Fn cut(Ident (FnSignatureDecl / FnParamDecl))
+FnSignatureDecl <- Colon TypeExpr WhereConstraints? Assign Expr label("expected `;` after function body", SemiColon)
+FnParamDecl <- FnParams ArrowR TypeExpr WhereConstraints? Assign Expr label("expected `;` after function body", SemiColon)
+FnParams <- ArrowParam (ArrowR ArrowParam)* / LegacyParamGroup
+ArrowParam <- ParenParam / NamedParam
+NamedParam <- Ident Colon TypeApp
+ParenParam <- ParenL Ident Colon TypeExpr ParenR
+LegacyParamGroup <- ParenL (LegacyParam (Comma LegacyParam)*)? ParenR
+LegacyParam <- Ident Colon TypeExpr
+DeclareFnDecl <- Declare cut(Fn Ident Colon? (DeclareParamSig / BareFnSig) label("expected `;` after declare fn declaration", SemiColon))
+DeclareParamSig <- FnParams ArrowR TypeExpr WhereConstraints?
+BareFnSig <- TypeExpr WhereConstraints?
+ClassDecl <- Class cut(Ident TypeParam* SuperClause? label("expected `where { ... }` or `;` after class header", ClassBlock / SemiColon))
+SuperClause <- Le TypeConstraints
+ClassBlock <- Where label("expected `{` after `where` in class declaration", BraceL) (ClassMethod (SemiColon ClassMethod)* SemiColon?)? BraceR
+ClassMethod <- ValueName Colon TypeExpr
+InstanceDecl <- Instance cut(NameRef TypeApp InstanceContext? label("expected `where { ... }` or `;` after instance header", InstanceBlock / SemiColon))
+InstanceContext <- Le TypeConstraints
+InstanceBlock <- Where label("expected `{` after `where` in instance declaration", BraceL) (InstanceMethod (SemiColon InstanceMethod)* SemiColon?)? BraceR
+InstanceMethod <- ValueName Assign Expr
+WhereConstraints <- Where TypeConstraints
+TypeConstraints <- TypeConstraint (Comma TypeConstraint)*
+TypeConstraint <- NameRef TypeApp
+TypeExpr <- TypeFun
+TypeFun <- TypeApp (ArrowR TypeFun)?
+TypeApp <- TypeAtom+
+TypeAtom <- NameRef / TypeParen / TypeRecord
+TypeParen <- UnitType / TupleType / GroupedType
+UnitType <- ParenL ParenR
+TupleType <- ParenL TypeExpr Comma cut(TypeExpr (Comma cut(TypeExpr))* ParenR)
+GroupedType <- ParenL TypeExpr ParenR
+TypeRecord <- BraceL (TypeField (Comma cut(TypeField))*)? BraceR
+TypeField <- Ident Colon TypeExpr
+Expr <- UnaryExpr (BinaryOp cut(UnaryExpr))*
+BinaryOp <- BinaryOperator
+UnaryExpr <- ApplicationExpr (Is TypeExpr)*
+ApplicationExpr <- PostfixExpr (&(ParenL / BracketL / BraceL / Bool / Float / Int / String / Question / Ident / BackSlash / Let / If / Match) cut(PostfixExpr))*
+PostfixExpr <- AtomExpr (Dot FieldName)*
+FieldName <- Ident / Int
+AtomExpr <- &ParenL cut(ParenExpr) / &BracketL cut(ListExpr) / &BraceL cut(BraceExpr) / Bool / Float / Int / String / HoleExpr / IdentExpr / &BackSlash cut(LambdaExpr) / &Let cut(LetExpr) / &If cut(IfExpr) / &Match cut(MatchExpr) / &Sub cut(NegExpr)
+HoleExpr <- Question
+IdentExpr <- Ident
+BraceExpr <- DictExpr / RecordUpdateExpr
+ParenExpr <- UnitExpr / OperatorNameExpr / TupleExpr / GroupedExpr
+UnitExpr <- ParenL ParenR
+OperatorNameExpr <- ParenL ValueOperator ParenR
+TupleExpr <- ParenL Expr Comma (Expr (Comma Expr)* Comma?)? ParenR
+GroupedExpr <- ParenL Expr ParenR
+ListExpr <- BracketL (Expr (Comma Expr)* Comma?)? BracketR
+DictExpr <- BraceL (BraceR / &(Ident Assign) DictItem (Comma (DictItem / BadDictItem))* Comma? BraceR)
+DictItem <- Ident Assign Expr
+BadDictItem <- Ident !Assign
+RecordUpdateExpr <- BraceL Expr label("expected `with`", With) DictExpr BraceR
+NegExpr <- Sub cut(Expr)
+LambdaExpr <- BackSlash cut(LambdaParam* WhereConstraints? ArrowR Expr)
+LambdaParam <- Ident (Colon TypeExpr)? / ParenL Ident Colon TypeExpr ParenR
+LetExpr <- Let cut((Rec LetRecBinding (Comma LetRecBinding)* / LetBinding (Comma LetBinding)*) In Expr)
+LetBinding <- Pattern (Colon TypeExpr)? Assign Expr
+LetRecBinding <- Pattern (Colon TypeExpr)? Assign Expr
+IfExpr <- If cut(Expr Then Expr Else Expr)
+MatchExpr <- Match cut(label("expected `with {` after match scrutinee", Expr With) label("expected `{` after `with` in match expression", BraceL) MatchArm+ BraceR)
+MatchArm <- When Pattern ArrowR Expr label("expected `;` after match arm expression", SemiColon)
+Pattern <- AppPattern (ColonColon Pattern)?
+AppPattern <- NameRef PatternAtom* / PatternAtom
+PatternAtom <- Ident / ListPattern / DictPattern / ParenPattern
+ListPattern <- BracketL (Pattern (Comma cut(Pattern))*)? BracketR
+DictPattern <- BraceL (DictPatternField (Comma cut(DictPatternField))*)? BraceR
+DictPatternField <- Ident (Colon Pattern)?
+ParenPattern <- ParenL ParenR / ParenL Pattern Comma cut(Pattern (Comma cut(Pattern))* ParenR) / ParenL Pattern ParenR
+NameRef <- Ident (Dot Ident)*
+ValueName <- Ident / ValueOperator

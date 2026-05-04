@@ -16,10 +16,10 @@ use rex_lexer::{
 use crate::{
     ParserLimits,
     error::ParserErr,
-    formal::{Cst, CstNode, GrammarParser, TokenKind},
-    grammar::{self, RexRule},
+    grammar::{Cst, CstNode, GrammarParser, TokenKind},
     op::Operator,
     peg::{Failure, Input},
+    rex::{self, RexRule},
 };
 
 pub(crate) struct PegParser {
@@ -40,7 +40,7 @@ impl PegParser {
     }
 
     pub(crate) fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
-        let grammar = grammar::rex_grammar();
+        let grammar = rex::rex_grammar();
         let mut engine = self.input.engine();
         let tokens = engine.tokens().to_vec();
         let eof = engine.eof_span();
@@ -55,7 +55,7 @@ impl PegParser {
 
     #[cfg(test)]
     fn parse_pattern_for_test(&mut self) -> Result<Pattern, Vec<ParserErr>> {
-        let grammar = grammar::rex_grammar();
+        let grammar = rex::rex_grammar();
         let mut engine = self.input.engine();
         let tokens = engine.tokens().to_vec();
         let eof = engine.eof_span();
