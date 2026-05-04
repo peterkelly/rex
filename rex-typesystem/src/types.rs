@@ -7,6 +7,7 @@ use chrono::{DateTime, Utc};
 use rex_ast::expr::{Pattern, Symbol};
 use rpds::HashTrieMapSync;
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     fmt::{self, Display, Formatter},
     mem,
@@ -124,11 +125,66 @@ impl TypeVar {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub struct TypeConst {
-    pub name: Symbol,
-    pub arity: usize,
-    pub builtin_id: Option<BuiltinTypeId>,
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+pub enum TypeConst {
+    Builtin(BuiltinTypeId),
+    User { name: Symbol, arity: usize },
+}
+
+impl TypeConst {
+    pub fn builtin_id(&self) -> Option<BuiltinTypeId> {
+        match self {
+            Self::Builtin(id) => Some(*id),
+            Self::User { .. } => None,
+        }
+    }
+
+    pub fn is_builtin(&self, id: BuiltinTypeId) -> bool {
+        self.builtin_id() == Some(id)
+    }
+
+    pub fn name(&self) -> Symbol {
+        match self {
+            Self::Builtin(id) => id.as_symbol(),
+            Self::User { name, .. } => name.clone(),
+        }
+    }
+
+    pub fn name_str(&self) -> &str {
+        match self {
+            Self::Builtin(id) => id.as_str(),
+            Self::User { name, .. } => name.as_ref(),
+        }
+    }
+
+    pub fn user_name(&self) -> Option<&Symbol> {
+        match self {
+            Self::Builtin(_) => None,
+            Self::User { name, .. } => Some(name),
+        }
+    }
+
+    pub fn arity(&self) -> usize {
+        match self {
+            Self::Builtin(id) => id.arity(),
+            Self::User { arity, .. } => *arity,
+        }
+    }
+}
+
+impl Ord for TypeConst {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.name_str()
+            .cmp(other.name_str())
+            .then_with(|| self.arity().cmp(&other.arity()))
+            .then_with(|| self.builtin_id().cmp(&other.builtin_id()))
+    }
+}
+
+impl PartialOrd for TypeConst {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
@@ -163,19 +219,14 @@ impl Type {
     }
 
     pub fn user_con(name: impl AsRef<str>, arity: usize) -> Self {
-        Type::new(TypeKind::Con(TypeConst {
+        Type::new(TypeKind::Con(TypeConst::User {
             name: Symbol::intern(name.as_ref()),
             arity,
-            builtin_id: None,
         }))
     }
 
     pub fn builtin(id: BuiltinTypeId) -> Self {
-        Type::new(TypeKind::Con(TypeConst {
-            name: id.as_symbol(),
-            arity: id.arity(),
-            builtin_id: Some(id),
-        }))
+        Type::new(TypeKind::Con(TypeConst::Builtin(id)))
     }
 
     pub fn var(tv: TypeVar) -> Self {
@@ -365,7 +416,7 @@ impl Display for Type {
                 Some(name) => write!(f, "'{}", name),
                 None => write!(f, "t{}", tv.id),
             },
-            TypeKind::Con(c) => write!(f, "{}", c.name),
+            TypeKind::Con(c) => write!(f, "{}", c.name_str()),
             TypeKind::App(l, r) => {
                 // Internally `Result` is represented as `Result err ok` so it can be partially
                 // applied as `Result err` for HKTs (Functor/Monad/etc).
@@ -376,7 +427,7 @@ impl Display for Type {
                     && matches!(
                         head.as_ref(),
                         TypeKind::Con(c)
-                            if c.builtin_id == Some(BuiltinTypeId::Result) && c.arity == 2
+                            if c.is_builtin(BuiltinTypeId::Result) && c.arity() == 2
                     )
                 {
                     return write!(f, "(Result {} {})", r, err);
@@ -1247,12 +1298,12 @@ pub fn collect_adts_in_types(types: Vec<Type>) -> Result<Vec<Type>, CollectAdtsE
         typ.for_each(|t| {
             if let TypeKind::Con(tc) = t.as_ref() {
                 // Builtins are not embeddable ADT declarations.
-                if tc.builtin_id.is_none() {
+                if let Some(name) = tc.user_name() {
                     let adt = Type::new(TypeKind::Con(tc.clone()));
                     if seen.insert(adt.clone()) {
                         out.push(adt.clone());
                     }
-                    let defs = defs_by_name.entry(tc.name.clone()).or_default();
+                    let defs = defs_by_name.entry(name.clone()).or_default();
                     if !defs.contains(&adt) {
                         defs.push(adt);
                     }
@@ -1308,15 +1359,15 @@ fn type_head_and_args_for_adt_family(typ: &Type) -> Result<(Symbol, usize, Vec<T
             "cannot build ADT declaration from non-constructor type `{typ}`"
         )));
     };
-    if !args.is_empty() && args.len() != con.arity {
+    if !args.is_empty() && args.len() != con.arity() {
         return Err(TypeError::Internal(format!(
             "constructor `{}` expected {} type arguments but got {} in `{typ}`",
-            con.name,
-            con.arity,
+            con.name_str(),
+            con.arity(),
             args.len()
         )));
     }
-    Ok((con.name.clone(), con.arity, args))
+    Ok((con.name(), con.arity(), args))
 }
 
 fn type_head_for_adt_family(typ: &Type) -> Result<Type, TypeError> {
@@ -1354,7 +1405,7 @@ fn normalize_type_for_shape(typ: &Type, param_names: &BTreeMap<usize, String>) -
             .get(&tv.id)
             .cloned()
             .unwrap_or_else(|| format!("v{}", tv.id)),
-        TypeKind::Con(con) => con.name.to_string(),
+        TypeKind::Con(con) => con.name_str().to_string(),
         TypeKind::App(fun, arg) => format!(
             "({} {})",
             normalize_type_for_shape(fun, param_names),
@@ -1471,8 +1522,10 @@ pub fn order_adt_family(adts: Vec<AdtDecl>) -> Result<Vec<AdtDecl>, TypeError> {
                     "dependency head for `{name}` was not a constructor"
                 )));
             };
-            if unique.contains_key(&dep_con.name) {
-                visit(&dep_con.name, unique, visiting, visited, ordered)?;
+            if let Some(name) = dep_con.user_name()
+                && unique.contains_key(name)
+            {
+                visit(name, unique, visiting, visited, ordered)?;
             }
         }
         visiting.pop();

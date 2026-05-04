@@ -132,8 +132,8 @@ fn collect_primitive_type_names(ts: &TypeSystem) -> BTreeSet<String> {
             continue;
         }
         if let TypeKind::Con(c) = scheme.typ.as_ref()
-            && c.arity == 0
-            && c.name == *name
+            && c.arity() == 0
+            && c.name_str() == name.as_ref()
         {
             out.insert(name.to_string());
         }
@@ -164,9 +164,9 @@ fn collect_type_ctors_from_type(typ: &Type, out: &mut BTreeMap<String, usize>) {
     match typ.as_ref() {
         TypeKind::Var(_) => {}
         TypeKind::Con(c) => {
-            out.entry(c.name.to_string())
-                .and_modify(|arity| *arity = (*arity).max(c.arity))
-                .or_insert(c.arity);
+            out.entry(c.name_str().to_string())
+                .and_modify(|arity| *arity = (*arity).max(c.arity()))
+                .or_insert(c.arity());
         }
         TypeKind::App(l, r) | TypeKind::Fun(l, r) => {
             collect_type_ctors_from_type(l, out);

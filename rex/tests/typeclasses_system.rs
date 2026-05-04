@@ -6,8 +6,8 @@ use rex::{
 
 fn type_compatible(actual: &Type, expected: &Type) -> bool {
     match (actual.as_ref(), expected.as_ref()) {
-        (TypeKind::Var(_), TypeKind::Con(tc)) if tc.name.as_ref() == "i32" => true,
-        (TypeKind::Con(a), TypeKind::Con(b)) => a.name == b.name && a.arity == b.arity,
+        (TypeKind::Var(_), TypeKind::Con(tc)) if tc.name_str() == "i32" => true,
+        (TypeKind::Con(a), TypeKind::Con(b)) => a == b,
         (TypeKind::App(af, aa), TypeKind::App(ef, ea))
         | (TypeKind::Fun(af, aa), TypeKind::Fun(ef, ea)) => {
             type_compatible(af, ef) && type_compatible(aa, ea)

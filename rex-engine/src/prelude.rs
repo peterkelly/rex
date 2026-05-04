@@ -67,7 +67,7 @@ fn result_handle(value: &Handle) -> Result<Result<Handle, Handle>, EngineError> 
 
 pub(crate) fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "List") => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::List)) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -79,7 +79,7 @@ pub(crate) fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
 
 pub(crate) fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Array") => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Array)) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -91,7 +91,7 @@ pub(crate) fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
 
 pub(crate) fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Dict") => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Dict)) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -103,7 +103,7 @@ pub(crate) fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
 
 pub(crate) fn option_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
-        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Option") => {
+        TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Option)) => {
             Ok(elem.clone())
         }
         _ => Err(EngineError::NativeType {
@@ -116,7 +116,7 @@ pub(crate) fn option_elem_type(typ: &Type) -> Result<Type, EngineError> {
 pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, ok) => match head.as_ref() {
-            TypeKind::App(head, err) if matches!(head.as_ref(), TypeKind::Con(c) if c.name.as_ref() == "Result") => {
+            TypeKind::App(head, err) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Result)) => {
                 Ok((ok.clone(), err.clone()))
             }
             _ => Err(EngineError::NativeType {
@@ -312,131 +312,131 @@ fn cmp_cell_by_type(
     }
 
     match typ.as_ref() {
-        TypeKind::Con(tc) => match tc.builtin_id {
+        TypeKind::Con(tc) => match tc.builtin_id() {
             Some(BuiltinTypeId::U8) => {
                 let a = lhs
                     .cell_as_u8()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u8()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U16) => {
                 let a = lhs
                     .cell_as_u16()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u16()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U32) => {
                 let a = lhs
                     .cell_as_u32()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u32()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::U64) => {
                 let a = lhs
                     .cell_as_u64()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_u64()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I8) => {
                 let a = lhs
                     .cell_as_i8()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i8()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I16) => {
                 let a = lhs
                     .cell_as_i16()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i16()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I32) => {
                 let a = lhs
                     .cell_as_i32()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i32()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::I64) => {
                 let a = lhs
                     .cell_as_i64()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_i64()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::F32) => {
                 let a = lhs
                     .cell_as_f32()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_f32()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
-                    expected: tc.name.to_string(),
+                    expected: tc.name_str().to_string(),
                     got: "nan".into(),
                 })
             }
             Some(BuiltinTypeId::F64) => {
                 let a = lhs
                     .cell_as_f64()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_f64()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 a.partial_cmp(&b).ok_or_else(|| EngineError::NativeType {
-                    expected: tc.name.to_string(),
+                    expected: tc.name_str().to_string(),
                     got: "nan".into(),
                 })
             }
             Some(BuiltinTypeId::String) => {
                 let a = lhs
                     .cell_as_string()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_string()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::Uuid) => {
                 let a = lhs
                     .cell_as_uuid()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_uuid()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
             Some(BuiltinTypeId::DateTime) => {
                 let a = lhs
                     .cell_as_datetime()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 let b = rhs
                     .cell_as_datetime()
-                    .map_err(|_| mismatch(op_name, tc.name.as_ref(), lhs, rhs))?;
+                    .map_err(|_| mismatch(op_name, tc.name_str(), lhs, rhs))?;
                 Ok(a.cmp(&b))
             }
-            _ => Err(mismatch(op_name, tc.name.as_ref(), lhs, rhs)),
+            _ => Err(mismatch(op_name, tc.name_str(), lhs, rhs)),
         },
         _ => Err(mismatch(op_name, &typ.to_string(), lhs, rhs)),
     }
@@ -3050,7 +3050,7 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
                     TypeKind::App(head, _)
                         if matches!(
                             head.as_ref(),
-                            TypeKind::Con(c) if c.name.as_ref() == "Option"
+                            TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Option)
                         )
                 ) =>
             {
@@ -3070,7 +3070,7 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
                             TypeKind::App(head2, _)
                                 if matches!(
                                     head2.as_ref(),
-                                    TypeKind::Con(c) if c.name.as_ref() == "Result"
+                                    TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Result)
                                 )
                         )
                 ) =>

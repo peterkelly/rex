@@ -568,17 +568,14 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
                 .unwrap_or_else(|| Symbol::intern(&format!("t{}", tv.id)));
             TypeExpr::Name(Span::default(), NameRef::Unqualified(name))
         }
-        TypeKind::Con(con) => {
-            TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()))
-        }
+        TypeKind::Con(con) => TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name())),
         TypeKind::App(fun, arg) => {
             if let TypeKind::App(head, err) = fun.as_ref()
                 && let TypeKind::Con(con) = head.as_ref()
-                && con.builtin_id == Some(BuiltinTypeId::Result)
-                && con.arity == 2
+                && con.is_builtin(BuiltinTypeId::Result)
+                && con.arity() == 2
             {
-                let result =
-                    TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()));
+                let result = TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name()));
                 let ok_expr = type_expr_from_type(arg);
                 let err_expr = type_expr_from_type(err);
                 let app1 = TypeExpr::App(Span::default(), Box::new(result), Box::new(ok_expr));

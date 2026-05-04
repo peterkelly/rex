@@ -1,8 +1,8 @@
 use crate::{
     error::TypeError,
     types::{
-        AdtDecl, AdtVariant, BuiltinTypeId, Predicate, Scheme, Type, TypeConst, TypeEnv, TypeKind,
-        TypeVar, TypeVarId, TypedExpr, TypedExprKind, Types,
+        AdtDecl, AdtVariant, BuiltinTypeId, Predicate, Scheme, Type, TypeEnv, TypeKind, TypeVar,
+        TypeVarId, TypedExpr, TypedExprKind, Types,
     },
     typesystem::{
         TypeSystem, TypeVarSupply, instantiate, is_integral_literal_expr,
@@ -31,19 +31,20 @@ fn dedup_preds(preds: Vec<Predicate>) -> Vec<Predicate> {
 fn is_integral_primitive(typ: &Type) -> bool {
     matches!(
         typ.as_ref(),
-        TypeKind::Con(TypeConst {
-            builtin_id: Some(
-                BuiltinTypeId::U8
-                    | BuiltinTypeId::U16
-                    | BuiltinTypeId::U32
-                    | BuiltinTypeId::U64
-                    | BuiltinTypeId::I8
-                    | BuiltinTypeId::I16
-                    | BuiltinTypeId::I32
-                    | BuiltinTypeId::I64
-            ),
-            ..
-        })
+        TypeKind::Con(tc)
+            if matches!(
+                tc.builtin_id(),
+                Some(
+                    BuiltinTypeId::U8
+                        | BuiltinTypeId::U16
+                        | BuiltinTypeId::U32
+                        | BuiltinTypeId::U64
+                        | BuiltinTypeId::I8
+                        | BuiltinTypeId::I16
+                        | BuiltinTypeId::I32
+                        | BuiltinTypeId::I64
+                )
+            )
     )
 }
 
@@ -261,7 +262,7 @@ fn indexable_elem_subst(container: &Type, elem: &Type) -> Result<Subst, TypeErro
         TypeKind::App(head, arg) => match head.as_ref() {
             TypeKind::Con(tc)
                 if matches!(
-                    tc.builtin_id,
+                    tc.builtin_id(),
                     Some(BuiltinTypeId::List | BuiltinTypeId::Array)
                 ) =>
             {
@@ -345,7 +346,7 @@ fn unary_app_arg(typ: &Type, ctor_name: &str) -> Option<Type> {
     let TypeKind::Con(tc) = head.as_ref() else {
         return None;
     };
-    (tc.name.as_ref() == ctor_name && tc.arity == 1).then(|| arg.clone())
+    (tc.name_str() == ctor_name && tc.arity() == 1).then(|| arg.clone())
 }
 
 fn infer_app_arg_type(
@@ -2178,7 +2179,7 @@ fn type_head_name(typ: &Type) -> Option<&Symbol> {
         cur = head;
     }
     match cur.as_ref() {
-        TypeKind::Con(tc) => Some(&tc.name),
+        TypeKind::Con(tc) => tc.user_name(),
         _ => None,
     }
 }

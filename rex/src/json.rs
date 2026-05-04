@@ -81,11 +81,11 @@ pub fn json_to_rex(
             "cannot decode JSON into unresolved type variable t{}",
             tv.id
         ))),
-        TypeKind::Con(con) => json_to_handle_for_con(heap, json, &con.name, &[], ts, opts),
+        TypeKind::Con(con) => json_to_handle_for_con(heap, json, &con.name(), &[], ts, opts),
         TypeKind::App(_, _) => {
             let (head, args) = decompose_type_app(want);
             if let TypeKind::Con(con) = head.as_ref() {
-                json_to_handle_for_con(heap, json, &con.name, &args, ts, opts)
+                json_to_handle_for_con(heap, json, &con.name(), &args, ts, opts)
             } else {
                 Err(error(format!("unsupported applied type {}", want)))
             }
@@ -130,11 +130,11 @@ pub fn rex_to_json(
             "cannot encode unresolved type variable t{} to JSON",
             tv.id
         ))),
-        TypeKind::Con(con) => handle_to_json_for_con(handle, &con.name, &[], ts, opts),
+        TypeKind::Con(con) => handle_to_json_for_con(handle, &con.name(), &[], ts, opts),
         TypeKind::App(_, _) => {
             let (head, args) = decompose_type_app(want);
             if let TypeKind::Con(con) = head.as_ref() {
-                handle_to_json_for_con(handle, &con.name, &args, ts, opts)
+                handle_to_json_for_con(handle, &con.name(), &args, ts, opts)
             } else {
                 Err(error(format!("unsupported applied type {}", want)))
             }

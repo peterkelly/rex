@@ -157,7 +157,7 @@ impl Unifier {
             }
             (TypeKind::Record(fields), TypeKind::App(head, arg))
             | (TypeKind::App(head, arg), TypeKind::Record(fields)) => match head.as_ref() {
-                TypeKind::Con(c) if c.builtin_id == Some(BuiltinTypeId::Dict) => {
+                TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Dict) => {
                     let elem_ty = record_elem_type_unifier(fields, self)?;
                     self.unify(arg, &elem_ty)
                 }
@@ -307,7 +307,7 @@ pub fn unify(t1: &Type, t2: &Type) -> Result<Subst, TypeError> {
         }
         (TypeKind::Record(fields), TypeKind::App(head, arg))
         | (TypeKind::App(head, arg), TypeKind::Record(fields)) => match head.as_ref() {
-            TypeKind::Con(c) if c.builtin_id == Some(BuiltinTypeId::Dict) => {
+            TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Dict) => {
                 let (s_fields, elem_ty) = record_elem_type(fields)?;
                 let s_arg = unify(&arg.apply(&s_fields), &elem_ty)?;
                 Ok(compose_subst(s_arg, s_fields))

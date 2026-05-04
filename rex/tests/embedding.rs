@@ -318,7 +318,7 @@ fn handle_as_list(handle: &Handle) -> Result<Vec<Handle>, EngineError> {
 }
 
 fn is_i32_or_var(ty: &Type) -> bool {
-    matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
+    matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name_str() == "i32")
         || matches!(ty.as_ref(), TypeKind::Var(_))
 }
 

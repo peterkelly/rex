@@ -38,7 +38,7 @@ async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
     .unwrap();
 
     assert!(
-        matches!(ty.as_ref(), TypeKind::Con(con) if con.builtin_id == Some(BuiltinTypeId::I32))
+        matches!(ty.as_ref(), TypeKind::Con(con) if con.is_builtin(BuiltinTypeId::I32))
             || matches!(ty.as_ref(), TypeKind::Var(_)),
         "expected i32-compatible result type, got {ty}"
     );

@@ -55,7 +55,7 @@ macro_rules! assert_handle_eq {
 async fn assert_i32_result(source: &str, expected: i32) {
     let (heap, handle, ty) = eval(source).await.unwrap();
     assert!(
-        matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
+        matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name_str() == "i32")
             || matches!(ty.as_ref(), TypeKind::Var(_)),
         "eval returned unexpected type for: {source}"
     );

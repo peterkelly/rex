@@ -627,7 +627,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     };
     assert_eq!(items.len(), 2);
     assert!(
-        matches!(items[0].as_ref(), TypeKind::Con(tc) if tc.name.as_ref() == "i32")
+        matches!(items[0].as_ref(), TypeKind::Con(tc) if tc.name_str() == "i32")
             || matches!(items[0].as_ref(), TypeKind::Var(_))
     );
     assert_eq!(items[1], Type::builtin(BuiltinTypeId::String));

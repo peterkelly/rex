@@ -3311,7 +3311,7 @@ fn expected_type_in_expr(expr: &Expr, typed: &TypedExpr, pos: RexPosition) -> Op
                 let list_elem_expected = match typed.typ.as_ref() {
                     TypeKind::App(head, elem) => match head.as_ref() {
                         TypeKind::Con(tc)
-                            if tc.builtin_id == Some(BuiltinTypeId::List) && tc.arity == 1 =>
+                            if tc.is_builtin(BuiltinTypeId::List) && tc.arity() == 1 =>
                         {
                             Some(elem)
                         }

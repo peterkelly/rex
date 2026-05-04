@@ -148,7 +148,7 @@ fn check_non_ground_predicates_declared(
 fn type_term_remaining_arity(ty: &Type) -> Option<usize> {
     match ty.as_ref() {
         TypeKind::Var(_) => None,
-        TypeKind::Con(tc) => Some(tc.arity),
+        TypeKind::Con(tc) => Some(tc.arity()),
         TypeKind::App(l, _) => {
             let a = type_term_remaining_arity(l)?;
             Some(a.saturating_sub(1))
@@ -1285,7 +1285,7 @@ fn type_app_with_result_syntax(fun: Type, arg: Type) -> Type {
         && matches!(
             head.as_ref(),
             TypeKind::Con(c)
-                if c.builtin_id == Some(BuiltinTypeId::Result) && c.arity == 2
+                if c.is_builtin(BuiltinTypeId::Result) && c.arity() == 2
         )
     {
         return Type::app(Type::app(head.clone(), arg), ok.clone());

@@ -287,7 +287,7 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
                 got: value.to_string(),
             }
         })?),
-        TypeKind::Con(tc) => match tc.builtin_id {
+        TypeKind::Con(tc) => match tc.builtin_id() {
             Some(BuiltinTypeId::U8) => {
                 engine.heap.alloc_ptr_u8(u8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
@@ -369,7 +369,7 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
                 got: value.to_string(),
             }
         })?),
-        TypeKind::Con(tc) => match tc.builtin_id {
+        TypeKind::Con(tc) => match tc.builtin_id() {
             Some(BuiltinTypeId::I8) => {
                 engine.heap.alloc_ptr_i8(i8::try_from(value).map_err(|_| {
                     EngineError::NativeType {
@@ -849,17 +849,14 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
                 .unwrap_or_else(|| Symbol::intern(&format!("t{}", tv.id)));
             TypeExpr::Name(Span::default(), NameRef::Unqualified(name))
         }
-        TypeKind::Con(con) => {
-            TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()))
-        }
+        TypeKind::Con(con) => TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name())),
         TypeKind::App(fun, arg) => {
             if let TypeKind::App(head, err) = fun.as_ref()
                 && let TypeKind::Con(con) = head.as_ref()
-                && con.builtin_id == Some(BuiltinTypeId::Result)
-                && con.arity == 2
+                && con.is_builtin(BuiltinTypeId::Result)
+                && con.arity() == 2
             {
-                let result =
-                    TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name.clone()));
+                let result = TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name()));
                 let ok_expr = type_expr_from_type(arg);
                 let err_expr = type_expr_from_type(err);
                 let app1 = TypeExpr::App(Span::default(), Box::new(result), Box::new(ok_expr));
@@ -950,8 +947,10 @@ fn qualify_module_type_refs(
 ) -> Type {
     match typ.as_ref() {
         TypeKind::Con(tc) => {
-            if local_type_names.contains(&tc.name) {
-                Type::con(virtual_export_name(module_name, tc.name.as_ref()), tc.arity)
+            if let Some(name) = tc.user_name()
+                && local_type_names.contains(name)
+            {
+                Type::con(virtual_export_name(module_name, name.as_ref()), tc.arity())
             } else {
                 typ.clone()
             }
@@ -3866,7 +3865,7 @@ fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
     while let Some(expr) = stack.pop() {
         if expr.typ.ftv().is_empty()
             && let TypeKind::Con(tc) = expr.typ.as_ref()
-            && tc.arity == 0
+            && tc.arity() == 0
         {
             push_unique_type(out, expr.typ.clone());
         }
@@ -4027,15 +4026,15 @@ fn type_head_and_args(typ: &Type) -> Result<(Symbol, usize, Vec<Type>), EngineEr
             "cannot build ADT declaration from non-constructor type `{typ}`"
         )));
     };
-    if !args.is_empty() && args.len() != con.arity {
+    if !args.is_empty() && args.len() != con.arity() {
         return Err(EngineError::Custom(format!(
             "constructor `{}` expected {} type arguments but got {} in `{typ}`",
-            con.name,
-            con.arity,
+            con.name_str(),
+            con.arity(),
             args.len()
         )));
     }
-    Ok((con.name.clone(), con.arity, args))
+    Ok((con.name(), con.arity(), args))
 }
 
 pub(crate) fn adt_shape(adt: &AdtDecl) -> String {
@@ -4068,7 +4067,7 @@ fn normalize_type_for_shape(typ: &Type, param_names: &BTreeMap<usize, String>) -
             .get(&tv.id)
             .cloned()
             .unwrap_or_else(|| format!("v{}", tv.id)),
-        TypeKind::Con(con) => con.name.to_string(),
+        TypeKind::Con(con) => con.name_str().to_string(),
         TypeKind::App(fun, arg) => format!(
             "({} {})",
             normalize_type_for_shape(fun, param_names),
@@ -6350,8 +6349,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match elem_ty.as_ref() {
-        TypeKind::Con(c) if c.name.as_ref() == "f32" => runtime.heap.alloc_ptr_f32(len as f32),
-        TypeKind::Con(c) if c.name.as_ref() == "f64" => runtime.heap.alloc_ptr_f64(len as f64),
+        TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F32) => {
+            runtime.heap.alloc_ptr_f32(len as f32)
+        }
+        TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::F64) => {
+            runtime.heap.alloc_ptr_f64(len as f64)
+        }
         _ => Err(EngineError::NativeType {
             expected: "f32 or f64".into(),
             got: elem_ty.to_string(),
