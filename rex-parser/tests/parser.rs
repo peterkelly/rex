@@ -27,6 +27,93 @@ fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
 }
 
 #[test]
+fn test_parser_exposes_target_peg_grammar() {
+    let grammar = Parser::grammar();
+    for rule in [
+        "Program <-",
+        "Decl <-",
+        "TypeExpr <-",
+        "Expr <-",
+        "Pattern <-",
+    ] {
+        assert!(grammar.contains(rule), "missing grammar rule {rule}");
+    }
+    assert!(grammar.contains("readable mirror of the formal Rust grammar"));
+}
+
+#[test]
+fn test_grammar_contract_examples_parse() {
+    for (name, code) in [
+        ("import decl", "import std.prelude as prelude; ()"),
+        ("type decl", "type Option a = None | Some a; ()"),
+        ("fn decl", "fn id x: a -> a = x; id 1"),
+        ("declare fn decl", "declare fn native : i32 -> i32; ()"),
+        ("class decl", "class Eq a where { ==: a -> a -> bool; } ()"),
+        (
+            "instance decl",
+            "instance Eq i32 where { == = prim_eq; } ()",
+        ),
+        (
+            "expr forms",
+            "let p = Point { x = 1, y = 2 } in if true then { p with { x = 3 } } else p",
+        ),
+        (
+            "match patterns",
+            "match [1] with { when x::xs -> x; when [] -> 0; }",
+        ),
+    ] {
+        let mut parser = Parser::new(Token::tokenize(code).unwrap_or_else(|err| {
+            panic!("{name}: tokenize failed: {err}");
+        }));
+        parser.parse_program().unwrap_or_else(|errs| {
+            panic!("{name}: parse failed: {errs:?}");
+        });
+    }
+}
+
+#[test]
+fn test_grammar_contract_near_misses_fail() {
+    for (name, code, expected) in [
+        (
+            "import requires semicolon",
+            "import std.prelude as prelude",
+            "`;`",
+        ),
+        (
+            "match arms require braces",
+            "match xs with when [] -> 0",
+            "expected `{` after `with` in match expression",
+        ),
+        (
+            "let rec requires variable",
+            "let rec (x, y) = pair in x",
+            "let rec only supports variable bindings",
+        ),
+        ("dict items require equals", "{ a 1 }", "expected `with`"),
+    ] {
+        let mut parser = Parser::new(Token::tokenize(code).unwrap_or_else(|err| {
+            panic!("{name}: tokenize failed: {err}");
+        }));
+        let errs = match parser.parse_program() {
+            Ok(program) => panic!("{name}: parse unexpectedly succeeded: {program:?}"),
+            Err(errs) => errs,
+        };
+        assert!(
+            errs.iter().any(|err| err.message.contains(expected)),
+            "{name}: expected parse error containing {expected:?}, got {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn test_parser_documents_ast_output_boundary() {
+    let boundary = Parser::ast_boundary();
+    assert!(boundary.contains("grammar-driven"));
+    assert!(boundary.contains("converts the resulting CST"));
+    assert!(boundary.contains("memoizes CST rule results"));
+}
+
+#[test]
 fn test_parse_comment() {
     let mut parser = Parser::new(Token::tokenize("true {- this is a boolean -}").unwrap());
     let expr = parser.parse_program().unwrap().expr;
@@ -51,6 +138,35 @@ fn test_parse_comment() {
             u!(span!(1:51 - 1:53); 42),
             b!(span!(1:55 - 1:60); false),
         )
+    );
+}
+
+#[test]
+fn test_lexer_stream_exposes_no_whitespace_tokens() {
+    let tokens = Token::tokenize("  1\n\t+\r2  ").unwrap();
+    assert_eq!(tokens.items.len(), 3);
+    assert!(matches!(tokens.items[0], Token::Int(1, _)));
+    assert!(matches!(tokens.items[1], Token::Add(_)));
+    assert!(matches!(tokens.items[2], Token::Int(2, _)));
+}
+
+#[test]
+fn test_parser_consumes_whole_input() {
+    let mut parser = Parser::new(Token::tokenize("1 ;").unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter().any(|e| e.message.contains("unexpected ;")),
+        "expected trailing-token error, got {errs:?}"
+    );
+}
+
+#[test]
+fn test_pub_without_declaration_is_not_consumed() {
+    let mut parser = Parser::new(Token::tokenize("pub 1").unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter().any(|e| e.message.contains("unexpected pub")),
+        "expected `pub` to remain visible to expression parsing, got {errs:?}"
     );
 }
 

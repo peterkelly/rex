@@ -479,6 +479,201 @@ fn infer_app_arg_typed(
     }
 }
 
+struct TypedAppState {
+    preds: Vec<Predicate>,
+    func_ty: Type,
+    typed: TypedExpr,
+    overload_name: Option<Symbol>,
+    overload_candidates: Option<Vec<Type>>,
+}
+
+struct TailAppFrame<'a> {
+    head: &'a Expr,
+    prefix_args: Vec<&'a Expr>,
+}
+
+fn app_arg_hint(unifier: &mut Unifier, func_ty: &Type) -> Option<Type> {
+    match unifier.apply_type(func_ty).as_ref() {
+        TypeKind::Fun(arg, _) => Some(arg.clone()),
+        _ => None,
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn infer_typed_app_head(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    known: &KnownVariants,
+    head: &Expr,
+) -> Result<TypedAppState, TypeError> {
+    let (preds, func_ty, typed) = infer_expr(unifier, supply, env, adts, known, head)?;
+    let mut overload_name = None;
+    let overload_candidates = match typed.kind.as_ref() {
+        TypedExprKind::Var { name, overloads } if !overloads.is_empty() => {
+            overload_name = Some(name.clone());
+            Some(overloads.clone())
+        }
+        _ => None,
+    };
+    Ok(TypedAppState {
+        preds,
+        func_ty,
+        typed,
+        overload_name,
+        overload_candidates,
+    })
+}
+
+fn apply_typed_app_arg(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    state: &mut TypedAppState,
+    expected_arg: Option<Type>,
+    p_arg: Vec<Predicate>,
+    arg_ty: Type,
+    typed_arg: TypedExpr,
+) -> Result<(), TypeError> {
+    let mut arg_ty = unifier.apply_type(&arg_ty);
+    let mut typed_arg = typed_arg;
+
+    if let Some(expected_arg) = expected_arg {
+        let expected_arg = unifier.apply_type(&expected_arg);
+        if let (Some(expected_elem), Some(arg_elem)) = (
+            unary_app_arg(&expected_arg, "Array"),
+            unary_app_arg(&arg_ty, "List"),
+        ) {
+            unifier.unify(&expected_elem, &arg_elem)?;
+            let elem_ty = unifier.apply_type(&expected_elem);
+            let list_ty = Type::list(elem_ty.clone());
+            let array_ty = Type::array(elem_ty);
+            let coercion_ty = Type::fun(list_ty, array_ty.clone());
+            let coercion_fn = TypedExpr::new(
+                coercion_ty,
+                TypedExprKind::Var {
+                    name: Symbol::intern("prim_array_from_list"),
+                    overloads: vec![],
+                },
+            );
+            typed_arg = TypedExpr::new(
+                array_ty.clone(),
+                TypedExprKind::App(Arc::new(coercion_fn), Arc::new(typed_arg)),
+            );
+            arg_ty = array_ty;
+        }
+    }
+    if let Some(candidates) = state.overload_candidates.take() {
+        let candidates = candidates
+            .into_iter()
+            .map(|t| unifier.apply_type(&t))
+            .collect::<Vec<_>>();
+        let narrowed = narrow_overload_candidates(&candidates, &arg_ty);
+        if narrowed.is_empty()
+            && let Some(name) = &state.overload_name
+        {
+            return Err(TypeError::AmbiguousOverload(name.clone()));
+        }
+        state.overload_candidates = Some(narrowed);
+    }
+    let res_ty = match state.overload_candidates.as_ref() {
+        Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
+        _ => Type::var(supply.fresh(Some(Symbol::intern("r")))),
+    };
+    unifier.unify(&state.func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
+    let result_ty = match state.overload_candidates.as_ref() {
+        Some(candidates) if candidates.len() == 1 => unifier.apply_type(&candidates[0]),
+        _ => unifier.apply_type(&res_ty),
+    };
+    state.preds.extend(p_arg);
+    state.typed = TypedExpr::new(
+        result_ty.clone(),
+        TypedExprKind::App(Arc::new(state.typed.clone()), Arc::new(typed_arg)),
+    );
+    state.func_ty = result_ty;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn infer_typed_app_expr_arg(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    known: &KnownVariants,
+    state: &mut TypedAppState,
+    arg: &Expr,
+) -> Result<(), TypeError> {
+    let expected_arg = app_arg_hint(unifier, &state.func_ty);
+    let (p_arg, arg_ty, typed_arg) =
+        infer_app_arg_typed(unifier, supply, env, adts, known, expected_arg.clone(), arg)?;
+    apply_typed_app_arg(
+        unifier,
+        supply,
+        state,
+        expected_arg,
+        p_arg,
+        arg_ty,
+        typed_arg,
+    )
+}
+
+fn collect_tail_app_chain(expr: &Expr) -> Option<(&Expr, Vec<TailAppFrame<'_>>)> {
+    let mut frames = Vec::new();
+    let mut cur = expr;
+    while let Expr::App(..) = cur {
+        let (head, mut args) = collect_app_chain(cur);
+        let Some(tail) = args.pop() else {
+            break;
+        };
+        if !matches!(tail, Expr::App(..)) {
+            break;
+        }
+        frames.push(TailAppFrame {
+            head,
+            prefix_args: args,
+        });
+        cur = tail;
+    }
+    (!frames.is_empty()).then_some((cur, frames))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn infer_tail_app_chain_typed(
+    unifier: &mut Unifier,
+    supply: &mut TypeVarSupply,
+    env: &TypeEnv,
+    adts: &BTreeMap<Symbol, AdtDecl>,
+    known: &KnownVariants,
+    leaf: &Expr,
+    frames: Vec<TailAppFrame<'_>>,
+) -> Result<(Vec<Predicate>, Type, TypedExpr), TypeError> {
+    let (mut preds, mut tail_ty, mut typed_tail) =
+        infer_expr(unifier, supply, env, adts, known, leaf)?;
+
+    for frame in frames.into_iter().rev() {
+        let mut state = infer_typed_app_head(unifier, supply, env, adts, known, frame.head)?;
+        for arg in frame.prefix_args {
+            infer_typed_app_expr_arg(unifier, supply, env, adts, known, &mut state, arg)?;
+        }
+        let expected_arg = app_arg_hint(unifier, &state.func_ty);
+        apply_typed_app_arg(
+            unifier,
+            supply,
+            &mut state,
+            expected_arg,
+            Vec::new(),
+            tail_ty,
+            typed_tail,
+        )?;
+        preds.extend(state.preds);
+        tail_ty = state.func_ty;
+        typed_tail = state.typed;
+    }
+
+    Ok((preds, tail_ty, typed_tail))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn infer_record_update_type_with_hint(
     unifier: &mut Unifier,
@@ -1165,88 +1360,17 @@ fn infer_expr(
                 Ok((preds, fun_ty, typed))
             }
             Expr::App(..) => {
-                let (head, args) = collect_app_chain(expr);
-                let (mut preds, mut func_ty, mut typed) =
-                    infer_expr(unifier, supply, env, adts, known, head)?;
-                let mut overload_name = None;
-                let mut overload_candidates = match typed.kind.as_ref() {
-                    TypedExprKind::Var { name, overloads } if !overloads.is_empty() => {
-                        overload_name = Some(name.clone());
-                        Some(overloads.clone())
-                    }
-                    _ => None,
-                };
-                for arg in args {
-                    let expected_arg = match unifier.apply_type(&func_ty).as_ref() {
-                        TypeKind::Fun(arg, _) => Some(arg.clone()),
-                        _ => None,
-                    };
-                    let arg_hint = match unifier.apply_type(&func_ty).as_ref() {
-                        TypeKind::Fun(arg, _) => Some(arg.clone()),
-                        _ => None,
-                    };
-                    let (p_arg, arg_ty, typed_arg) =
-                        infer_app_arg_typed(unifier, supply, env, adts, known, arg_hint, arg)?;
-                    let mut arg_ty = unifier.apply_type(&arg_ty);
-                    let mut typed_arg = typed_arg;
-
-                    if let Some(expected_arg) = expected_arg {
-                        let expected_arg = unifier.apply_type(&expected_arg);
-                        if let (Some(expected_elem), Some(arg_elem)) = (
-                            unary_app_arg(&expected_arg, "Array"),
-                            unary_app_arg(&arg_ty, "List"),
-                        ) {
-                            unifier.unify(&expected_elem, &arg_elem)?;
-                            let elem_ty = unifier.apply_type(&expected_elem);
-                            let list_ty = Type::list(elem_ty.clone());
-                            let array_ty = Type::array(elem_ty);
-                            let coercion_ty = Type::fun(list_ty, array_ty.clone());
-                            let coercion_fn = TypedExpr::new(
-                                coercion_ty,
-                                TypedExprKind::Var {
-                                    name: Symbol::intern("prim_array_from_list"),
-                                    overloads: vec![],
-                                },
-                            );
-                            typed_arg = TypedExpr::new(
-                                array_ty.clone(),
-                                TypedExprKind::App(Arc::new(coercion_fn), Arc::new(typed_arg)),
-                            );
-                            arg_ty = array_ty;
-                        }
-                    }
-                    if let Some(candidates) = overload_candidates.take() {
-                        let candidates = candidates
-                            .into_iter()
-                            .map(|t| unifier.apply_type(&t))
-                            .collect::<Vec<_>>();
-                        let narrowed = narrow_overload_candidates(&candidates, &arg_ty);
-                        if narrowed.is_empty()
-                            && let Some(name) = &overload_name
-                        {
-                            return Err(TypeError::AmbiguousOverload(name.clone()));
-                        }
-                        overload_candidates = Some(narrowed);
-                    }
-                    let res_ty = match overload_candidates.as_ref() {
-                        Some(candidates) if candidates.len() == 1 => candidates[0].clone(),
-                        _ => Type::var(supply.fresh(Some(Symbol::intern("r")))),
-                    };
-                    unifier.unify(&func_ty, &Type::fun(arg_ty, res_ty.clone()))?;
-                    let result_ty = match overload_candidates.as_ref() {
-                        Some(candidates) if candidates.len() == 1 => {
-                            unifier.apply_type(&candidates[0])
-                        }
-                        _ => unifier.apply_type(&res_ty),
-                    };
-                    preds.extend(p_arg);
-                    typed = TypedExpr::new(
-                        result_ty.clone(),
-                        TypedExprKind::App(Arc::new(typed), Arc::new(typed_arg)),
+                if let Some((leaf, frames)) = collect_tail_app_chain(expr) {
+                    return infer_tail_app_chain_typed(
+                        unifier, supply, env, adts, known, leaf, frames,
                     );
-                    func_ty = result_ty;
                 }
-                Ok((preds, func_ty, typed))
+                let (head, args) = collect_app_chain(expr);
+                let mut state = infer_typed_app_head(unifier, supply, env, adts, known, head)?;
+                for arg in args {
+                    infer_typed_app_expr_arg(unifier, supply, env, adts, known, &mut state, arg)?;
+                }
+                Ok((state.preds, state.func_ty, state.typed))
             }
             Expr::Project(_, base, field) => {
                 let (p1, t1, typed_base) = infer_expr(unifier, supply, env, adts, known, base)?;

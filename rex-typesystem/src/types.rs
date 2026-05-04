@@ -9,6 +9,7 @@ use rpds::HashTrieMapSync;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::{self, Display, Formatter},
+    mem,
     sync::Arc,
 };
 use uuid::Uuid;
@@ -534,6 +535,128 @@ pub struct TypedExpr {
     pub kind: Arc<TypedExprKind>,
 }
 
+struct TypedTailAppFrame {
+    head: Arc<TypedExpr>,
+    prefix_args: Vec<(Type, Arc<TypedExpr>)>,
+    tail_result_type: Type,
+}
+
+fn collect_typed_app_chain(expr: &TypedExpr) -> (Arc<TypedExpr>, Vec<(Type, Arc<TypedExpr>)>) {
+    let mut args = Vec::new();
+    let mut cur = expr;
+    while let TypedExprKind::App(f, x) = cur.kind.as_ref() {
+        args.push((cur.typ.clone(), Arc::clone(x)));
+        cur = f.as_ref();
+    }
+    args.reverse();
+    (Arc::new(cur.clone()), args)
+}
+
+fn collect_typed_tail_app_chain(
+    expr: &TypedExpr,
+) -> Option<(Arc<TypedExpr>, Vec<TypedTailAppFrame>)> {
+    let mut frames = Vec::new();
+    let mut cur = Arc::new(expr.clone());
+    while matches!(cur.kind.as_ref(), TypedExprKind::App(..)) {
+        let (head, mut args) = collect_typed_app_chain(cur.as_ref());
+        let Some((tail_result_type, tail)) = args.pop() else {
+            break;
+        };
+        if !matches!(tail.kind.as_ref(), TypedExprKind::App(..)) {
+            break;
+        }
+        frames.push(TypedTailAppFrame {
+            head,
+            prefix_args: args,
+            tail_result_type,
+        });
+        cur = tail;
+    }
+    (!frames.is_empty()).then_some((cur, frames))
+}
+
+fn typed_drop_placeholder() -> Arc<TypedExpr> {
+    Arc::new(TypedExpr::new(Type::tuple(vec![]), TypedExprKind::Hole))
+}
+
+fn drain_typed_expr_kind(kind: &mut TypedExprKind, stack: &mut Vec<Arc<TypedExpr>>) {
+    match kind {
+        TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
+            stack.extend(mem::take(elems));
+        }
+        TypedExprKind::Dict(kvs) => {
+            stack.extend(mem::take(kvs).into_values());
+        }
+        TypedExprKind::RecordUpdate { base, updates } => {
+            stack.push(mem::replace(base, typed_drop_placeholder()));
+            stack.extend(mem::take(updates).into_values());
+        }
+        TypedExprKind::App(f, x) => {
+            stack.push(mem::replace(f, typed_drop_placeholder()));
+            stack.push(mem::replace(x, typed_drop_placeholder()));
+        }
+        TypedExprKind::Project { expr, .. } => {
+            stack.push(mem::replace(expr, typed_drop_placeholder()));
+        }
+        TypedExprKind::Lam { body, .. } => {
+            stack.push(mem::replace(body, typed_drop_placeholder()));
+        }
+        TypedExprKind::Let { def, body, .. } => {
+            stack.push(mem::replace(def, typed_drop_placeholder()));
+            stack.push(mem::replace(body, typed_drop_placeholder()));
+        }
+        TypedExprKind::LetRec { bindings, body } => {
+            for (_name, def) in mem::take(bindings) {
+                stack.push(def);
+            }
+            stack.push(mem::replace(body, typed_drop_placeholder()));
+        }
+        TypedExprKind::Ite {
+            cond,
+            then_expr,
+            else_expr,
+        } => {
+            stack.push(mem::replace(cond, typed_drop_placeholder()));
+            stack.push(mem::replace(then_expr, typed_drop_placeholder()));
+            stack.push(mem::replace(else_expr, typed_drop_placeholder()));
+        }
+        TypedExprKind::Match { scrutinee, arms } => {
+            stack.push(mem::replace(scrutinee, typed_drop_placeholder()));
+            for (_pat, arm) in mem::take(arms) {
+                stack.push(arm);
+            }
+        }
+        TypedExprKind::Bool(..)
+        | TypedExprKind::Uint(..)
+        | TypedExprKind::Int(..)
+        | TypedExprKind::Float(..)
+        | TypedExprKind::String(..)
+        | TypedExprKind::Uuid(..)
+        | TypedExprKind::DateTime(..)
+        | TypedExprKind::Hole
+        | TypedExprKind::Var { .. } => {}
+    }
+}
+
+impl Drop for TypedExpr {
+    fn drop(&mut self) {
+        let Some(kind) = Arc::get_mut(&mut self.kind) else {
+            return;
+        };
+        let mut stack = Vec::new();
+        drain_typed_expr_kind(kind, &mut stack);
+        while let Some(mut expr) = stack.pop() {
+            let Some(expr) = Arc::get_mut(&mut expr) else {
+                continue;
+            };
+            let Some(kind) = Arc::get_mut(&mut expr.kind) else {
+                continue;
+            };
+            drain_typed_expr_kind(kind, &mut stack);
+        }
+    }
+}
+
 impl TypedExpr {
     pub fn new(typ: Type, kind: TypedExprKind) -> Self {
         Self {
@@ -567,6 +690,24 @@ impl TypedExpr {
                 return out;
             }
             TypedExprKind::App(..) => {
+                if let Some((leaf, frames)) = collect_typed_tail_app_chain(self) {
+                    let mut out = leaf.apply(s);
+                    for frame in frames.into_iter().rev() {
+                        let mut typed = frame.head.apply(s);
+                        for (typ, arg) in frame.prefix_args {
+                            typed = TypedExpr::new(
+                                typ.apply(s),
+                                TypedExprKind::App(Arc::new(typed), Arc::new(arg.apply(s))),
+                            );
+                        }
+                        out = TypedExpr::new(
+                            frame.tail_result_type.apply(s),
+                            TypedExprKind::App(Arc::new(typed), Arc::new(out)),
+                        );
+                    }
+                    return out;
+                }
+
                 let mut apps: Vec<(Type, Arc<TypedExpr>)> = Vec::new();
                 let mut cur = self;
                 while let TypedExprKind::App(f, x) = cur.kind.as_ref() {

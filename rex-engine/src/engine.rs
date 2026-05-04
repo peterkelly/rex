@@ -3724,73 +3724,64 @@ where
 }
 
 fn first_hole_span(expr: &Expr) -> Option<Span> {
-    match expr {
-        Expr::Hole(span) => Some(*span),
-        Expr::App(_, f, x) => first_hole_span(f).or_else(|| first_hole_span(x)),
-        Expr::Project(_, base, _) => first_hole_span(base),
-        Expr::Lam(_, _scope, _param, _ann, _constraints, body) => first_hole_span(body),
-        Expr::Let(_, _var, _ann, def, body) => {
-            first_hole_span(def).or_else(|| first_hole_span(body))
-        }
-        Expr::LetRec(_, bindings, body) => {
-            for (_var, _ann, def) in bindings {
-                if let Some(span) = first_hole_span(def) {
-                    return Some(span);
+    let mut stack = vec![expr];
+    while let Some(expr) = stack.pop() {
+        match expr {
+            Expr::Hole(span) => return Some(*span),
+            Expr::App(_, f, x) => {
+                stack.push(x);
+                stack.push(f);
+            }
+            Expr::Project(_, base, _) | Expr::Ann(_, base, _) => stack.push(base),
+            Expr::Lam(_, _scope, _param, _ann, _constraints, body) => stack.push(body),
+            Expr::Let(_, _var, _ann, def, body) => {
+                stack.push(body);
+                stack.push(def);
+            }
+            Expr::LetRec(_, bindings, body) => {
+                stack.push(body);
+                for (_var, _ann, def) in bindings.iter().rev() {
+                    stack.push(def);
                 }
             }
-            first_hole_span(body)
-        }
-        Expr::Ite(_, cond, then_expr, else_expr) => first_hole_span(cond)
-            .or_else(|| first_hole_span(then_expr))
-            .or_else(|| first_hole_span(else_expr)),
-        Expr::Match(_, scrutinee, arms) => {
-            if let Some(span) = first_hole_span(scrutinee) {
-                return Some(span);
+            Expr::Ite(_, cond, then_expr, else_expr) => {
+                stack.push(else_expr);
+                stack.push(then_expr);
+                stack.push(cond);
             }
-            for (_pat, arm) in arms {
-                if let Some(span) = first_hole_span(arm) {
-                    return Some(span);
+            Expr::Match(_, scrutinee, arms) => {
+                for (_pat, arm) in arms.iter().rev() {
+                    stack.push(arm);
+                }
+                stack.push(scrutinee);
+            }
+            Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+                for elem in elems.iter().rev() {
+                    stack.push(elem);
                 }
             }
-            None
-        }
-        Expr::Ann(_, inner, _) => first_hole_span(inner),
-        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
-            for elem in elems {
-                if let Some(span) = first_hole_span(elem) {
-                    return Some(span);
+            Expr::Dict(_, kvs) => {
+                for value in kvs.values().rev() {
+                    stack.push(value);
                 }
             }
-            None
-        }
-        Expr::Dict(_, kvs) => {
-            for value in kvs.values() {
-                if let Some(span) = first_hole_span(value) {
-                    return Some(span);
+            Expr::RecordUpdate(_, base, kvs) => {
+                for value in kvs.values().rev() {
+                    stack.push(value);
                 }
+                stack.push(base);
             }
-            None
+            Expr::Bool(..)
+            | Expr::Uint(..)
+            | Expr::Int(..)
+            | Expr::Float(..)
+            | Expr::String(..)
+            | Expr::Uuid(..)
+            | Expr::DateTime(..)
+            | Expr::Var(..) => {}
         }
-        Expr::RecordUpdate(_, base, kvs) => {
-            if let Some(span) = first_hole_span(base) {
-                return Some(span);
-            }
-            for value in kvs.values() {
-                if let Some(span) = first_hole_span(value) {
-                    return Some(span);
-                }
-            }
-            None
-        }
-        Expr::Bool(..)
-        | Expr::Uint(..)
-        | Expr::Int(..)
-        | Expr::Float(..)
-        | Expr::String(..)
-        | Expr::Uuid(..)
-        | Expr::DateTime(..)
-        | Expr::Var(..) => None,
     }
+    None
 }
 
 fn normalize_name(name: &str) -> Symbol {

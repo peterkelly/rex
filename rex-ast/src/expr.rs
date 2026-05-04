@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     fmt::{self, Display, Formatter},
+    mem,
     sync::Arc,
 };
 
@@ -570,7 +571,7 @@ impl Program {
     }
 }
 
-#[derive(Debug, PartialEq, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Expr {
     Bool(Span, bool),              // true
@@ -603,6 +604,80 @@ pub enum Expr {
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>),                       // if e1 then e2 else e3
     Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>),                // match e1 with { ... }
     Ann(Span, Arc<Expr>, TypeExpr),                                   // e is t
+}
+
+fn expr_drop_placeholder() -> Arc<Expr> {
+    Arc::new(Expr::Hole(Span::default()))
+}
+
+fn drain_expr(expr: &mut Expr, stack: &mut Vec<Arc<Expr>>) {
+    match expr {
+        Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+            stack.extend(mem::take(elems));
+        }
+        Expr::Dict(_, kvs) => {
+            stack.extend(mem::take(kvs).into_values());
+        }
+        Expr::RecordUpdate(_, base, updates) => {
+            stack.push(mem::replace(base, expr_drop_placeholder()));
+            stack.extend(mem::take(updates).into_values());
+        }
+        Expr::App(_, f, x) => {
+            stack.push(mem::replace(f, expr_drop_placeholder()));
+            stack.push(mem::replace(x, expr_drop_placeholder()));
+        }
+        Expr::Project(_, base, _) | Expr::Ann(_, base, _) => {
+            stack.push(mem::replace(base, expr_drop_placeholder()));
+        }
+        Expr::Lam(_, scope, _, _, _, body) => {
+            let old_scope = mem::replace(scope, Scope::new_sync());
+            stack.extend(old_scope.iter().map(|(_, expr)| expr.clone()));
+            stack.push(mem::replace(body, expr_drop_placeholder()));
+        }
+        Expr::Let(_, _, _, def, body) => {
+            stack.push(mem::replace(def, expr_drop_placeholder()));
+            stack.push(mem::replace(body, expr_drop_placeholder()));
+        }
+        Expr::LetRec(_, bindings, body) => {
+            for (_var, _ann, def) in mem::take(bindings) {
+                stack.push(def);
+            }
+            stack.push(mem::replace(body, expr_drop_placeholder()));
+        }
+        Expr::Ite(_, cond, then_expr, else_expr) => {
+            stack.push(mem::replace(cond, expr_drop_placeholder()));
+            stack.push(mem::replace(then_expr, expr_drop_placeholder()));
+            stack.push(mem::replace(else_expr, expr_drop_placeholder()));
+        }
+        Expr::Match(_, scrutinee, arms) => {
+            stack.push(mem::replace(scrutinee, expr_drop_placeholder()));
+            for (_pat, arm) in mem::take(arms) {
+                stack.push(arm);
+            }
+        }
+        Expr::Bool(..)
+        | Expr::Uint(..)
+        | Expr::Int(..)
+        | Expr::Float(..)
+        | Expr::String(..)
+        | Expr::Uuid(..)
+        | Expr::DateTime(..)
+        | Expr::Hole(..)
+        | Expr::Var(..) => {}
+    }
+}
+
+impl Drop for Expr {
+    fn drop(&mut self) {
+        let mut stack = Vec::new();
+        drain_expr(self, &mut stack);
+        while let Some(mut expr) = stack.pop() {
+            let Some(expr) = Arc::get_mut(&mut expr) else {
+                continue;
+            };
+            drain_expr(expr, &mut stack);
+        }
+    }
 }
 
 impl Expr {

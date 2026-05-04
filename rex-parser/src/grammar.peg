@@ -1,0 +1,260 @@
+# Rex token-level PEG grammar contract
+#
+# This file is a readable mirror of the formal Rust grammar defined in
+# grammar.rs. The parser implementation uses the grammar.rs data structure as
+# input to the generic PEG interpreter in formal.rs; this file is exposed as
+# Parser::grammar() for humans and tests.
+#
+# The grammar is written over lexer tokens, not source characters:
+#
+# - Whitespace is not present in the token stream.
+# - Stage 2 strips comments before grammar parsing. Comment stripping removes a
+#   CommentL token, every token up to the first CommentR token, and the CommentR
+#   token itself. Nested comments are not part of this grammar.
+# - EOF is synthetic and supplied by the lexer span information.
+#
+# Notation:
+#
+#   A <- B / C       ordered choice
+#   A B             sequence
+#   A?              optional
+#   A*              zero or more
+#   A+              one or more
+#   &A              positive lookahead
+#   !A              negative lookahead
+#   TOKEN           lexer token class
+#   'text'          lexer token whose printed source spelling is text
+#   { note }        AST action or semantic restriction, not syntax
+#
+# Names such as Ident and Int refer to rex_lexer::Token variants. Rule names
+# should line up with RexRule variants in grammar.rs.
+#
+# Parser output contract:
+#
+#   formal.rs         -> CST nodes for named RexRule grammar rules
+#   ast_builder.rs    -> rex_ast::expr AST values from successful CST nodes
+#
+#   Program           -> rex_ast::expr::Program
+#   Decl              -> rex_ast::expr::Decl
+#   ImportDecl        -> rex_ast::expr::ImportDecl
+#   TypeDecl          -> rex_ast::expr::TypeDecl
+#   FnDecl            -> rex_ast::expr::FnDecl
+#   DeclareFnDecl     -> rex_ast::expr::DeclareFnDecl
+#   ClassDecl         -> rex_ast::expr::ClassDecl
+#   InstanceDecl      -> rex_ast::expr::InstanceDecl
+#   TypeExpr          -> rex_ast::expr::TypeExpr
+#   TypeConstraint    -> rex_ast::expr::TypeConstraint
+#   Expr              -> rex_ast::expr::Expr
+#   Pattern           -> rex_ast::expr::Pattern
+#   NameRef           -> rex_ast::expr::NameRef
+#
+# The PEG parser should not build a full CST. Small helper structs are fine for
+# grammar-local semantic actions, but the public parser result and memoized
+# grammar-rule values should be AST values or simple AST-adjacent helpers.
+
+Program <- Decl* Expr? EOF
+
+Decl <- PublicDecl / PrivateDecl
+PublicDecl <- 'pub' DeclBody
+PrivateDecl <- DeclBody
+DeclBody <-
+      ImportDecl
+    / TypeDecl
+    / FnDecl
+    / DeclareFnDecl
+    / ClassDecl
+    / InstanceDecl
+
+
+# Declarations
+
+ImportDecl <- 'import' ImportPath ImportClause? ImportAlias? ';'
+ImportPath <- RemoteImportPath / RelativeImportPath / DottedImportPath
+RemoteImportPath <- HttpsUrl
+DottedImportPath <- Ident ('.' Ident)* HashSuffix?
+RelativeImportPath <- RelativePrefix Ident ImportPathSegment* HashSuffix?
+RelativePrefix <- ('.' '/' / '..' '/')+
+ImportPathSegment <- ('.' / '/') Ident
+HashSuffix <- '#' (Ident / Int)
+ImportClause <- '(' '*' ')' / '(' ImportItem (',' ImportItem)* ')'
+ImportItem <- ValueName ('as' Ident)?
+ImportAlias <- 'as' Ident
+
+TypeDecl <- 'type' Ident TypeParam* '=' TypeVariant ('|' TypeVariant)* ';'
+TypeParam <- Ident
+TypeVariant <- Ident TypeAtom*
+
+FnDecl <- 'fn' Ident (FnSignatureDecl / FnParamDecl)
+FnSignatureDecl <- ':' TypeExpr WhereConstraints? '=' Expr ';'
+FnParamDecl <- FnParams '->' TypeExpr WhereConstraints? '=' Expr ';'
+FnParams <- ArrowParam ('->' ArrowParam)* / LegacyParamGroup
+ArrowParam <- ParenParam / NamedParam
+NamedParam <- Ident ':' NonFunType
+ParenParam <- '(' Ident ':' TypeExpr ')'
+LegacyParamGroup <- '(' (LegacyParam (',' LegacyParam)*)? ')'
+LegacyParam <- Ident ':' TypeExpr
+NonFunType <- TypeApp
+
+DeclareFnDecl <- 'declare' 'fn' Ident ':'? (DeclareParamSig / BareFnSig) ';'
+DeclareParamSig <- FnParams '->' TypeExpr WhereConstraints?
+BareFnSig <- TypeExpr WhereConstraints?
+
+ClassDecl <- 'class' Ident TypeParam* SuperClause? (ClassBlock / ';')
+SuperClause <- '<=' TypeConstraints
+ClassBlock <- 'where' '{' ClassMethodList? '}'
+ClassMethodList <- ClassMethod (';' ClassMethod)* ';'?
+ClassMethod <- ValueName ':' TypeExpr
+
+InstanceDecl <- 'instance' NameRef TypeApp InstanceContext? (InstanceBlock / ';')
+InstanceContext <- '<=' TypeConstraints
+InstanceBlock <- 'where' '{' InstanceMethodList? '}'
+InstanceMethodList <- InstanceMethod (';' InstanceMethod)* ';'?
+InstanceMethod <- ValueName '=' Expr
+
+WhereConstraints <- 'where' TypeConstraints
+TypeConstraints <- TypeConstraint (',' TypeConstraint)*
+TypeConstraint <- NameRef TypeApp
+
+
+# Types
+
+TypeExpr <- TypeFun
+TypeFun <- TypeApp ('->' TypeFun)?
+TypeApp <- TypeAtom+
+TypeAtom <- NameRef / TypeParen / TypeRecord
+
+TypeParen <- UnitType / TupleType / GroupedType
+UnitType <- '(' ')'
+TupleType <- '(' TypeExpr ',' TypeExpr (',' TypeExpr)* ')'
+GroupedType <- '(' TypeExpr ')'
+
+TypeRecord <- '{' TypeFieldList? '}'
+TypeFieldList <- TypeField (',' TypeField)*
+TypeField <- Ident ':' TypeExpr
+
+
+# Expressions
+
+Expr <- BinaryExpr
+
+# The implementation should parse BinaryExpr with the precedence table below.
+# `::` is kept as expression syntax and lowers to `Cons lhs rhs`.
+#
+#   precedence  operator set                         associativity
+#   0           ::                                   right
+#   1           ||                                   left
+#   2           &&                                   left
+#   3           == != < <= > >=                      right
+#   4           + - ++                               left
+#   5           * / %                                left
+#
+BinaryExpr <- UnaryExpr (BinaryOp UnaryExpr)*
+BinaryOp <- '::' / '||' / '&&' / '==' / '!=' / '<' / '<=' / '>' / '>=' / '+' / '-' / '++' / '*' / '/' / '%'
+
+UnaryExpr <- ApplicationExpr ('is' TypeExpr)*
+ApplicationExpr <- PostfixExpr ApplicationArg*
+ApplicationArg <- PostfixExpr
+PostfixExpr <- AtomExpr ('.' FieldName)*
+FieldName <- Ident / Int
+
+AtomExpr <-
+      ParenExpr
+    / ListExpr
+    / BraceExpr
+    / Bool
+    / Float
+    / Int
+    / String
+    / HoleExpr
+    / IdentExpr
+    / LambdaExpr
+    / LetExpr
+    / IfExpr
+    / MatchExpr
+    / NegExpr
+
+HoleExpr <- '?'
+IdentExpr <- Ident
+
+ParenExpr <- UnitExpr / OperatorNameExpr / TupleExpr / GroupedExpr
+UnitExpr <- '(' ')'
+OperatorNameExpr <- '(' ValueOperator ')'
+TupleExpr <- '(' Expr ',' (Expr (',' Expr)* ','?)? ')'
+GroupedExpr <- '(' Expr ')'
+
+ListExpr <- '[' ListItems? ']'
+ListItems <- Expr (',' Expr)* ','?
+
+BraceExpr <- DictExpr / RecordUpdateExpr
+DictExpr <- '{' DictItems? '}'
+DictItems <- DictItem (',' DictItem)* ','?
+DictItem <- Ident '=' Expr
+RecordUpdateExpr <- '{' Expr 'with' DictExpr '}'
+
+# Current Rex gives unary minus a broad scope because the old parser parses the
+# operand as Expr. Preserve that behavior until we explicitly choose otherwise.
+NegExpr <- '-' Expr
+
+LambdaExpr <- '\' LambdaParam* WhereConstraints? '->' Expr
+LambdaParam <- Ident (':' TypeExpr)? / '(' Ident ':' TypeExpr ')'
+
+LetExpr <- 'let' ('rec' LetRecBindingList / LetBindingList) 'in' Expr
+LetBindingList <- LetBinding (',' LetBinding)*
+LetBinding <- Pattern (':' TypeExpr)? '=' Expr
+LetRecBindingList <- LetRecBinding (',' LetRecBinding)*
+LetRecBinding <- Ident (':' TypeExpr)? '=' Expr
+
+IfExpr <- 'if' Expr 'then' Expr 'else' Expr
+
+MatchExpr <- 'match' Expr 'with' '{' MatchArm+ '}'
+MatchArm <- 'when' Pattern '->' Expr ';'
+
+
+# Patterns
+
+Pattern <- ConsPattern
+ConsPattern <- AppPattern ('::' ConsPattern)?
+AppPattern <- QualifiedConstructor PatternAtom* / ConstructorApp / PatternAtom
+ConstructorApp <- Ident PatternAtom+ { identifier text must not be "_" }
+QualifiedConstructor <- Ident ('.' Ident)+
+
+PatternAtom <-
+      WildcardPattern
+    / IdentPattern
+    / ListPattern
+    / DictPattern
+    / ParenPattern
+
+WildcardPattern <- Ident { identifier text must be "_" }
+IdentPattern <- Ident { uppercase identifiers become zero-arg constructors; lowercase identifiers become variables }
+
+ListPattern <- '[' PatternList? ']'
+PatternList <- Pattern (',' Pattern)*
+
+DictPattern <- '{' DictPatternFields? '}'
+DictPatternFields <- DictPatternField (',' DictPatternField)*
+DictPatternField <- Ident (':' Pattern)?
+
+ParenPattern <- UnitPattern / TuplePattern / GroupedPattern
+UnitPattern <- '(' ')'
+TuplePattern <- '(' Pattern ',' Pattern (',' Pattern)* ')'
+GroupedPattern <- '(' Pattern ')'
+
+
+# Shared lexical-level rules
+
+NameRef <- Ident ('.' Ident)*
+ValueName <- Ident / ValueOperator
+ValueOperator <- '+' / '&&' / '++' / '/' / '==' / '!=' / '>=' / '>' / '<=' / '<' / '%' / '*' / '||' / '-'
+
+
+# Compatibility notes and explicit non-rules
+#
+# - `for`, `null`, and `<-` are lexed today but are not part of the parser
+#   grammar.
+# - Import aliases and duplicate imported item names are semantic checks.
+# - Signature-form `fn name : Type = body;` must have a function type; that is a
+#   semantic validation after TypeExpr parsing.
+# - Constructor-vs-variable pattern classification depends on identifier text.
+# - Legacy function parameter groups remain in the grammar for compatibility:
+#   `fn f (x: a, y: b) -> c = body;`.

@@ -539,11 +539,10 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
     }
 }
 
-#[test]
-fn eval_deep_list_does_not_overflow() {
-    // Regression test: deeply nested terms (right-nested arguments) can overflow the default
-    // Rust stack during typechecking/evaluation unless callers opt into a larger stack.
-    const N: usize = 2_000;
+#[tokio::test]
+async fn eval_deep_list_does_not_overflow() {
+    // Regression test: deeply nested terms must not overflow the default Rust stack.
+    const N: usize = 5_000;
     let mut code = String::new();
     code.push_str("let xs = ");
     for _ in 0..N {
@@ -555,39 +554,25 @@ fn eval_deep_list_does_not_overflow() {
     }
     code.push_str(" in xs");
 
-    let handle = std::thread::Builder::new()
-        .name("eval_deep_list_large_stack".into())
-        .stack_size(128 * 1024 * 1024)
-        .spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime.block_on(async move {
-                let tokens = Token::tokenize(&code).unwrap();
-                let mut parser = Parser::new(tokens);
-                let program = parser.parse_program().unwrap();
-                let expr = program.expr;
-                let mut engine = Engine::with_prelude(()).unwrap();
-                let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
-                let xs = list_values(&value.value().unwrap());
-                assert_eq!(xs.len(), N);
-                let expected = engine.heap.alloc_i32(0).unwrap();
-                assert_pointer_eq!(
-                    &engine.heap,
-                    xs.first().expect("list should be non-empty"),
-                    expected
-                );
-                assert_pointer_eq!(
-                    &engine.heap,
-                    xs.last().expect("list should be non-empty"),
-                    expected
-                );
-            });
-        })
-        .unwrap();
-
-    handle.join().unwrap();
+    let tokens = Token::tokenize(&code).unwrap();
+    let mut parser = Parser::new(tokens);
+    let program = parser.parse_program().unwrap();
+    let expr = program.expr;
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let value = eval_expr(&mut engine, expr.as_ref()).await.unwrap();
+    let xs = list_values(&value.value().unwrap());
+    assert_eq!(xs.len(), N);
+    let expected = engine.heap.alloc_i32(0).unwrap();
+    assert_pointer_eq!(
+        &engine.heap,
+        xs.first().expect("list should be non-empty"),
+        expected
+    );
+    assert_pointer_eq!(
+        &engine.heap,
+        xs.last().expect("list should be non-empty"),
+        expected
+    );
 }
 
 #[tokio::test]
