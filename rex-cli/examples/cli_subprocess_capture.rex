@@ -1,7 +1,7 @@
 {- CLI example: subprocess + wait + stdout/stderr
 
 Run:
-  cargo run -p rex -- run rex/examples/cli_subprocess_capture.rex
+  cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_subprocess_capture.rex
 
 This spawns a subprocess, waits for it to exit, then forwards its captured
 stdout/stderr to the CLI stdout/stderr.

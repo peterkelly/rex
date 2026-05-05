@@ -3,12 +3,12 @@
 
 use std::fs;
 use std::io::IsTerminal;
-use std::io::{self, BufRead, Read, Write};
+use std::io::{self, Read};
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser};
 use rex::{
     ast::Program,
-    engine::{Compiler, Engine, Evaluator, ReplState, RuntimeEnv, ValueDisplayOptions},
+    engine::{Compiler, Engine, Evaluator, RuntimeEnv, ValueDisplayOptions},
     parser::{Parser as RexParser, ParserErr, ParserLimits, Token},
 };
 use serde_json::json;
@@ -20,14 +20,8 @@ use rex_cli::cli_prelude;
 #[command(about = "Rex (Rush Expressions) CLI")]
 #[command(arg_required_else_help = true)]
 struct Cli {
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    Run(RunArgs),
-    Repl(ReplArgs),
+    #[command(flatten)]
+    args: RunArgs,
 }
 
 #[derive(Args)]
@@ -88,29 +82,6 @@ struct RunArgs {
     no_max_nesting: bool,
 }
 
-#[derive(Args)]
-struct ReplArgs {
-    /// Additional module include roots (searched after local-relative imports).
-    #[arg(long = "include", value_name = "DIR")]
-    include: Vec<String>,
-
-    /// Stack size (in MiB) used for parsing/type inference/evaluation.
-    #[arg(long = "stack-size-mb", default_value_t = 16)]
-    stack_size_mb: usize,
-
-    /// Maximum nesting depth allowed during parsing (defaults to a safe limit).
-    #[arg(
-        long = "max-nesting",
-        value_name = "N",
-        conflicts_with = "no_max_nesting"
-    )]
-    max_nesting: Option<usize>,
-
-    /// Disable the parsing nesting-depth limit.
-    #[arg(long = "no-max-nesting")]
-    no_max_nesting: bool,
-}
-
 #[tokio::main]
 async fn main() {
     init_tracing();
@@ -141,10 +112,7 @@ fn init_tracing() {
 }
 
 async fn run(cli: Cli) -> Result<(), String> {
-    match cli.command {
-        Command::Run(args) => run_cmd(args).await,
-        Command::Repl(args) => repl_cmd(args).await,
-    }
+    run_cmd(cli.args).await
 }
 
 async fn run_cmd(args: RunArgs) -> Result<(), String> {
@@ -197,138 +165,6 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
         },
     )
     .await
-}
-
-async fn repl_cmd(args: ReplArgs) -> Result<(), String> {
-    let ReplArgs {
-        include,
-        stack_size_mb: _stack_size_mb,
-        max_nesting,
-        no_max_nesting,
-    } = args;
-
-    let parser_limits = if no_max_nesting {
-        ParserLimits::unlimited()
-    } else if let Some(max_nesting) = max_nesting {
-        ParserLimits {
-            max_nesting: Some(max_nesting),
-        }
-    } else {
-        ParserLimits::safe_defaults()
-    };
-
-    repl_loop(include, parser_limits).await
-}
-
-async fn repl_loop(include: Vec<String>, parser_limits: ParserLimits) -> Result<(), String> {
-    let mut engine =
-        Engine::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
-    engine.add_default_resolvers();
-    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| format!("{e}"))?;
-    for root in include {
-        engine
-            .add_include_resolver(&root)
-            .map_err(|e| format!("{e}"))?;
-    }
-
-    let mut state = ReplState::new();
-
-    let interactive = io::stdin().is_terminal();
-    let mut stdin = io::stdin().lock();
-    let mut stderr = io::stderr().lock();
-
-    let mut buffer = String::new();
-    loop {
-        if interactive {
-            if buffer.is_empty() {
-                write!(stderr, "rex> ").ok();
-            } else {
-                write!(stderr, "...> ").ok();
-            }
-            stderr.flush().ok();
-        }
-
-        let mut line = String::new();
-        let n = stdin
-            .read_line(&mut line)
-            .map_err(|e| format!("failed to read input: {e}"))?;
-        if n == 0 {
-            if interactive {
-                writeln!(stderr).ok();
-            }
-            break;
-        }
-
-        if buffer.is_empty() && line.trim().is_empty() {
-            continue;
-        }
-
-        buffer.push_str(&line);
-        let parse_source = if is_imports_only(&buffer) {
-            format!("{buffer}\n()")
-        } else {
-            buffer.clone()
-        };
-
-        let tokens = match Token::tokenize(&parse_source) {
-            Ok(t) => t,
-            Err(e) => {
-                eprintln!("error: lex error: {e}");
-                buffer.clear();
-                continue;
-            }
-        };
-        let mut parser = RexParser::new(tokens);
-        parser.set_limits(parser_limits);
-        let program = match parser.parse_program() {
-            Ok(p) => p,
-            Err(errs) => {
-                let incomplete =
-                    !errs.is_empty() && errs.iter().all(|e| e.message.trim() == "unexpected EOF");
-                if incomplete {
-                    continue;
-                }
-                eprintln!("{}", format_parse_errors(&errs));
-                buffer.clear();
-                continue;
-            }
-        };
-
-        match Evaluator::new_with_compiler(
-            RuntimeEnv::new(engine.clone()),
-            Compiler::new(engine.clone()),
-        )
-        .eval_repl_program(&program, &mut state)
-        .await
-        {
-            Ok((v, _)) => {
-                let rendered = v
-                    .display_with(ValueDisplayOptions::unsanitized())
-                    .unwrap_or_else(|e| format!("<display error: {e}>"));
-                println!("{rendered}");
-            }
-            Err(e) => eprintln!("error: {e}"),
-        }
-        buffer.clear();
-    }
-
-    Ok(())
-}
-
-fn is_imports_only(buffer: &str) -> bool {
-    let mut saw_import = false;
-    for line in buffer.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        if trimmed.starts_with("import ") || trimmed.starts_with("pub import ") {
-            saw_import = true;
-            continue;
-        }
-        return false;
-    }
-    saw_import
 }
 
 struct RunSourceOpts {

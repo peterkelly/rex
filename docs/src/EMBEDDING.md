@@ -55,7 +55,7 @@ What "compiled" means in the current design:
 - `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
 - runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
 - internally, `RuntimeEnv` keeps a runtime snapshot for execution and separate engine-backed loader
-  state for convenience entry points like module loading and REPL-style session sync
+  state for convenience module-loading entry points
 - `CompiledProgram::link_contract()` and `RuntimeEnv::capabilities()` now make the runtime link
   contract explicit, including the current ABI version and the required callable shapes
 - `CompiledProgram::storage_boundary()` and `RuntimeEnv::storage_boundary()` mark both values as
@@ -80,10 +80,6 @@ Phase-specific errors:
 - convenience helpers like `eval_snippet` return `ExecutionError` because they still do both
   phases
 
-`Evaluator` is a stateful session. Reusing one evaluator preserves the compiler/runtime snapshot it
-has accumulated so far, which matters for REPL-style workflows. Constructing a fresh evaluator from
-the same engine starts a fresh session.
-
 If you want an explicit preflight before running:
 
 ```rust
@@ -94,9 +90,9 @@ let mut evaluator = rex::Evaluator::new(runtime);
 let value = evaluator.run(&program).await?;
 ```
 
-The convenience helpers such as `Evaluator::eval`, `eval_snippet`, `eval_snippet_at`, and
-`eval_repl_program` now route through the same prepare/validate/run boundary internally. They are
-still sugar, but they no longer use a separate execution path.
+The convenience helpers such as `Evaluator::eval`, `eval_snippet`, and `eval_snippet_at` now route
+through the same prepare/validate/run boundary internally. They are still sugar, but they no longer
+use a separate execution path.
 
 ## Evaluate Rex Code Directly
 
@@ -119,7 +115,8 @@ let value = evaluator.run(&program).await?;
 println!("{value}");
 ```
 
-Module sources loaded via resolvers (and module files on disk) must be declaration-only. To run an expression, use snippet/repl entry points.
+Module sources loaded via resolvers (and module files on disk) must be declaration-only. To run an
+expression, use snippet or program entry points.
 Qualified alias members used in type/class positions (annotations, `where` constraints, instance
 headers, superclass clauses) are validated against module exports during module processing; missing
 exports fail early with module errors.

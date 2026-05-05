@@ -51,8 +51,8 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   type-incompatible runtime bindings.
 - **RuntimeEnv split**: internally, `RuntimeEnv` now distinguishes the execution snapshot used by
   `Evaluator` and native dispatch from the engine-backed loader state still used by convenience
-  entry points such as module loading and REPL session syncing. That keeps the public model
-  stable while shrinking execution's implicit dependence on the full engine object.
+  module-loading entry points. That keeps the public model stable while shrinking execution's
+  implicit dependence on the full engine object.
 - **Process-local boundary**: `CompiledProgram::storage_boundary()` and
   `RuntimeEnv::storage_boundary()` make it explicit that both values still contain process-local
   state and are not serialization-ready artifacts.

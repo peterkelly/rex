@@ -10,16 +10,16 @@ Rex programs are *one expression*, optionally preceded by top-level declarations
 
 ## Running Rex
 
-From this repository, you can run a file:
+From this repository, you can run a snippet file:
 
 ```sh
-cargo run -p rex-cli -- run rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/record_update.rex
 ```
 
 Or evaluate a small snippet inline:
 
 ```sh
-cargo run -p rex-cli -- run -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 ### What you should see
@@ -99,7 +99,7 @@ in
 Run it:
 
 ```sh
-cargo run -p rex-cli -- run hello.rex
+cargo run -p rex-cli --bin rex -- --snippet hello.rex
 ```
 
 ## Unicode (λ, →) versus ASCII

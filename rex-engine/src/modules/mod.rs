@@ -34,7 +34,7 @@ pub use resolvers::default_stdlib_resolver;
 pub use system::ResolverFn;
 pub use types::virtual_export_name;
 pub use types::{
-    CanonicalSymbol, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ReplState, ResolveRequest,
+    CanonicalSymbol, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ResolveRequest,
     ResolvedModule, ResolvedModuleContent, SymbolKind, VirtualModule,
 };
 
@@ -103,9 +103,6 @@ pub(crate) struct ImportBindings {
 pub(crate) struct ImportBindingPolicy<'a> {
     pub(crate) forbidden_values: &'a BTreeSet<Symbol>,
     pub(crate) forbidden_types: &'a BTreeSet<Symbol>,
-    pub(crate) existing_imported_values: Option<&'a BTreeSet<Symbol>>,
-    pub(crate) existing_imported_types: Option<&'a BTreeSet<Symbol>>,
-    pub(crate) existing_imported_classes: Option<&'a BTreeSet<Symbol>>,
 }
 
 fn add_import_bindings(
@@ -124,11 +121,6 @@ fn add_import_bindings(
                 }
                 .into());
             }
-            if let Some(existing) = policy.existing_imported_values
-                && existing.contains(&local_name)
-            {
-                return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
-            }
             if out.imported_values.contains_key(&local_name) {
                 return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
             }
@@ -144,11 +136,6 @@ fn add_import_bindings(
                 }
                 .into());
             }
-            if let Some(existing) = policy.existing_imported_types
-                && existing.contains(&local_name)
-            {
-                return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
-            }
             if out.imported_types.contains_key(&local_name) {
                 return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
             }
@@ -163,11 +150,6 @@ fn add_import_bindings(
                     name: local_name,
                 }
                 .into());
-            }
-            if let Some(existing) = policy.existing_imported_classes
-                && existing.contains(&local_name)
-            {
-                return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
             }
             if out.imported_classes.contains_key(&local_name) {
                 return Err(crate::ModuleError::DuplicateImportedName { name: local_name }.into());
@@ -2446,8 +2428,6 @@ where
         importer: Option<ModuleId>,
         policy: &ImportBindingPolicy<'_>,
     ) -> Result<(), EngineError> {
-        let existing_value_names: BTreeSet<Symbol> =
-            policy.existing_imported_values.cloned().unwrap_or_default();
         let default_imports = self.default_imports().to_vec();
         for module_name in default_imports {
             let alias = Symbol::intern(&module_name);
@@ -2460,7 +2440,6 @@ where
                 .await?;
             for (local, target) in exports.values() {
                 if !policy.forbidden_values.contains(local)
-                    && !existing_value_names.contains(local)
                     && !bindings.imported_values.contains_key(local)
                 {
                     bindings
@@ -2470,9 +2449,6 @@ where
             }
             for (local, target) in exports.types() {
                 if !policy.forbidden_types.contains(local)
-                    && !policy
-                        .existing_imported_types
-                        .is_some_and(|names| names.contains(local))
                     && !bindings.imported_types.contains_key(local)
                 {
                     bindings
@@ -2482,9 +2458,6 @@ where
             }
             for (local, target) in exports.classes() {
                 if !policy.forbidden_types.contains(local)
-                    && !policy
-                        .existing_imported_classes
-                        .is_some_and(|names| names.contains(local))
                     && !bindings.imported_classes.contains_key(local)
                 {
                     bindings
@@ -2596,9 +2569,6 @@ where
             let import_policy = ImportBindingPolicy {
                 forbidden_values: &local_values,
                 forbidden_types: &local_types,
-                existing_imported_values: None,
-                existing_imported_types: None,
-                existing_imported_classes: None,
             };
             let import_bindings = self
                 .import_bindings_for_decls(
@@ -2691,9 +2661,6 @@ where
         let import_policy = ImportBindingPolicy {
             forbidden_values: &local_values,
             forbidden_types: &local_types,
-            existing_imported_values: None,
-            existing_imported_types: None,
-            existing_imported_classes: None,
         };
         for decl in &program.decls {
             let Decl::Import(import_decl) = decl else {

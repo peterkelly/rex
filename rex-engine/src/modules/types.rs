@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use rex_ast::expr::{Decl, Program, Symbol};
 use rex_typesystem::types::Type;
@@ -188,29 +188,6 @@ pub struct VirtualModule {
     pub exports: ModuleExports,
     pub decls: Vec<Decl>,
     pub source: Option<String>,
-}
-
-#[derive(Clone, Default)]
-pub struct ReplState {
-    pub(crate) alias_exports: BTreeMap<Symbol, ModuleExports>,
-    pub(crate) imported_values: BTreeMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_types: BTreeMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_classes: BTreeMap<Symbol, CanonicalSymbol>,
-    pub(crate) defined_values: BTreeSet<Symbol>,
-    pub(crate) importer_path: Option<PathBuf>,
-}
-
-impl ReplState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_importer_path(path: impl AsRef<Path>) -> Self {
-        Self {
-            importer_path: Some(path.as_ref().to_path_buf()),
-            ..Self::default()
-        }
-    }
 }
 
 #[derive(Clone)]

@@ -1,8 +1,7 @@
-use std::path::Path;
 use std::sync::Arc;
 
 use rex_ast::expr::{Decl, Expr, Program, Symbol};
-use rex_engine::{Compiler, Engine, EngineError, Evaluator, Module, ReplState, RuntimeEnv, Value};
+use rex_engine::{Compiler, Engine, EngineError, Evaluator, Module, RuntimeEnv, Value};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -117,99 +116,6 @@ fn inject_adt_family_rejects_cycles() {
     let err = module.add_adt_family(vec![a, b]).unwrap_err();
     assert!(matches!(err, EngineError::Custom(_)));
     assert!(err.to_string().contains("cyclic ADT auto-registration"));
-}
-
-#[tokio::test]
-async fn repl_persists_function_definitions() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.add_default_resolvers();
-    let mut state = ReplState::new();
-    let mut evaluator = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    );
-
-    let program1 = parse_program("fn inc (x: i32) -> i32 = x + 1;\ninc 1");
-    let (v1, t1) = evaluator
-        .eval_repl_program(&program1, &mut state)
-        .await
-        .unwrap();
-    assert_eq!(t1, Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(v1.to_rust::<i32>().unwrap(), 2);
-
-    let program2 = parse_program("inc 2");
-    let (v2, t2) = evaluator
-        .eval_repl_program(&program2, &mut state)
-        .await
-        .unwrap();
-    assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(v2.to_rust::<i32>().unwrap(), 3);
-}
-
-#[tokio::test]
-async fn repl_persists_import_aliases() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.add_default_resolvers();
-
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex-cli/examples/modules_basic");
-    engine.add_include_resolver(&examples).unwrap();
-
-    let mut state = ReplState::new();
-    let mut evaluator = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    );
-    let program1 = parse_program("import foo.bar as Bar;\n()");
-    let (v1, t1) = evaluator
-        .eval_repl_program(&program1, &mut state)
-        .await
-        .unwrap();
-    assert_eq!(t1, Type::tuple(vec![]));
-    assert!(
-        v1.value_eq(&engine.heap.alloc_tuple(vec![]).unwrap())
-            .unwrap()
-    );
-
-    let program2 = parse_program("Bar.triple 10");
-    let (v2, t2) = evaluator
-        .eval_repl_program(&program2, &mut state)
-        .await
-        .unwrap();
-    assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(v2.to_rust::<i32>().unwrap(), 30);
-}
-
-#[tokio::test]
-async fn repl_persists_imported_values() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.add_default_resolvers();
-
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../rex-cli/examples/modules_basic");
-    engine.add_include_resolver(&examples).unwrap();
-
-    let mut state = ReplState::new();
-    let mut evaluator = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    );
-    let program1 = parse_program("import foo.bar (triple as t);\n()");
-    let (v1, t1) = evaluator
-        .eval_repl_program(&program1, &mut state)
-        .await
-        .unwrap();
-    assert_eq!(t1, Type::tuple(vec![]));
-    assert!(
-        v1.value_eq(&engine.heap.alloc_tuple(vec![]).unwrap())
-            .unwrap()
-    );
-
-    let program2 = parse_program("t 10");
-    let (v2, t2) = evaluator
-        .eval_repl_program(&program2, &mut state)
-        .await
-        .unwrap();
-    assert_eq!(t2, Type::builtin(BuiltinTypeId::I32));
-    assert_eq!(v2.to_rust::<i32>().unwrap(), 30);
 }
 
 #[tokio::test]

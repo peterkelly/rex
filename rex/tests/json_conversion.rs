@@ -1,9 +1,7 @@
 use rex::{
     Rex,
     ast::{Program, Symbol},
-    engine::{
-        Compiler, Engine, EngineError, Evaluator, Handle, Heap, ReplState, RuntimeEnv, Value,
-    },
+    engine::{Compiler, Engine, EngineError, Evaluator, Handle, Heap, RuntimeEnv, Value},
     json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json},
     parser::{Parser, Token},
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
@@ -360,21 +358,5 @@ async fn eval_entry_points_return_type_for_json_eval() {
     .eval_snippet_at(rex_code, &importer)
     .await
     .unwrap();
-    assert_eval_json(
-        &engine,
-        &handle_snippet_at,
-        &ty_snippet_at,
-        expected_json.clone(),
-    );
-
-    let repl_program = parse_program(rex_code);
-    let mut repl_state = ReplState::new();
-    let (handle_repl, ty_repl) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_repl_program(&repl_program, &mut repl_state)
-    .await
-    .unwrap();
-    assert_eval_json(&engine, &handle_repl, &ty_repl, expected_json);
+    assert_eval_json(&engine, &handle_snippet_at, &ty_snippet_at, expected_json);
 }

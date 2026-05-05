@@ -12,28 +12,28 @@ to make the problem obvious.
 
 ## Useful CLI flags
 
-Run a file:
+Run a snippet file:
 
 ```sh
-cargo run -p rex-cli -- run path/to/file.rex
+cargo run -p rex-cli --bin rex -- --snippet path/to/file.rex
 ```
 
 Run an inline snippet:
 
 ```sh
-cargo run -p rex-cli -- run -c 'let x = 1 in x + 2'
+cargo run -p rex-cli --bin rex -- -c 'let x = 1 in x + 2'
 ```
 
 Show the parsed AST and exit:
 
 ```sh
-cargo run -p rex-cli -- run --emit-ast -c '1 + 2'
+cargo run -p rex-cli --bin rex -- --emit-ast -c '1 + 2'
 ```
 
 Show the inferred type and exit:
 
 ```sh
-cargo run -p rex-cli -- run --emit-type -c 'map ((*) 2) [1, 2, 3]'
+cargo run -p rex-cli --bin rex -- --emit-type -c 'map ((*) 2) [1, 2, 3]'
 ```
 
 ## “Parse error”: start small

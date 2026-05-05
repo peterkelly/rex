@@ -1,8 +1,8 @@
 {- CLI example: logging + Show
 
 Run:
-  cargo run -p rex -- run rex/examples/cli_subprocess_log.rex
-  REX_LOG=rex_engine=debug cargo run -p rex -- run rex/examples/cli_subprocess_log.rex
+  cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_subprocess_log.rex
+  REX_LOG=rex_engine=debug cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_subprocess_log.rex
 
 Notes:
   - info/debug/warn/error return a rendered string (via Show a)

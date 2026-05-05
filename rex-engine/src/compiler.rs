@@ -10,9 +10,8 @@ use crate::engine::{
     RUNTIME_LINK_ABI_VERSION, RuntimeLinkContract, collect_pattern_bindings, type_check_engine,
 };
 use crate::modules::{
-    ModuleExports, ModuleId, ReplState, ResolvedModule, decl_type_names, decl_value_names,
-    exports_from_program, parse_program_from_source, prefix_for_module, rewrite_import_uses,
-    validate_import_uses,
+    ModuleExports, ModuleId, ResolvedModule, exports_from_program, parse_program_from_source,
+    prefix_for_module,
 };
 use crate::{CompileError, EngineError, Environment};
 
@@ -353,76 +352,6 @@ where
             content: crate::modules::ResolvedModuleContent::Source(source),
         })
         .map_err(CompileError::from)
-    }
-
-    pub async fn compile_repl_program(
-        &mut self,
-        program: &Program,
-        state: &mut ReplState,
-    ) -> Result<CompiledProgram, CompileError> {
-        self.compile_repl_program_internal(program, state)
-            .await
-            .map_err(CompileError::from)
-    }
-
-    async fn compile_repl_program_internal(
-        &mut self,
-        program: &Program,
-        state: &mut ReplState,
-    ) -> Result<CompiledProgram, EngineError> {
-        let importer = state
-            .importer_path
-            .as_ref()
-            .map(|p| ModuleId::Local { path: p.clone() });
-
-        let mut local_values = state.defined_values.clone();
-        local_values.extend(decl_value_names(&program.decls));
-        let local_types = decl_type_names(&program.decls);
-        let existing_imported: BTreeSet<Symbol> = state.imported_values.keys().cloned().collect();
-        let existing_imported_types: BTreeSet<Symbol> =
-            state.imported_types.keys().cloned().collect();
-        let existing_imported_classes: BTreeSet<Symbol> =
-            state.imported_classes.keys().cloned().collect();
-        let import_policy = crate::modules::ImportBindingPolicy {
-            forbidden_values: &local_values,
-            forbidden_types: &local_types,
-            existing_imported_values: Some(&existing_imported),
-            existing_imported_types: Some(&existing_imported_types),
-            existing_imported_classes: Some(&existing_imported_classes),
-        };
-        let import_bindings = self
-            .engine
-            .import_bindings_for_decls(&program.decls, importer.clone(), &import_policy)
-            .await?;
-        state.alias_exports.extend(import_bindings.alias_exports);
-        state
-            .imported_values
-            .extend(import_bindings.imported_values);
-        state.imported_types.extend(import_bindings.imported_types);
-        state
-            .imported_classes
-            .extend(import_bindings.imported_classes);
-
-        let mut shadowed_values = state.defined_values.clone();
-        shadowed_values.extend(decl_value_names(&program.decls));
-        let shadowed_types = decl_type_names(&program.decls);
-
-        validate_import_uses(program, &state.alias_exports, Some(&shadowed_values))?;
-        let rewritten = rewrite_import_uses(
-            program,
-            &state.alias_exports,
-            &state.imported_values,
-            &state.imported_types,
-            &state.imported_classes,
-            Some(&shadowed_types),
-            Some(&shadowed_values),
-        );
-
-        self.engine.inject_decls(&rewritten.decls)?;
-        state
-            .defined_values
-            .extend(decl_value_names(&program.decls));
-        self.compile_expr_internal(rewritten.expr.as_ref())
     }
 
     fn compile_module_source(

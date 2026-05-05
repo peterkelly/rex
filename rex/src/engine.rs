@@ -4,7 +4,7 @@ pub use rex_engine::{
     EngineError, EngineOptions, EvalError, Evaluator, EvaluatorRef, ExecutionBounds,
     ExecutionError, Export, FromRex, Handle, Heap, HostFnAsync, HostFnSync, IntoRex, Module,
     NativeCapability, NativeFuture, NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode,
-    ROOT_MODULE_NAME, ReplState, ResolveRequest, ResolvedModule, ResolvedModuleContent, RexDefault,
+    ROOT_MODULE_NAME, ResolveRequest, ResolvedModule, ResolvedModuleContent, RexDefault,
     RuntimeCapabilities, RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary, RuntimeLinkContract,
     Value, ValueDisplayOptions, collect_adts_error_to_engine, virtual_export_name,
 };

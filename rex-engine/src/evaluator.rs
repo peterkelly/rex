@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 
-use rex_ast::expr::{Expr, Program, Symbol};
+use rex_ast::expr::{Expr, Symbol};
 use rex_typesystem::{
     error::TypeError,
     types::{Type, TypedExpr, Types},
@@ -16,7 +16,7 @@ use crate::engine::{
     CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, eval_typed_expr, impl_matches_type,
     is_function_type, type_head_is_var,
 };
-use crate::modules::{ModuleId, ReplState, ResolvedModule, ResolvedModuleContent};
+use crate::modules::{ModuleId, ResolvedModule, ResolvedModuleContent};
 use crate::value::{Handle, Heap, Pointer};
 use crate::{
     CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, RuntimeEnv,
@@ -190,18 +190,6 @@ where
     pub async fn eval_snippet(&mut self, source: &str) -> Result<(Handle, Type), ExecutionError> {
         self.prepare_and_run(|compiler| compiler.compile_snippet(source))
             .await
-    }
-
-    pub async fn eval_repl_program(
-        &mut self,
-        program: &Program,
-        state: &mut ReplState,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        let compiler = self.compiler.as_mut().ok_or_else(|| {
-            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
-        })?;
-        let compiled = compiler.compile_repl_program(program, state).await?;
-        self.run_prepared(compiled).await
     }
 
     pub async fn eval_snippet_at(

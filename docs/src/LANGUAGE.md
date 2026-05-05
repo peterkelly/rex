@@ -31,7 +31,7 @@ in
 
 Rex modules are `.rex` files. Imports are semicolon-terminated top-level declarations.
 Module files are declaration-only: they do not have a top-level expression result. To evaluate an
-expression, use snippet/REPL/program entrypoints.
+expression, use snippet or program entry points.
 
 Supported forms:
 

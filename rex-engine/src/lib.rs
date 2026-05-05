@@ -27,8 +27,8 @@ pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleErro
 pub use evaluator::{Evaluator, EvaluatorRef};
 pub use modules::virtual_export_name;
 pub use modules::{
-    CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ReplState,
-    ResolveRequest, ResolvedModule, ResolvedModuleContent, SymbolKind,
+    CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ResolveRequest,
+    ResolvedModule, ResolvedModuleContent, SymbolKind,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
 pub use value::{FromRex, Handle, Heap, IntoRex, Value, ValueDisplayOptions};
