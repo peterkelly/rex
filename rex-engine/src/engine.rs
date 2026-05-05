@@ -4223,24 +4223,18 @@ fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {
         {
             Err(EngineError::UnknownType(Symbol::intern("result")))
         }
-        Cell::Adt(tag, args)
-            if (tag.as_ref() == "Empty" || tag.as_ref() == "Cons") && args.len() <= 2 =>
-        {
-            let elems = list_to_vec(heap, cell)?;
-            let first = elems
-                .first()
-                .ok_or_else(|| EngineError::UnknownType(Symbol::intern("list")))?;
-            let elem_ty = pointer_type(first)?;
-            for elem in elems.iter().skip(1) {
-                let ty = pointer_type(elem)?;
-                if ty != elem_ty {
-                    return Err(EngineError::NativeType {
-                        expected: elem_ty.to_string(),
-                        got: ty.to_string(),
-                    });
-                }
-            }
+        Cell::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
+            Err(EngineError::UnknownType(Symbol::intern("list")))
+        }
+        Cell::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
+            let elem_ty = pointer_type(&args[0])?;
             Ok(Type::app(Type::builtin(BuiltinTypeId::List), elem_ty))
+        }
+        Cell::Adt(tag, _args) if tag.as_ref() == "Empty" || tag.as_ref() == "Cons" => {
+            Err(EngineError::NativeType {
+                expected: "list".into(),
+                got: cell.cell_type_name().into(),
+            })
         }
         Cell::Adt(tag, _args) => Err(EngineError::UnknownType(tag.clone())),
         Cell::Uninitialized(..) => Err(EngineError::UnknownType(Symbol::intern("uninitialized"))),
