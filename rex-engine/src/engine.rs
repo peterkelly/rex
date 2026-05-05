@@ -276,7 +276,7 @@ impl PartialEq for AsyncCallPolicy {
 impl Eq for AsyncCallPolicy {}
 
 fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &RuntimeCore<State>,
     value: u64,
     typ: &Type,
 ) -> Result<Pointer, EngineError> {
@@ -358,7 +358,7 @@ fn alloc_uint_literal_as<State: Clone + Send + Sync + 'static>(
 }
 
 fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
-    engine: &RuntimeSnapshot<State>,
+    engine: &RuntimeCore<State>,
     value: i64,
     typ: &Type,
 ) -> Result<Pointer, EngineError> {
@@ -1382,10 +1382,7 @@ where
         }
     }
 
-    fn invoke(
-        mut self,
-        runtime: &RuntimeSnapshot<State>,
-    ) -> Result<NativeHandleFuture, EngineError> {
+    fn invoke(mut self, runtime: &RuntimeCore<State>) -> Result<NativeHandleFuture, EngineError> {
         let mut protected = Vec::new();
         self.trace_pointers(&mut protected);
         let roots = runtime.heap.temp_roots(protected)?;
@@ -1432,7 +1429,7 @@ pub(crate) enum NativeCallResult<State: Clone + Send + Sync + 'static> {
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
     fn call_with_context(
         &self,
-        runtime: &RuntimeSnapshot<State>,
+        runtime: &RuntimeCore<State>,
         typ: Type,
         args: &[Pointer],
         context: EvalContext,
@@ -1532,7 +1529,7 @@ impl NativeFn {
 
     pub(crate) fn call_zero_with_context<State: Clone + Send + Sync + 'static>(
         &self,
-        runtime: &RuntimeSnapshot<State>,
+        runtime: &RuntimeCore<State>,
         context: EvalContext,
     ) -> Result<NativeCallResult<State>, EngineError> {
         if self.arity != 0 {
@@ -1552,7 +1549,7 @@ impl NativeFn {
 
     fn apply_with_context<State: Clone + Send + Sync + 'static>(
         mut self,
-        runtime: &RuntimeSnapshot<State>,
+        runtime: &RuntimeCore<State>,
         arg: Pointer,
         arg_type: Option<&Type>,
         context: EvalContext,
@@ -1873,7 +1870,6 @@ where
     pub heap: Heap,
 }
 
-#[derive(Clone)]
 pub struct CompiledProgram {
     pub externs: CompiledExterns,
     link_contract: RuntimeLinkContract,
@@ -2065,26 +2061,29 @@ impl RuntimeCompatibility {
 }
 
 #[derive(Clone)]
-pub struct RuntimeSnapshot<State = ()>
+pub(crate) struct RuntimeCore<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub state: Arc<State>,
-    pub(crate) natives: NativeRegistry<State>,
-    pub(crate) typeclasses: TypeclassRegistry,
-    pub type_system: TypeSystem,
+    pub(crate) state: Arc<State>,
+    pub(crate) natives: Arc<NativeRegistry<State>>,
+    pub(crate) typeclasses: Arc<Mutex<TypeclassRegistry>>,
+    pub(crate) type_system: Arc<TypeSystem>,
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
     pub(crate) async_call_policy: AsyncCallPolicy,
     pub(crate) execution_bounds: ExecutionBounds,
-    pub heap: Heap,
+    pub(crate) heap: Heap,
 }
 
-impl<State> RuntimeSnapshot<State>
+impl<State> RuntimeCore<State>
 where
     State: Clone + Send + Sync + 'static,
 {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) -> Result<(), EngineError> {
-        self.typeclasses.trace_pointers(out);
+        self.typeclasses
+            .lock()
+            .map_err(|_| EngineError::Internal("typeclass registry poisoned".into()))?
+            .trace_pointers(out);
         let cache = self
             .typeclass_cache
             .lock()
@@ -2098,11 +2097,14 @@ where
         roots: &TempRoots,
         cursor: &mut usize,
     ) -> Result<(), EngineError> {
-        self.typeclasses.rewrite_pointers(&mut |_| {
-            let pointer = roots.get(*cursor)?;
-            *cursor += 1;
-            Ok(pointer)
-        })?;
+        self.typeclasses
+            .lock()
+            .map_err(|_| EngineError::Internal("typeclass registry poisoned".into()))?
+            .rewrite_pointers(&mut |_| {
+                let pointer = roots.get(*cursor)?;
+                *cursor += 1;
+                Ok(pointer)
+            })?;
         let mut cache = self
             .typeclass_cache
             .lock()
@@ -2211,12 +2213,12 @@ where
         self
     }
 
-    pub(crate) fn runtime_snapshot(&self) -> RuntimeSnapshot<State> {
-        RuntimeSnapshot {
+    pub(crate) fn runtime_core(&self) -> RuntimeCore<State> {
+        RuntimeCore {
             state: Arc::clone(&self.state),
-            natives: self.natives.clone(),
-            typeclasses: self.typeclasses.clone(),
-            type_system: self.type_system.clone(),
+            natives: Arc::new(self.natives.clone()),
+            typeclasses: Arc::new(Mutex::new(self.typeclasses.clone())),
+            type_system: Arc::new(self.type_system.clone()),
             typeclass_cache: Arc::clone(&self.typeclass_cache),
             async_call_policy: self.async_call_policy.clone(),
             execution_bounds: self.execution_bounds,
@@ -3680,7 +3682,7 @@ where
         .unwrap_or(false)
 }
 
-impl<State> RuntimeSnapshot<State>
+impl<State> RuntimeCore<State>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -4536,7 +4538,7 @@ where
         Self { frame, call }
     }
 
-    fn activate(self, runtime: &RuntimeSnapshot<State>) -> PendingNative {
+    fn activate(self, runtime: &RuntimeCore<State>) -> PendingNative {
         match self.call.invoke(runtime) {
             Ok(future) => PendingNative::new(self.frame, future),
             Err(err) => PendingNative::ready(self.frame, Err(err)),
@@ -4624,7 +4626,7 @@ where
         }
     }
 
-    fn admit_deferred_native(&mut self, runtime: &RuntimeSnapshot<State>) {
+    fn admit_deferred_native(&mut self, runtime: &RuntimeCore<State>) {
         let limit = self.bounds.pending_async_limit();
         while self.pending_native.len() < limit {
             let Some(deferred) = self.deferred_native.pop_front() else {
@@ -4692,7 +4694,7 @@ where
 }
 
 async fn poll_pending_native<State>(
-    runtime: &mut RuntimeSnapshot<State>,
+    runtime: &mut RuntimeCore<State>,
     scheduler: &mut EvalScheduler<State>,
     wait: bool,
 ) -> Result<bool, EngineError>
@@ -4740,9 +4742,9 @@ where
 }
 
 pub(crate) async fn eval_typed_expr<State>(
-    runtime: &RuntimeSnapshot<State>,
-    env: &Environment,
-    expr: &TypedExpr,
+    runtime: RuntimeCore<State>,
+    env: Environment,
+    expr: Arc<TypedExpr>,
 ) -> Result<Pointer, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -4759,21 +4761,18 @@ pub(crate) enum EvalStop {
 }
 
 pub(crate) async fn eval_typed_expr_from_parent<State>(
-    runtime: &RuntimeSnapshot<State>,
+    mut runtime: RuntimeCore<State>,
     initial_parent: Pointer,
     stop: EvalStop,
-    env: &Environment,
-    expr: &TypedExpr,
+    env: Environment,
+    expr: Arc<TypedExpr>,
 ) -> Result<Pointer, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut runtime = runtime.clone();
-    let root_expr = Arc::new(expr.clone());
-    let root_frame =
-        runtime
-            .heap
-            .alloc_ptr_frame(frame_for_expr(initial_parent, root_expr, env.clone()))?;
+    let root_frame = runtime
+        .heap
+        .alloc_ptr_frame(frame_for_expr(initial_parent, expr, env))?;
     let mut scheduler = EvalScheduler::new(root_frame, runtime.execution_bounds);
 
     loop {
@@ -4876,7 +4875,7 @@ where
 }
 
 fn refresh_eval_roots<State>(
-    runtime: &mut RuntimeSnapshot<State>,
+    runtime: &mut RuntimeCore<State>,
     item: &mut EvalWorkItem,
     scheduler: &mut EvalScheduler<State>,
     roots: &TempRoots,
@@ -5069,7 +5068,7 @@ fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Fr
 }
 
 fn eval_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     frame: Frame,
 ) -> Result<EvalControl<State>, EngineError>
@@ -5276,7 +5275,7 @@ where
 }
 
 fn eval_tuple_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrTuple,
 ) -> Result<EvalControl<State>, EngineError>
@@ -5331,7 +5330,7 @@ where
 }
 
 fn eval_list_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrList,
 ) -> Result<EvalControl<State>, EngineError>
@@ -5388,7 +5387,7 @@ where
 }
 
 fn eval_dict_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrDict,
 ) -> Result<EvalControl<State>, EngineError>
@@ -5440,7 +5439,7 @@ where
 }
 
 fn eval_record_update_updates_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrRecordUpdate,
 ) -> Result<EvalControl<State>, EngineError>
@@ -5488,7 +5487,7 @@ where
 }
 
 fn eval_app_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrApp,
 ) -> Result<EvalControl<State>, EngineError>
@@ -5710,7 +5709,7 @@ fn record_update_exprs_for_keys(
 }
 
 fn eval_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     frame: Frame,
     child: Pointer,
@@ -5986,7 +5985,7 @@ enum NativeStep {
 }
 
 fn eval_native_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
 ) -> Result<EvalControl<State>, EngineError>
@@ -6006,7 +6005,7 @@ where
 }
 
 fn eval_native_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
     value: Pointer,
@@ -6057,7 +6056,7 @@ fn refresh_frame_from_roots(
 }
 
 fn native_step_to_control<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
     step: NativeStep,
@@ -6078,7 +6077,7 @@ where
 }
 
 fn native_task_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeTask,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6130,7 +6129,7 @@ where
 }
 
 fn native_task_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeTask,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6186,7 +6185,7 @@ fn native_eval_var_step(name: Symbol, typ: Type) -> NativeStep {
 }
 
 fn alloc_native_sequence<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     shape: &NativeSequenceShape,
     values: Vec<Pointer>,
 ) -> Result<Pointer, EngineError>
@@ -6200,7 +6199,7 @@ where
 }
 
 fn option_from_native_pointer<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     value: Option<Pointer>,
 ) -> Result<Pointer, EngineError>
 where
@@ -6215,7 +6214,7 @@ where
 }
 
 fn result_from_native_pointer<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     value: Result<Pointer, Pointer>,
 ) -> Result<Pointer, EngineError>
 where
@@ -6232,7 +6231,7 @@ where
 }
 
 fn option_value_ptr<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     pointer: Pointer,
 ) -> Result<Option<Pointer>, EngineError>
 where
@@ -6252,7 +6251,7 @@ where
 }
 
 fn result_value_ptr<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     pointer: Pointer,
 ) -> Result<Result<Pointer, Pointer>, EngineError>
 where
@@ -6272,7 +6271,7 @@ where
 }
 
 fn native_flatten_sequence<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     shape: &NativeSequenceShape,
     pointer: Pointer,
 ) -> Result<Vec<Pointer>, EngineError>
@@ -6286,7 +6285,7 @@ where
 }
 
 fn overloaded_pointer<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     name: &str,
     typ: Type,
 ) -> Result<Pointer, EngineError>
@@ -6305,7 +6304,7 @@ fn binary_same_type(typ: &Type) -> Type {
 }
 
 fn len_value_for_native_type<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     elem_ty: &Type,
     len: usize,
 ) -> Result<Pointer, EngineError>
@@ -6327,7 +6326,7 @@ where
 }
 
 fn native_sequence_map_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceMap,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6350,7 +6349,7 @@ where
 }
 
 fn native_sequence_map_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceMap,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6375,7 +6374,7 @@ where
 }
 
 fn native_sequence_filter_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceFilter,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6398,7 +6397,7 @@ where
 }
 
 fn native_sequence_filter_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceFilter,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6425,7 +6424,7 @@ where
 }
 
 fn native_sequence_filter_map_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceFilterMap,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6448,7 +6447,7 @@ where
 }
 
 fn native_sequence_filter_map_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceFilterMap,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6475,7 +6474,7 @@ where
 }
 
 fn native_sequence_flat_map_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceFlatMap,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6498,7 +6497,7 @@ where
 }
 
 fn native_sequence_flat_map_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSequenceFlatMap,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6524,7 +6523,7 @@ where
 }
 
 fn native_unary_map_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeUnaryMap,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6539,7 +6538,7 @@ where
 }
 
 fn native_unary_filter_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeUnaryFilter,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6555,7 +6554,7 @@ where
 }
 
 fn native_unary_flat_map_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeUnaryFlatMap,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6569,7 +6568,7 @@ where
 }
 
 fn native_fold_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeFold,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6584,7 +6583,7 @@ where
 }
 
 fn native_fold_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeFold,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6612,7 +6611,7 @@ where
 }
 
 fn native_fold_apply_first<State>(
-    _runtime: &RuntimeSnapshot<State>,
+    _runtime: &RuntimeCore<State>,
     task: &NativeFold,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6646,7 +6645,7 @@ fn native_fold_apply_second(task: &NativeFold) -> Result<NativeStep, EngineError
 }
 
 fn native_dict_map_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeDictMap,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6668,7 +6667,7 @@ where
 }
 
 fn native_dict_map_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeDictMap,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6693,7 +6692,7 @@ where
 }
 
 fn native_dict_traverse_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeDictTraverseResult,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6717,7 +6716,7 @@ where
 }
 
 fn native_dict_traverse_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeDictTraverseResult,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6754,7 +6753,7 @@ where
 }
 
 fn native_array_eq_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeArrayEq,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6772,7 +6771,7 @@ where
 }
 
 fn native_array_eq_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeArrayEq,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6802,7 +6801,7 @@ where
 }
 
 fn native_array_eq_apply_first<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &NativeArrayEq,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6835,7 +6834,7 @@ fn native_array_eq_apply_second(task: &NativeArrayEq) -> Result<NativeStep, Engi
 }
 
 fn native_array_eq_result<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &NativeArrayEq,
     equal: bool,
 ) -> Result<NativeStep, EngineError>
@@ -6848,7 +6847,7 @@ where
 }
 
 fn native_sum_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSum,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6870,7 +6869,7 @@ where
 }
 
 fn native_sum_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeSum,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6898,7 +6897,7 @@ where
 }
 
 fn native_sum_apply_first<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &NativeSum,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6928,7 +6927,7 @@ fn native_sum_apply_second(task: &NativeSum) -> Result<NativeStep, EngineError> 
 }
 
 fn native_mean_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeMean,
 ) -> Result<NativeStep, EngineError>
 where
@@ -6948,7 +6947,7 @@ where
 }
 
 fn native_mean_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeMean,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -6983,7 +6982,7 @@ where
 }
 
 fn native_mean_apply_plus_first<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &NativeMean,
 ) -> Result<NativeStep, EngineError>
 where
@@ -7013,7 +7012,7 @@ fn native_mean_apply_plus_second(task: &NativeMean) -> Result<NativeStep, Engine
 }
 
 fn native_mean_apply_div_first<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &mut NativeMean,
 ) -> Result<NativeStep, EngineError>
 where
@@ -7050,7 +7049,7 @@ fn native_mean_apply_div_second(task: &NativeMean) -> Result<NativeStep, EngineE
 }
 
 fn native_log_show_enter<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &NativeLogShow,
 ) -> Result<NativeStep, EngineError>
 where
@@ -7063,7 +7062,7 @@ where
 }
 
 fn native_log_show_receive<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     task: &NativeLogShow,
     value: Pointer,
 ) -> Result<NativeStep, EngineError>
@@ -7076,7 +7075,7 @@ where
 }
 
 fn eval_apply_overloaded_arg<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     parent: Pointer,
     mut over: OverloadedFn,
     arg: Pointer,
@@ -7149,7 +7148,7 @@ where
 }
 
 fn eval_apply_arg<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     parent: Pointer,
     func: Pointer,
     arg: Pointer,
@@ -7205,7 +7204,7 @@ where
 }
 
 fn continue_app_after_apply<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     mut frame_ptr: Pointer,
     mut frame: FrApp,
     applied: Option<Pointer>,
@@ -7294,7 +7293,7 @@ where
 }
 
 fn eval_resolve_var<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     parent: Pointer,
     env: &Environment,
     name: &Symbol,
@@ -7351,7 +7350,7 @@ where
 }
 
 fn apply_record_update_values<State>(
-    runtime: &RuntimeSnapshot<State>,
+    runtime: &RuntimeCore<State>,
     base_ptr: Pointer,
     update_vals: BTreeMap<Symbol, Pointer>,
 ) -> Result<Pointer, EngineError>

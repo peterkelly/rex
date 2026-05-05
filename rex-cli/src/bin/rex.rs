@@ -219,7 +219,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let engine = init_engine(&include)?;
 
-    let mut evaluator = engine.into_evaluator();
+    let evaluator = engine.into_evaluator();
 
     let (value, _) = if let Some(path) = file {
         if snippet {

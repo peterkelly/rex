@@ -2,7 +2,8 @@
 
 This crate evaluates Rex ASTs and supports host-native injection of functions and values. The API
 now exposes an explicit preparation boundary: `Engine` builds the host environment, `Compiler`
-prepares Rex code into `CompiledProgram`, and `Evaluator` runs prepared programs. The current
+prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator` runs one prepared program.
+The current
 implementation still keeps engine-backed state internally, but the compile/runtime split is now a
 first-class part of the public API. The runtime operates on `Value` and supports closures,
 application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
@@ -29,8 +30,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     let mut compiler = engine.into_compiler();
     let compiled = compiler.compile_expr(program.expr.as_ref())?;
-    let mut evaluator = compiler.into_evaluator();
-    let value = evaluator.run(&compiled).await?;
+    let evaluator = compiler.into_evaluator();
+    evaluator.validate(&compiled)?;
+    let value = evaluator.run(compiled).await?;
 
     assert_eq!(value.as_i32()?, 43);
     Ok(())

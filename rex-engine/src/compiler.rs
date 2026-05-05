@@ -31,11 +31,12 @@ where
     }
 
     pub fn into_evaluator(self) -> Evaluator<State> {
-        let runtime = self.runtime_env();
-        Evaluator::new(runtime, self)
+        let runtime_env = RuntimeEnv::from_engine(&self.engine);
+        let runtime = self.engine.runtime_core();
+        Evaluator::new(runtime, runtime_env, self)
     }
 
-    pub fn runtime_env(&self) -> RuntimeEnv<State> {
+    pub fn runtime_env(&self) -> RuntimeEnv {
         RuntimeEnv::from_engine(&self.engine)
     }
 

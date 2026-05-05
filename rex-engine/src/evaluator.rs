@@ -14,7 +14,7 @@ use rex_util::sha256_hex;
 
 use crate::engine::{
     CompiledProgram, NativeImpl, OverloadedFn, RuntimeCapabilities, RuntimeCompatibility,
-    RuntimeSnapshot, eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
+    RuntimeCore, eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ResolvedModule, ResolvedModuleContent};
 use crate::value::{Handle, Heap, Pointer};
@@ -26,7 +26,8 @@ pub struct Evaluator<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) runtime: RuntimeEnv<State>,
+    pub(crate) runtime: RuntimeCore<State>,
+    pub(crate) runtime_env: RuntimeEnv,
     pub(crate) compiler: Compiler<State>,
 }
 
@@ -35,7 +36,7 @@ pub struct EvaluatorRef<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    runtime: RuntimeSnapshot<State>,
+    runtime: RuntimeCore<State>,
     #[allow(dead_code)]
     #[doc(hidden)]
     pub(crate) context: EvalContext,
@@ -59,58 +60,61 @@ impl<State> Evaluator<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(runtime: RuntimeEnv<State>, compiler: Compiler<State>) -> Self {
-        Self { runtime, compiler }
+    pub(crate) fn new(
+        runtime: RuntimeCore<State>,
+        runtime_env: RuntimeEnv,
+        compiler: Compiler<State>,
+    ) -> Self {
+        Self {
+            runtime,
+            runtime_env,
+            compiler,
+        }
     }
 
-    fn sync_runtime_from_compiler(&mut self) {
-        self.runtime.sync_from_engine(&self.compiler.engine);
-    }
-
-    pub fn runtime_env(&self) -> &RuntimeEnv<State> {
-        &self.runtime
+    pub fn runtime_env(&self) -> &RuntimeEnv {
+        &self.runtime_env
     }
 
     pub fn capabilities(&self) -> &RuntimeCapabilities {
-        self.runtime.capabilities()
+        self.runtime_env.capabilities()
     }
 
     pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
-        self.runtime.compatibility_with(program)
+        self.runtime_env.compatibility_with(program)
     }
 
     pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
-        self.runtime.validate(program)
+        self.runtime_env.validate(program)
     }
 
-    pub async fn run(&mut self, program: &CompiledProgram) -> Result<Handle, EvalError> {
-        self.runtime.validate_internal(program)?;
-        let pointer = eval_typed_expr(&self.runtime.runtime, &program.env, program.expr.as_ref())
+    pub async fn run(self, program: CompiledProgram) -> Result<Handle, EvalError> {
+        self.runtime_env.validate_internal(&program)?;
+        let runtime = self.runtime;
+        let heap = runtime.heap.clone();
+        let pointer = eval_typed_expr(runtime, program.env, program.expr)
             .await
             .map_err(EvalError::from)?;
-        self.runtime
-            .runtime
-            .heap
-            .handle(pointer)
-            .map_err(EvalError::from)
+        heap.handle(pointer).map_err(EvalError::from)
     }
 
-    pub async fn eval(&mut self, expr: &Expr) -> Result<(Handle, Type), ExecutionError> {
+    pub async fn eval(self, expr: &Expr) -> Result<(Handle, Type), ExecutionError> {
         self.prepare_and_run(|compiler| compiler.compile_expr(expr))
             .await
     }
 
     async fn run_prepared(
-        &mut self,
+        mut self,
         program: CompiledProgram,
     ) -> Result<(Handle, Type), ExecutionError> {
-        self.sync_runtime_from_compiler();
+        self.runtime_env = RuntimeEnv::from_engine(&self.compiler.engine);
+        self.runtime = self.compiler.engine.runtime_core();
         let typ = program.result_type().clone();
-        let value = self.run(&program).await?;
+        let value = self.run(program).await?;
         Ok((value, typ))
     }
 
-    async fn prepare_and_run<F>(&mut self, compile: F) -> Result<(Handle, Type), ExecutionError>
+    async fn prepare_and_run<F>(mut self, compile: F) -> Result<(Handle, Type), ExecutionError>
     where
         F: FnOnce(&mut Compiler<State>) -> Result<CompiledProgram, CompileError>,
     {
@@ -119,7 +123,7 @@ where
     }
 
     pub async fn eval_module_file(
-        &mut self,
+        mut self,
         path: impl AsRef<Path>,
     ) -> Result<(Handle, Type), ExecutionError> {
         let result: Result<(Handle, Type), ExecutionError> = {
@@ -161,13 +165,11 @@ where
                 Ok((inst.init_value, inst.init_type))
             }
         };
-        let result = result?;
-        self.sync_runtime_from_compiler();
-        Ok(result)
+        result
     }
 
     pub async fn eval_module_source(
-        &mut self,
+        mut self,
         source: &str,
     ) -> Result<(Handle, Type), ExecutionError> {
         let result: Result<(Handle, Type), ExecutionError> = {
@@ -188,18 +190,16 @@ where
                 Ok((inst.init_value, inst.init_type))
             }
         };
-        let result = result?;
-        self.sync_runtime_from_compiler();
-        Ok(result)
+        result
     }
 
-    pub async fn eval_snippet(&mut self, source: &str) -> Result<(Handle, Type), ExecutionError> {
+    pub async fn eval_snippet(self, source: &str) -> Result<(Handle, Type), ExecutionError> {
         self.prepare_and_run(|compiler| compiler.compile_snippet(source))
             .await
     }
 
     pub async fn eval_snippet_at(
-        &mut self,
+        self,
         source: &str,
         importer_path: impl AsRef<Path>,
     ) -> Result<(Handle, Type), ExecutionError> {
@@ -213,14 +213,14 @@ impl<State> EvaluatorRef<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new_with_context(runtime: &RuntimeSnapshot<State>, context: EvalContext) -> Self {
+    pub(crate) fn new_with_context(runtime: &RuntimeCore<State>, context: EvalContext) -> Self {
         Self {
             runtime: runtime.clone(),
             context,
         }
     }
 
-    pub(crate) fn new_with_parent(runtime: &RuntimeSnapshot<State>, parent: Pointer) -> Self {
+    pub(crate) fn new_with_parent(runtime: &RuntimeCore<State>, parent: Pointer) -> Self {
         Self::new_with_context(runtime, EvalContext::child(parent))
     }
 
@@ -233,7 +233,7 @@ where
     }
 
     pub fn type_system(&self) -> &TypeSystem {
-        &self.runtime.type_system
+        self.runtime.type_system.as_ref()
     }
 
     pub(crate) fn handles_from_pointers(
@@ -274,6 +274,8 @@ where
 
         self.runtime
             .typeclasses
+            .lock()
+            .map_err(|_| EngineError::Internal("typeclass registry poisoned".into()))?
             .resolve(&info.class, name, &param_type)
     }
 

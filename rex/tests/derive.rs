@@ -363,34 +363,41 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    MyInnerStruct::inject_rex(&mut engine).unwrap();
-    MyStruct::inject_rex(&mut engine).unwrap();
+    fn engine_with_struct_exports() -> Engine {
+        let mut engine = Engine::with_prelude(()).unwrap();
+        MyInnerStruct::inject_rex(&mut engine).unwrap();
+        MyStruct::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |module| {
-        module.export("bump_y", |_: &(), mut s: MyStruct| {
-            s.y += 1;
-            Ok(s)
+        inject_globals(&mut engine, |module| {
+            module.export("bump_y", |_: &(), mut s: MyStruct| {
+                s.y += 1;
+                Ok(s)
+            })
         })
-    })
-    .unwrap();
-    inject_globals(&mut engine, |module| {
-        module.export_value(
-            "const_struct",
-            MyStruct {
-                x: false,
-                y: 100,
-                tags: vec![],
-                props: HashMap::new(),
-                inner: MyInnerStruct { x: true, y: 1 },
-                pair: (2, "ok".into(), false),
-                renamed_field: 0,
-            },
-        )
-    })
-    .unwrap();
-    let mut evaluator = engine.into_evaluator();
-    let (v_handle, ty) = evaluator.eval(program.expr.as_ref()).await.unwrap();
+        .unwrap();
+        inject_globals(&mut engine, |module| {
+            module.export_value(
+                "const_struct",
+                MyStruct {
+                    x: false,
+                    y: 100,
+                    tags: vec![],
+                    props: HashMap::new(),
+                    inner: MyInnerStruct { x: true, y: 1 },
+                    pair: (2, "ok".into(), false),
+                    renamed_field: 0,
+                },
+            )
+        })
+        .unwrap();
+        engine
+    }
+
+    let (v_handle, ty) = engine_with_struct_exports()
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, MyStruct::rex_type());
     let bumped = MyStruct::from_rex(&v_handle).unwrap();
     assert_eq!(bumped.y, 43);
@@ -398,7 +405,11 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let tokens = Token::tokenize("const_struct.y").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (v, ty) = evaluator.eval(program.expr.as_ref()).await.unwrap();
+    let (v, ty) = engine_with_struct_exports()
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(v.as_i32().unwrap(), 100);
 }

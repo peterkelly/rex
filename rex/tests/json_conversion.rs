@@ -320,8 +320,12 @@ fn unit_enum_integer_unknown_discriminant_errors() {
 
 #[tokio::test]
 async fn eval_entry_points_return_type_for_json_eval() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    EvalJsonRecord::inject_rex(&mut engine).unwrap();
+    fn engine_with_eval_json_record() -> Engine {
+        let mut engine = Engine::with_prelude(()).unwrap();
+        EvalJsonRecord::inject_rex(&mut engine).unwrap();
+        engine
+    }
+
     let rex_code = "EvalJsonRecord { id = 7, values = to_array [1, 2, 3, 5, 8] }";
     let expected_json = json!({
         "id": 7,
@@ -336,11 +340,19 @@ async fn eval_entry_points_return_type_for_json_eval() {
         expected_json
     );
     let expr_program = parse_program(rex_code);
+    let engine = engine_with_eval_json_record();
     let type_system = engine.type_system.clone();
-    let mut evaluator = engine.into_evaluator();
-    let (handle_eval, ty_eval) = evaluator.eval(expr_program.expr.as_ref()).await.unwrap();
+    let (handle_eval, ty_eval) = engine
+        .into_evaluator()
+        .eval(expr_program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
-    let (handle_snippet, ty_snippet) = evaluator.eval_snippet(rex_code).await.unwrap();
+    let (handle_snippet, ty_snippet) = engine_with_eval_json_record()
+        .into_evaluator()
+        .eval_snippet(rex_code)
+        .await
+        .unwrap();
     assert_eval_json(
         &type_system,
         &handle_snippet,
@@ -351,7 +363,8 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let (handle_snippet_at, ty_snippet_at) = evaluator
+    let (handle_snippet_at, ty_snippet_at) = engine_with_eval_json_record()
+        .into_evaluator()
         .eval_snippet_at(rex_code, &importer)
         .await
         .unwrap();

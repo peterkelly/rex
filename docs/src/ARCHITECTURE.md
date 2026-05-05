@@ -23,12 +23,12 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - `rex-engine`: runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
-  - `Compiler::runtime_env()` to create an explicit runtime preflight snapshot.
+  - `Compiler::runtime_env()` to create explicit runtime preflight data.
   - `Engine::into_evaluator()` / `Compiler::into_evaluator()` to consume preparation state into an evaluator.
   - `Compiler::compile_*` to prepare source into `CompiledProgram`.
   - `RuntimeEnv::validate(&compiled)` to preflight runtime linkage before execution.
-  - `Evaluator::validate(&compiled)` / `Evaluator::run(&compiled).await` to validate and execute a prepared program.
-  - convenience helpers like `Evaluator::eval_snippet` still exist, but they are just compile-then-run wrappers.
+  - `Evaluator::validate(&compiled)` / `Evaluator::run(compiled).await` to validate and execute one prepared program. `run` consumes both the evaluator and the compiled program.
+  - convenience helpers like `Evaluator::eval_snippet` still exist, but they are single-shot compile-then-run wrappers.
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while handle-based native APIs (`export_native*`) receive `EvaluatorRef<State>`.
   - public phase errors are split as `CompileError`, `EvalError`, and `ExecutionError` (for convenience entry points that do both phases).
   - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
@@ -41,21 +41,23 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - **Typed preparation**: `rex-engine` prepares code into a typed form before execution. The
   current `CompiledProgram` still stores a typed AST plus runtime linkage metadata, but the
   compile/runtime boundary is now explicit in the API.
+- **Single-shot execution**: evaluation is intentionally one-shot. `CompiledProgram` is validated by
+  borrow and then moved into `Evaluator::run`, which consumes the evaluator as well. Prepare all
+  required declarations/modules before constructing or consuming the evaluator.
 - **Current linkage model**: `CompiledProgram` captures the prepared expression and the environment
   snapshot needed to run it. Rex declarations that are part of the prepared program are captured
   there. Host-provided exports and typeclass method bindings remain runtime-linked through
-  `RuntimeEnv`, which is why `RuntimeEnv::validate` exists. So the current model is "prepared plus
-  link-validated", not "fully self-contained executable artifact".
+  the evaluator runtime. `RuntimeEnv::validate` exposes a lightweight preflight view, so the
+  current model is "prepared plus link-validated", not "fully self-contained executable artifact".
 - **Explicit link contract**: `CompiledProgram::link_contract()` now records the required runtime
   ABI version and the callable shapes the prepared program expects. `RuntimeEnv::capabilities()`
   exposes the matching runtime-side view, and compatibility checks now reject both missing and
   type-incompatible runtime bindings.
-- **RuntimeEnv split**: internally, `RuntimeEnv` now contains only the execution snapshot and link
-  capabilities used by `Evaluator` and native dispatch. Convenience module-loading entry points
-  use the evaluator's compiler state instead of a second engine-backed loader inside the runtime.
+- **RuntimeEnv split**: internally, `RuntimeEnv` contains only link capabilities used for preflight
+  validation. `Evaluator` owns the runtime core used by native dispatch and execution.
 - **Process-local boundary**: `CompiledProgram::storage_boundary()` and
-  `RuntimeEnv::storage_boundary()` make it explicit that both values still contain process-local
-  state and are not serialization-ready artifacts.
+  `RuntimeEnv::storage_boundary()` make it explicit that both values are API artifacts, not
+  serialization-ready artifacts.
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::new_with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rex-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)

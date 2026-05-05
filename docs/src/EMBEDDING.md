@@ -30,10 +30,10 @@ Evaluation API:
 
 - `Engine` builds the host environment.
 - `Compiler` prepares user code into a `CompiledProgram`.
-- `Evaluator` runs prepared code against a `RuntimeEnv`.
+- `Evaluator` owns the runtime core and runs one prepared program.
 
-`Evaluator` owns the compiler state needed by convenience helpers, while `RuntimeEnv` is a
-runtime-only snapshot used for validation and execution.
+`Evaluator` is single-shot: preflight validation borrows the compiled program, and
+`Evaluator::run` consumes both the evaluator and the compiled program.
 
 ```rust
 use rex::Engine;
@@ -42,9 +42,10 @@ let engine = Engine::with_prelude(())?;
 let mut compiler = engine.into_compiler();
 
 let program = compiler.compile_snippet("let x = 1 + 2 in x * 3")?;
-let mut evaluator = compiler.into_evaluator();
-let value = evaluator.run(&program).await?;
 assert_eq!(program.result_type().to_string(), "i32");
+let evaluator = compiler.into_evaluator();
+evaluator.validate(&program)?;
+let value = evaluator.run(program).await?;
 ```
 
 What "compiled" means in the current design:
@@ -52,20 +53,22 @@ What "compiled" means in the current design:
 - parsing, import rewriting, declaration injection, and typechecking have already happened
 - `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
 - runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
-- internally, `RuntimeEnv` keeps the runtime snapshot and link capabilities needed for execution;
-  convenience module-loading entry points use the evaluator's compiler state
+- internally, `RuntimeEnv` keeps only the link capabilities needed for preflight validation
+- `Evaluator` owns the runtime core needed for execution
 - `CompiledProgram::link_contract()` and `RuntimeEnv::capabilities()` now make the runtime link
   contract explicit, including the current ABI version and the required callable shapes
 - `CompiledProgram::storage_boundary()` and `RuntimeEnv::storage_boundary()` mark both values as
-  process-local, not serializable artifacts
+  API artifacts, not serialization-ready artifacts
+- `Evaluator::run` consumes the evaluator and compiled program; use a new engine/compiler/evaluator
+  for another generated workflow
 
 What is currently captured versus linked:
 
 - Rex declarations that are part of the prepared program are captured into the compiled env snapshot
 - host-provided exports registered through `export`, `export_async`, `export_native`,
   `export_native_async`, or `export_value` are runtime-linked and must be available in the
-  `RuntimeEnv`
-- typeclass method bindings are also runtime-linked through the `RuntimeEnv`
+  evaluator runtime
+- typeclass method bindings are also runtime-linked through the evaluator runtime
 
 That means `CompiledProgram` is engine-independent at the API level, but it is not a fully
 self-contained serialized artifact. It is best thought of as a prepared program plus explicit
@@ -86,18 +89,18 @@ let program = compiler.compile_snippet("let x = 1 + 2 in x * 3")?;
 let runtime = compiler.runtime_env();
 runtime.validate(&program)?;
 
-let mut evaluator = compiler.into_evaluator();
+let evaluator = compiler.into_evaluator();
 evaluator.validate(&program)?;
-let value = evaluator.run(&program).await?;
+let value = evaluator.run(program).await?;
 ```
 
 `RuntimeEnv::compatibility_with` and `Evaluator::compatibility_with` return structured link
 feedback. That is useful for tools and AI agents that want to report missing or incompatible host
 bindings before attempting evaluation.
 
-The convenience helpers such as `Evaluator::eval`, `eval_snippet`, and `eval_snippet_at` now route
-through the same prepare/validate/run boundary internally. They are still sugar, but they no longer
-use a separate execution path.
+The convenience helpers such as `Evaluator::eval`, `eval_snippet`, and `eval_snippet_at` route
+through the same prepare/validate/run boundary internally. They are still sugar, but each helper
+consumes the evaluator.
 
 ## Evaluate Rex Code Directly
 
@@ -114,8 +117,8 @@ globals.add_decls(program.decls.clone());
 engine.inject_module(globals)?;
 let mut compiler = engine.into_compiler();
 let program = compiler.compile_expr(program.expr.as_ref())?;
-let mut evaluator = compiler.into_evaluator();
-let value = evaluator.run(&program).await?;
+let evaluator = compiler.into_evaluator();
+let value = evaluator.run(program).await?;
 println!("{value}");
 ```
 
@@ -164,9 +167,9 @@ use rex::{Engine};
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
 engine.add_include_resolver("/opt/my-app/rex-modules")?;
-let value = engine
-    .eval_module_file("workflows/main.rex")
-    .await?;
+let mut compiler = engine.into_compiler();
+let program = compiler.compile_module_file("workflows/main.rex")?;
+let value = compiler.into_evaluator().run(program).await?;
 println!("{value}");
 ```
 
@@ -219,6 +222,7 @@ engine.add_resolver("host-map", {
     }
 });
 let value = engine
+    .into_evaluator()
     .eval_snippet("import acme.main (main);\nmain")
     .await?;
 println!("{value}");
@@ -264,6 +268,7 @@ math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
 engine.inject_module(math)?;
 let value = engine
+    .into_evaluator()
     .eval_snippet("import acme.math (inc, double_async as d);\ninc (d 20)")
     .await?;
 println!("{value}");
@@ -347,6 +352,7 @@ m.export("render_label", |_state: &(), label: Label| {
 })?;
 engine.inject_module(m)?;
 let value = engine
+    .into_evaluator()
     .eval_snippet(
         r#"
         import sample (Label, Left, Right, render_label);
@@ -428,6 +434,7 @@ If you evaluate ad-hoc Rex snippets that contain imports, use `eval_snippet_at` 
 
 ```rust
 let value = engine
+    .into_evaluator()
     .eval_snippet_at("import foo.bar as Bar;\nBar.add 1 2", "/tmp/workflow/_snippet.rex")
     .await?;
 ```
@@ -596,7 +603,7 @@ assert_eq!(ty.to_string(), "i32");
 ### Evaluate: Inject Decls into `Engine`
 
 ```rust
-use rex_engine::{Engine, EngineError};
+use rex_engine::{Engine, EngineError, Module};
 use rex::{Parser, Token};
 
 let code = r#"
@@ -621,7 +628,8 @@ let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
 engine.inject_module(globals)?;
-let value = engine
+let (value, _ty) = engine
+    .into_evaluator()
     .eval(program.expr.as_ref())
     .await?;
 println!("{value}");
@@ -652,23 +660,23 @@ direct calls, `let` bindings, and lambda wrappers:
 ```rust
 use rex_engine::{Engine, Module};
 
-let mut engine = Engine::with_prelude(())?;
-let mut globals = Module::global();
-globals.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
-globals.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
-engine.inject_module(globals)?;
-
 for code in [
     "num_u8 4",
     "let x = 4 in num_u8 x",
     "let f = \\x -> num_i64 x in f 4",
 ] {
+    let mut engine = Engine::with_prelude(())?;
+    let mut globals = Module::global();
+    globals.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
+    globals.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
+    engine.inject_module(globals)?;
+
     let tokens = Token::tokenize(code)?;
     let mut parser = Parser::new(tokens);
     let program = parser
         .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
-    let value = engine.eval(program.expr.as_ref()).await?;
+    let (value, _ty) = engine.into_evaluator().eval(program.expr.as_ref()).await?;
     println!("{value}");
 }
 ```
@@ -694,7 +702,7 @@ let mut parser = Parser::new(tokens);
 let program = parser
     .parse_program()
     .map_err(|errs| format!("parse error: {errs:?}"))?;
-let v = engine.eval(program.expr.as_ref()).await?;
+let (v, _ty) = engine.into_evaluator().eval(program.expr.as_ref()).await?;
 println!("{v}");
 ```
 
@@ -814,7 +822,7 @@ let expr = Parser::new(Token::tokenize("Just 1")?)
     .parse_program()
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .expr;
-let (v, _ty) = engine.eval(expr.as_ref()).await?;
+let (v, _ty) = engine.into_evaluator().eval(expr.as_ref()).await?;
 assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));
 ```
 

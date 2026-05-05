@@ -93,7 +93,7 @@ async fn eval_expr(engine: Engine, expr: &Expr) -> Result<Handle, EngineError> {
 #[tokio::test]
 async fn engine_consumes_into_evaluator() {
     let engine = Engine::with_prelude(()).unwrap();
-    let mut evaluator = engine.into_evaluator();
+    let evaluator = engine.into_evaluator();
     let (value, ty) = evaluator.eval_snippet("1 + 2").await.unwrap();
 
     assert_eq!(ty.to_string(), "i32");
@@ -107,8 +107,8 @@ async fn compiler_consumes_into_evaluator() {
     let program = compiler
         .compile_snippet("let answer = 40 + 2 in answer")
         .unwrap();
-    let mut evaluator = compiler.into_evaluator();
-    let value = evaluator.run(&program).await.unwrap();
+    let evaluator = compiler.into_evaluator();
+    let value = evaluator.run(program).await.unwrap();
 
     assert_eq!(value.as_i32().unwrap(), 42);
 }
@@ -319,6 +319,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     assert!(!compatibility.is_compatible());
     assert_ne!(runtime.fingerprint(), 0);
     assert!(!runtime.storage_boundary().serializable);
+    assert!(!runtime.storage_boundary().contains_runtime_core);
     assert!(!runtime.storage_boundary().contains_loader_state);
 
     let err = runtime.validate(&program).unwrap_err().into_engine_error();
@@ -332,7 +333,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         } if expected_abi_version == actual_abi_version && missing_natives == vec![Symbol::intern("inc")]
     ));
 
-    let mut evaluator = runtime_compiler.into_evaluator();
+    let evaluator = runtime_compiler.into_evaluator();
     let compatibility = evaluator.compatibility_with(&program);
     assert_eq!(compatibility.missing_natives, vec![Symbol::intern("inc")]);
     assert!(!compatibility.is_compatible());
@@ -348,7 +349,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         } if missing_natives == vec![Symbol::intern("inc")]
     ));
     let err = evaluator
-        .run(&program)
+        .run(program)
         .await
         .unwrap_err()
         .into_engine_error();
@@ -415,10 +416,10 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     assert!(runtime.compatibility_with(&program).is_compatible());
     runtime.validate(&program).unwrap();
 
-    let mut evaluator = runtime_compiler.into_evaluator();
+    let evaluator = runtime_compiler.into_evaluator();
     assert!(evaluator.compatibility_with(&program).is_compatible());
     evaluator.validate(&program).unwrap();
-    let value = evaluator.run(&program).await.unwrap();
+    let value = evaluator.run(program).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 41);
 }
 
@@ -735,21 +736,27 @@ async fn eval_typed_hole_reports_type_error_not_runtime_error() {
 
 #[tokio::test]
 async fn eval_sync_native_injection() {
-    let mut engine = Engine::new(());
-    inject_globals(&mut engine, |module| {
-        module.export("zero", |_: &()| Ok(0u32))?;
-        module.export("(+)", |_: &(), x: u32, y: u32| Ok(x + y))?;
-        module.export_value("one", 1u32)?;
-        Ok(())
-    });
+    fn engine_with_natives() -> Engine {
+        let mut engine = Engine::new(());
+        inject_globals(&mut engine, |module| {
+            module.export("zero", |_: &()| Ok(0u32))?;
+            module.export("(+)", |_: &(), x: u32, y: u32| Ok(x + y))?;
+            module.export_value("one", 1u32)?;
+            Ok(())
+        });
+        engine
+    }
 
     let expr = parse("one + one");
-    let mut evaluator = engine.into_evaluator();
-    let (value, _) = evaluator.eval(expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine_with_natives(), expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(value.as_u32().unwrap(), 2);
 
     let expr = parse("zero");
-    let (value, _) = evaluator.eval(expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine_with_natives(), expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(value.as_u32().unwrap(), 0);
 }
 
@@ -956,15 +963,12 @@ async fn eval_simple_mod() {
 
 #[tokio::test]
 async fn eval_get_list_and_tuple() {
-    let engine = engine_with_arith();
-    let mut evaluator = engine.into_evaluator();
-
     let expr = parse("get 1 [1, 2, 3]");
-    let (value, _) = evaluator.eval(expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine_with_arith(), expr.as_ref()).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 2);
 
     let expr = parse("(1, 2, 3).2");
-    let (value, _) = evaluator.eval(expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine_with_arith(), expr.as_ref()).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 3);
 }
 

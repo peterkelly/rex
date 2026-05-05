@@ -1,16 +1,10 @@
 use crate::engine::{
     CompiledProgram, Engine, RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract,
-    RuntimeSnapshot, class_method_capability_matches_requirement,
-    native_capability_matches_requirement,
+    class_method_capability_matches_requirement, native_capability_matches_requirement,
 };
 use crate::{EngineError, EvalError};
 
-#[derive(Clone)]
-pub struct RuntimeEnv<State = ()>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) runtime: RuntimeSnapshot<State>,
+pub struct RuntimeEnv {
     capabilities: RuntimeCapabilities,
 }
 
@@ -56,17 +50,13 @@ fn runtime_compatibility(
     }
 }
 
-impl<State> RuntimeEnv<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) fn from_engine(engine: &Engine<State>) -> Self {
+impl RuntimeEnv {
+    pub(crate) fn from_engine<State>(engine: &Engine<State>) -> Self
+    where
+        State: Clone + Send + Sync + 'static,
+    {
         let capabilities = engine.runtime_capabilities_snapshot();
-        let runtime = engine.runtime_snapshot();
-        Self {
-            runtime,
-            capabilities,
-        }
+        Self { capabilities }
     }
 
     pub fn capabilities(&self) -> &RuntimeCapabilities {
@@ -101,14 +91,9 @@ where
         }
     }
 
-    pub(crate) fn sync_from_engine(&mut self, engine: &Engine<State>) {
-        self.runtime = engine.runtime_snapshot();
-        self.capabilities = engine.runtime_capabilities_snapshot();
-    }
-
     pub fn storage_boundary(&self) -> RuntimeEnvBoundary {
         RuntimeEnvBoundary {
-            contains_runtime_snapshot: true,
+            contains_runtime_core: false,
             contains_loader_state: false,
             serializable: false,
         }
@@ -117,7 +102,7 @@ where
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeEnvBoundary {
-    pub contains_runtime_snapshot: bool,
+    pub contains_runtime_core: bool,
     pub contains_loader_state: bool,
     pub serializable: bool,
 }

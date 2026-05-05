@@ -24,8 +24,8 @@ pub async fn eval(source: &str) -> Result<String, engine::ExecutionError> {
     engine.add_default_resolvers();
     let mut compiler = engine.into_compiler();
     let program = compiler.compile_snippet(source)?;
-    let mut evaluator = compiler.into_evaluator();
-    let value = evaluator.run(&program).await?;
+    let evaluator = compiler.into_evaluator();
+    let value = evaluator.run(program).await?;
 
     Ok(value
         .display_with(engine::ValueDisplayOptions::default())

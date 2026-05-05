@@ -188,40 +188,22 @@ async fn module_import_local_pub() {
 }
 
 #[tokio::test]
-async fn eval_module_file_reloads_when_local_file_changes() {
-    let dir = temp_dir("eval_module_file_reloads_when_local_file_changes");
+async fn compile_module_file_accepts_declaration_only_local_module() {
+    let dir = temp_dir("compile_module_file_accepts_declaration_only_local_module");
     let module = dir.join("foo.rex");
-    let importer = dir.join("main.rex");
-    write_file(&importer, "()");
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let mut evaluator = engine.into_evaluator();
+    let mut compiler = engine.into_compiler();
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
-    let _ = evaluator.eval_module_file(&module).await.unwrap();
-    let (value_ptr, ty) = evaluator
-        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
-        .await
-        .unwrap();
-    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    let program = compiler.compile_module_file(&module).unwrap();
+    let ty = program.result_type().clone();
+    let value_ptr = compiler.into_evaluator().run(program).await.unwrap();
+    assert_eq!(ty, Type::tuple(vec![]));
     match value_ptr.value().unwrap() {
-        Value::I32(v) => assert_eq!(v, 1),
-        other => panic!("expected i32, got {}", other.value_type_name()),
-    }
-
-    // Edit the same local module path and ensure the engine invalidates path-keyed
-    // module cache entries before reloading.
-    write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
-    let _ = evaluator.eval_module_file(&module).await.unwrap();
-    let (value_ptr, ty) = evaluator
-        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
-        .await
-        .unwrap();
-    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match value_ptr.value().unwrap() {
-        Value::I32(v) => assert_eq!(v, 2),
-        other => panic!("expected i32, got {}", other.value_type_name()),
+        Value::Tuple(items) => assert!(items.is_empty()),
+        other => panic!("expected unit tuple, got {}", other.value_type_name()),
     }
 }
 
@@ -235,25 +217,20 @@ async fn snippet_import_reloads_when_local_module_changes() {
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let mut evaluator = engine.into_evaluator();
+    let mut compiler = engine.into_compiler();
 
-    let (value_ptr, ty) = evaluator
-        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
-        .await
+    let _ = compiler
+        .compile_snippet_at("import foo (value);\nvalue 0", &importer)
         .unwrap();
-    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    match value_ptr.value().unwrap() {
-        Value::I32(v) => assert_eq!(v, 1),
-        other => panic!("expected i32, got {}", other.value_type_name()),
-    }
 
     // Same module path, changed contents: import resolution must observe updated
-    // source and invalidate stale per-module caches.
+    // source and invalidate stale per-module caches during preparation.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
-    let (value_ptr, ty) = evaluator
-        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
-        .await
+    let program = compiler
+        .compile_snippet_at("import foo (value);\nvalue 0", &importer)
         .unwrap();
+    let ty = program.result_type().clone();
+    let value_ptr = compiler.into_evaluator().run(program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 2),

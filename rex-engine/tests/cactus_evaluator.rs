@@ -18,7 +18,7 @@ async fn eval_value<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut evaluator = engine.into_evaluator();
+    let evaluator = engine.into_evaluator();
     evaluator
         .eval_snippet(source)
         .await

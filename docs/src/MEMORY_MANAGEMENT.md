@@ -62,15 +62,14 @@ pointers.
 ### Runtime heap lifecycle
 
 `Engine` constructs the initial `Heap` during preparation (`Engine::new`, `Engine::with_prelude`).
-That heap then moves with the prepared runtime state into `Compiler`, `RuntimeEnv`, and
-`Evaluator`.
+That heap then moves with the prepared runtime state into `Compiler` and `Evaluator`.
 
 - Evaluation returns `Handle`, not `Value`.
 - Callers can inspect via the returned handle or allocate more values from native callbacks through
   `EvaluatorRef::heap()`.
 
 This keeps allocation authority clear: the preparation phase creates the heap, and the evaluator's
-runtime snapshot is the single store used during execution.
+runtime core is the single store used during execution.
 
 ## Read/write semantics
 
