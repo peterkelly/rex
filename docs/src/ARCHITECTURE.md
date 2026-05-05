@@ -22,11 +22,12 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - For untrusted code, set `TypeSystemLimits::safe_defaults` before inference.
 - `rex-engine`: runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
-  - `Engine::compiler()` to create a preparation view over that environment.
-  - `Engine::runtime_env()` / `Engine::evaluator()` to create runtime views over that environment.
+  - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
+  - `Compiler::runtime_env()` to create an explicit runtime preflight snapshot.
+  - `Engine::into_evaluator()` / `Compiler::into_evaluator()` to consume preparation state into an evaluator.
   - `Compiler::compile_*` to prepare source into `CompiledProgram`.
   - `RuntimeEnv::validate(&compiled)` to preflight runtime linkage before execution.
-  - `Evaluator::run(&compiled).await` to execute a prepared program.
+  - `Evaluator::validate(&compiled)` / `Evaluator::run(&compiled).await` to validate and execute a prepared program.
   - convenience helpers like `Evaluator::eval_snippet` still exist, but they are just compile-then-run wrappers.
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while handle-based native APIs (`export_native*`) receive `EvaluatorRef<State>`.
   - public phase errors are split as `CompileError`, `EvalError`, and `ExecutionError` (for convenience entry points that do both phases).
@@ -49,10 +50,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   ABI version and the callable shapes the prepared program expects. `RuntimeEnv::capabilities()`
   exposes the matching runtime-side view, and compatibility checks now reject both missing and
   type-incompatible runtime bindings.
-- **RuntimeEnv split**: internally, `RuntimeEnv` now distinguishes the execution snapshot used by
-  `Evaluator` and native dispatch from the engine-backed loader state still used by convenience
-  module-loading entry points. That keeps the public model stable while shrinking execution's
-  implicit dependence on the full engine object.
+- **RuntimeEnv split**: internally, `RuntimeEnv` now contains only the execution snapshot and link
+  capabilities used by `Evaluator` and native dispatch. Convenience module-loading entry points
+  use the evaluator's compiler state instead of a second engine-backed loader inside the runtime.
 - **Process-local boundary**: `CompiledProgram::storage_boundary()` and
   `RuntimeEnv::storage_boundary()` make it explicit that both values still contain process-local
   state and are not serialization-ready artifacts.

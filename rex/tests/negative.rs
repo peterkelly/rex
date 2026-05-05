@@ -1,6 +1,6 @@
 use rex::{
     ast::{Program, Symbol},
-    engine::{Compiler, Engine, EngineError, Evaluator, Module, RuntimeEnv},
+    engine::{Engine, EngineError, Module},
     parser::{Parser, ParserErr, ParserLimits, Token},
     typesystem::TypeError,
 };
@@ -30,13 +30,7 @@ async fn compile_err(code: &str) -> EngineError {
     if let Err(e) = engine.inject_module(module) {
         return e;
     }
-    match Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    {
+    match engine.into_evaluator().eval(program.expr.as_ref()).await {
         Ok((v, _)) => {
             let value_type = v.type_name().unwrap_or("<invalid handle>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");

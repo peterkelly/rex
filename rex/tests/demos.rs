@@ -1,5 +1,5 @@
 use rex::{
-    engine::{Compiler, Engine, Evaluator, Handle, Heap, RuntimeEnv, Value},
+    engine::{Engine, Handle, Heap, Value},
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -41,14 +41,13 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                     engine
                         .infer_snippet(&source)
                         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
-                    let (value, ty) = Evaluator::new_with_compiler(
-                        RuntimeEnv::new(engine.clone()),
-                        Compiler::new(engine.clone()),
-                    )
-                    .eval_snippet(&source)
-                    .await
-                    .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
-                    (engine.into_heap(), value, ty)
+                    let heap = engine.heap.clone();
+                    let (value, ty) = engine
+                        .into_evaluator()
+                        .eval_snippet(&source)
+                        .await
+                        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+                    (heap, value, ty)
                 })
         })
         .unwrap()

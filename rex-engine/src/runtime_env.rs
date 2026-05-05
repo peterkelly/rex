@@ -10,7 +10,6 @@ pub struct RuntimeEnv<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) loader: Engine<State>,
     pub(crate) runtime: RuntimeSnapshot<State>,
     capabilities: RuntimeCapabilities,
 }
@@ -61,11 +60,10 @@ impl<State> RuntimeEnv<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub fn new(engine: Engine<State>) -> Self {
+    pub(crate) fn from_engine(engine: &Engine<State>) -> Self {
         let capabilities = engine.runtime_capabilities_snapshot();
         let runtime = engine.runtime_snapshot();
         Self {
-            loader: engine,
             runtime,
             capabilities,
         }
@@ -104,7 +102,6 @@ where
     }
 
     pub(crate) fn sync_from_engine(&mut self, engine: &Engine<State>) {
-        self.loader = engine.clone();
         self.runtime = engine.runtime_snapshot();
         self.capabilities = engine.runtime_capabilities_snapshot();
     }
@@ -112,7 +109,7 @@ where
     pub fn storage_boundary(&self) -> RuntimeEnvBoundary {
         RuntimeEnvBoundary {
             contains_runtime_snapshot: true,
-            contains_loader_state: true,
+            contains_loader_state: false,
             serializable: false,
         }
     }

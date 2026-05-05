@@ -1,5 +1,5 @@
 use rex::{
-    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv},
+    engine::{Engine, Module},
     parser::{Parser, ParserLimits, Token},
     typesystem::{TypeSystem, infer},
 };
@@ -72,11 +72,6 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         let mut module = Module::global();
         module.add_decls(program.decls.clone());
         let _ = engine.inject_module(module);
-        let _ = Evaluator::new_with_compiler(
-            RuntimeEnv::new(engine.clone()),
-            Compiler::new(engine.clone()),
-        )
-        .eval(program.expr.as_ref())
-        .await;
+        let _ = engine.into_evaluator().eval(program.expr.as_ref()).await;
     }
 }

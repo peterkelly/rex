@@ -10,7 +10,7 @@ application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 ## Quickstart
 
 ```rust
-use rex_engine::{Compiler, Engine, Module, RuntimeEnv};
+use rex_engine::{Engine, Module};
 use rex_lexer::Token;
 use rex_parser::Parser;
 
@@ -27,13 +27,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = parser.parse_program().map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
-    let mut compiler = Compiler::new(engine.clone());
-    let mut evaluator =
-        Evaluator::new_with_compiler(RuntimeEnv::new(engine.clone()), Compiler::new(engine.clone()));
+    let mut compiler = engine.into_compiler();
     let compiled = compiler.compile_expr(program.expr.as_ref())?;
+    let mut evaluator = compiler.into_evaluator();
     let value = evaluator.run(&compiled).await?;
 
-    assert_eq!(engine.heap.pointer_as_i32(&value)?, 43);
+    assert_eq!(value.as_i32()?, 43);
     Ok(())
 }
 ```

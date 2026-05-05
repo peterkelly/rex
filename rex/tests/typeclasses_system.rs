@@ -1,5 +1,5 @@
 use rex::{
-    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv, ValueDisplayOptions},
+    engine::{Engine, Module, ValueDisplayOptions},
     parser::{Parser, Token},
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
@@ -35,13 +35,11 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).map_err(|e| format!("{e}"))?;
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .map_err(|e| format!("{e}"))?;
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .map_err(|e| format!("{e}"))?;
     assert!(
         type_compatible(&ty, &expected_ty),
         "eval returned unexpected type for: {code}\nactual: {ty}\nexpected: {expected_ty}"

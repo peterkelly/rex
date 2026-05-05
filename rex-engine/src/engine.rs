@@ -54,7 +54,7 @@ use crate::stack::{
 use crate::value::FromPointer;
 use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec};
 use crate::{
-    EngineError, Environment, FromRex, IntoRex,
+    Compiler, EngineError, Environment, Evaluator, FromRex, IntoRex,
     evaluator::{EvalContext, EvaluatorRef},
 };
 
@@ -79,7 +79,7 @@ pub trait RexDefault<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn rex_default(engine: &Engine<State>) -> Result<Handle, EngineError>;
+    fn rex_default(engine: EvaluatorRef<State>) -> Result<Handle, EngineError>;
 }
 
 pub const ROOT_MODULE_NAME: &str = "__root__";
@@ -2115,36 +2115,6 @@ where
     }
 }
 
-impl<State> Clone for Engine<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    fn clone(&self) -> Self {
-        Self {
-            state: Arc::clone(&self.state),
-            env: self.env.clone(),
-            natives: self.natives.clone(),
-            typeclasses: self.typeclasses.clone(),
-            type_system: self.type_system.clone(),
-            typeclass_cache: Arc::clone(&self.typeclass_cache),
-            modules: self.modules.clone(),
-            injected_modules: self.injected_modules.clone(),
-            module_exports_cache: self.module_exports_cache.clone(),
-            module_interface_cache: self.module_interface_cache.clone(),
-            module_sources: self.module_sources.clone(),
-            module_source_fingerprints: self.module_source_fingerprints.clone(),
-            published_cycle_interfaces: self.published_cycle_interfaces.clone(),
-            default_imports: self.default_imports.clone(),
-            virtual_modules: self.virtual_modules.clone(),
-            module_local_type_names: self.module_local_type_names.clone(),
-            registration_module_context: self.registration_module_context.clone(),
-            async_call_policy: self.async_call_policy.clone(),
-            execution_bounds: self.execution_bounds,
-            heap: self.heap.clone(),
-        }
-    }
-}
-
 impl<State> Default for Engine<State>
 where
     State: Clone + Send + Sync + 'static + Default,
@@ -2325,6 +2295,14 @@ where
         }
     }
 
+    pub fn into_compiler(self) -> Compiler<State> {
+        Compiler::new(self)
+    }
+
+    pub fn into_evaluator(self) -> Evaluator<State> {
+        self.into_compiler().into_evaluator()
+    }
+
     pub fn with_prelude(state: State) -> Result<Self, EngineError> {
         Self::with_options(state, EngineOptions::default())
     }
@@ -2361,10 +2339,6 @@ where
             engine.inject_prelude_virtual_module()?;
         }
         Ok(engine)
-    }
-
-    pub fn into_heap(self) -> Heap {
-        self.heap
     }
 
     pub fn set_default_imports(&mut self, imports: Vec<String>) {
@@ -2979,15 +2953,11 @@ where
             sanitize_type_name_for_symbol(&head_ty)
         );
         let native_scheme = Scheme::new(vec![], vec![], head_ty.clone());
-        let engine_for_default = self.clone();
         self.export_native(
             native_name.clone(),
             native_scheme,
             0,
-            move |engine, _, _| {
-                let _ = engine;
-                T::rex_default(&engine_for_default)
-            },
+            move |engine, _, _| T::rex_default(engine),
         )?;
 
         self.type_system.register_instance(

@@ -22,11 +22,9 @@ pub async fn eval(source: &str) -> Result<String, engine::ExecutionError> {
         )))
     })?;
     engine.add_default_resolvers();
-    let mut compiler = engine::Compiler::new(engine.clone());
-    let runtime = engine::RuntimeEnv::new(engine.clone());
+    let mut compiler = engine.into_compiler();
     let program = compiler.compile_snippet(source)?;
-    runtime.validate(&program)?;
-    let mut evaluator = engine::Evaluator::new(runtime);
+    let mut evaluator = compiler.into_evaluator();
     let value = evaluator.run(&program).await?;
 
     Ok(value

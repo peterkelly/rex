@@ -13,8 +13,8 @@ use rex_typesystem::{
 use rex_util::sha256_hex;
 
 use crate::engine::{
-    CompiledProgram, NativeImpl, OverloadedFn, RuntimeSnapshot, eval_typed_expr, impl_matches_type,
-    is_function_type, type_head_is_var,
+    CompiledProgram, NativeImpl, OverloadedFn, RuntimeCapabilities, RuntimeCompatibility,
+    RuntimeSnapshot, eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
 };
 use crate::modules::{ModuleId, ResolvedModule, ResolvedModuleContent};
 use crate::value::{Handle, Heap, Pointer};
@@ -27,7 +27,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) runtime: RuntimeEnv<State>,
-    pub(crate) compiler: Option<Compiler<State>>,
+    pub(crate) compiler: Compiler<State>,
 }
 
 #[derive(Clone)]
@@ -59,24 +59,28 @@ impl<State> Evaluator<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub fn new(runtime: RuntimeEnv<State>) -> Self {
-        Self {
-            runtime,
-            compiler: None,
-        }
-    }
-
-    pub fn new_with_compiler(runtime: RuntimeEnv<State>, compiler: Compiler<State>) -> Self {
-        Self {
-            runtime,
-            compiler: Some(compiler),
-        }
+    pub(crate) fn new(runtime: RuntimeEnv<State>, compiler: Compiler<State>) -> Self {
+        Self { runtime, compiler }
     }
 
     fn sync_runtime_from_compiler(&mut self) {
-        if let Some(compiler) = &self.compiler {
-            self.runtime.sync_from_engine(&compiler.engine);
-        }
+        self.runtime.sync_from_engine(&self.compiler.engine);
+    }
+
+    pub fn runtime_env(&self) -> &RuntimeEnv<State> {
+        &self.runtime
+    }
+
+    pub fn capabilities(&self) -> &RuntimeCapabilities {
+        self.runtime.capabilities()
+    }
+
+    pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
+        self.runtime.compatibility_with(program)
+    }
+
+    pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
+        self.runtime.validate(program)
     }
 
     pub async fn run(&mut self, program: &CompiledProgram) -> Result<Handle, EvalError> {
@@ -110,10 +114,7 @@ where
     where
         F: FnOnce(&mut Compiler<State>) -> Result<CompiledProgram, CompileError>,
     {
-        let compiler = self.compiler.as_mut().ok_or_else(|| {
-            CompileError::from(EngineError::Internal("evaluator has no compiler".into()))
-        })?;
-        let program = compile(compiler)?;
+        let program = compile(&mut self.compiler)?;
         self.run_prepared(program).await
     }
 
@@ -121,70 +122,75 @@ where
         &mut self,
         path: impl AsRef<Path>,
     ) -> Result<(Handle, Type), ExecutionError> {
-        let (id, bytes) = self
-            .runtime
-            .loader
-            .read_local_module_bytes(path.as_ref())
-            .map_err(CompileError::from)?;
-        let source_fingerprint = sha256_hex(&bytes);
-        if let Some(inst) = self
-            .runtime
-            .loader
-            .modules
-            .cached(&id)
-            .map_err(EvalError::from)?
-        {
-            if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
-                return Ok((inst.init_value, inst.init_type));
+        let result: Result<(Handle, Type), ExecutionError> = {
+            let engine = &mut self.compiler.engine;
+            let (id, bytes) = engine
+                .read_local_module_bytes(path.as_ref())
+                .map_err(CompileError::from)?;
+            let source_fingerprint = sha256_hex(&bytes);
+            if let Some(inst) = engine.modules.cached(&id).map_err(EvalError::from)? {
+                if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
+                    Ok((inst.init_value, inst.init_type))
+                } else {
+                    engine
+                        .invalidate_module_caches(&id)
+                        .map_err(EvalError::from)?;
+                    let source = engine
+                        .decode_local_module_source(&id, bytes)
+                        .map_err(CompileError::from)?;
+                    let inst = engine
+                        .load_module_from_resolved(ResolvedModule {
+                            id,
+                            content: ResolvedModuleContent::Source(source),
+                        })
+                        .await
+                        .map_err(CompileError::from)?;
+                    Ok((inst.init_value, inst.init_type))
+                }
+            } else {
+                let source = engine
+                    .decode_local_module_source(&id, bytes)
+                    .map_err(CompileError::from)?;
+                let inst = engine
+                    .load_module_from_resolved(ResolvedModule {
+                        id,
+                        content: ResolvedModuleContent::Source(source),
+                    })
+                    .await
+                    .map_err(CompileError::from)?;
+                Ok((inst.init_value, inst.init_type))
             }
-            self.runtime
-                .loader
-                .invalidate_module_caches(&id)
-                .map_err(EvalError::from)?;
-        }
-        let source = self
-            .runtime
-            .loader
-            .decode_local_module_source(&id, bytes)
-            .map_err(CompileError::from)?;
-        let inst = self
-            .runtime
-            .loader
-            .load_module_from_resolved(ResolvedModule {
-                id,
-                content: ResolvedModuleContent::Source(source),
-            })
-            .await
-            .map_err(CompileError::from)?;
-        Ok((inst.init_value, inst.init_type))
+        };
+        let result = result?;
+        self.sync_runtime_from_compiler();
+        Ok(result)
     }
 
     pub async fn eval_module_source(
         &mut self,
         source: &str,
     ) -> Result<(Handle, Type), ExecutionError> {
-        let mut hasher = DefaultHasher::new();
-        source.hash(&mut hasher);
-        let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-        if let Some(inst) = self
-            .runtime
-            .loader
-            .modules
-            .cached(&id)
-            .map_err(EvalError::from)?
-        {
-            return Ok((inst.init_value, inst.init_type));
-        }
-        let inst = self
-            .runtime
-            .loader
-            .load_module_from_resolved(ResolvedModule {
-                id,
-                content: ResolvedModuleContent::Source(source.to_string()),
-            })
-            .await
-            .map_err(CompileError::from)?;
-        Ok((inst.init_value, inst.init_type))
+        let result: Result<(Handle, Type), ExecutionError> = {
+            let engine = &mut self.compiler.engine;
+            let mut hasher = DefaultHasher::new();
+            source.hash(&mut hasher);
+            let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
+            if let Some(inst) = engine.modules.cached(&id).map_err(EvalError::from)? {
+                Ok((inst.init_value, inst.init_type))
+            } else {
+                let inst = engine
+                    .load_module_from_resolved(ResolvedModule {
+                        id,
+                        content: ResolvedModuleContent::Source(source.to_string()),
+                    })
+                    .await
+                    .map_err(CompileError::from)?;
+                Ok((inst.init_value, inst.init_type))
+            }
+        };
+        let result = result?;
+        self.sync_runtime_from_compiler();
+        Ok(result)
     }
 
     pub async fn eval_snippet(&mut self, source: &str) -> Result<(Handle, Type), ExecutionError> {

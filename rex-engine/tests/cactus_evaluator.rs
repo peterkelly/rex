@@ -1,7 +1,7 @@
 use futures::{FutureExt, channel::oneshot};
 use rex_engine::{
-    AsyncCallExecutor, AsyncCallPolicy, Compiler, Engine, EngineError, Evaluator, ExecutionBounds,
-    FromRex, Handle, Module, NativeFuture, RuntimeEnv,
+    AsyncCallExecutor, AsyncCallPolicy, Engine, EngineError, ExecutionBounds, FromRex, Handle,
+    Module, NativeFuture,
 };
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
 use std::collections::VecDeque;
@@ -18,9 +18,7 @@ async fn eval_value<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let runtime = RuntimeEnv::new(engine.clone());
-    let compiler = Compiler::new(engine);
-    let mut evaluator = Evaluator::new_with_compiler(runtime, compiler);
+    let mut evaluator = engine.into_evaluator();
     evaluator
         .eval_snippet(source)
         .await

@@ -1,5 +1,5 @@
 use rex::{
-    engine::{Compiler, Engine, EngineError, Evaluator, Handle, Heap, Module, RuntimeEnv},
+    engine::{Engine, EngineError, Handle, Heap, Module},
     parser::{Parser, Token},
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
@@ -12,14 +12,12 @@ async fn eval(source: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .map_err(|err| err.into_engine_error())?;
-    let heap = engine.into_heap();
+    let heap = engine.heap.clone();
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .map_err(|err| err.into_engine_error())?;
     Ok((heap, handle, ty))
 }
 

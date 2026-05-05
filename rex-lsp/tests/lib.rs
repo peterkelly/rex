@@ -7,7 +7,7 @@ use rex::{
     parser::{Parser, Token},
 };
 use rex_ast::expr::{Decl, Expr, NameRef, TypeExpr};
-use rex_engine::{Compiler, Evaluator, RuntimeEnv, ValueDisplayOptions};
+use rex_engine::ValueDisplayOptions;
 use rex_lsp::server::*;
 use serde_json::{Map, Value, json};
 use std::fs;
@@ -62,13 +62,11 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).expect("inject decls");
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .expect("evaluate source");
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .expect("evaluate source");
     let display = handle
         .display_with(ValueDisplayOptions {
             include_numeric_suffixes: true,

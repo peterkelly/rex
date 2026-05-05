@@ -1,21 +1,19 @@
-use rex_engine::{Compiler, Engine, EngineError, Evaluator, Handle, RuntimeEnv};
+use rex_engine::{Engine, EngineError, Handle};
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind};
 
-async fn eval_snippet(engine: &mut Engine, source: &str) -> Result<(Handle, Type), EngineError> {
-    Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet(source)
-    .await
-    .map_err(|err| err.into_engine_error())
+async fn eval_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), EngineError> {
+    engine
+        .into_evaluator()
+        .eval_snippet(source)
+        .await
+        .map_err(|err| err.into_engine_error())
 }
 
 #[tokio::test]
 async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let engine = Engine::with_prelude(()).unwrap();
     let (value, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         class Pick a where {
             pick : a -> a;

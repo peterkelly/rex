@@ -534,7 +534,7 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
 
 #[cfg(test)]
 mod tests {
-    use rex::engine::{Compiler, Engine, Evaluator, RuntimeEnv};
+    use rex::engine::Engine;
 
     use super::*;
     #[tokio::test]
@@ -550,13 +550,7 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
-        Evaluator::new_with_compiler(
-            RuntimeEnv::new(engine.clone()),
-            Compiler::new(engine.clone()),
-        )
-        .eval_snippet(code)
-        .await
-        .unwrap();
+        engine.into_evaluator().eval_snippet(code).await.unwrap();
     }
 
     #[tokio::test]
@@ -571,13 +565,7 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
         engine.add_default_resolvers();
         inject_cli_prelude_engine(&mut engine).unwrap();
-        let (value, ty) = Evaluator::new_with_compiler(
-            RuntimeEnv::new(engine.clone()),
-            Compiler::new(engine.clone()),
-        )
-        .eval_snippet(code)
-        .await
-        .unwrap();
+        let (value, ty) = engine.into_evaluator().eval_snippet(code).await.unwrap();
         assert_eq!(
             ty,
             Type::tuple(vec![

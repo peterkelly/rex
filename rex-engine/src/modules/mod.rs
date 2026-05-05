@@ -2644,6 +2644,10 @@ where
             importer,
         })?;
         self.refresh_if_stale(&imported)?;
+        if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
+            self.ensure_cycle_interfaces_published(&imported.id)?;
+            return Ok(exports);
+        }
         self.load_module_types_from_resolved(imported, loaded, loading)
     }
 

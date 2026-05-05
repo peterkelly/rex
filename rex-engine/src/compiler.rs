@@ -13,9 +13,8 @@ use crate::modules::{
     ModuleExports, ModuleId, ResolvedModule, exports_from_program, parse_program_from_source,
     prefix_for_module,
 };
-use crate::{CompileError, EngineError, Environment};
+use crate::{CompileError, EngineError, Environment, Evaluator, RuntimeEnv};
 
-#[derive(Clone)]
 pub struct Compiler<State = ()>
 where
     State: Clone + Send + Sync + 'static,
@@ -27,8 +26,17 @@ impl<State> Compiler<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub fn new(engine: Engine<State>) -> Self {
+    pub(crate) fn new(engine: Engine<State>) -> Self {
         Self { engine }
+    }
+
+    pub fn into_evaluator(self) -> Evaluator<State> {
+        let runtime = self.runtime_env();
+        Evaluator::new(runtime, self)
+    }
+
+    pub fn runtime_env(&self) -> RuntimeEnv<State> {
+        RuntimeEnv::from_engine(&self.engine)
     }
 
     pub fn compile_expr(&mut self, expr: &Expr) -> Result<CompiledProgram, CompileError> {

@@ -3,26 +3,10 @@ use std::collections::BTreeMap;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{
-        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, IntoRex, Module,
-        RuntimeEnv, Value,
-    },
+    engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
     parser::{Parser, Token},
     typesystem::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply},
 };
-
-macro_rules! assert_handle_eq {
-    ($lhs:expr, $rhs:expr) => {{
-        let lhs: Handle = ($lhs).clone();
-        let rhs: Handle = ($rhs).clone();
-        assert!(
-            lhs.value_eq(&rhs).unwrap(),
-            "left: {}, right: {}",
-            lhs.display().unwrap(),
-            rhs.display().unwrap()
-        );
-    }};
-}
 
 #[derive(Debug, Clone, PartialEq)]
 struct ManualRecord {
@@ -193,13 +177,11 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let tokens = Token::tokenize("ManualRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, ManualRecord::rex_type());
     let decoded = ManualRecord::from_rex(&handle).unwrap();
     assert_eq!(
@@ -219,13 +201,11 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     let tokens = Token::tokenize("DerivedRecord { enabled = true, count = 41 }").unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, DerivedRecord::rex_type());
     let decoded = DerivedRecord::from_rex(&handle).unwrap();
     assert_eq!(
@@ -253,15 +233,13 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
+    assert_eq!(handle.as_i32().unwrap(), 10);
 }
 
 #[tokio::test]
@@ -280,15 +258,13 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
+    assert_eq!(handle.as_i32().unwrap(), 10);
 }
 
 #[test]
@@ -384,15 +360,13 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
+    assert_eq!(handle.as_i32().unwrap(), 10);
 }
 
 #[tokio::test]
@@ -417,13 +391,11 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     .unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let (handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
+    let (handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    assert_handle_eq!(handle, engine.heap.alloc_i32(10).unwrap());
+    assert_eq!(handle.as_i32().unwrap(), 10);
 }

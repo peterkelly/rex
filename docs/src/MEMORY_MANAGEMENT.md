@@ -59,15 +59,18 @@ Internal runtime reads/writes go through heap methods. Public construction uses
 `Heap::make_*` / `Heap::alloc_*`, which return `Handle` values rather than raw
 pointers.
 
-### Engine-owned heap lifecycle
+### Runtime heap lifecycle
 
-`Engine` constructs and owns its own `Heap` (`Engine::new`, `Engine::with_prelude`).
+`Engine` constructs the initial `Heap` during preparation (`Engine::new`, `Engine::with_prelude`).
+That heap then moves with the prepared runtime state into `Compiler`, `RuntimeEnv`, and
+`Evaluator`.
 
 - Evaluation returns `Handle`, not `Value`.
-- Callers can inspect via the returned handle or allocate more values through
-  `engine.heap`.
+- Callers can inspect via the returned handle or allocate more values from native callbacks through
+  `EvaluatorRef::heap()`.
 
-This keeps allocation authority clear: the engine is responsible for heap creation, and the heap is the single runtime store for values.
+This keeps allocation authority clear: the preparation phase creates the heap, and the evaluator's
+runtime snapshot is the single store used during execution.
 
 ## Read/write semantics
 

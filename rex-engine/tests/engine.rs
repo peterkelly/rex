@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use rex_ast::expr::{Decl, Expr, Program, Symbol};
-use rex_engine::{Compiler, Engine, EngineError, Evaluator, Module, RuntimeEnv, Value};
+use rex_engine::{Engine, EngineError, Module, Value};
 use rex_lexer::Token;
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -129,18 +129,16 @@ async fn injected_module_can_define_pub_adt_declarations() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value, _ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet(
-        r#"
+    let (value, _ty) = engine
+        .into_evaluator()
+        .eval_snippet(
+            r#"
             import acme.status (Failed);
             Failed "boom"
             "#,
-    )
-    .await
-    .unwrap();
+        )
+        .await
+        .unwrap();
 
     match value.value().unwrap() {
         Value::Adt(tag, args) => {
@@ -156,13 +154,7 @@ async fn export_value_registers_global_value() {
     let expr = parse("answer");
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut engine, |module| module.export_value("answer", 42i32));
-    let (value, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(expr.as_ref())
-    .await
-    .unwrap();
+    let (value, ty) = engine.into_evaluator().eval(expr.as_ref()).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(value.to_rust::<i32>().unwrap(), 42);
 }
@@ -182,13 +174,7 @@ async fn record_update_requires_known_variant_for_sum_types() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    match Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    {
+    match engine.into_evaluator().eval(program.expr.as_ref()).await {
         Err(err) => {
             let EngineError::Type(err) = err.into_engine_error() else {
                 panic!("expected type error");

@@ -8,7 +8,7 @@ use std::io::{self, Read};
 use clap::{Args, Parser};
 use rex::{
     ast::Program,
-    engine::{Compiler, Engine, Evaluator, RuntimeEnv, ValueDisplayOptions},
+    engine::{Engine, ValueDisplayOptions},
     parser::{Parser as RexParser, ParserErr, ParserLimits, Token},
 };
 use serde_json::json;
@@ -219,10 +219,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     let engine = init_engine(&include)?;
 
-    let mut evaluator = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    );
+    let mut evaluator = engine.into_evaluator();
 
     let (value, _) = if let Some(path) = file {
         if snippet {

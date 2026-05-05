@@ -1,9 +1,7 @@
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{
-        Compiler, Engine, EngineError, Evaluator, FromRex, Handle, Heap, Module, RuntimeEnv, Value,
-    },
+    engine::{Engine, EngineError, FromRex, Handle, Heap, Module, Value},
     parser::{Parser, Token},
     typesystem::{BuiltinTypeId, RexType, Type},
 };
@@ -20,14 +18,12 @@ fn inject_globals(
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
     let tokens = Token::tokenize(expr).unwrap();
     let program = Parser::new(tokens).parse_program().unwrap();
-    let (value, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
-    let heap = engine.into_heap();
+    let heap = engine.heap.clone();
+    let (value, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     (value, heap, ty)
 }
 

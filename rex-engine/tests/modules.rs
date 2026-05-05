@@ -8,8 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::FutureExt;
 use rex_ast::expr::Symbol;
 use rex_engine::{
-    Compiler, Engine, EngineError, EngineOptions, Evaluator, EvaluatorRef, Handle, Module,
-    PreludeMode, RuntimeEnv, Value,
+    Engine, EngineError, EngineOptions, EvaluatorRef, Handle, Module, PreludeMode, Value,
 };
 use rex_typesystem::{
     error::TypeError,
@@ -76,9 +75,9 @@ impl RexAdt for LocalRunSpec {
 
 #[tokio::test]
 async fn prelude_module_can_be_imported_explicitly() {
-    let mut engine = engine_with_prelude();
+    let engine = engine_with_prelude();
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import Prelude (map);
         map ((+) 1) [1, 2]
@@ -100,7 +99,7 @@ async fn prelude_module_can_be_imported_explicitly() {
 
 #[tokio::test]
 async fn engine_options_can_disable_prelude() {
-    let mut engine = Engine::with_options(
+    let engine = Engine::with_options(
         (),
         EngineOptions {
             prelude: PreludeMode::Disabled,
@@ -108,7 +107,7 @@ async fn engine_options_can_disable_prelude() {
         },
     )
     .unwrap();
-    let err = eval_snippet(&mut engine, "map ((+) 1) [1, 2]")
+    let err = eval_snippet(engine, "map ((+) 1) [1, 2]")
         .await
         .expect_err("prelude should be unavailable when disabled");
     let msg = err.to_string();
@@ -116,7 +115,7 @@ async fn engine_options_can_disable_prelude() {
 }
 
 async fn eval_module_file<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: Engine<State>,
     path: &Path,
 ) -> Result<(Handle, Type), EngineError> {
     let source = fs::read_to_string(path).unwrap();
@@ -124,30 +123,26 @@ async fn eval_module_file<State: Clone + Send + Sync + 'static>(
 }
 
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: Engine<State>,
     source: &str,
 ) -> Result<(Handle, Type), EngineError> {
-    Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet(source)
-    .await
-    .map_err(|err| err.into_engine_error())
+    engine
+        .into_evaluator()
+        .eval_snippet(source)
+        .await
+        .map_err(|err| err.into_engine_error())
 }
 
 async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: Engine<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
 ) -> Result<(Handle, Type), EngineError> {
-    Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet_at(source, importer_path)
-    .await
-    .map_err(|err| err.into_engine_error())
+    engine
+        .into_evaluator()
+        .eval_snippet_at(source, importer_path)
+        .await
+        .map_err(|err| err.into_engine_error())
 }
 
 macro_rules! pvals {
@@ -183,7 +178,7 @@ async fn module_import_local_pub() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -201,16 +196,12 @@ async fn eval_module_file_reloads_when_local_file_changes() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
+    let mut evaluator = engine.into_evaluator();
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
-    let _ = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_module_file(&module)
-    .await
-    .unwrap();
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
+    let _ = evaluator.eval_module_file(&module).await.unwrap();
+    let (value_ptr, ty) = evaluator
+        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -222,14 +213,9 @@ async fn eval_module_file_reloads_when_local_file_changes() {
     // Edit the same local module path and ensure the engine invalidates path-keyed
     // module cache entries before reloading.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
-    let _ = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_module_file(&module)
-    .await
-    .unwrap();
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
+    let _ = evaluator.eval_module_file(&module).await.unwrap();
+    let (value_ptr, ty) = evaluator
+        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -249,8 +235,10 @@ async fn snippet_import_reloads_when_local_module_changes() {
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
+    let mut evaluator = engine.into_evaluator();
 
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
+    let (value_ptr, ty) = evaluator
+        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -262,7 +250,8 @@ async fn snippet_import_reloads_when_local_module_changes() {
     // Same module path, changed contents: import resolution must observe updated
     // source and invalidate stale per-module caches.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
-    let (value_ptr, ty) = eval_snippet_at(&mut engine, "import foo (value);\nvalue 0", &importer)
+    let (value_ptr, ty) = evaluator
+        .eval_snippet_at("import foo (value);\nvalue 0", &importer)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -297,7 +286,7 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, _ty) = eval_snippet_at(
-        &mut engine,
+        engine,
         r#"
         import a (id);
         import b (Boxed);
@@ -341,7 +330,7 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet_at(
-        &mut engine,
+        engine,
         r#"
         import dep as D;
 
@@ -393,7 +382,7 @@ async fn module_import_selected_clause_can_import_class_exports() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 7),
@@ -419,7 +408,7 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet_at(
-        &mut engine,
+        engine,
         r#"
         import dep as D;
 
@@ -471,7 +460,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -498,7 +487,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
     engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import host.math (inc, double_async as d);
         inc (d 20)
@@ -570,7 +559,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import host.ptrsync (pick, pick_typed, heap_i32);
         (pick 10 42, pick_typed 5 99, heap_i32)
@@ -614,7 +603,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import host.over (id);
         (id 7, id "ok")
@@ -668,7 +657,7 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
     engine.inject_module(module).unwrap();
 
     let (_value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import host.delay as Delay;
         let x: Delay.RunSpec = Delay.make_run_spec in
@@ -739,7 +728,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import host.ptrasync (pick_async, pick_typed_async as pta, heap_i32_async);
         (pick_async 7 21, pta 1 2, heap_i32_async)
@@ -831,7 +820,7 @@ async fn module_injected_from_rust_wildcard_import() {
     engine.inject_module(module).unwrap();
 
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import host.ops (*);
         add (triple 10) 2
@@ -885,7 +874,7 @@ async fn module_import_rejects_private_access() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -920,7 +909,7 @@ async fn module_import_include_roots() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     engine.add_include_resolver(&include_root).unwrap();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -944,7 +933,7 @@ async fn snippet_can_import_with_explicit_base() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet_at(
-        &mut engine,
+        engine,
         r#"
         import foo.bar as Bar;
         Bar.add 20 22
@@ -987,7 +976,7 @@ async fn module_import_wildcard_clause() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -1020,7 +1009,7 @@ async fn module_import_selected_clause_with_alias() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -1052,7 +1041,7 @@ async fn module_import_selected_clause_missing_export() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1085,7 +1074,7 @@ async fn module_import_selected_clause_can_import_type_exports() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1120,7 +1109,7 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1155,7 +1144,7 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1190,7 +1179,7 @@ async fn module_import_wildcard_clause_imports_type_exports_too() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1230,7 +1219,7 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 11),
@@ -1265,7 +1254,7 @@ async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     let TypeKind::Tuple(items) = ty.as_ref() else {
         panic!("expected tuple type, got {ty}");
     };
@@ -1308,7 +1297,7 @@ async fn module_import_selected_clause_type_name_does_not_create_value_facet() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1342,7 +1331,7 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1372,7 +1361,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
     engine.inject_module(module).unwrap();
 
     let (value_ptr, _ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import host.types (RunSpec, pending);
         let x: RunSpec = pending in
@@ -1420,7 +1409,7 @@ async fn module_import_missing_class_export_in_instance_header() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1455,7 +1444,7 @@ async fn module_import_missing_type_export_in_fn_signature() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1494,7 +1483,7 @@ async fn module_import_missing_type_export_in_instance_head() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1531,7 +1520,7 @@ async fn module_import_missing_class_export_in_fn_where_constraint() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1568,7 +1557,7 @@ async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1607,7 +1596,7 @@ async fn module_import_missing_class_export_in_class_super_constraint() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1642,7 +1631,7 @@ async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1678,7 +1667,7 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 0),
@@ -1712,7 +1701,7 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(&mut engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 0),
@@ -1746,7 +1735,7 @@ async fn module_import_missing_type_export_in_let_annotation_with_alias_named_bi
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1787,7 +1776,7 @@ async fn module_import_selected_clause_duplicate_name() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1819,7 +1808,7 @@ async fn module_import_selected_clause_conflicts_with_local() {
 
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let err = match eval_module_file(&mut engine, &main).await {
+    let err = match eval_module_file(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1832,7 +1821,7 @@ async fn std_json_encode_decode_smoke() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import std.json as Json;
 
@@ -1858,7 +1847,7 @@ async fn std_json_roundtrip_nested() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import std.json as Json;
 
@@ -1917,8 +1906,7 @@ async fn std_json_roundtrip_nested() {
 async fn std_json_decode_errors_have_useful_messages() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+    let (value_ptr, ty) = eval_snippet(engine,
         r#"
         import std.json as Json;
 
@@ -1992,7 +1980,7 @@ async fn std_json_numeric_decode_errors() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import std.json as Json;
 
@@ -2044,7 +2032,7 @@ async fn std_json_show_renders_valid_json() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import std.json as Json;
 
@@ -2096,7 +2084,7 @@ async fn std_json_parse_and_from_string_roundtrip() {
     let mut engine = engine_with_prelude();
     engine.add_default_resolvers();
     let (value_ptr, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import std.json as Json;
 

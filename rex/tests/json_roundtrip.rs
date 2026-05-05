@@ -2,7 +2,7 @@
 
 use rex::{
     Rex,
-    engine::{Compiler, Engine, EngineError, Evaluator, Handle, Module, RuntimeEnv},
+    engine::{Engine, EngineError, Handle, Module},
     json::{JsonOptions, rex_to_json},
     typesystem::Type,
 };
@@ -12,16 +12,14 @@ fn engine_with_prelude() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: Engine<State>,
     source: &str,
 ) -> Result<(Handle, Type), EngineError> {
-    Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet(source)
-    .await
-    .map_err(|err| err.into_engine_error())
+    engine
+        .into_evaluator()
+        .eval_snippet(source)
+        .await
+        .map_err(|err| err.into_engine_error())
 }
 
 #[derive(Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -54,8 +52,9 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
+    let type_system = engine.type_system.clone();
     let (value_handle, ty) = eval_snippet(
-        &mut engine,
+        engine,
         r#"
         import echo (EchoEnum, EchoRecord, Foo, BAR, echo);
 
@@ -83,13 +82,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     .await
     .unwrap();
 
-    let parsed = rex_to_json(
-        &value_handle,
-        &ty,
-        &engine.type_system,
-        &JsonOptions::default(),
-    )
-    .unwrap();
+    let parsed = rex_to_json(&value_handle, &ty, &type_system, &JsonOptions::default()).unwrap();
     let items = parsed.as_array().expect("expected top-level array");
     assert_eq!(items.len(), 2);
 

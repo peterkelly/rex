@@ -1,7 +1,7 @@
 use rex::{
     Rex,
     ast::{Program, Symbol},
-    engine::{Compiler, Engine, EngineError, Evaluator, Handle, Heap, RuntimeEnv, Value},
+    engine::{Engine, EngineError, Handle, Heap, Value},
     json::{EnumPatch, JsonOptions, json_to_rex, rex_to_json},
     parser::{Parser, Token},
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
@@ -53,8 +53,13 @@ struct EvalJsonRecord {
     values: Vec<i32>,
 }
 
-fn assert_eval_json(engine: &Engine<()>, handle: &Handle, typ: &Type, expected: serde_json::Value) {
-    let actual = rex_to_json(handle, typ, &engine.type_system, &JsonOptions::default()).unwrap();
+fn assert_eval_json(
+    type_system: &TypeSystem,
+    handle: &Handle,
+    typ: &Type,
+    expected: serde_json::Value,
+) {
+    let actual = rex_to_json(handle, typ, type_system, &JsonOptions::default()).unwrap();
     assert_eq!(actual, expected);
 }
 
@@ -331,32 +336,29 @@ async fn eval_entry_points_return_type_for_json_eval() {
         expected_json
     );
     let expr_program = parse_program(rex_code);
-    let (handle_eval, ty_eval) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(expr_program.expr.as_ref())
-    .await
-    .unwrap();
-    assert_eval_json(&engine, &handle_eval, &ty_eval, expected_json.clone());
-    let (handle_snippet, ty_snippet) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet(rex_code)
-    .await
-    .unwrap();
-    assert_eval_json(&engine, &handle_snippet, &ty_snippet, expected_json.clone());
+    let type_system = engine.type_system.clone();
+    let mut evaluator = engine.into_evaluator();
+    let (handle_eval, ty_eval) = evaluator.eval(expr_program.expr.as_ref()).await.unwrap();
+    assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
+    let (handle_snippet, ty_snippet) = evaluator.eval_snippet(rex_code).await.unwrap();
+    assert_eval_json(
+        &type_system,
+        &handle_snippet,
+        &ty_snippet,
+        expected_json.clone(),
+    );
 
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let (handle_snippet_at, ty_snippet_at) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet_at(rex_code, &importer)
-    .await
-    .unwrap();
-    assert_eval_json(&engine, &handle_snippet_at, &ty_snippet_at, expected_json);
+    let (handle_snippet_at, ty_snippet_at) = evaluator
+        .eval_snippet_at(rex_code, &importer)
+        .await
+        .unwrap();
+    assert_eval_json(
+        &type_system,
+        &handle_snippet_at,
+        &ty_snippet_at,
+        expected_json,
+    );
 }

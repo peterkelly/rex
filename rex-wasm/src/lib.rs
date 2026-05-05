@@ -3,7 +3,7 @@
 
 use futures::executor::block_on;
 use rex_ast::expr::Program;
-use rex_engine::{Compiler, Engine, Evaluator, RuntimeEnv, ValueDisplayOptions};
+use rex_engine::{Engine, ValueDisplayOptions};
 use rex_lexer::Token;
 use rex_lsp::server::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,
@@ -128,13 +128,11 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
     engine.type_system.set_limits(TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between the native CLI and wasm playground.
-    let (value, _value_ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval_snippet(source)
-    .await
-    .map_err(|e| format!("runtime error: {e}"))?;
+    let (value, _value_ty) = engine
+        .into_evaluator()
+        .eval_snippet(source)
+        .await
+        .map_err(|e| format!("runtime error: {e}"))?;
 
     value
         .display_with(ValueDisplayOptions::docs())
@@ -228,13 +226,11 @@ pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
 
     let fut = async move {
         let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-        let (value, _value_ty) = Evaluator::new_with_compiler(
-            RuntimeEnv::new(engine.clone()),
-            Compiler::new(engine.clone()),
-        )
-        .eval_snippet(source)
-        .await
-        .map_err(|e| format!("runtime error: {e}"))?;
+        let (value, _value_ty) = engine
+            .into_evaluator()
+            .eval_snippet(source)
+            .await
+            .map_err(|e| format!("runtime error: {e}"))?;
         let rendered = value
             .display_with(ValueDisplayOptions::unsanitized())
             .map_err(|e| format!("display error: {e}"))?;

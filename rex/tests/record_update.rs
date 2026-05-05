@@ -1,5 +1,5 @@
 use rex::{
-    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv, Value},
+    engine::{Engine, Module, Value},
     parser::{Parser, Token},
     typesystem::{BuiltinTypeId, Type},
 };
@@ -29,13 +29,11 @@ async fn record_update_end_to_end() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let (value_handle, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap();
+    let (value_handle, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![

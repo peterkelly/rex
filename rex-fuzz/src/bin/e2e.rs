@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use rex_engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv};
+use rex_engine::{Engine, Module};
 use rex_fuzz::{FuzzError, parser_limits_from_env, read_stdin_bytes, tokenize_fuzz_input};
 use rex_parser::Parser;
 use rex_typesystem::{inference::infer, typesystem::TypeSystem};
@@ -36,12 +36,7 @@ async fn run_one(input: &[u8]) {
     if engine.inject_module(module).is_err() {
         return;
     }
-    let _ = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await;
+    let _ = engine.into_evaluator().eval(program.expr.as_ref()).await;
 }
 
 #[tokio::main]

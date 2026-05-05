@@ -32,19 +32,17 @@ Evaluation API:
 - `Compiler` prepares user code into a `CompiledProgram`.
 - `Evaluator` runs prepared code against a `RuntimeEnv`.
 
-The current implementation still keeps engine-backed state internally, but the public API now
-separates compile-time and runtime phases.
+`Evaluator` owns the compiler state needed by convenience helpers, while `RuntimeEnv` is a
+runtime-only snapshot used for validation and execution.
 
 ```rust
 use rex::Engine;
 
 let engine = Engine::with_prelude(())?;
-let mut compiler = rex::Compiler::new(engine.clone());
-let runtime = rex::RuntimeEnv::new(engine.clone());
-let mut evaluator = rex::Evaluator::new(runtime.clone());
+let mut compiler = engine.into_compiler();
 
 let program = compiler.compile_snippet("let x = 1 + 2 in x * 3")?;
-runtime.validate(&program)?;
+let mut evaluator = compiler.into_evaluator();
 let value = evaluator.run(&program).await?;
 assert_eq!(program.result_type().to_string(), "i32");
 ```
@@ -54,8 +52,8 @@ What "compiled" means in the current design:
 - parsing, import rewriting, declaration injection, and typechecking have already happened
 - `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
 - runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
-- internally, `RuntimeEnv` keeps a runtime snapshot for execution and separate engine-backed loader
-  state for convenience module-loading entry points
+- internally, `RuntimeEnv` keeps the runtime snapshot and link capabilities needed for execution;
+  convenience module-loading entry points use the evaluator's compiler state
 - `CompiledProgram::link_contract()` and `RuntimeEnv::capabilities()` now make the runtime link
   contract explicit, including the current ABI version and the required callable shapes
 - `CompiledProgram::storage_boundary()` and `RuntimeEnv::storage_boundary()` mark both values as
@@ -83,12 +81,19 @@ Phase-specific errors:
 If you want an explicit preflight before running:
 
 ```rust
-let runtime = rex::RuntimeEnv::new(engine.clone());
+let mut compiler = engine.into_compiler();
+let program = compiler.compile_snippet("let x = 1 + 2 in x * 3")?;
+let runtime = compiler.runtime_env();
 runtime.validate(&program)?;
 
-let mut evaluator = rex::Evaluator::new(runtime);
+let mut evaluator = compiler.into_evaluator();
+evaluator.validate(&program)?;
 let value = evaluator.run(&program).await?;
 ```
+
+`RuntimeEnv::compatibility_with` and `Evaluator::compatibility_with` return structured link
+feedback. That is useful for tools and AI agents that want to report missing or incompatible host
+bindings before attempting evaluation.
 
 The convenience helpers such as `Evaluator::eval`, `eval_snippet`, and `eval_snippet_at` now route
 through the same prepare/validate/run boundary internally. They are still sugar, but they no longer
@@ -107,10 +112,9 @@ let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
 engine.inject_module(globals)?;
-let mut compiler = rex::Compiler::new(engine.clone());
+let mut compiler = engine.into_compiler();
 let program = compiler.compile_expr(program.expr.as_ref())?;
-let mut evaluator =
-    rex::Evaluator::new_with_compiler(rex::RuntimeEnv::new(engine.clone()), rex::Compiler::new(engine.clone()));
+let mut evaluator = compiler.into_evaluator();
 let value = evaluator.run(&program).await?;
 println!("{value}");
 ```

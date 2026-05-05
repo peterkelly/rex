@@ -389,7 +389,7 @@ impl Handle {
         }
     }
 
-    fn heap(&self) -> &Heap {
+    pub fn heap(&self) -> &Heap {
         &self.root.heap
     }
 

@@ -1,5 +1,5 @@
 use rex::{
-    engine::{Compiler, Engine, Evaluator, Module, RuntimeEnv, Value},
+    engine::{Engine, Module, Value},
     parser::{Parser, ParserErr, Token},
     typesystem::{BuiltinTypeId, Type},
 };
@@ -25,13 +25,11 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     engine
         .inject_module(module)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
-    let (value, ty) = Evaluator::new_with_compiler(
-        RuntimeEnv::new(engine.clone()),
-        Compiler::new(engine.clone()),
-    )
-    .eval(program.expr.as_ref())
-    .await
-    .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+    let (value, ty) = engine
+        .into_evaluator()
+        .eval(program.expr.as_ref())
+        .await
+        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");
 
     match value
