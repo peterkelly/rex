@@ -76,6 +76,14 @@ where
         &self.runtime_env
     }
 
+    pub fn type_system(&self) -> Arc<TypeSystem> {
+        Arc::clone(&self.runtime.type_system)
+    }
+
+    pub fn heap(&self) -> &Heap {
+        &self.runtime.heap
+    }
+
     pub fn capabilities(&self) -> &RuntimeCapabilities {
         self.runtime_env.capabilities()
     }

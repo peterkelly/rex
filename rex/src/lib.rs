@@ -9,7 +9,7 @@ pub mod typesystem;
 
 pub use rex_proc_macro::Rex;
 
-pub async fn eval(source: &str) -> Result<String, engine::ExecutionError> {
+pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionError> {
     let tokens = parser::Token::tokenize(source).map_err(|e| {
         engine::CompileError::from(engine::EngineError::from(format!("lex error: {e}")))
     })?;
@@ -24,10 +24,18 @@ pub async fn eval(source: &str) -> Result<String, engine::ExecutionError> {
     engine.add_default_resolvers();
     let mut compiler = engine.into_compiler();
     let program = compiler.compile_snippet(source)?;
+    let result_type = program.result_type().clone();
     let evaluator = compiler.into_evaluator();
+    let type_system = evaluator.type_system();
+
     let value = evaluator.run(program).await?;
 
-    Ok(value
-        .display_with(engine::ValueDisplayOptions::default())
-        .map_err(engine::EvalError::from)?)
+    let json = json::rex_to_json(
+        &value,
+        &result_type,
+        &type_system,
+        &json::JsonOptions::default(),
+    )
+    .map_err(engine::EvalError::from)?;
+    Ok(json)
 }
