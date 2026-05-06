@@ -71,6 +71,12 @@ fn entail_instances() {
     let pred = Predicate::new("Field", Type::builtin(BuiltinTypeId::F32));
     assert!(entails(&ts.classes, &[], &pred).unwrap());
 
+    let pred = Predicate::new("Divisive", Type::builtin(BuiltinTypeId::U32));
+    assert!(entails(&ts.classes, &[], &pred).unwrap());
+
+    let pred = Predicate::new("Subtractive", Type::builtin(BuiltinTypeId::U32));
+    assert!(entails(&ts.classes, &[], &pred).unwrap());
+
     let pred_fail = Predicate::new("Field", Type::builtin(BuiltinTypeId::U32));
     assert!(!entails(&ts.classes, &[], &pred_fail).unwrap());
 }
@@ -88,6 +94,8 @@ fn prelude_injects_functions() {
     assert_eq!(minus.vars.len(), 1);
     assert_eq!(div.preds.len(), 1);
     assert_eq!(div.vars.len(), 1);
+    assert_eq!(minus.preds[0].class.as_ref(), "Subtractive");
+    assert_eq!(div.preds[0].class.as_ref(), "Divisive");
 }
 
 #[test]
@@ -739,12 +747,12 @@ fn infer_multiplicative_monoid_constraint() {
 }
 
 #[test]
-fn infer_additive_group_constraint() {
+fn infer_subtractive_constraint() {
     let expr = parse_expr("\\x y -> x - y");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(preds.len(), 1);
-    assert_eq!(preds[0].class.as_ref(), "AdditiveGroup");
+    assert_eq!(preds[0].class.as_ref(), "Subtractive");
 
     if let TypeKind::Fun(a, rest) = ty.as_ref()
         && let TypeKind::Fun(b, c) = rest.as_ref()
@@ -847,9 +855,25 @@ fn infer_division_defaults() {
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
     assert_eq!(preds.len(), 1);
-    assert_eq!(preds[0].class.as_ref(), "Field");
+    assert_eq!(preds[0].class.as_ref(), "Divisive");
     assert_eq!(preds[0].typ, Type::builtin(BuiltinTypeId::F32));
     assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+}
+
+#[test]
+fn infer_integer_division_defaults() {
+    let expr = parse_expr("1 / 2");
+    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(preds.len(), 2);
+    assert!(preds.iter().any(|p| p.class.as_ref() == "Divisive"));
+    assert!(preds.iter().any(|p| p.class.as_ref() == "Integral"));
+    assert!(
+        preds
+            .iter()
+            .all(|p| p.typ == Type::builtin(BuiltinTypeId::I32))
+    );
 }
 
 #[test]
@@ -1136,17 +1160,11 @@ fn infer_match_list_patterns_on_result_error() {
 #[test]
 fn infer_missing_instances_produce_unsatisfied_predicates() {
     for (name, code) in [
-        ("division", "1 / 2"),
         ("eq_dict", "{a = 1} == {a = 2}"),
         ("min_bool", "min [true]"),
         ("map_dict", r#"map (\x -> x) {a = 1}"#),
     ] {
         let (class, pred_type, expected_ty) = match name {
-            "division" => (
-                "Field",
-                Type::builtin(BuiltinTypeId::I32),
-                Some(Type::builtin(BuiltinTypeId::I32)),
-            ),
             "eq_dict" => ("Eq", dict_of(Type::builtin(BuiltinTypeId::I32)), None),
             "min_bool" => ("Ord", Type::builtin(BuiltinTypeId::Bool), None),
             "map_dict" => ("Functor", Type::builtin(BuiltinTypeId::Dict), None),

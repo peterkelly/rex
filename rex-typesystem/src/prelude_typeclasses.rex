@@ -19,15 +19,18 @@ class MultiplicativeMonoid a where {
 }
 class Semiring a <= AdditiveMonoid a, MultiplicativeMonoid a;
 
-class AdditiveGroup a <= Semiring a where {
-    negate : a -> a;
+class Subtractive a <= Semiring a where {
     - : a -> a -> a;
+}
+class AdditiveGroup a <= Subtractive a where {
+    negate : a -> a;
 }
 class Ring a <= AdditiveGroup a, MultiplicativeMonoid a;
 
-class Field a <= Ring a where {
+class Divisive a <= MultiplicativeMonoid a where {
     / : a -> a -> a;
 }
+class Field a <= Ring a, Divisive a;
 class Integral a where {
     % : a -> a -> a;
 }
@@ -189,30 +192,56 @@ instance Semiring i64;
 instance Semiring f32;
 instance Semiring f64;
 
+{- Subtractive instances -}
+instance Subtractive u8 <= Semiring u8 where {
+    - = prim_sub;
+}
+instance Subtractive u16 <= Semiring u16 where {
+    - = prim_sub;
+}
+instance Subtractive u32 <= Semiring u32 where {
+    - = prim_sub;
+}
+instance Subtractive u64 <= Semiring u64 where {
+    - = prim_sub;
+}
+instance Subtractive i8 <= Semiring i8 where {
+    - = prim_sub;
+}
+instance Subtractive i16 <= Semiring i16 where {
+    - = prim_sub;
+}
+instance Subtractive i32 <= Semiring i32 where {
+    - = prim_sub;
+}
+instance Subtractive i64 <= Semiring i64 where {
+    - = prim_sub;
+}
+instance Subtractive f32 <= Semiring f32 where {
+    - = prim_sub;
+}
+instance Subtractive f64 <= Semiring f64 where {
+    - = prim_sub;
+}
+
 {- AdditiveGroup and Ring instances -}
-instance AdditiveGroup i8 <= Semiring i8 where {
+instance AdditiveGroup i8 <= Subtractive i8 where {
     negate = prim_negate;
-    - = prim_sub;
 }
-instance AdditiveGroup i16 <= Semiring i16 where {
+instance AdditiveGroup i16 <= Subtractive i16 where {
     negate = prim_negate;
-    - = prim_sub;
 }
-instance AdditiveGroup i32 <= Semiring i32 where {
+instance AdditiveGroup i32 <= Subtractive i32 where {
     negate = prim_negate;
-    - = prim_sub;
 }
-instance AdditiveGroup i64 <= Semiring i64 where {
+instance AdditiveGroup i64 <= Subtractive i64 where {
     negate = prim_negate;
-    - = prim_sub;
 }
-instance AdditiveGroup f32 <= Semiring f32 where {
+instance AdditiveGroup f32 <= Subtractive f32 where {
     negate = prim_negate;
-    - = prim_sub;
 }
-instance AdditiveGroup f64 <= Semiring f64 where {
+instance AdditiveGroup f64 <= Subtractive f64 where {
     negate = prim_negate;
-    - = prim_sub;
 }
 instance Ring i8 <= AdditiveGroup i8;
 instance Ring i16 <= AdditiveGroup i16;
@@ -221,13 +250,39 @@ instance Ring i64 <= AdditiveGroup i64;
 instance Ring f32 <= AdditiveGroup f32;
 instance Ring f64 <= AdditiveGroup f64;
 
-{- Field instances -}
-instance Field f32 <= Ring f32 where {
+{- Divisive and Field instances -}
+instance Divisive u8 <= MultiplicativeMonoid u8 where {
     / = prim_div;
 }
-instance Field f64 <= Ring f64 where {
+instance Divisive u16 <= MultiplicativeMonoid u16 where {
     / = prim_div;
 }
+instance Divisive u32 <= MultiplicativeMonoid u32 where {
+    / = prim_div;
+}
+instance Divisive u64 <= MultiplicativeMonoid u64 where {
+    / = prim_div;
+}
+instance Divisive i8 <= MultiplicativeMonoid i8 where {
+    / = prim_div;
+}
+instance Divisive i16 <= MultiplicativeMonoid i16 where {
+    / = prim_div;
+}
+instance Divisive i32 <= MultiplicativeMonoid i32 where {
+    / = prim_div;
+}
+instance Divisive i64 <= MultiplicativeMonoid i64 where {
+    / = prim_div;
+}
+instance Divisive f32 <= MultiplicativeMonoid f32 where {
+    / = prim_div;
+}
+instance Divisive f64 <= MultiplicativeMonoid f64 where {
+    / = prim_div;
+}
+instance Field f32 <= Ring f32, Divisive f32;
+instance Field f64 <= Ring f64, Divisive f64;
 {- Integral instances -}
 instance Integral u8 where {
     % = prim_mod;

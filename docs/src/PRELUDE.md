@@ -29,13 +29,12 @@
 ## Built-in Type Classes
 
 ### `AdditiveGroup`
-Types supporting additive inverse and subtraction.
+Types supporting additive inverse.
 
-Superclasses: `Semiring`
+Superclasses: `Subtractive`
 
 Methods:
 - `negate`: `AdditiveGroup 'a => ('a -> 'a)`. Additive inverse.
-- `-`: `AdditiveGroup 'a => ('a -> ('a -> 'a))`. Subtraction.
 
 ### `AdditiveMonoid`
 Types with additive identity and associative addition.
@@ -71,6 +70,14 @@ Superclasses: _none_
 Methods:
 - `default`: `Default 'a => 'a`. Canonical default value for a type. For `Result a e`, this requires `Default a`.
 
+### `Divisive`
+Types supporting division.
+
+Superclasses: `MultiplicativeMonoid`
+
+Methods:
+- `/`: `Divisive 'a => ('a -> ('a -> 'a))`. Division.
+
 ### `Eq`
 Types supporting equality/inequality comparison.
 
@@ -83,10 +90,9 @@ Methods:
 ### `Field`
 Types supporting division in addition to ring operations.
 
-Superclasses: `Ring`
+Superclasses: `Ring`, `Divisive`
 
 Methods:
-- `/`: `Field 'a => ('a -> ('a -> 'a))`. Division.
 
 ### `Filterable`
 Functors supporting filtering and partial mapping.
@@ -193,6 +199,14 @@ Superclasses: _none_
 Methods:
 - `show`: `Show 'a => ('a -> string)`. Render a value as a human-readable string.
 
+### `Subtractive`
+Types supporting binary subtraction.
+
+Superclasses: `Semiring`
+
+Methods:
+- `-`: `Subtractive 'a => ('a -> ('a -> 'a))`. Subtraction.
+
 ## Built-in Functions
 
 ### Overloaded (Type Class Methods)
@@ -200,16 +214,15 @@ Methods:
 | Function | Signature | Implemented On | Description |
 |---|---|---|---|
 | `negate` | `('a -> 'a)` | `i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive inverse. |
-| `-` | `('a -> ('a -> 'a))` | `i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Subtraction. |
 | `zero` | `'a` | `string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Additive identity. |
 | `+` | `('a -> ('a -> 'a))` | `string`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Addition (or concatenation for strings). |
 | `or_else` | `((('f 'a) -> ('f 'a)) -> (('f`<br>`'a) -> ('f 'a)))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Provide an alternative container value. |
 | `pure` | `('a -> ('f 'a))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Lift a plain value into an applicative context. |
 | `ap` | `(('f ('a -> 'b)) -> (('f 'a)`<br>`-> ('f 'b)))` | `List`<br>`Option`<br>`Array`<br>`(Result 'e)` | Apply wrapped functions to wrapped values. |
 | `default` | `'a` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`(List 'a)`<br>`(Array 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Canonical default value for a type. For `Result a e`, this requires `Default a`. |
+| `/` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Division. |
 | `==` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Array 'a)`<br>`(Result 'a 'e)` | Equality comparison. |
 | `!=` | `('a -> ('a -> bool))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`bool`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Option 'a)`<br>`(Array 'a)`<br>`(Result 'a 'e)` | Inequality comparison. |
-| `/` | `('a -> ('a -> 'a))` | `f32`<br>`f64` | Division. |
 | `filter` | `(('a -> bool) -> (('f 'a) ->`<br>`('f 'a)))` | `List`<br>`Option`<br>`Array` | Keep elements that satisfy a predicate. |
 | `filter_map` | `(('a -> (Option 'b)) -> (('f`<br>`'a) -> ('f 'b)))` | `List`<br>`Option`<br>`Array` | Map and drop missing results in one pass. |
 | `foldl` | `(('b -> ('a -> 'b)) -> ('b ->`<br>`(('t 'a) -> 'b)))` | `List`<br>`Option`<br>`Array` | Strict left fold. |
@@ -231,6 +244,7 @@ Methods:
 | `zip` | `(('f 'a) -> (('f 'b) -> ('f`<br>`('a, 'b))))` | `List`<br>`Array` | Pair elements from two containers by position. |
 | `unzip` | `(('f ('a, 'b)) -> (('f 'a),`<br>`('f 'b)))` | `List`<br>`Array` | Split a container of pairs into a pair of containers. |
 | `show` | `('a -> string)` | `bool`<br>`u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64`<br>`string`<br>`uuid`<br>`datetime`<br>`(List 'a)`<br>`(Array 'a)`<br>`(Option 'a)`<br>`(Result 'a 'e)` | Render a value as a human-readable string. |
+| `-` | `('a -> ('a -> 'a))` | `u8`<br>`u16`<br>`u32`<br>`u64`<br>`i8`<br>`i16`<br>`i32`<br>`i64`<br>`f32`<br>`f64` | Subtraction. |
 
 ### Other Built-ins
 

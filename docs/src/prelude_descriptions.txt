@@ -22,11 +22,12 @@ type:u32	32-bit unsigned integer.
 type:u64	64-bit unsigned integer.
 type:u8	8-bit unsigned integer.
 type:uuid	UUID value.
-class:AdditiveGroup	Types supporting additive inverse and subtraction.
+class:AdditiveGroup	Types supporting additive inverse.
 class:AdditiveMonoid	Types with additive identity and associative addition.
 class:Alternative	Applicative types with a fallback choice operation.
 class:Applicative	Functors that can lift values and apply wrapped functions.
 class:Default	Types with a canonical default value.
+class:Divisive	Types supporting division.
 class:Eq	Types supporting equality/inequality comparison.
 class:Field	Types supporting division in addition to ring operations.
 class:Filterable	Functors supporting filtering and partial mapping.
@@ -41,6 +42,7 @@ class:Show	Types that can be converted to user-facing strings (Haskell-style nam
 class:Ring	Types supporting additive group plus multiplication.
 class:Semiring	Types supporting additive and multiplicative monoid operations.
 class:Sequence	Ordered containers with slicing/zipping operations.
+class:Subtractive	Types supporting binary subtraction.
 fn:!=	Inequality comparison.
 fn:%	Remainder/modulo operation.
 fn:&&	Boolean conjunction.

@@ -3802,7 +3802,14 @@ fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
 fn defaultable_class(class: &Symbol) -> bool {
     matches!(
         class.as_ref(),
-        "AdditiveMonoid" | "MultiplicativeMonoid" | "AdditiveGroup" | "Ring" | "Field" | "Integral"
+        "AdditiveMonoid"
+            | "MultiplicativeMonoid"
+            | "Subtractive"
+            | "AdditiveGroup"
+            | "Ring"
+            | "Divisive"
+            | "Field"
+            | "Integral"
     )
 }
 

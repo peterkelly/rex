@@ -179,6 +179,30 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
             );
         }
 
+        let subtractive = [
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
+        ];
+        for builtin in subtractive {
+            let t = Type::builtin(builtin);
+            ts.add_overload(
+                "prim_sub",
+                Scheme::new(
+                    vec![],
+                    vec![],
+                    Type::fun(t.clone(), Type::fun(t.clone(), t.clone())),
+                ),
+            );
+        }
+
         let signed = [
             BuiltinTypeId::I8,
             BuiltinTypeId::I16,
@@ -190,20 +214,24 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
         for builtin in signed {
             let t = Type::builtin(builtin);
             ts.add_overload(
-                "prim_sub",
-                Scheme::new(
-                    vec![],
-                    vec![],
-                    Type::fun(t.clone(), Type::fun(t.clone(), t.clone())),
-                ),
-            );
-            ts.add_overload(
                 "prim_negate",
                 Scheme::new(vec![], vec![], Type::fun(t.clone(), t.clone())),
             );
         }
 
-        for builtin in [BuiltinTypeId::F32, BuiltinTypeId::F64] {
+        let divisive = [
+            BuiltinTypeId::U8,
+            BuiltinTypeId::U16,
+            BuiltinTypeId::U32,
+            BuiltinTypeId::U64,
+            BuiltinTypeId::I8,
+            BuiltinTypeId::I16,
+            BuiltinTypeId::I32,
+            BuiltinTypeId::I64,
+            BuiltinTypeId::F32,
+            BuiltinTypeId::F64,
+        ];
+        for builtin in divisive {
             let t = Type::builtin(builtin);
             ts.add_overload(
                 "prim_div",

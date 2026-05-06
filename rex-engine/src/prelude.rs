@@ -868,6 +868,10 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     })?;
 
     // Subtraction and negation
+    engine.export("prim_sub", |_: &State, a: u8, b: u8| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: u16, b: u16| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: u32, b: u32| Ok(a - b))?;
+    engine.export("prim_sub", |_: &State, a: u64, b: u64| Ok(a - b))?;
     engine.export("prim_sub", |_: &State, a: i8, b: i8| Ok(a - b))?;
     engine.export("prim_sub", |_: &State, a: i16, b: i16| Ok(a - b))?;
     engine.export("prim_sub", |_: &State, a: i32, b: i32| Ok(a - b))?;
@@ -892,6 +896,14 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_mul", |_: &State, a: i64, b: i64| Ok(a * b))?;
     engine.export("prim_mul", |_: &State, a: f32, b: f32| Ok(a * b))?;
     engine.export("prim_mul", |_: &State, a: f64, b: f64| Ok(a * b))?;
+    engine.export("prim_div", |_: &State, a: u8, b: u8| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: u16, b: u16| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: u32, b: u32| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: u64, b: u64| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: i8, b: i8| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: i16, b: i16| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: i32, b: i32| Ok(a / b))?;
+    engine.export("prim_div", |_: &State, a: i64, b: i64| Ok(a / b))?;
     engine.export("prim_div", |_: &State, a: f32, b: f32| Ok(a / b))?;
     engine.export("prim_div", |_: &State, a: f64, b: f64| Ok(a / b))?;
 

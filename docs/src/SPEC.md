@@ -322,6 +322,10 @@ Integer literals are overloaded over integral types.
 - A literal like `4` introduces a fresh type variable `α` with predicate `Integral α`.
 - A negative literal like `-3` introduces `α` with predicates `Integral α` and `AdditiveGroup α`
   (so it can only specialize to signed numeric types).
+- Binary subtraction uses `Subtractive`, which includes unsigned integer types. Unary negation still
+  requires `AdditiveGroup`.
+- Division uses `Divisive`, which includes primitive integer and floating-point types. Integer
+  division follows Rust's integer division semantics.
 - Context can specialize `α` (for example, `let x: u64 = 4 in x`).
 - Unannotated `let` bindings whose definition is an integer literal are kept monomorphic. This lets
   use sites specialize the binding consistently in that scope (for example, `let x = 4 in (x + 1,
@@ -350,7 +354,8 @@ A type variable `α` is eligible for defaulting iff:
 
 - `α` appears only in *simple* predicates of the form `C α` (not in compound types), and
 - every such `C` is in the defaultable set:
-  `AdditiveMonoid`, `MultiplicativeMonoid`, `AdditiveGroup`, `Ring`, `Field`, `Integral`.
+  `AdditiveMonoid`, `MultiplicativeMonoid`, `Subtractive`, `AdditiveGroup`, `Ring`, `Divisive`,
+  `Field`, `Integral`.
 
 If `α` appears in any non-simple predicate or any non-defaultable class predicate, it is not
 defaulted.
