@@ -1,6 +1,6 @@
 //! Core engine implementation for Rex.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::{self, Write as _};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -1824,9 +1824,10 @@ impl TypeclassRegistry {
     }
 
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+        let mut seen_envs = HashSet::new();
         for instances in self.entries.values() {
             for instance in instances {
-                instance.def_env.trace_pointers(out);
+                instance.def_env.trace_pointers_shared(&mut seen_envs, out);
             }
         }
     }
@@ -1835,9 +1836,12 @@ impl TypeclassRegistry {
         &mut self,
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
+        let mut rewritten_envs = HashMap::new();
         for instances in self.entries.values_mut() {
             for instance in instances {
-                instance.def_env.rewrite_pointers(rewrite)?;
+                instance
+                    .def_env
+                    .rewrite_pointers_shared(&mut rewritten_envs, rewrite)?;
             }
         }
         Ok(())
@@ -2097,6 +2101,11 @@ where
         roots: &TempRoots,
         cursor: &mut usize,
     ) -> Result<(), EngineError> {
+        // Root slots only diverge from stored pointers after a copying collection.
+        if !roots.has_collected_since_creation()? {
+            return Ok(());
+        }
+
         self.typeclasses
             .lock()
             .map_err(|_| EngineError::Internal("typeclass registry poisoned".into()))?

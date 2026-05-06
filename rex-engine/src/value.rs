@@ -99,6 +99,7 @@ pub(crate) struct HeapAccess<'a> {
 pub(crate) struct TempRoots {
     heap: Heap,
     root_ids: Vec<RootId>,
+    collection_count: u64,
 }
 
 /// A rooted reference to a Rex heap value.
@@ -186,6 +187,15 @@ impl Drop for TempRoots {
 impl TempRoots {
     pub(crate) fn len(&self) -> usize {
         self.root_ids.len()
+    }
+
+    pub(crate) fn has_collected_since_creation(&self) -> Result<bool, EngineError> {
+        let state = self
+            .heap
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        Ok(state.collections != self.collection_count)
     }
 
     pub(crate) fn get(&self, index: usize) -> Result<Pointer, EngineError> {
@@ -720,9 +730,11 @@ impl Heap {
         for pointer in pointers {
             root_ids.push(Self::register_root_locked(self.id, &mut state, pointer)?);
         }
+        let collection_count = state.collections;
         Ok(TempRoots {
             heap: self.clone(),
             root_ids,
+            collection_count,
         })
     }
 
