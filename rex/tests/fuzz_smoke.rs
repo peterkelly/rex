@@ -66,12 +66,15 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
 
         let mut ts = TypeSystem::new_with_prelude().unwrap();
         let _ = ts.register_decls(&program.decls);
-        let _ = infer(&mut ts, program.expr.as_ref());
+        let Some(body) = program.body.as_ref() else {
+            continue;
+        };
+        let _ = infer(&mut ts, body.as_ref());
 
         let mut engine = Engine::with_prelude(()).unwrap();
         let mut module = Module::global();
         module.add_decls(program.decls.clone());
         let _ = engine.inject_module(module);
-        let _ = engine.into_evaluator().eval(program.expr.as_ref()).await;
+        let _ = engine.into_evaluator().eval(body.as_ref()).await;
     }
 }

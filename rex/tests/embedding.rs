@@ -269,7 +269,7 @@ async fn have_role_async(state: HostState, role: String) -> Result<bool, EngineE
 
 fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().expr
+    parser.parse_program().unwrap().body.unwrap()
 }
 fn tuple_items(value: &Handle) -> Vec<Handle> {
     let Value::Tuple(items) = value.value().unwrap() else {

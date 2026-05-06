@@ -2,7 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use futures::executor::block_on;
-use rex_ast::expr::Program;
+use rex_ast::expr::CompilationUnit;
 use rex_engine::{Engine, ValueDisplayOptions};
 use rex_lexer::Token;
 use rex_lsp::server::{
@@ -17,7 +17,10 @@ use rex_typesystem::{
 };
 use wasm_bindgen::prelude::*;
 
-fn parse_program_with_limits(source: &str, limits: ParserLimits) -> Result<Program, String> {
+fn parse_program_with_limits(
+    source: &str,
+    limits: ParserLimits,
+) -> Result<CompilationUnit, String> {
     let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
     let mut parser = Parser::new(tokens);
     parser.set_limits(limits);
@@ -49,8 +52,10 @@ pub fn infer_to_json(source: &str) -> Result<String, String> {
     ts.register_decls(&program.decls)
         .map_err(|e| format!("type declaration error: {e}"))?;
 
-    let (preds, typ) =
-        infer(&mut ts, program.expr.as_ref()).map_err(|e| format!("type error: {e}"))?;
+    let Some(body) = program.body.as_ref() else {
+        return Err("missing final expression".to_string());
+    };
+    let (preds, typ) = infer(&mut ts, body.as_ref()).map_err(|e| format!("type error: {e}"))?;
 
     let payload = serde_json::json!({
         "type": typ.to_string(),

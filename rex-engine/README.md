@@ -28,8 +28,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = parser.parse_program().map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
+    let body = program.body.as_ref().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing final expression")
+    })?;
     let mut compiler = engine.into_compiler();
-    let compiled = compiler.compile_expr(program.expr.as_ref())?;
+    let compiled = compiler.compile_expr(body.as_ref())?;
     let evaluator = compiler.into_evaluator();
     evaluator.validate(&compiled)?;
     let value = evaluator.run(compiled).await?;

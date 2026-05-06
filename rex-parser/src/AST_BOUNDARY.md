@@ -22,7 +22,7 @@ it is not exposed as the public parser result and is not intended to preserve
 whitespace or comments.
 
 The AST builder consumes only successful CST nodes and produces the existing
-pipeline types: `Program`, `Decl`, `Expr`, `Pattern`, `TypeExpr`, declaration
+pipeline types: `CompilationUnit`, `Decl`, `Expr`, `Pattern`, `TypeExpr`, declaration
 structs, import structs, `NameRef`, and `TypeConstraint`.
 
 ## Semantic actions

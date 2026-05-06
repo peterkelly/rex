@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use rex_ast::expr::{
-    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl,
-    ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Symbol,
+    ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
+    ImportDecl, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol,
     TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_lexer::{Span, Token};
@@ -206,7 +206,7 @@ fn add_import_bindings(
 }
 
 fn collect_local_renames(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     prefix: &str,
 ) -> (
     BTreeMap<Symbol, Symbol>,
@@ -217,7 +217,7 @@ fn collect_local_renames(
     let mut types = BTreeMap::new();
     let mut classes = BTreeMap::new();
 
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         match decl {
             Decl::Fn(fd) => {
                 values.insert(fd.name.name.clone(), qualify(prefix, &fd.name.name));
@@ -649,10 +649,11 @@ fn rename_expr(
     }
 }
 
-pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
-    let (value_renames, type_renames, class_renames) = collect_local_renames(program, prefix);
+pub(crate) fn qualify_program(compilation_unit: &CompilationUnit, prefix: &str) -> CompilationUnit {
+    let (value_renames, type_renames, class_renames) =
+        collect_local_renames(compilation_unit, prefix);
 
-    let decls = program
+    let decls = compilation_unit
         .decls
         .iter()
         .filter_map(|decl| match decl {
@@ -816,16 +817,18 @@ pub(crate) fn qualify_program(program: &Program, prefix: &str) -> Program {
         })
         .collect();
 
-    let mut bound = BTreeSet::new();
-    let expr = Arc::new(rename_expr(
-        program.expr.as_ref(),
-        &mut bound,
-        &value_renames,
-        &type_renames,
-        &class_renames,
-    ));
+    let body = compilation_unit.body.as_ref().map(|body| {
+        let mut bound = BTreeSet::new();
+        Arc::new(rename_expr(
+            body.as_ref(),
+            &mut bound,
+            &value_renames,
+            &type_renames,
+            &class_renames,
+        ))
+    });
 
-    Program { decls, expr }
+    CompilationUnit { decls, body }
 }
 
 fn alias_is_visible(
@@ -1260,14 +1263,14 @@ fn rewrite_import_uses_type_expr(
 }
 
 pub(crate) fn rewrite_import_uses(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     aliases: &BTreeMap<Symbol, ModuleExports>,
     imported_values: &BTreeMap<Symbol, CanonicalSymbol>,
     imported_types: &BTreeMap<Symbol, CanonicalSymbol>,
     imported_classes: &BTreeMap<Symbol, CanonicalSymbol>,
     shadowed_types: Option<&BTreeSet<Symbol>>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
-) -> Program {
+) -> CompilationUnit {
     let scope = RewriteScope {
         aliases,
         imported_values,
@@ -1277,7 +1280,7 @@ pub(crate) fn rewrite_import_uses(
         shadowed_values,
     };
     let decl_bound = BTreeSet::new();
-    let decls = program
+    let decls = compilation_unit
         .decls
         .iter()
         .map(|decl| match decl {
@@ -1531,13 +1534,11 @@ pub(crate) fn rewrite_import_uses(
         })
         .collect();
 
-    let mut bound = BTreeSet::new();
-    let expr = Arc::new(rewrite_import_uses_expr(
-        program.expr.as_ref(),
-        &mut bound,
-        &scope,
-    ));
-    Program { decls, expr }
+    let body = compilation_unit.body.as_ref().map(|body| {
+        let mut bound = BTreeSet::new();
+        Arc::new(rewrite_import_uses_expr(body.as_ref(), &mut bound, &scope))
+    });
+    CompilationUnit { decls, body }
 }
 
 fn validate_import_uses_expr(
@@ -1742,11 +1743,11 @@ fn validate_import_uses_type_expr(
 }
 
 pub(crate) fn validate_import_uses(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     aliases: &BTreeMap<Symbol, ModuleExports>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
 ) -> Result<(), EngineError> {
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         match decl {
             Decl::Fn(fd) => {
                 for (_, t) in &fd.params {
@@ -1878,7 +1879,10 @@ pub(crate) fn validate_import_uses(
         }
     }
     let mut bound = BTreeSet::new();
-    validate_import_uses_expr(program.expr.as_ref(), &mut bound, aliases, shadowed_values)
+    if let Some(body) = &compilation_unit.body {
+        validate_import_uses_expr(body.as_ref(), &mut bound, aliases, shadowed_values)?;
+    }
+    Ok(())
 }
 
 pub(crate) fn decl_value_names(decls: &[Decl]) -> BTreeSet<Symbol> {
@@ -1918,9 +1922,9 @@ pub(crate) fn decl_type_names(decls: &[Decl]) -> BTreeSet<Symbol> {
     out
 }
 
-pub(crate) fn interface_decls_from_program(program: &Program) -> Vec<Decl> {
+pub(crate) fn interface_decls_from_program(compilation_unit: &CompilationUnit) -> Vec<Decl> {
     let mut out = Vec::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         match decl {
             Decl::Fn(fd) if fd.is_pub => out.push(Decl::DeclareFn(DeclareFnDecl {
                 span: fd.span,
@@ -1941,16 +1945,19 @@ pub(crate) fn interface_decls_from_program(program: &Program) -> Vec<Decl> {
     out
 }
 
-fn graph_imports_for_program(program: &Program, default_imports: &[String]) -> Vec<ImportDecl> {
+fn graph_imports_for_program(
+    compilation_unit: &CompilationUnit,
+    default_imports: &[String],
+) -> Vec<ImportDecl> {
     let mut out = Vec::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         if let Decl::Import(import_decl) = decl {
             out.push(import_decl.clone());
         }
     }
     for module_name in default_imports {
         let alias = Symbol::intern(module_name);
-        if contains_import_alias(&program.decls, &alias) {
+        if contains_import_alias(&compilation_unit.decls, &alias) {
             continue;
         }
         out.push(default_import_decl(module_name));
@@ -2036,16 +2043,17 @@ fn tarjan_scc_module_ids(
 }
 
 pub(crate) fn exports_from_program(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     prefix: &str,
     module_id: &ModuleId,
 ) -> ModuleExports {
-    let (value_renames, type_renames, class_renames) = collect_local_renames(program, prefix);
+    let (value_renames, type_renames, class_renames) =
+        collect_local_renames(compilation_unit, prefix);
     let module_key = module_key_for_module(module_id);
 
     let mut exports = ModuleExports::default();
 
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         match decl {
             Decl::Fn(fd) if fd.is_pub => {
                 if let Some(internal) = value_renames.get(&fd.name.name) {
@@ -2127,7 +2135,7 @@ pub(crate) fn exports_from_program(
 pub(crate) fn parse_program_from_source(
     source: &str,
     context: Option<&ModuleId>,
-) -> Result<Program, EngineError> {
+) -> Result<CompilationUnit, EngineError> {
     let tokens = Token::tokenize(source).map_err(|e| match context {
         Some(id) => EngineError::from(crate::ModuleError::LexInModule {
             module: id.clone(),
@@ -2144,7 +2152,7 @@ pub(crate) fn parse_program_from_source(
         None => EngineError::from(crate::ModuleError::Parse { errors: errs }),
     })?;
     if let Some(module) = context
-        && !matches!(program.expr.as_ref(), Expr::Tuple(_, elems) if elems.is_empty())
+        && program.body.is_some()
     {
         return Err(crate::ModuleError::TopLevelExprInModule {
             module: module.clone(),
@@ -2154,13 +2162,15 @@ pub(crate) fn parse_program_from_source(
     Ok(program)
 }
 
-pub(crate) fn program_from_resolved(resolved: &ResolvedModule) -> Result<Program, EngineError> {
+pub(crate) fn program_from_resolved(
+    resolved: &ResolvedModule,
+) -> Result<CompilationUnit, EngineError> {
     match &resolved.content {
         ResolvedModuleContent::Source(source) => {
             parse_program_from_source(source, Some(&resolved.id))
         }
-        ResolvedModuleContent::Program(program) => {
-            if !matches!(program.expr.as_ref(), Expr::Tuple(_, elems) if elems.is_empty()) {
+        ResolvedModuleContent::CompilationUnit(program) => {
+            if program.body.is_some() {
                 return Err(crate::ModuleError::TopLevelExprInModule {
                     module: resolved.id.clone(),
                 }
@@ -2182,7 +2192,7 @@ where
     fn content_fingerprint(resolved: &ResolvedModule) -> Option<String> {
         match &resolved.content {
             ResolvedModuleContent::Source(source) => Some(Self::source_fingerprint(source)),
-            ResolvedModuleContent::Program(_) => None,
+            ResolvedModuleContent::CompilationUnit(_) => None,
         }
     }
 
@@ -2255,7 +2265,7 @@ where
         #[derive(Clone)]
         struct PendingModule {
             resolved: ResolvedModule,
-            program: Program,
+            program: CompilationUnit,
             prefix: String,
         }
 
@@ -2653,20 +2663,20 @@ where
 
     pub(crate) fn rewrite_program_with_imports(
         &mut self,
-        program: &Program,
+        compilation_unit: &CompilationUnit,
         importer: Option<ModuleId>,
         prefix: &str,
         loaded: &mut BTreeMap<ModuleId, ModuleExports>,
         loading: &mut BTreeSet<ModuleId>,
-    ) -> Result<Program, EngineError> {
+    ) -> Result<CompilationUnit, EngineError> {
         let mut bindings = ImportBindings::default();
-        let local_values = decl_value_names(&program.decls);
-        let local_types = decl_type_names(&program.decls);
+        let local_values = decl_value_names(&compilation_unit.decls);
+        let local_types = decl_type_names(&compilation_unit.decls);
         let import_policy = ImportBindingPolicy {
             forbidden_values: &local_values,
             forbidden_types: &local_types,
         };
-        for decl in &program.decls {
+        for decl in &compilation_unit.decls {
             let Decl::Import(import_decl) = decl else {
                 continue;
             };
@@ -2682,7 +2692,7 @@ where
         let default_imports = self.default_imports().to_vec();
         for module_name in default_imports {
             let alias = Symbol::intern(&module_name);
-            if contains_import_alias(&program.decls, &alias) {
+            if contains_import_alias(&compilation_unit.decls, &alias) {
                 continue;
             }
             let import_decl = default_import_decl(&module_name);
@@ -2715,7 +2725,7 @@ where
             }
         }
 
-        let qualified = qualify_program(program, prefix);
+        let qualified = qualify_program(compilation_unit, prefix);
         validate_import_uses(&qualified, &bindings.alias_exports, None)?;
         Ok(rewrite_import_uses(
             &qualified,
@@ -2802,7 +2812,10 @@ where
         )?;
         self.inject_decls(&rewritten.decls)?;
 
-        let (preds, ty) = self.infer_type(rewritten.expr.as_ref())?;
+        let body = rewritten
+            .body
+            .unwrap_or_else(|| Arc::new(Expr::Tuple(Span::default(), Vec::new())));
+        let (preds, ty) = self.infer_type(body.as_ref())?;
 
         let exports = exports_from_program(&program, &prefix, &resolved.id);
         loaded.insert(resolved.id.clone(), exports);
@@ -2847,6 +2860,9 @@ where
             &mut loading,
         )?;
         self.inject_decls(&rewritten.decls)?;
-        self.infer_type(rewritten.expr.as_ref())
+        let body = rewritten
+            .body
+            .ok_or(EngineError::MissingBody { context: "snippet" })?;
+        self.infer_type(body.as_ref())
     }
 }

@@ -24,7 +24,10 @@ async fn run_one(input: &[u8]) {
     if ts.register_decls(&program.decls).is_err() {
         return;
     }
-    if infer(&mut ts, program.expr.as_ref()).is_err() {
+    let Some(body) = program.body.as_ref() else {
+        return;
+    };
+    if infer(&mut ts, body.as_ref()).is_err() {
         return;
     }
 
@@ -36,7 +39,7 @@ async fn run_one(input: &[u8]) {
     if engine.inject_module(module).is_err() {
         return;
     }
-    let _ = engine.into_evaluator().eval(program.expr.as_ref()).await;
+    let _ = engine.into_evaluator().eval(body.as_ref()).await;
 }
 
 #[tokio::main]

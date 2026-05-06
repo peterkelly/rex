@@ -15,7 +15,7 @@ async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let heap = engine.heap.clone();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((heap, handle, ty))

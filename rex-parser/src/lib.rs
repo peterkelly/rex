@@ -19,7 +19,7 @@ mod rex;
 #[cfg(test)]
 mod peg_syntax;
 
-use rex_ast::expr::Program;
+use rex_ast::expr::CompilationUnit;
 use rex_lexer::Tokens;
 
 use crate::error::ParserErr;
@@ -70,7 +70,7 @@ impl Parser {
         self.peg.set_limits(limits);
     }
 
-    pub fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
+    pub fn parse_program(&mut self) -> Result<CompilationUnit, Vec<ParserErr>> {
         self.peg.parse_program()
     }
 }

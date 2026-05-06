@@ -1,7 +1,7 @@
 
-# Program
+# CompilationUnit
 
-Program            <- Decl* Expr? EOF
+CompilationUnit    <- Decl* Expr? EOF
 
 # Declarations
 

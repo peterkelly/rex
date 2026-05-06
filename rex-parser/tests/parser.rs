@@ -12,7 +12,7 @@ use rex_parser::{Parser, ParserLimits};
 
 fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().expr
+    parser.parse_program().unwrap().body.unwrap()
 }
 
 fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
@@ -51,7 +51,7 @@ fn test_parser_exposes_target_peg_grammar() {
         "all grammar arrows should be aligned"
     );
 
-    for rule in ["Program", "Decl", "TypeExpr", "Expr", "Pattern"] {
+    for rule in ["CompilationUnit", "Decl", "TypeExpr", "Expr", "Pattern"] {
         assert!(
             rule_lines
                 .iter()
@@ -59,13 +59,26 @@ fn test_parser_exposes_target_peg_grammar() {
             "missing grammar rule {rule}"
         );
     }
-    assert!(grammar.starts_with("\n# Program\n\nProgram            <- Decl* Expr? EOF\n"));
+    assert!(grammar.starts_with("\n# CompilationUnit\n\nCompilationUnit    <- Decl* Expr? EOF\n"));
     assert!(grammar.contains("\n# Declarations\n\nDecl               <-"));
     assert!(grammar.contains("\n# Expressions\n\nExpr               <-"));
     assert!(grammar.contains("\n# Patterns\n\nPattern            <-"));
     assert!(grammar.contains("ImportDecl         <- IMPORT cut("));
     assert!(grammar.contains("label(\"expected `;` after function body\", SEMI_COLON)"));
     assert!(!grammar.contains("'import'"));
+}
+
+#[test]
+fn test_parse_declaration_only_compilation_unit_has_no_body() {
+    let code = r#"
+        type Option a = None | Some a;
+        fn id x: a -> a = x;
+    "#;
+    let mut parser = Parser::new(Token::tokenize(code).unwrap());
+    let program = parser.parse_program().unwrap();
+
+    assert_eq!(program.decls.len(), 2);
+    assert!(program.body.is_none());
 }
 
 #[test]
@@ -143,11 +156,11 @@ fn test_parser_documents_ast_output_boundary() {
 #[test]
 fn test_parse_comment() {
     let mut parser = Parser::new(Token::tokenize("true {- this is a boolean -}").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(expr, b!(span!(1:1 - 1:5); true));
 
     let mut parser = Parser::new(Token::tokenize("{- this is a boolean -} false").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(expr, b!(span!(1:25 - 1:30); false));
 
     let mut parser = Parser::new(
@@ -156,7 +169,7 @@ fn test_parse_comment() {
         )
         .unwrap(),
     );
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         tup!(
@@ -271,7 +284,7 @@ fn test_max_nesting_cons_pattern_chain() {
 #[test]
 fn test_add() {
     let mut parser = Parser::new(Token::tokenize("1 + 2").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -286,7 +299,7 @@ fn test_add() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(6.9 + 3.17)").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -301,7 +314,7 @@ fn test_add() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(+) 420").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -352,7 +365,7 @@ fn test_parse_type_decl() {
         }
         other => panic!("expected type decl, got {other:?}"),
     }
-    assert_expr_eq!(program.expr, u!(span!(3:5 - 3:7); 42));
+    assert_expr_eq!(program.body.unwrap(), u!(span!(3:5 - 3:7); 42));
 }
 
 #[test]
@@ -387,7 +400,7 @@ fn test_parse_type_decl_semicolon_preserves_ident_expr_boundary() {
         }
         other => panic!("expected type decl, got {other:?}"),
     }
-    assert_expr_eq!(program.expr, v!(span!(3:5 - 3:10); "value"));
+    assert_expr_eq!(program.body.unwrap(), v!(span!(3:5 - 3:10); "value"));
 }
 
 #[test]
@@ -625,7 +638,7 @@ fn test_parse_declare_fn_decl_where_constraints() {
         }
         other => panic!("expected declare fn decl, got {other:?}"),
     }
-    assert_expr_eq!(program.expr, u!(span!(3:5 - 3:7); 42));
+    assert_expr_eq!(program.body.unwrap(), u!(span!(3:5 - 3:7); 42));
 }
 
 #[test]
@@ -798,7 +811,7 @@ fn test_parse_unit_type() {
 #[test]
 fn test_sub() {
     let mut parser = Parser::new(Token::tokenize("1 - 2").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -813,7 +826,7 @@ fn test_sub() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(6.9 - 3.17)").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -828,7 +841,7 @@ fn test_sub() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(-) 4.20").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -842,7 +855,7 @@ fn test_sub() {
 #[test]
 fn test_negate() {
     let mut parser = Parser::new(Token::tokenize("-1").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -853,7 +866,7 @@ fn test_negate() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(-1)").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -864,7 +877,7 @@ fn test_negate() {
     );
 
     let mut parser = Parser::new(Token::tokenize("(- 6.9)").unwrap());
-    let expr = parser.parse_program().unwrap().expr;
+    let expr = parser.parse_program().unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -1669,7 +1682,10 @@ true
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     let program = parser.parse_program().unwrap();
     assert_eq!(program.decls.len(), 2);
-    assert!(matches!(program.expr.as_ref(), Expr::Bool(..)));
+    assert!(matches!(
+        program.body.as_ref().unwrap().as_ref(),
+        Expr::Bool(..)
+    ));
 }
 
 #[test]

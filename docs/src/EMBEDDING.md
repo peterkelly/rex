@@ -3,7 +3,7 @@
 Rex is designed as a small pipeline you can embed at whatever stage you need:
 
 1. `rex-lexer`: source → `Tokens`
-2. `rex-parser`: tokens → `Program { decls, expr }`
+2. `rex-parser`: tokens -> `CompilationUnit { decls, body }`
 3. `rex-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
 4. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Handle`
 
@@ -116,7 +116,11 @@ let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
 engine.inject_module(globals)?;
 let mut compiler = engine.into_compiler();
-let program = compiler.compile_expr(program.expr.as_ref())?;
+let body = program
+    .body
+    .as_ref()
+    .expect("snippet must contain a final expression");
+let program = compiler.compile_expr(body.as_ref())?;
 let evaluator = compiler.into_evaluator();
 let value = evaluator.run(program).await?;
 println!("{value}");
@@ -425,7 +429,7 @@ Resolver contract:
 - return `Err(...)` for hard failures (invalid module payload, policy violations, etc.).
 
 `ResolvedModule` can carry either `ResolvedModuleContent::Source(...)` for real Rex source or
-`ResolvedModuleContent::Program(...)` for preconstructed structured modules.
+`ResolvedModuleContent::CompilationUnit(...)` for preconstructed structured modules.
 
 ### 5) Snippets That Import Relative Modules
 
@@ -540,7 +544,11 @@ for decl in &program.decls {
     }
 }
 
-let (preds, ty) = infer(&mut ts, program.expr.as_ref())?;
+let body = program
+    .body
+    .as_ref()
+    .expect("snippet must contain a final expression");
+let (preds, ty) = infer(&mut ts, body.as_ref())?;
 println!("type: {ty}");
 if !preds.is_empty() {
     println!(
@@ -557,7 +565,7 @@ if !preds.is_empty() {
 
 Users can declare new type classes and instances directly in Rex source. As the host, you:
 
-1. Parse Rex source into `Program { decls, expr }`.
+1. Parse Rex source into `CompilationUnit { decls, body }`.
 2. Inject `Decl::Class` / `Decl::Instance` into the type system (if you’re typechecking without running).
 3. Inject all decls into the engine (if you’re running), so instance method bodies are available at runtime.
 
@@ -596,7 +604,11 @@ for decl in &program.decls {
     }
 }
 
-let (_preds, ty) = infer(&mut ts, program.expr.as_ref())?;
+let body = program
+    .body
+    .as_ref()
+    .expect("snippet must contain a final expression");
+let (_preds, ty) = infer(&mut ts, body.as_ref())?;
 assert_eq!(ty.to_string(), "i32");
 ```
 
@@ -628,9 +640,13 @@ let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
 globals.add_decls(program.decls.clone());
 engine.inject_module(globals)?;
+let body = program
+    .body
+    .as_ref()
+    .expect("snippet must contain a final expression");
 let (value, _ty) = engine
     .into_evaluator()
-    .eval(program.expr.as_ref())
+    .eval(body.as_ref())
     .await?;
 println!("{value}");
 ```
@@ -676,7 +692,11 @@ for code in [
     let program = parser
         .parse_program()
         .map_err(|errs| format!("parse error: {errs:?}"))?;
-    let (value, _ty) = engine.into_evaluator().eval(program.expr.as_ref()).await?;
+    let body = program
+        .body
+        .as_ref()
+        .expect("snippet must contain a final expression");
+    let (value, _ty) = engine.into_evaluator().eval(body.as_ref()).await?;
     println!("{value}");
 }
 ```
@@ -702,7 +722,11 @@ let mut parser = Parser::new(tokens);
 let program = parser
     .parse_program()
     .map_err(|errs| format!("parse error: {errs:?}"))?;
-let (v, _ty) = engine.into_evaluator().eval(program.expr.as_ref()).await?;
+let body = program
+    .body
+    .as_ref()
+    .expect("snippet must contain a final expression");
+let (v, _ty) = engine.into_evaluator().eval(body.as_ref()).await?;
 println!("{v}");
 ```
 
@@ -818,11 +842,12 @@ enum Maybe<T> {
 let mut engine = Engine::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
-let expr = Parser::new(Token::tokenize("Just 1")?)
+let body = Parser::new(Token::tokenize("Just 1")?)
     .parse_program()
     .map_err(|errs| format!("parse error: {errs:?}"))?
-    .expr;
-let (v, _ty) = engine.into_evaluator().eval(expr.as_ref()).await?;
+    .body
+    .expect("snippet must contain a final expression");
+let (v, _ty) = engine.into_evaluator().eval(body.as_ref()).await?;
 assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));
 ```
 

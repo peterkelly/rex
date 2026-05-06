@@ -12,8 +12,8 @@ use futures::{
     future::{BoxFuture, poll_fn},
 };
 use rex_ast::expr::{
-    ClassDecl, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern, Program, Scope,
-    Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
+    ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern,
+    Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
 };
 use rex_lexer::span::Span;
 use rex_typesystem::{
@@ -2716,13 +2716,11 @@ where
             self.module_local_type_names
                 .insert(module_name.clone(), local_type_names);
 
-            let program = Program {
-                decls,
-                expr: Arc::new(Expr::Tuple(Span::default(), vec![])),
-            };
+            let compilation_unit = CompilationUnit { decls, body: None };
             let prefix = prefix_for_module(&module_id);
-            let exports = crate::modules::exports_from_program(&program, &prefix, &module_id);
-            let qualified = qualify_program(&program, &prefix);
+            let exports =
+                crate::modules::exports_from_program(&compilation_unit, &prefix, &module_id);
+            let qualified = qualify_program(&compilation_unit, &prefix);
             let interfaces = interface_decls_from_program(&qualified);
             self.module_exports_cache
                 .insert(module_id.clone(), exports.clone());
@@ -2732,7 +2730,7 @@ where
                 module_name.clone(),
                 VirtualModule {
                     exports,
-                    decls: program.decls.clone(),
+                    decls: compilation_unit.decls.clone(),
                     source: None,
                 },
             );
@@ -2743,7 +2741,6 @@ where
 
             self.inject_decls(&qualified.decls)?;
             let resolver_module_name = module_name.clone();
-            let resolver_program = program;
             self.add_resolver(
                 format!("injected:{module_name}"),
                 move |req: ResolveRequest| {
@@ -2757,7 +2754,7 @@ where
                     }
                     Ok(Some(ResolvedModule {
                         id: ModuleId::Virtual(resolver_module_name.clone()),
-                        content: ResolvedModuleContent::Program(resolver_program.clone()),
+                        content: ResolvedModuleContent::CompilationUnit(compilation_unit.clone()),
                     }))
                 },
             );

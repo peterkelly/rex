@@ -1,4 +1,4 @@
-use rex_ast::expr::{Decl, Expr, Program, Symbol};
+use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
 use rex_lexer::{Token, span::Span};
 use rex_parser::Parser;
 use rex_typesystem::{
@@ -111,10 +111,10 @@ fn adt_constructors_are_present() {
 
 fn parse_expr(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().expr
+    parser.parse_program().unwrap().body.unwrap()
 }
 
-fn parse_program(code: &str) -> Program {
+fn parse_program(code: &str) -> CompilationUnit {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap()
 }
@@ -143,7 +143,7 @@ fn infer_deep_list_does_not_overflow() {
         })
         .unwrap();
     let program = parse_handle.join().unwrap().unwrap();
-    let expr = program.expr;
+    let expr = program.body.unwrap();
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(
@@ -206,7 +206,7 @@ fn infer_depth_limit_is_enforced() {
         max_infer_depth: Some(8),
     });
 
-    let err = infer(&mut ts, program.expr.as_ref()).unwrap_err();
+    let err = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap_err();
     assert!(
         err.to_string().contains("maximum inference depth exceeded"),
         "expected a max-depth inference error, got: {err:?}"
@@ -223,7 +223,7 @@ fn declare_fn_injects_scheme_for_use_sites() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     ts.register_decls(&program.decls).unwrap();
-    let (preds, ty) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert!(
         preds.is_empty()
             || preds
@@ -271,7 +271,7 @@ fn unit_type_parses_and_infers() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     ts.register_decls(&program.decls).unwrap();
-    let (preds, ty) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert!(preds.is_empty());
     assert_eq!(ty, Type::tuple(vec![]));
 }
@@ -426,7 +426,7 @@ fn infer_project_single_variant_let() {
             ts.register_type_decl(decl).unwrap();
         }
     }
-    let (_preds, ty) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     let expected = Type::tuple(vec![
         Type::builtin(BuiltinTypeId::I32),
         Type::builtin(BuiltinTypeId::F32),
@@ -451,7 +451,7 @@ fn infer_project_known_variant_let() {
             ts.register_type_decl(decl).unwrap();
         }
     }
-    let (_preds, ty) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
 
@@ -472,7 +472,7 @@ fn infer_project_unknown_variant_error() {
             ts.register_type_decl(decl).unwrap();
         }
     }
-    let err = strip_span(infer(&mut ts, program.expr.as_ref()).unwrap_err());
+    let err = strip_span(infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::FieldNotKnown { .. }));
 }
 
@@ -493,7 +493,7 @@ fn infer_project_lambda_param_single_variant() {
             ts.register_type_decl(decl).unwrap();
         }
     }
-    let (_preds, ty) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
 
@@ -517,7 +517,7 @@ fn infer_project_in_match_arm() {
             ts.register_type_decl(decl).unwrap();
         }
     }
-    let (_preds, ty) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
 
@@ -656,7 +656,7 @@ fn infer_record_pattern_in_lambda() {
             ts.register_type_decl(decl).unwrap();
         }
     }
-    let (_preds, ty) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
 
@@ -669,7 +669,7 @@ fn infer_fn_decl_simple() {
             "#,
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
-    let expr = program.expr_with_fns();
+    let expr = program.body_with_fns().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -683,7 +683,7 @@ fn infer_fn_decl_signature_form() {
             "#,
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
-    let expr = program.expr_with_fns();
+    let expr = program.body_with_fns().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -697,7 +697,7 @@ fn infer_fn_decl_polymorphic_where_constraints() {
             "#,
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
-    let expr = program.expr_with_fns();
+    let expr = program.body_with_fns().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(
         ty,
@@ -1200,7 +1200,7 @@ fn record_update_single_variant_adt_infers() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     ts.register_decls(&program.decls).unwrap();
-    let (_preds, typ) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(typ.to_string(), "Foo");
 }
 
@@ -1217,7 +1217,7 @@ fn record_update_unknown_field_errors() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     ts.register_decls(&program.decls).unwrap();
-    let err = infer(&mut ts, program.expr.as_ref()).unwrap_err();
+    let err = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap_err();
     let err = strip_span(err);
     assert!(matches!(err, TypeError::UnknownField { .. }));
 }
@@ -1235,7 +1235,7 @@ fn record_update_requires_refined_variant_for_sum_types() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     ts.register_decls(&program.decls).unwrap();
-    let err = infer(&mut ts, program.expr.as_ref()).unwrap_err();
+    let err = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap_err();
     let err = strip_span(err);
     assert!(matches!(err, TypeError::FieldNotKnown { .. }));
 }
@@ -1257,7 +1257,7 @@ fn record_update_allowed_after_match_refines_variant() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     ts.register_decls(&program.decls).unwrap();
-    let (_preds, typ) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(typ.to_string(), "Foo");
 }
 
@@ -1273,7 +1273,7 @@ fn record_update_plain_record_type() {
     );
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     ts.register_decls(&program.decls).unwrap();
-    let (_preds, typ) = infer(&mut ts, program.expr.as_ref()).unwrap();
+    let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(typ.to_string(), "{x: i32, y: i32}");
 }
 

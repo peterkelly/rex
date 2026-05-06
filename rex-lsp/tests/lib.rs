@@ -64,7 +64,7 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     engine.inject_module(module).expect("inject decls");
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .expect("evaluate source");
     let display = handle
@@ -120,7 +120,7 @@ x is D.Boxed
         prepare_program_with_imports(&uri, &program).expect("prepare");
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
 
-    let Expr::Let(_, _, Some(let_ann), _, body) = rewritten.expr.as_ref() else {
+    let Expr::Let(_, _, Some(let_ann), _, body) = rewritten.body.as_ref().unwrap().as_ref() else {
         panic!("expected rewritten let expression");
     };
     if let TypeExpr::Name(_, name) = let_ann {
@@ -138,7 +138,7 @@ x is D.Boxed
         panic!("expected rewritten annotation type");
     }
 
-    if let Expr::Let(_, _, _, def, _) = rewritten.expr.as_ref()
+    if let Expr::Let(_, _, _, def, _) = rewritten.body.as_ref().unwrap().as_ref()
         && let Expr::App(_, ctor, _) = def.as_ref()
         && let Expr::Var(v) = ctor.as_ref()
     {
@@ -162,7 +162,6 @@ fn prepare_program_rewrites_imported_class_refs_in_instance_headers() {
 pub class Pick a where {
     pick : a;
 }
-()
 "#,
     )
     .expect("write dep");
@@ -208,7 +207,6 @@ fn diagnostics_report_missing_class_export_in_instance_header() {
 pub class Present a where {
     present : a;
 }
-()
 "#,
     )
     .expect("write dep");
@@ -241,7 +239,6 @@ fn diagnostics_report_missing_type_export_in_annotation() {
         &dep,
         r#"
 pub type Present = Present i32;
-()
 "#,
     )
     .expect("write dep");
@@ -275,7 +272,6 @@ fn diagnostics_report_missing_type_export_in_instance_head() {
 pub class Marker a where {
     marker : i32;
 }
-()
 "#,
     )
     .expect("write dep");
@@ -310,7 +306,6 @@ fn diagnostics_report_missing_class_export_in_fn_where_constraint() {
 pub class Present a where {
     present : a;
 }
-()
 "#,
     )
     .expect("write dep");
@@ -344,7 +339,6 @@ fn diagnostics_report_missing_class_export_in_declare_fn_where_constraint() {
 pub class Present a where {
     present : a;
 }
-()
 "#,
     )
     .expect("write dep");
@@ -378,7 +372,6 @@ fn diagnostics_report_missing_class_export_in_class_super_constraint() {
 pub class Present a where {
     present : a;
 }
-()
 "#,
     )
     .expect("write dep");
@@ -411,7 +404,6 @@ fn diagnostics_allow_lambda_param_named_like_import_alias_in_annotation() {
         &dep,
         r#"
 pub type Boxed = Boxed i32;
-()
 "#,
     )
     .expect("write dep");
@@ -439,7 +431,6 @@ fn diagnostics_report_missing_type_export_in_letrec_annotation_with_alias_named_
         &dep,
         r#"
 pub type Present = Present i32;
-()
 "#,
     )
     .expect("write dep");
@@ -471,7 +462,6 @@ fn diagnostics_allow_letrec_annotation_with_alias_named_binding_for_valid_type()
         &dep,
         r#"
 pub type Num = Num i32;
-()
 "#,
     )
     .expect("write dep");
@@ -498,7 +488,6 @@ fn diagnostics_allow_let_annotation_with_alias_named_binding_for_valid_type() {
         &dep,
         r#"
 pub type Num = Num i32;
-()
 "#,
     )
     .expect("write dep");
@@ -526,7 +515,6 @@ fn diagnostics_report_missing_type_export_in_let_annotation_with_alias_named_bin
         &dep,
         r#"
 pub type Present = Present i32;
-()
 "#,
     )
     .expect("write dep");

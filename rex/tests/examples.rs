@@ -27,7 +27,7 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
     let (value, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");

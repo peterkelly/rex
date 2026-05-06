@@ -3,7 +3,7 @@
 Rex is implemented as a small set of focused crates that form a pipeline:
 
 1. **Lexing** (`rex-lexer`): converts source text into a `Vec<Token>` with spans.
-2. **Parsing** (`rex-parser`): converts tokens into a `rex_ast::expr::Program { decls, expr }`.
+2. **Parsing** (`rex-parser`): converts tokens into a `rex_ast::expr::CompilationUnit { decls, body }`.
 3. **Typing** (`rex-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_typesystem::TypedExpr`.
 4. **Evaluation** (`rex-engine`): evaluates `TypedExpr` to a runtime `rex_engine::Handle`.
 
@@ -11,7 +11,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 ## Crates
 
-- `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `TypeExpr`, `Program`, symbols).
+- `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `TypeExpr`, `CompilationUnit`, symbols).
 - `rex-lexer`: tokenizer + spans (`Span`, `Position`).
 - `rex-parser`: recursive-descent parser. Entry point: `rex_parser::Parser::parse_program`.
   - For untrusted code, set `ParserLimits::safe_defaults` before parsing.

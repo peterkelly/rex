@@ -521,18 +521,18 @@ impl std::fmt::Display for Decl {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-pub struct Program {
+pub struct CompilationUnit {
     pub decls: Vec<Decl>,
-    pub expr: Arc<Expr>,
+    pub body: Option<Arc<Expr>>,
 }
 
-impl Program {
-    /// Lower top-level `fn` declarations into nested `let` bindings around `expr`.
+impl CompilationUnit {
+    /// Lower top-level `fn` declarations into nested `let` bindings around `body`.
     ///
     /// This keeps the surface syntax (`Decl::Fn`) intact for tools, while giving
     /// the type checker and evaluator a plain expression to work with.
-    pub fn expr_with_fns(&self) -> Arc<Expr> {
-        let mut out = self.expr.clone();
+    pub fn body_with_fns(&self) -> Option<Arc<Expr>> {
+        let mut out = self.body.clone()?;
         for decl in self.decls.iter().rev() {
             let Decl::Fn(fd) = decl else {
                 continue;
@@ -567,7 +567,7 @@ impl Program {
             let span = Span::from_begin_end(fd.span.begin, out.span().end);
             out = Arc::new(Expr::Let(span, fd.name.clone(), Some(sig), lam_body, out));
         }
-        out
+        Some(out)
     }
 }
 

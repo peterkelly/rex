@@ -7,7 +7,7 @@ use std::io::{self, Read};
 
 use clap::{Args, Parser};
 use rex::{
-    ast::Program,
+    ast::CompilationUnit,
     engine::{Engine, ValueDisplayOptions},
     parser::{Parser as RexParser, ParserErr, ParserLimits, Token},
 };
@@ -247,17 +247,17 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 }
 
 fn emit_json(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     emit_ast: bool,
     type_json: Option<serde_json::Value>,
 ) -> Result<String, String> {
     match (emit_ast, type_json) {
-        (true, None) => serde_json::to_string_pretty(program)
+        (true, None) => serde_json::to_string_pretty(compilation_unit)
             .map_err(|e| format!("failed to serialize AST to JSON: {e}")),
         (false, Some(type_json)) => serde_json::to_string_pretty(&type_json)
             .map_err(|e| format!("failed to serialize type to JSON: {e}")),
         (true, Some(type_json)) => serde_json::to_string_pretty(&json!({
-            "ast": program,
+            "ast": compilation_unit,
             "type": type_json,
         }))
         .map_err(|e| format!("failed to serialize outputs to JSON: {e}")),

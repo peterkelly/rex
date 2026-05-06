@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
-use rex_ast::expr::{Decl, Program, Symbol};
+use rex_ast::expr::{CompilationUnit, Decl, Symbol};
 use rex_typesystem::types::Type;
 
 use crate::Handle;
@@ -33,7 +33,7 @@ pub struct ResolveRequest {
 #[derive(Clone, Debug)]
 pub enum ResolvedModuleContent {
     Source(String),
-    Program(Program),
+    CompilationUnit(CompilationUnit),
 }
 
 #[derive(Clone, Debug)]

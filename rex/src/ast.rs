@@ -1,1 +1,1 @@
-pub use rex_ast::expr::{Decl, Expr, Program, Symbol};
+pub use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};

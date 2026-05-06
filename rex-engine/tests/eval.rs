@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use rex_ast::expr::{Decl, Expr, Program, Symbol};
+use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
 use rex_engine::{
     Engine, EngineError, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module, Value,
 };
@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().expr
+    parser.parse_program().unwrap().body.unwrap()
 }
 
-fn parse_program(code: &str) -> Program {
+fn parse_program(code: &str) -> CompilationUnit {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap()
 }
@@ -597,7 +597,7 @@ async fn eval_deep_list_does_not_overflow() {
     let tokens = Token::tokenize(&code).unwrap();
     let mut parser = Parser::new(tokens);
     let program = parser.parse_program().unwrap();
-    let expr = program.expr;
+    let expr = program.body.unwrap();
     let engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(engine, expr.as_ref()).await.unwrap();
     let xs = list_values(&value.value().unwrap());
@@ -658,7 +658,9 @@ async fn eval_record_update_single_variant_adt() {
     );
     let mut engine = engine_with_arith();
     inject_global_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+        .await
+        .unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(6).unwrap());
 }
 
@@ -678,7 +680,9 @@ async fn eval_record_update_refined_by_match() {
     );
     let mut engine = engine_with_arith();
     inject_global_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+        .await
+        .unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
 }
 
@@ -694,7 +698,9 @@ async fn eval_record_update_plain_record_type() {
     );
     let mut engine = engine_with_arith();
     inject_global_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+        .await
+        .unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(9).unwrap());
 }
 
@@ -1143,7 +1149,9 @@ async fn eval_user_adt_declaration() {
     );
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_global_type_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+        .await
+        .unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
 }
 
@@ -1157,7 +1165,7 @@ async fn eval_fn_decl_simple() {
     );
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_global_type_decls(&mut engine, &program.decls);
-    let expr = program.expr_with_fns();
+    let expr = program.body_with_fns().unwrap();
     let value = eval_expr(engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
 }
@@ -1172,7 +1180,7 @@ async fn eval_fn_decl_with_where_constraints() {
     );
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_global_type_decls(&mut engine, &program.decls);
-    let expr = program.expr_with_fns();
+    let expr = program.body_with_fns().unwrap();
     let value = eval_expr(engine, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
 }
@@ -1190,7 +1198,9 @@ async fn eval_adt_record_projection_single_variant() {
     );
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_global_type_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+        .await
+        .unwrap();
     let value = pval!(engine, value);
     match value {
         Value::Tuple(xs) => {
@@ -1221,7 +1231,9 @@ async fn eval_adt_record_projection_match_arm() {
     );
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_global_type_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.expr.as_ref()).await.unwrap();
+    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+        .await
+        .unwrap();
     assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
 }
 

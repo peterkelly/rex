@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use rex_ast::expr::{Decl, Program, Symbol};
+use rex_ast::expr::{CompilationUnit, Decl, Symbol};
 use rex_lexer::Token;
 use rex_parser::Parser;
 
@@ -24,8 +24,8 @@ fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeE
     Ok(())
 }
 
-pub fn prelude_typeclasses_program() -> Result<&'static Program, TypeError> {
-    static PROGRAM: OnceLock<Result<Program, String>> = OnceLock::new();
+pub fn prelude_typeclasses_program() -> Result<&'static CompilationUnit, TypeError> {
+    static PROGRAM: OnceLock<Result<CompilationUnit, String>> = OnceLock::new();
     let parsed = PROGRAM.get_or_init(|| {
         let source = include_str!("prelude_typeclasses.rex");
         let tokens =

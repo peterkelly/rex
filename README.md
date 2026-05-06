@@ -92,7 +92,7 @@ https://github.com/talo/rex.
 This repo is a Cargo workspace. The key crates are:
 
 - `rex-lexer`: tokenization (+ spans)
-- `rex-parser`: parser producing a `Program { decls, expr }`
+- `rex-parser`: parser producing a `CompilationUnit { decls, body }`
 - `rex-typesystem`: Hindley–Milner type inference + type classes + ADTs
 - `rex-engine`: runtime evaluator + native-function injection, backed by `rex-typesystem`
 - `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values

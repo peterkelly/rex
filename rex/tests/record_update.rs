@@ -31,7 +31,7 @@ async fn record_update_end_to_end() {
     engine.inject_module(module).unwrap();
     let (value_handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(

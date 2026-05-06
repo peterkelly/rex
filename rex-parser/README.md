@@ -1,6 +1,6 @@
 # Rex Parser (`rex-parser`)
 
-This crate parses token streams into the Rex AST (`rex-ast`), producing a `Program { decls, expr }`
+This crate parses token streams into the Rex AST (`rex-ast`), producing a `CompilationUnit { decls, body }`
 or a list of parse errors with spans.
 
 ## Usage

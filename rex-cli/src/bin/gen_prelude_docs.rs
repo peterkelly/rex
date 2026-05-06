@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 
 use rex::{
-    ast::{Decl, Program, Symbol},
+    ast::{CompilationUnit, Decl, Symbol},
     typesystem::{
         Instance, Predicate, Scheme, Type, TypeKind, TypeSystem, prelude_typeclasses_program,
     },
@@ -141,9 +141,11 @@ fn collect_primitive_type_names(ts: &TypeSystem) -> BTreeSet<String> {
     out
 }
 
-fn collect_methods_by_class(program: &Program) -> Result<BTreeMap<String, Vec<String>>, String> {
+fn collect_methods_by_class(
+    compilation_unit: &CompilationUnit,
+) -> Result<BTreeMap<String, Vec<String>>, String> {
     let mut out = BTreeMap::<String, Vec<String>>::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         if let Decl::Class(class_decl) = decl {
             let class_name = class_decl.name.to_string();
             let methods = class_decl

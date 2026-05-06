@@ -10,9 +10,9 @@ use lsp_types::{
     Location, MarkupContent, MarkupKind, Position, Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
 };
 use rex_ast::expr::{
-    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, ImportPath,
-    InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Symbol, TypeConstraint, TypeDecl,
-    TypeExpr, TypeVariant, Var,
+    ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl,
+    ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint,
+    TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_engine::{Engine, EngineError, ModuleError};
 use rex_lexer::{
@@ -87,7 +87,7 @@ impl BulkQuickFixStrategy {
 struct CachedParse {
     hash: u64,
     tokens: Tokens,
-    program: Program,
+    program: CompilationUnit,
 }
 
 fn text_hash(text: &str) -> u64 {
@@ -146,7 +146,9 @@ fn url_from_file_path(_path: &std::path::Path) -> Option<Url> {
     None
 }
 
-fn tokenize_and_parse(text: &str) -> std::result::Result<(Tokens, Program), TokenizeOrParseError> {
+fn tokenize_and_parse(
+    text: &str,
+) -> std::result::Result<(Tokens, CompilationUnit), TokenizeOrParseError> {
     let tokens = Token::tokenize(text).map_err(TokenizeOrParseError::Lex)?;
     let mut parser = Parser::new(tokens.clone());
     let program = parser
@@ -158,7 +160,7 @@ fn tokenize_and_parse(text: &str) -> std::result::Result<(Tokens, Program), Toke
 fn tokenize_and_parse_cached(
     uri: &Url,
     text: &str,
-) -> std::result::Result<(Tokens, Program), TokenizeOrParseError> {
+) -> std::result::Result<(Tokens, CompilationUnit), TokenizeOrParseError> {
     let hash = text_hash(text);
     if let Ok(cache) = parse_cache().lock()
         && let Some(cached) = cache.get(uri)
@@ -241,7 +243,7 @@ fn module_prefix(hash: &str) -> String {
 
 fn inject_program_decls(
     ts: &mut TypeSystem,
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     want_prepared_instance: Option<usize>,
 ) -> std::result::Result<InjectedDecls, TsTypeError> {
     let mut instances = Vec::new();
@@ -258,7 +260,7 @@ fn inject_program_decls(
             Ok(())
         };
 
-    for (idx, decl) in program.decls.iter().enumerate() {
+    for (idx, decl) in compilation_unit.decls.iter().enumerate() {
         match decl {
             Decl::Instance(inst_decl) => {
                 flush_non_instances(ts, &mut pending_non_instances)?;
@@ -707,12 +709,12 @@ fn rewrite_import_projections_type_expr(
 }
 
 fn rewrite_program_import_projections(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Program {
+) -> CompilationUnit {
     let decl_bound = BTreeSet::new();
-    let decls = program
+    let decls = compilation_unit
         .decls
         .iter()
         .map(|decl| match decl {
@@ -874,15 +876,17 @@ fn rewrite_program_import_projections(
         })
         .collect();
 
-    let mut bound = BTreeSet::new();
-    let expr = std::sync::Arc::new(rewrite_import_projections_expr(
-        program.expr.as_ref(),
-        &mut bound,
-        imports,
-        diagnostics,
-    ));
+    let body = compilation_unit.body.as_ref().map(|body| {
+        let mut bound = BTreeSet::new();
+        std::sync::Arc::new(rewrite_import_projections_expr(
+            body.as_ref(),
+            &mut bound,
+            imports,
+            diagnostics,
+        ))
+    });
 
-    Program { decls, expr }
+    CompilationUnit { decls, body }
 }
 
 fn validate_import_projection_class_name(
@@ -1070,12 +1074,12 @@ fn validate_import_projection_expr(
 }
 
 fn validate_import_projection_uses(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     imports: &HashMap<Symbol, ImportModuleInfo>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let decl_bound = BTreeSet::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         match decl {
             Decl::Fn(fd) => {
                 for (_, t) in &fd.params {
@@ -1166,12 +1170,14 @@ fn validate_import_projection_uses(
             Decl::Import(..) => {}
         }
     }
-    let mut bound = BTreeSet::new();
-    validate_import_projection_expr(program.expr.as_ref(), &mut bound, imports, diagnostics);
+    if let Some(body) = &compilation_unit.body {
+        let mut bound = BTreeSet::new();
+        validate_import_projection_expr(body.as_ref(), &mut bound, imports, diagnostics);
+    }
 }
 
 pub type PreparedProgram = (
-    Program,
+    CompilationUnit,
     TypeSystem,
     HashMap<Symbol, ImportModuleInfo>,
     Vec<Diagnostic>,
@@ -1179,7 +1185,7 @@ pub type PreparedProgram = (
 
 pub fn prepare_program_with_imports(
     uri: &Url,
-    program: &Program,
+    compilation_unit: &CompilationUnit,
 ) -> std::result::Result<PreparedProgram, String> {
     let mut ts =
         TypeSystem::new_with_prelude().map_err(|e| format!("failed to build prelude: {e}"))?;
@@ -1189,7 +1195,7 @@ pub fn prepare_program_with_imports(
 
     let mut imports: HashMap<Symbol, ImportModuleInfo> = HashMap::new();
 
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         let Decl::Import(ImportDecl {
             span, path, alias, ..
         }) = decl
@@ -1497,18 +1503,19 @@ pub fn prepare_program_with_imports(
         );
     }
 
-    validate_import_projection_uses(program, &imports, &mut diagnostics);
-    let rewritten = rewrite_program_import_projections(program, &imports, &mut diagnostics);
+    validate_import_projection_uses(compilation_unit, &imports, &mut diagnostics);
+    let rewritten =
+        rewrite_program_import_projections(compilation_unit, &imports, &mut diagnostics);
     Ok((rewritten, ts, imports, diagnostics))
 }
 
 fn completion_exports_for_module_alias(
     uri: &Url,
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     alias: &str,
 ) -> std::result::Result<Vec<String>, String> {
     let alias_sym = Symbol::intern(alias);
-    let Some(import_decl) = program.decls.iter().find_map(|d| {
+    let Some(import_decl) = compilation_unit.decls.iter().find_map(|d| {
         let Decl::Import(id) = d else { return None };
         if id.alias == alias_sym {
             Some(id)
@@ -1605,24 +1612,25 @@ pub(crate) fn goto_definition_response(
     let pos = lsp_to_rex_position(position);
 
     // Pick the expression tree that actually contains the cursor. Top-level
-    // instance method bodies are not part of `expr_with_fns()`, so we have
+    // instance method bodies are not part of `body_with_fns()`, so we have
     // to handle them explicitly.
-    let expr_with_fns = program.expr_with_fns();
-    let mut root_expr: &Expr = expr_with_fns.as_ref();
+    let body_with_fns = program.body_with_fns();
+    let mut root_expr = body_with_fns.as_deref();
     for decl in &program.decls {
         let Decl::Instance(inst) = decl else {
             continue;
         };
         for method in &inst.methods {
             if position_in_span(pos, *method.body.span()) {
-                root_expr = method.body.as_ref();
+                root_expr = Some(method.body.as_ref());
                 break;
             }
         }
     }
 
-    let value_def =
-        definition_span_for_value_ident(root_expr, pos, &ident, &mut Vec::new(), &tokens);
+    let value_def = root_expr.and_then(|expr| {
+        definition_span_for_value_ident(expr, pos, &ident, &mut Vec::new(), &tokens)
+    });
 
     let instance_method_def = index
         .instance_method_defs
@@ -1881,16 +1889,17 @@ pub(crate) fn references_for_source(
     if include_declaration {
         refs.push(def_location);
     }
-    let expr = program.expr_with_fns();
-    collect_references_in_expr(
-        expr.as_ref(),
-        &ident,
-        target_span,
-        uri,
-        &top_level_defs,
-        &mut Vec::new(),
-        &mut refs,
-    );
+    if let Some(expr) = program.body_with_fns() {
+        collect_references_in_expr(
+            expr.as_ref(),
+            &ident,
+            target_span,
+            uri,
+            &top_level_defs,
+            &mut Vec::new(),
+            &mut refs,
+        );
+    }
     refs.sort_by_key(|location| {
         (
             location.range.start.line,
@@ -1976,14 +1985,17 @@ pub fn code_actions_for_source(
 fn code_actions_for_hole_fill(
     uri: &Url,
     text: &str,
-    program: Option<&Program>,
+    compilation_unit: Option<&CompilationUnit>,
     request_range: Range,
 ) -> Vec<CodeActionOrCommand> {
-    let Some(program) = program else {
+    let Some(compilation_unit) = compilation_unit else {
+        return Vec::new();
+    };
+    let Some(body) = compilation_unit.body_with_fns() else {
         return Vec::new();
     };
     let mut hole_spans = Vec::new();
-    collect_hole_spans(program.expr_with_fns().as_ref(), &mut hole_spans);
+    collect_hole_spans(body.as_ref(), &mut hole_spans);
     let Some(hole_span) = hole_spans
         .into_iter()
         .find(|span| ranges_overlap(span_to_range(*span), request_range))
@@ -2016,7 +2028,7 @@ fn code_actions_for_hole_fill(
 fn code_actions_for_diagnostic(
     uri: &Url,
     text: &str,
-    program: Option<&Program>,
+    compilation_unit: Option<&CompilationUnit>,
     request_range: Range,
     diagnostic: &Diagnostic,
 ) -> Vec<CodeActionOrCommand> {
@@ -2031,13 +2043,18 @@ fn code_actions_for_diagnostic(
         .message
         .contains("typed hole `?` must be filled before evaluation")
     {
-        actions.extend(code_actions_for_hole_fill(uri, text, program, target_range));
+        actions.extend(code_actions_for_hole_fill(
+            uri,
+            text,
+            compilation_unit,
+            target_range,
+        ));
     }
 
     if let Some(name) = unknown_var_name_from_message(&diagnostic.message) {
-        if let Some(program) = program {
+        if let Some(compilation_unit) = compilation_unit {
             let mut candidates: Vec<String> =
-                values_in_scope_at_position(program, target_range.start)
+                values_in_scope_at_position(compilation_unit, target_range.start)
                     .into_keys()
                     .filter(|candidate| candidate != name)
                     .collect();
@@ -2153,10 +2170,10 @@ fn code_actions_for_diagnostic(
     }
 
     if let Some(field) = field_not_definitely_available_from_message(&diagnostic.message)
-        && let Some(program) = program
+        && let Some(compilation_unit) = compilation_unit
         && let Some(selected) = text_for_range(text, target_range)
     {
-        let candidates = default_record_candidates_for_field(program, field);
+        let candidates = default_record_candidates_for_field(compilation_unit, field);
         for ty_name in &candidates {
             if let Some(new_text) = replace_first_default_with_is(&selected, ty_name) {
                 actions.push(code_action_replace(
@@ -2170,7 +2187,7 @@ fn code_actions_for_diagnostic(
         }
 
         if let Some((binding_name, insert_pos)) =
-            find_let_binding_for_def_range(program, target_range)
+            find_let_binding_for_def_range(compilation_unit, target_range)
         {
             for ty_name in &candidates {
                 actions.push(code_action_insert(
@@ -2281,10 +2298,13 @@ fn field_not_definitely_available_from_message(message: &str) -> Option<&str> {
         .then_some(field)
 }
 
-fn default_record_candidates_for_field(program: &Program, field: &str) -> Vec<String> {
+fn default_record_candidates_for_field(
+    compilation_unit: &CompilationUnit,
+    field: &str,
+) -> Vec<String> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         let Decl::Instance(inst) = decl else {
             continue;
         };
@@ -2294,7 +2314,7 @@ fn default_record_candidates_for_field(program: &Program, field: &str) -> Vec<St
         let TypeExpr::Name(_, ty_name) = &inst.head else {
             continue;
         };
-        if !type_decl_has_record_field(program, ty_name.as_ref(), field) {
+        if !type_decl_has_record_field(compilation_unit, ty_name.as_ref(), field) {
             continue;
         }
         let ty_name = ty_name.as_ref().to_string();
@@ -2305,8 +2325,12 @@ fn default_record_candidates_for_field(program: &Program, field: &str) -> Vec<St
     out
 }
 
-fn type_decl_has_record_field(program: &Program, type_name: &str, field: &str) -> bool {
-    program.decls.iter().any(|decl| {
+fn type_decl_has_record_field(
+    compilation_unit: &CompilationUnit,
+    type_name: &str,
+    field: &str,
+) -> bool {
+    compilation_unit.decls.iter().any(|decl| {
         let Decl::Type(td) = decl else {
             return false;
         };
@@ -2457,7 +2481,9 @@ fn in_scope_value_types_at_position(
         return Vec::new();
     }
 
-    let expr = program.expr_with_fns();
+    let Some(expr) = program.body_with_fns() else {
+        return Vec::new();
+    };
     let Ok((typed, _preds, _ty)) = infer_typed(&mut ts, expr.as_ref()) else {
         return Vec::new();
     };
@@ -3017,7 +3043,7 @@ pub(crate) fn hover_type_contents(
     )
     .ok()?;
 
-    let expr_with_fns = program.expr_with_fns();
+    let body_with_fns = program.body_with_fns();
 
     let root_expr: &Expr;
     let typed_root: TypedExpr;
@@ -3031,9 +3057,10 @@ pub(crate) fn hover_type_contents(
         typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
         root_expr = method.body.as_ref();
     } else {
-        let (typed, _preds, _) = infer_typed(&mut ts, expr_with_fns.as_ref()).ok()?;
+        let body_with_fns = body_with_fns.as_ref()?;
+        let (typed, _preds, _) = infer_typed(&mut ts, body_with_fns.as_ref()).ok()?;
         typed_root = typed;
-        root_expr = expr_with_fns.as_ref();
+        root_expr = body_with_fns.as_ref();
     }
 
     let hover = hover_type_in_expr(
@@ -3107,7 +3134,7 @@ fn expected_type_at_position_type(uri: &Url, text: &str, position: Position) -> 
     )
     .ok()?;
 
-    let expr_with_fns = program.expr_with_fns();
+    let body_with_fns = program.body_with_fns();
     let root_expr: &Expr;
     let typed_root: TypedExpr;
 
@@ -3120,9 +3147,10 @@ fn expected_type_at_position_type(uri: &Url, text: &str, position: Position) -> 
         typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
         root_expr = method.body.as_ref();
     } else {
-        let (typed, _preds, _) = infer_typed(&mut ts, expr_with_fns.as_ref()).ok()?;
+        let body_with_fns = body_with_fns.as_ref()?;
+        let (typed, _preds, _) = infer_typed(&mut ts, body_with_fns.as_ref()).ok()?;
         typed_root = typed;
-        root_expr = expr_with_fns.as_ref();
+        root_expr = body_with_fns.as_ref();
     }
 
     expected_type_in_expr(root_expr, &typed_root, pos)
@@ -3158,7 +3186,7 @@ fn inferred_type_at_position_type(uri: &Url, text: &str, position: Position) -> 
     )
     .ok()?;
 
-    let expr_with_fns = program.expr_with_fns();
+    let body_with_fns = program.body_with_fns();
     let root_expr: &Expr;
     let typed_root: TypedExpr;
 
@@ -3171,9 +3199,10 @@ fn inferred_type_at_position_type(uri: &Url, text: &str, position: Position) -> 
         typed_root = ts.typecheck_instance_method(&prepared, method).ok()?;
         root_expr = method.body.as_ref();
     } else {
-        let (typed, _preds, _) = infer_typed(&mut ts, expr_with_fns.as_ref()).ok()?;
+        let body_with_fns = body_with_fns.as_ref()?;
+        let (typed, _preds, _) = infer_typed(&mut ts, body_with_fns.as_ref()).ok()?;
         typed_root = typed;
-        root_expr = expr_with_fns.as_ref();
+        root_expr = body_with_fns.as_ref();
     }
 
     inferred_type_in_expr(root_expr, &typed_root, pos)
@@ -4152,9 +4181,11 @@ pub fn hole_expected_types_for_document(uri: &Url, text: &str) -> Vec<Value> {
     let mut holes = Vec::new();
 
     // First-class holes: parse `?` nodes directly.
-    if let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) {
+    if let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text)
+        && let Some(body) = program.body_with_fns()
+    {
         let mut spans = Vec::new();
-        collect_hole_spans(program.expr_with_fns().as_ref(), &mut spans);
+        collect_hole_spans(body.as_ref(), &mut spans);
         for span in spans {
             let pos = span_to_range(span).start;
             if let Some(expected_type) = expected_type_at_position(uri, text, pos)
@@ -4365,7 +4396,8 @@ fn expected_type_from_syntax_context(uri: &Url, text: &str, position: Position) 
         }
     }
 
-    visit(program.expr_with_fns().as_ref(), pos)
+    let body = program.body_with_fns()?;
+    visit(body.as_ref(), pos)
 }
 
 pub fn command_uri_and_position(arguments: &[Value]) -> Option<(Url, Position)> {
@@ -4892,7 +4924,7 @@ fn diagnostic_for_span(span: Span, message: impl Into<String>) -> Diagnostic {
 fn push_type_diagnostics(
     uri: &Url,
     text: &str,
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Type inference is meaningfully more expensive than lex/parse, and we run
@@ -4905,7 +4937,7 @@ fn push_type_diagnostics(
     let mut engine = match Engine::with_prelude(()) {
         Ok(engine) => engine,
         Err(err) => {
-            push_engine_error(err, diagnostics, program);
+            push_engine_error(err, diagnostics, compilation_unit);
             return;
         }
     };
@@ -4918,40 +4950,50 @@ fn push_type_diagnostics(
     };
 
     if let Err(err) = result {
-        push_engine_error(err.into_engine_error(), diagnostics, program);
+        push_engine_error(err.into_engine_error(), diagnostics, compilation_unit);
         return;
     }
 
-    push_hole_diagnostics(program, diagnostics);
+    push_hole_diagnostics(compilation_unit, diagnostics);
 }
 
-fn push_engine_error(err: EngineError, diagnostics: &mut Vec<Diagnostic>, program: &Program) {
+fn push_engine_error(
+    err: EngineError,
+    diagnostics: &mut Vec<Diagnostic>,
+    compilation_unit: &CompilationUnit,
+) {
     match err {
         EngineError::Type(err) => {
-            let expr = program.expr_with_fns();
+            let expr = compilation_unit.body_with_fns();
             let before = diagnostics.len();
-            push_ts_error(err, diagnostics, Some(expr.as_ref()), None, None);
-            if let Some(primary) = diagnostics.get(before).cloned() {
+            push_ts_error(err, diagnostics, expr.as_deref(), None, None);
+            if let Some(primary) = diagnostics.get(before).cloned()
+                && let Some(expr) = expr.as_deref()
+            {
                 push_additional_default_record_update_ambiguity_diagnostics(
-                    expr.as_ref(),
+                    expr,
                     &primary.message,
                     diagnostics,
                 );
             }
         }
         EngineError::Module(module_err) => {
-            push_module_error(&module_err, diagnostics, program);
+            push_module_error(&module_err, diagnostics, compilation_unit);
         }
         other => {
             diagnostics.push(diagnostic_for_span(
-                primary_program_span(program),
+                primary_program_span(compilation_unit),
                 other.to_string(),
             ));
         }
     }
 }
 
-fn push_module_error(err: &ModuleError, diagnostics: &mut Vec<Diagnostic>, program: &Program) {
+fn push_module_error(
+    err: &ModuleError,
+    diagnostics: &mut Vec<Diagnostic>,
+    compilation_unit: &CompilationUnit,
+) {
     match err {
         ModuleError::Lex { source } => {
             diagnostics.push(diagnostic_for_lexical_error(source));
@@ -4966,28 +5008,35 @@ fn push_module_error(err: &ModuleError, diagnostics: &mut Vec<Diagnostic>, progr
         }
         _ => {
             diagnostics.push(diagnostic_for_span(
-                primary_program_span(program),
+                primary_program_span(compilation_unit),
                 err.to_string(),
             ));
         }
     }
 }
 
-fn primary_program_span(program: &Program) -> Span {
-    match program.decls.first() {
+fn primary_program_span(compilation_unit: &CompilationUnit) -> Span {
+    match compilation_unit.decls.first() {
         Some(Decl::Type(d)) => d.span,
         Some(Decl::Fn(d)) => d.span,
         Some(Decl::DeclareFn(d)) => d.span,
         Some(Decl::Import(d)) => d.span,
         Some(Decl::Class(d)) => d.span,
         Some(Decl::Instance(d)) => d.span,
-        None => *program.expr.span(),
+        None => compilation_unit
+            .body
+            .as_deref()
+            .map(|expr| *expr.span())
+            .unwrap_or_default(),
     }
 }
 
-fn push_hole_diagnostics(program: &Program, diagnostics: &mut Vec<Diagnostic>) {
+fn push_hole_diagnostics(compilation_unit: &CompilationUnit, diagnostics: &mut Vec<Diagnostic>) {
+    let Some(body) = compilation_unit.body_with_fns() else {
+        return;
+    };
     let mut spans = Vec::new();
-    collect_hole_spans(program.expr_with_fns().as_ref(), &mut spans);
+    collect_hole_spans(body.as_ref(), &mut spans);
     spans.sort_unstable_by_key(|s| (s.begin.line, s.begin.column, s.end.line, s.end.column));
     spans.dedup();
 
@@ -5122,8 +5171,12 @@ fn collect_default_record_updates(expr: &Expr, out: &mut Vec<(Span, Vec<String>)
     }
 }
 
-fn find_let_binding_for_def_range(program: &Program, target: Range) -> Option<(String, Position)> {
-    find_let_binding_for_def_range_in_expr(program.expr_with_fns().as_ref(), target)
+fn find_let_binding_for_def_range(
+    compilation_unit: &CompilationUnit,
+    target: Range,
+) -> Option<(String, Position)> {
+    let body = compilation_unit.body_with_fns()?;
+    find_let_binding_for_def_range_in_expr(body.as_ref(), target)
 }
 
 fn find_let_binding_for_def_range_in_expr(
@@ -5469,7 +5522,7 @@ pub(crate) fn completion_items(uri: &Url, text: &str, position: Position) -> Vec
 }
 
 fn completion_items_from_program(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     position: Position,
     field_mode: bool,
     base_ident: Option<&str>,
@@ -5477,7 +5530,8 @@ fn completion_items_from_program(
 ) -> Vec<CompletionItem> {
     if field_mode {
         if let Some(base_ident) = base_ident
-            && let Ok(exports) = completion_exports_for_module_alias(uri, program, base_ident)
+            && let Ok(exports) =
+                completion_exports_for_module_alias(uri, compilation_unit, base_ident)
             && !exports.is_empty()
         {
             return exports
@@ -5485,7 +5539,8 @@ fn completion_items_from_program(
                 .map(|label| completion_item(label, CompletionItemKind::FIELD))
                 .collect();
         }
-        if let Some(fields) = field_completion_for_position(program, position, base_ident) {
+        if let Some(fields) = field_completion_for_position(compilation_unit, position, base_ident)
+        {
             return fields
                 .into_iter()
                 .map(|label| completion_item(label, CompletionItemKind::FIELD))
@@ -5494,9 +5549,9 @@ fn completion_items_from_program(
         return Vec::new();
     }
 
-    let mut value_kinds = values_in_scope_at_position(program, position);
+    let mut value_kinds = values_in_scope_at_position(compilation_unit, position);
     let pos = lsp_to_rex_position(position);
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         let Decl::Import(id) = decl else { continue };
         if position_in_span(pos, id.span) || position_leq(id.span.end, pos) {
             value_kinds
@@ -5512,13 +5567,13 @@ fn completion_items_from_program(
     for (value, kind) in prelude_completion_values() {
         value_kinds.entry(value.clone()).or_insert(*kind);
     }
-    for ctor in collect_constructors(program) {
+    for ctor in collect_constructors(compilation_unit) {
         value_kinds
             .entry(ctor)
             .or_insert(CompletionItemKind::CONSTRUCTOR);
     }
 
-    let mut type_names = collect_type_names(program);
+    let mut type_names = collect_type_names(compilation_unit);
     type_names.extend(BUILTIN_TYPES.iter().map(|value| value.to_string()));
 
     let mut items = Vec::new();
@@ -5591,12 +5646,14 @@ fn completion_item(label: String, kind: CompletionItemKind) -> CompletionItem {
 }
 
 fn values_in_scope_at_position(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     position: Position,
 ) -> HashMap<String, CompletionItemKind> {
     let pos = lsp_to_rex_position(position);
-    let expr = program.expr_with_fns();
-    values_in_scope_at_expr(&expr, pos, &mut Vec::new()).unwrap_or_default()
+    let Some(expr) = compilation_unit.body_with_fns() else {
+        return HashMap::new();
+    };
+    values_in_scope_at_expr(expr.as_ref(), pos, &mut Vec::new()).unwrap_or_default()
 }
 
 fn values_in_scope_at_expr(
@@ -5832,9 +5889,9 @@ fn function_defs_from_tokens(tokens: &Tokens) -> HashMap<String, CompletionItemK
     out
 }
 
-fn collect_type_names(program: &Program) -> BTreeSet<String> {
+fn collect_type_names(compilation_unit: &CompilationUnit) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         if let Decl::Type(TypeDecl { name, .. }) = decl {
             names.insert(name.to_string());
         }
@@ -5842,9 +5899,9 @@ fn collect_type_names(program: &Program) -> BTreeSet<String> {
     names
 }
 
-fn collect_constructors(program: &Program) -> BTreeSet<String> {
+fn collect_constructors(compilation_unit: &CompilationUnit) -> BTreeSet<String> {
     let mut names = BTreeSet::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         if let Decl::Type(TypeDecl { variants, .. }) = decl {
             for variant in variants {
                 names.insert(variant.name.to_string());
@@ -5879,16 +5936,16 @@ fn collect_fields_type_expr(typ: &TypeExpr, fields: &mut BTreeSet<String>) {
 }
 
 fn field_completion_for_position(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     position: Position,
     base_ident: Option<&str>,
 ) -> Option<BTreeSet<String>> {
-    let type_fields = type_fields_map(program);
-    let env = field_env_at_position(program, position, &type_fields);
+    let type_fields = type_fields_map(compilation_unit);
+    let env = field_env_at_position(compilation_unit, position, &type_fields);
     let pos = lsp_to_rex_position(position);
 
-    let expr = program.expr_with_fns();
-    if let Some(base) = project_base_at_position(&expr, pos)
+    if let Some(expr) = compilation_unit.body_with_fns()
+        && let Some(base) = project_base_at_position(expr.as_ref(), pos)
         && let Some(fields) = fields_for_expr(base, &env, &type_fields)
     {
         return Some(fields);
@@ -5906,9 +5963,9 @@ fn field_completion_for_position(
     None
 }
 
-fn type_fields_map(program: &Program) -> HashMap<String, BTreeSet<String>> {
+fn type_fields_map(compilation_unit: &CompilationUnit) -> HashMap<String, BTreeSet<String>> {
     let mut map = HashMap::new();
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         if let Decl::Type(TypeDecl { name, variants, .. }) = decl {
             let mut fields = BTreeSet::new();
             for variant in variants {
@@ -5925,13 +5982,15 @@ fn type_fields_map(program: &Program) -> HashMap<String, BTreeSet<String>> {
 }
 
 fn field_env_at_position(
-    program: &Program,
+    compilation_unit: &CompilationUnit,
     position: Position,
     type_fields: &HashMap<String, BTreeSet<String>>,
 ) -> HashMap<String, BTreeSet<String>> {
     let pos = lsp_to_rex_position(position);
-    let expr = program.expr_with_fns();
-    field_env_at_expr(&expr, pos, &HashMap::new(), type_fields).unwrap_or_default()
+    let Some(expr) = compilation_unit.body_with_fns() else {
+        return HashMap::new();
+    };
+    field_env_at_expr(expr.as_ref(), pos, &HashMap::new(), type_fields).unwrap_or_default()
 }
 
 fn field_env_at_expr(
@@ -6411,7 +6470,7 @@ struct DeclSpanIndex {
     instance_method_defs: Vec<(Span, HashMap<String, Span>)>,
 }
 
-fn index_decl_spans(program: &Program, tokens: &Tokens) -> DeclSpanIndex {
+fn index_decl_spans(compilation_unit: &CompilationUnit, tokens: &Tokens) -> DeclSpanIndex {
     fn span_contains_span(outer: Span, inner: Span) -> bool {
         position_leq(outer.begin, inner.begin) && position_leq(inner.end, outer.end)
     }
@@ -6423,7 +6482,7 @@ fn index_decl_spans(program: &Program, tokens: &Tokens) -> DeclSpanIndex {
     let mut class_method_defs = HashMap::new();
     let mut instance_method_defs = Vec::new();
 
-    for decl in &program.decls {
+    for decl in &compilation_unit.decls {
         match decl {
             Decl::Type(td) => {
                 let decl_span = td.span;

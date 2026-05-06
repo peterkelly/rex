@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use rex_ast::expr::{Expr, Program, Symbol};
+use rex_ast::expr::{CompilationUnit, Expr, Symbol};
 use rex_typesystem::types::{TypedExpr, TypedExprKind};
 use uuid::Uuid;
 
@@ -14,6 +15,10 @@ use crate::modules::{
     prefix_for_module,
 };
 use crate::{CompileError, EngineError, Environment, Evaluator, RuntimeEnv};
+
+fn unit_expr() -> Arc<Expr> {
+    Arc::new(Expr::Tuple(Default::default(), Vec::new()))
+}
 
 pub struct Compiler<State = ()>
 where
@@ -316,15 +321,19 @@ where
 
     fn rewrite_and_inject_program(
         &mut self,
-        program: &Program,
+        compilation_unit: &CompilationUnit,
         importer: Option<ModuleId>,
         prefix: &str,
         loaded: &mut BTreeMap<ModuleId, ModuleExports>,
         loading: &mut BTreeSet<ModuleId>,
-    ) -> Result<Program, EngineError> {
-        let rewritten = self
-            .engine
-            .rewrite_program_with_imports(program, importer, prefix, loaded, loading)?;
+    ) -> Result<CompilationUnit, EngineError> {
+        let rewritten = self.engine.rewrite_program_with_imports(
+            compilation_unit,
+            importer,
+            prefix,
+            loaded,
+            loading,
+        )?;
         self.engine.inject_decls(&rewritten.decls)?;
         Ok(rewritten)
     }
@@ -386,7 +395,8 @@ where
         loaded.insert(resolved.id.clone(), exports);
         loading.remove(&resolved.id);
 
-        self.compile_expr_internal(rewritten.expr.as_ref())
+        let body = rewritten.body.unwrap_or_else(unit_expr);
+        self.compile_expr_internal(body.as_ref())
     }
 
     fn compile_snippet_with_importer(
@@ -407,6 +417,9 @@ where
             &mut loaded,
             &mut loading,
         )?;
-        self.compile_expr_internal(rewritten.expr.as_ref())
+        let body = rewritten
+            .body
+            .ok_or(EngineError::MissingBody { context: "snippet" })?;
+        self.compile_expr_internal(body.as_ref())
     }
 }

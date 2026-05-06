@@ -1497,7 +1497,7 @@ mod tests {
         let rules = grammar.rules().collect::<Vec<_>>();
 
         assert_eq!(rules.len(), 90);
-        assert_eq!(rules.first().unwrap().name, "Program");
+        assert_eq!(rules.first().unwrap().name, "CompilationUnit");
         assert_eq!(rules.last().unwrap().name, "ValueName");
     }
 

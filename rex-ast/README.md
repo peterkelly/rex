@@ -4,7 +4,7 @@ This crate defines the core syntax tree for Rex and shared language data types.
 
 ## What’s here
 
-- `rex_ast::expr`: expression/decl/type AST nodes (`Program`, `Expr`, `Decl`, `TypeExpr`, etc.)
+- `rex_ast::expr`: expression/decl/type AST nodes (`CompilationUnit`, `Expr`, `Decl`, `TypeExpr`, etc.)
 - `Symbol` + interning utilities (`intern`): stable identifiers used across crates
 - Span-bearing nodes (via `rex-lexer` spans) so diagnostics can point at source locations
 

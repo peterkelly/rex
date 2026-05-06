@@ -165,7 +165,6 @@ async fn module_import_local_pub() {
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
         fn hidden x: i32 -> i32 = x + 1;
-        ()
 "#,
     );
     write_file(
@@ -300,7 +299,6 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
         pub class Pick a where {
             pick : a;
         }
-        ()
         "#,
     );
 
@@ -341,7 +339,6 @@ async fn module_import_selected_clause_can_import_class_exports() {
         pub class Pick a where {
             pick : a;
         }
-        ()
         "#,
     );
     write_file(
@@ -378,7 +375,6 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
         &dep,
         r#"
         pub type Boxed = Boxed i32;
-        ()
         "#,
     );
 
@@ -416,7 +412,6 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
         r#"
         import b as B;
         pub fn fa x: i32 -> i32 = if x == 0 then 0 else B.fb (x - 1);
-        ()
 "#,
     );
     write_file(
@@ -424,7 +419,6 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
         r#"
         import a as A;
         pub fn fb x: i32 -> i32 = if x == 0 then 0 else A.fa (x - 1);
-        ()
 "#,
     );
     write_file(
@@ -838,7 +832,6 @@ async fn module_import_rejects_private_access() {
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
         fn hidden x: i32 -> i32 = x + 1;
-        ()
 "#,
     );
     write_file(
@@ -871,7 +864,6 @@ async fn module_import_include_roots() {
         &module,
         r#"
         pub fn inc x: i32 -> i32 = x + 1;
-        ()
 "#,
     );
 
@@ -903,7 +895,6 @@ async fn snippet_can_import_with_explicit_base() {
         &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
-        ()
 "#,
     );
 
@@ -940,7 +931,6 @@ async fn module_import_wildcard_clause() {
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
         pub fn triple x: i32 -> i32 = x * 3;
         fn hidden x: i32 -> i32 = x + 1;
-        ()
 "#,
     );
     write_file(
@@ -973,7 +963,6 @@ async fn module_import_selected_clause_with_alias() {
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
         pub fn triple x: i32 -> i32 = x * 3;
-        ()
 "#,
     );
     write_file(
@@ -1005,7 +994,6 @@ async fn module_import_selected_clause_missing_export() {
         &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
-        ()
 "#,
     );
     write_file(
@@ -1036,7 +1024,6 @@ async fn module_import_selected_clause_can_import_type_exports() {
         &dep,
         r#"
         pub type Status = Ready | Failed;
-        ()
 "#,
     );
     write_file(
@@ -1071,7 +1058,6 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
         &dep,
         r#"
         pub type Token = Token;
-        ()
 "#,
     );
     write_file(
@@ -1106,7 +1092,6 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
         &dep,
         r#"
         pub type Token = Token;
-        ()
 "#,
     );
     write_file(
@@ -1141,7 +1126,6 @@ async fn module_import_wildcard_clause_imports_type_exports_too() {
         &dep,
         r#"
         pub type Status = Ready | Failed;
-        ()
 "#,
     );
     write_file(
@@ -1178,7 +1162,6 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
         pub class Pick a where {
             pick : a;
         }
-        ()
 "#,
     );
     write_file(
@@ -1214,7 +1197,6 @@ async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
         &dep,
         r#"
         pub type Status = Ready | Failed;
-        ()
 "#,
     );
     write_file(
@@ -1261,7 +1243,6 @@ async fn module_import_selected_clause_type_name_does_not_create_value_facet() {
         &dep,
         r#"
         pub type Status = Ready | Failed;
-        ()
 "#,
     );
     write_file(
@@ -1294,7 +1275,6 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
         pub class Pick a where {
             pick : a;
         }
-        ()
 "#,
     );
     write_file(
@@ -1368,7 +1348,6 @@ async fn module_import_missing_class_export_in_instance_header() {
         pub class Present a where {
             present : a;
         }
-        ()
 "#,
     );
     write_file(
@@ -1405,7 +1384,6 @@ async fn module_import_missing_type_export_in_fn_signature() {
         &dep,
         r#"
         pub type Present = Present i32;
-        ()
 "#,
     );
     write_file(
@@ -1442,7 +1420,6 @@ async fn module_import_missing_type_export_in_instance_head() {
         pub class Marker a where {
             marker : i32;
         }
-        ()
 "#,
     );
     write_file(
@@ -1481,7 +1458,6 @@ async fn module_import_missing_class_export_in_fn_where_constraint() {
         pub class Present a where {
             present : a;
         }
-        ()
 "#,
     );
     write_file(
@@ -1518,7 +1494,6 @@ async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
         pub class Present a where {
             present : a;
         }
-        ()
 "#,
     );
     write_file(
@@ -1555,7 +1530,6 @@ async fn module_import_missing_class_export_in_class_super_constraint() {
         pub class Present a where {
             present : a;
         }
-        ()
 "#,
     );
     write_file(
@@ -1593,7 +1567,6 @@ async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named
         &dep,
         r#"
         pub type Present = Present i32;
-        ()
 "#,
     );
     write_file(
@@ -1628,7 +1601,6 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
         &dep,
         r#"
         pub type Num = Num i32;
-        ()
 "#,
     );
     write_file(
@@ -1663,7 +1635,6 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
         &dep,
         r#"
         pub type Num = Num i32;
-        ()
 "#,
     );
     write_file(
@@ -1697,7 +1668,6 @@ async fn module_import_missing_type_export_in_let_annotation_with_alias_named_bi
         &dep,
         r#"
         pub type Present = Present i32;
-        ()
 "#,
     );
     write_file(
@@ -1732,14 +1702,12 @@ async fn module_import_selected_clause_duplicate_name() {
         &left,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
-        ()
 "#,
     );
     write_file(
         &right,
         r#"
         pub fn mul x: i32 -> y: i32 -> i32 = x * y;
-        ()
 "#,
     );
     write_file(
@@ -1771,7 +1739,6 @@ async fn module_import_selected_clause_conflicts_with_local() {
         &module,
         r#"
         pub fn add x: i32 -> y: i32 -> i32 = x + y;
-        ()
 "#,
     );
     write_file(

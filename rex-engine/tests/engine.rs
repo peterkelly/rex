@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rex_ast::expr::{Decl, Expr, Program, Symbol};
+use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
 use rex_engine::{Engine, EngineError, Module, Value};
 use rex_lexer::Token;
 use rex_parser::Parser;
@@ -11,10 +11,10 @@ use rex_typesystem::{
 
 fn parse(code: &str) -> Arc<Expr> {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().expr
+    parser.parse_program().unwrap().body.unwrap()
 }
 
-fn parse_program(code: &str) -> Program {
+fn parse_program(code: &str) -> CompilationUnit {
     let mut parser = Parser::new(Token::tokenize(code).unwrap());
     parser.parse_program().unwrap()
 }
@@ -55,6 +55,20 @@ fn registry_markdown_lists_core_sections() {
     assert!(doc.contains("### `virtual:Prelude`"));
     assert!(doc.contains("`List`"));
     assert!(doc.contains("`Option`"));
+}
+
+#[test]
+fn compile_snippet_rejects_declaration_only_input() {
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let err = match compiler.compile_snippet("fn id x: a -> a = x;") {
+        Ok(_) => panic!("declaration-only snippet unexpectedly compiled"),
+        Err(err) => err.into_engine_error(),
+    };
+
+    assert!(matches!(
+        err,
+        EngineError::MissingBody { context: "snippet" }
+    ));
 }
 
 #[test]
@@ -174,7 +188,11 @@ async fn record_update_requires_known_variant_for_sum_types() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    match engine.into_evaluator().eval(program.expr.as_ref()).await {
+    match engine
+        .into_evaluator()
+        .eval(program.body.as_ref().unwrap().as_ref())
+        .await
+    {
         Err(err) => {
             let EngineError::Type(err) = err.into_engine_error() else {
                 panic!("expected type error");

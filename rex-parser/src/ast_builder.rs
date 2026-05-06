@@ -4,8 +4,8 @@ use std::{
 };
 
 use rex_ast::expr::{
-    ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause, ImportDecl,
-    ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Program, Scope,
+    ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
+    ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Scope,
     Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_lexer::{
@@ -39,7 +39,7 @@ impl PegParser {
         self.limits = limits;
     }
 
-    pub(crate) fn parse_program(&mut self) -> Result<Program, Vec<ParserErr>> {
+    pub(crate) fn parse_program(&mut self) -> Result<CompilationUnit, Vec<ParserErr>> {
         let grammar = rex::rex_grammar();
         let mut engine = self.input.engine();
         let tokens = engine.tokens().to_vec();
@@ -104,7 +104,7 @@ impl AstBuilder {
         }
     }
 
-    fn program(mut self, node: &CstNode<RexRule>) -> Result<Program, Vec<ParserErr>> {
+    fn program(mut self, node: &CstNode<RexRule>) -> Result<CompilationUnit, Vec<ParserErr>> {
         let mut decls = Vec::new();
         for decl in child_rules(node, RexRule::Decl) {
             match self.decl(decl) {
@@ -116,22 +116,19 @@ impl AstBuilder {
             }
         }
 
-        let expr = match child_rules(node, RexRule::Expr).next() {
+        let body = match child_rules(node, RexRule::Expr).next() {
             Some(expr) => match self.expr(expr) {
-                Ok(expr) => expr,
+                Ok(expr) => Some(Arc::new(expr)),
                 Err(err) => {
                     self.errors.push(err);
                     return Err(self.errors);
                 }
             },
-            None => Expr::Tuple(node.span, Vec::new()),
+            None => None,
         };
 
         if self.errors.is_empty() {
-            Ok(Program {
-                decls,
-                expr: Arc::new(expr),
-            })
+            Ok(CompilationUnit { decls, body })
         } else {
             Err(self.errors)
         }

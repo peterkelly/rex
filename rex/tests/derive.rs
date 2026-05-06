@@ -36,7 +36,7 @@ async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let heap = engine.heap.clone();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((heap, handle, ty))
@@ -230,7 +230,7 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
     let type_system = engine.type_system.clone();
     let (v_handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
 
@@ -320,7 +320,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     engine.inject_module(module).unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     let expected_ty = Type::tuple(vec![Maybe::<i32>::rex_type(), Maybe::<bool>::rex_type()]);
@@ -395,7 +395,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
 
     let (v_handle, ty) = engine_with_struct_exports()
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, MyStruct::rex_type());
@@ -407,7 +407,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let program = parser.parse_program().unwrap();
     let (v, ty) = engine_with_struct_exports()
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -437,7 +437,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let program = parser.parse_program().unwrap();
     let (v, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -462,7 +462,7 @@ async fn derive_types_implement_rex_adt_trait() {
     let program = parser.parse_program().unwrap();
     let (v, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -489,7 +489,7 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let program = parser.parse_program().unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(
@@ -573,7 +573,7 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
     let program = parser.parse_program().unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
 
@@ -667,7 +667,7 @@ async fn derive_leaf_rex_type_field_does_not_require_rex_adt_dependency() {
     let program = parser.parse_program().unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
 
@@ -687,7 +687,7 @@ async fn derive_leaf_rex_type_record_fields_support_manual_leaf_types() {
     let program = parser.parse_program().unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
 

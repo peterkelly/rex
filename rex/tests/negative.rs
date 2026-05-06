@@ -1,5 +1,5 @@
 use rex::{
-    ast::{Program, Symbol},
+    ast::{CompilationUnit, Symbol},
     engine::{Engine, EngineError, Module},
     parser::{Parser, ParserErr, ParserLimits, Token},
     typesystem::TypeError,
@@ -12,7 +12,7 @@ fn strip_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn parse_program(code: &str) -> Result<Program, Vec<ParserErr>> {
+fn parse_program(code: &str) -> Result<CompilationUnit, Vec<ParserErr>> {
     let tokens = Token::tokenize(code).expect("lexer should not panic");
     let mut parser = Parser::new(tokens);
     parser.set_limits(ParserLimits::safe_defaults());
@@ -30,7 +30,11 @@ async fn compile_err(code: &str) -> EngineError {
     if let Err(e) = engine.inject_module(module) {
         return e;
     }
-    match engine.into_evaluator().eval(program.expr.as_ref()).await {
+    match engine
+        .into_evaluator()
+        .eval(program.body.as_ref().unwrap().as_ref())
+        .await
+    {
         Ok((v, _)) => {
             let value_type = v.type_name().unwrap_or("<invalid handle>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");

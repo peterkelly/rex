@@ -20,7 +20,7 @@ pub(crate) const REX_PEG_GRAMMAR: &str = include_str!("rex.peg");
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum RexRule {
-    Program,
+    CompilationUnit,
     Decl,
     PublicDecl,
     PrivateDecl,
@@ -115,7 +115,7 @@ pub(crate) enum RexRule {
 #[cfg(test)]
 impl RexRule {
     pub(crate) const ALL: &'static [Self] = &[
-        Self::Program,
+        Self::CompilationUnit,
         Self::Decl,
         Self::PublicDecl,
         Self::PrivateDecl,
@@ -383,11 +383,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
     use TokenKind as T;
 
     Grammar::from_items(
-        R::Program,
+        R::CompilationUnit,
         vec![
-            grammar_comment("Program"),
+            grammar_comment("CompilationUnit"),
             grammar_rule(
-                R::Program,
+                R::CompilationUnit,
                 seq([rep(rule(R::Decl)), opt(rule(R::Expr)), tok(T::Eof)]),
             ),
             grammar_comment("Declarations"),
@@ -1104,7 +1104,7 @@ mod tests {
         let grammar = rex_grammar();
 
         assert_eq!(grammar, rex_grammar());
-        assert_eq!(grammar.start(), RexRule::Program);
+        assert_eq!(grammar.start(), RexRule::CompilationUnit);
         assert_eq!(
             grammar.expression(RexRule::PrivateDecl),
             Some(&rule(RexRule::DeclBody))
@@ -1120,13 +1120,13 @@ mod tests {
         sorted.sort();
 
         assert_eq!(rules, sorted);
-        assert_eq!(rules.first(), Some(&RexRule::Program));
+        assert_eq!(rules.first(), Some(&RexRule::CompilationUnit));
         assert_eq!(rules.last(), Some(&RexRule::ValueName));
     }
 
     #[test]
     fn grammar_symbols_have_stable_print_names() {
-        assert_eq!(RexRule::Program.to_string(), "Program");
+        assert_eq!(RexRule::CompilationUnit.to_string(), "CompilationUnit");
         assert_eq!(TokenKind::Import.to_string(), "IMPORT");
         assert_eq!(TokenKind::ArrowR.to_string(), "ARROW_R");
         assert_eq!(TokenKind::from_name("PAREN_L"), Some(TokenKind::ParenL));
@@ -1138,7 +1138,9 @@ mod tests {
         let rendered = grammar_to_string(&rex_grammar());
 
         assert_eq!(rendered, grammar_to_string(&rex_grammar()));
-        assert!(rendered.starts_with("\n# Program\n\nProgram            <- Decl* Expr? EOF\n"));
+        assert!(
+            rendered.starts_with("\n# CompilationUnit\n\nCompilationUnit    <- Decl* Expr? EOF\n")
+        );
         assert!(rendered.contains("\n# Declarations\n\nDecl               <-"));
         assert!(rendered.contains("\n# Expressions\n\nExpr               <-"));
         assert!(rendered.contains(
@@ -1156,8 +1158,8 @@ mod tests {
     #[test]
     fn rex_grammar_resolution_rejects_unknown_symbols() {
         let source = REX_PEG_GRAMMAR.replacen(
-            "Program            <- Decl*",
-            "Program            <- Missing*",
+            "CompilationUnit    <- Decl*",
+            "CompilationUnit    <- Missing*",
             1,
         );
         let err = rex_grammar_from_peg(&source).unwrap_err();
@@ -1167,10 +1169,10 @@ mod tests {
 
     #[test]
     fn rex_grammar_resolution_rejects_duplicate_rules() {
-        let source = format!("{REX_PEG_GRAMMAR}Program <- EOF\n");
+        let source = format!("{REX_PEG_GRAMMAR}CompilationUnit <- EOF\n");
         let err = rex_grammar_from_peg(&source).unwrap_err();
 
-        assert_eq!(err.message, "duplicate rule definition `Program`");
+        assert_eq!(err.message, "duplicate rule definition `CompilationUnit`");
     }
 
     #[test]
@@ -1183,9 +1185,12 @@ mod tests {
 
     #[test]
     fn rex_grammar_resolution_rejects_wrong_start_rule() {
-        let source = REX_PEG_GRAMMAR.replacen("Program            <-", "Decl               <-", 1);
+        let source = REX_PEG_GRAMMAR.replacen("CompilationUnit    <-", "Decl               <-", 1);
         let err = rex_grammar_from_peg(&source).unwrap_err();
 
-        assert_eq!(err.message, "expected start rule `Program`, found `Decl`");
+        assert_eq!(
+            err.message,
+            "expected start rule `CompilationUnit`, found `Decl`"
+        );
     }
 }

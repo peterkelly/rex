@@ -1,6 +1,6 @@
 use rex::{
     Rex,
-    ast::{Program, Symbol},
+    ast::{CompilationUnit, Symbol},
     engine::{Engine, Handle, Heap, Value},
     json::{json_to_rex, rex_to_json},
     parser::{Parser, Token},
@@ -37,7 +37,7 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-fn parse_program(source: &str) -> Program {
+fn parse_program(source: &str) -> CompilationUnit {
     let tokens = Token::tokenize(source).unwrap();
     let mut parser = Parser::new(tokens);
     parser.parse_program().unwrap()
@@ -244,7 +244,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let type_system = engine.type_system.clone();
     let (handle_eval, ty_eval) = engine
         .into_evaluator()
-        .eval(expr_program.expr.as_ref())
+        .eval(expr_program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());

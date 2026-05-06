@@ -179,7 +179,7 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, ManualRecord::rex_type());
@@ -203,7 +203,7 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, DerivedRecord::rex_type());
@@ -235,7 +235,7 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -260,7 +260,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -362,7 +362,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -393,7 +393,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));

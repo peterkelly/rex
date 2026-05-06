@@ -15,7 +15,7 @@ general documentation notation. Comments in generated grammar files are
 ## File shape
 
 A file is a sequence of rule definitions and comment blocks. The first rule
-definition is the grammar start rule. For the Rex grammar this is `Program`.
+definition is the grammar start rule. For the Rex grammar this is `CompilationUnit`.
 
 Rules are emitted in stable grammar order. The canonical Rex grammar order is
 the `Grammar::rules()` order, which follows the `RexRule` ordering.
@@ -46,7 +46,7 @@ Rust variants stay in CamelCase, while canonical `.peg` token names are upper
 snake case.
 
 ```peg
-Program    <- Decl* Expr? EOF
+CompilationUnit    <- Decl* Expr? EOF
 ImportDecl <- IMPORT ImportPath SEMI_COLON
 ```
 

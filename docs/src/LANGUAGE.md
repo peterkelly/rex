@@ -9,14 +9,17 @@ Rex is a small, strongly-typed functional DSL with:
 This guide is meant for users and embedders. For locked/production-facing semantics and edge cases,
 see [SPEC.md](SPEC.md).
 
-## A Program
+## Source Forms
 
-A Rex program consists of:
+A Rex source is parsed as a compilation unit containing:
 
 - zero or more declarations (`type`, `class`, `instance`, `fn`, `import`)
-- followed by a single expression (the program result)
+- optionally followed by a single expression
 
-Example:
+Sources with a final expression are snippets or program entry points. Declaration-only sources are
+modules.
+
+Example snippet:
 
 ```rex,interactive
 fn inc : i32 -> i32 = \x -> x + 1;

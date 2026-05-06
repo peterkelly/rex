@@ -265,6 +265,8 @@ pub enum EngineError {
     UnknownField { field: Symbol, value: String },
     #[error("unsupported expression")]
     UnsupportedExpr,
+    #[error("{context} must contain a final expression")]
+    MissingBody { context: &'static str },
     #[error("empty sequence")]
     EmptySequence,
     #[error("index {index} out of bounds in `{name}` (len {len})")]

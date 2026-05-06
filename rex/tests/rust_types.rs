@@ -21,7 +21,7 @@ async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
     let heap = engine.heap.clone();
     let (value, ty) = engine
         .into_evaluator()
-        .eval(program.expr.as_ref())
+        .eval(program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
     (value, heap, ty)
