@@ -30,12 +30,7 @@ pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionEr
 
     let value = evaluator.run(program).await?;
 
-    let json = json::rex_to_json(
-        &value,
-        &result_type,
-        &type_system,
-        &json::JsonOptions::default(),
-    )
-    .map_err(engine::EvalError::from)?;
+    let json =
+        json::rex_to_json(&value, &result_type, &type_system).map_err(engine::EvalError::from)?;
     Ok(json)
 }

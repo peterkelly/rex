@@ -3,7 +3,7 @@
 use rex::{
     Rex,
     engine::{Engine, EngineError, Handle, Module},
-    json::{JsonOptions, rex_to_json},
+    json::rex_to_json,
     typesystem::Type,
 };
 use serde::{Deserialize, Serialize};
@@ -82,7 +82,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     .await
     .unwrap();
 
-    let parsed = rex_to_json(&value_handle, &ty, &type_system, &JsonOptions::default()).unwrap();
+    let parsed = rex_to_json(&value_handle, &ty, &type_system).unwrap();
     let items = parsed.as_array().expect("expected top-level array");
     assert_eq!(items.len(), 2);
 

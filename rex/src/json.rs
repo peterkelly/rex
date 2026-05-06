@@ -19,44 +19,6 @@ fn runtime_ctor(name: &Symbol) -> Symbol {
     Symbol::intern(local_name(name))
 }
 
-#[derive(Clone, Debug)]
-pub struct EnumPatch {
-    /// Variant name (kept as `enum_name` for backward compatibility).
-    pub enum_name: String,
-    pub discriminant: i64,
-}
-
-/// Options for handling enum JSON encodings.
-///
-/// Some enums are encoded as integers, while others are encoded as strings, and the type
-/// information alone is not always sufficient to recover which encoding should be used. For this
-/// reason, callers can whitelist ADT names that should be represented as integers in JSON. This
-/// applies to both encoding and decoding.
-///
-/// Additionally, older generated type metadata may have missing/incorrect discriminants. To keep
-/// JSON conversion behavior aligned with external serde-based encodings, callers can provide
-/// per-variant integer patches via [`EnumPatch`].
-#[derive(Clone, Default, Debug)]
-pub struct JsonOptions {
-    pub int_enums: BTreeMap<String, Vec<EnumPatch>>,
-}
-
-impl JsonOptions {
-    /// Register the name of an ADT enum that should be encoded as integers, rather than strings.
-    ///
-    /// This only has an effect for unit variants.
-    pub fn add_int_enum(&mut self, name: &str) {
-        self.int_enums.insert(name.to_string(), vec![]);
-    }
-
-    /// Register an ADT enum for integer encoding, with explicit discriminant patches.
-    ///
-    /// This only has an effect for unit variants.
-    pub fn add_int_enum_with_patches(&mut self, name: &str, patches: Vec<EnumPatch>) {
-        self.int_enums.insert(name.to_string(), patches);
-    }
-}
-
 /// Convert a JSON [`Value`] into a typed Rex runtime value (`Handle`) allocated on `heap`.
 ///
 /// The conversion is compatible with serde-style JSON representations for Rex-compatible Rust
@@ -74,18 +36,17 @@ pub fn json_to_rex(
     json: &Value,
     want: &Type,
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Handle, EngineError> {
     match want.as_ref() {
         TypeKind::Var(tv) => Err(error(format!(
             "cannot decode JSON into unresolved type variable t{}",
             tv.id
         ))),
-        TypeKind::Con(con) => json_to_handle_for_con(heap, json, &con.name(), &[], ts, opts),
+        TypeKind::Con(con) => json_to_handle_for_con(heap, json, &con.name(), &[], ts),
         TypeKind::App(_, _) => {
             let (head, args) = decompose_type_app(want);
             if let TypeKind::Con(con) = head.as_ref() {
-                json_to_handle_for_con(heap, json, &con.name(), &args, ts, opts)
+                json_to_handle_for_con(heap, json, &con.name(), &args, ts)
             } else {
                 Err(error(format!("unsupported applied type {}", want)))
             }
@@ -95,7 +56,7 @@ pub fn json_to_rex(
             Value::Array(values) if values.len() == items.len() => {
                 let mut out = Vec::with_capacity(values.len());
                 for (value, item_ty) in values.iter().zip(items.iter()) {
-                    out.push(json_to_rex(heap, value, item_ty, ts, opts)?);
+                    out.push(json_to_rex(heap, value, item_ty, ts)?);
                 }
                 heap.alloc_tuple(out)
             }
@@ -106,7 +67,7 @@ pub fn json_to_rex(
                 let mut out = BTreeMap::new();
                 for (k, t) in fields {
                     let j = entries.get(k.as_ref()).unwrap_or(&Value::Null);
-                    out.insert(k.clone(), json_to_rex(heap, j, t, ts, opts)?);
+                    out.insert(k.clone(), json_to_rex(heap, j, t, ts)?);
                 }
                 heap.alloc_dict(out)
             }
@@ -119,22 +80,17 @@ pub fn json_to_rex(
 ///
 /// The conversion is compatible with serde-style JSON representations for Rex-compatible Rust
 /// types, but operates on runtime values stored in the evaluator heap.
-pub fn rex_to_json(
-    handle: &Handle,
-    want: &Type,
-    ts: &TypeSystem,
-    opts: &JsonOptions,
-) -> Result<Value, EngineError> {
+pub fn rex_to_json(handle: &Handle, want: &Type, ts: &TypeSystem) -> Result<Value, EngineError> {
     match want.as_ref() {
         TypeKind::Var(tv) => Err(error(format!(
             "cannot encode unresolved type variable t{} to JSON",
             tv.id
         ))),
-        TypeKind::Con(con) => handle_to_json_for_con(handle, &con.name(), &[], ts, opts),
+        TypeKind::Con(con) => handle_to_json_for_con(handle, &con.name(), &[], ts),
         TypeKind::App(_, _) => {
             let (head, args) = decompose_type_app(want);
             if let TypeKind::Con(con) = head.as_ref() {
-                handle_to_json_for_con(handle, &con.name(), &args, ts, opts)
+                handle_to_json_for_con(handle, &con.name(), &args, ts)
             } else {
                 Err(error(format!("unsupported applied type {}", want)))
             }
@@ -147,7 +103,7 @@ pub fn rex_to_json(
             }
             let mut out = Vec::with_capacity(values.len());
             for (p, t) in values.iter().zip(item_types.iter()) {
-                out.push(rex_to_json(p, t, ts, opts)?);
+                out.push(rex_to_json(p, t, ts)?);
             }
             Ok(Value::Array(out))
         }
@@ -161,7 +117,7 @@ pub fn rex_to_json(
                 let p = entries
                     .get(k)
                     .ok_or_else(|| type_mismatch_handle(handle, want))?;
-                out.insert(k.to_string(), rex_to_json(p, t, ts, opts)?);
+                out.insert(k.to_string(), rex_to_json(p, t, ts)?);
             }
             Ok(Value::Object(out))
         }
@@ -174,7 +130,6 @@ fn json_to_handle_for_con(
     con_name: &Symbol,
     con_args: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Handle, EngineError> {
     match (con_name.as_ref(), con_args) {
         ("bool", []) => match json {
@@ -249,14 +204,13 @@ fn json_to_handle_for_con(
         ("Option", [inner]) => match json {
             Value::Null => heap.alloc_adt(Symbol::intern("None"), vec![]),
             _ => {
-                let inner_handle = json_to_rex(heap, json, inner, ts, opts)?;
+                let inner_handle = json_to_rex(heap, json, inner, ts)?;
                 heap.alloc_adt(Symbol::intern("Some"), vec![inner_handle])
             }
         },
 
         ("Promise", [_inner]) => {
-            let promise_id =
-                json_to_rex(heap, json, &Type::builtin(BuiltinTypeId::Uuid), ts, opts)?;
+            let promise_id = json_to_rex(heap, json, &Type::builtin(BuiltinTypeId::Uuid), ts)?;
             heap.alloc_adt(Symbol::intern("Promise"), vec![promise_id])
         }
 
@@ -264,10 +218,10 @@ fn json_to_handle_for_con(
         ("Result", [err_t, ok_t]) => match json {
             Value::Object(obj) if obj.len() == 1 => {
                 if let Some(v) = obj.get("Ok") {
-                    let p = json_to_rex(heap, v, ok_t, ts, opts)?;
+                    let p = json_to_rex(heap, v, ok_t, ts)?;
                     heap.alloc_adt(Symbol::intern("Ok"), vec![p])
                 } else if let Some(v) = obj.get("Err") {
-                    let p = json_to_rex(heap, v, err_t, ts, opts)?;
+                    let p = json_to_rex(heap, v, err_t, ts)?;
                     heap.alloc_adt(Symbol::intern("Err"), vec![p])
                 } else {
                     Err(error(format!(
@@ -284,7 +238,7 @@ fn json_to_handle_for_con(
             Value::Array(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(json_to_rex(heap, item, elem_t, ts, opts)?);
+                    out.push(json_to_rex(heap, item, elem_t, ts)?);
                 }
                 heap.alloc_array(out)
             }
@@ -298,7 +252,7 @@ fn json_to_handle_for_con(
             Value::Array(items) => {
                 let mut out = Vec::with_capacity(items.len());
                 for item in items {
-                    out.push(json_to_rex(heap, item, elem_t, ts, opts)?);
+                    out.push(json_to_rex(heap, item, elem_t, ts)?);
                 }
                 let mut list = heap.alloc_adt(Symbol::intern("Empty"), vec![])?;
                 for p in out.into_iter().rev() {
@@ -313,7 +267,7 @@ fn json_to_handle_for_con(
             Value::Object(obj) => {
                 let mut out = BTreeMap::new();
                 for (k, v) in obj {
-                    out.insert(Symbol::intern(k), json_to_rex(heap, v, elem_t, ts, opts)?);
+                    out.insert(Symbol::intern(k), json_to_rex(heap, v, elem_t, ts)?);
                 }
                 heap.alloc_dict(out)
             }
@@ -323,7 +277,7 @@ fn json_to_handle_for_con(
             ))),
         },
 
-        _ => json_to_handle_for_adt(heap, json, con_name, con_args, ts, opts),
+        _ => json_to_handle_for_adt(heap, json, con_name, con_args, ts),
     }
 }
 
@@ -332,7 +286,6 @@ fn handle_to_json_for_con(
     con_name: &Symbol,
     con_args: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Value, EngineError> {
     match (con_name.as_ref(), con_args) {
         ("bool", []) => Ok(Value::Bool(handle.as_bool()?)),
@@ -360,7 +313,7 @@ fn handle_to_json_for_con(
             let (tag, args) = handle.as_adt()?;
             match (tag.as_ref(), args.as_slice()) {
                 ("None", []) => Ok(Value::Null),
-                ("Some", [x]) => rex_to_json(x, inner_t, ts, opts),
+                ("Some", [x]) => rex_to_json(x, inner_t, ts),
                 _ => Err(type_mismatch_handle(
                     handle,
                     &Type::app(Type::builtin(BuiltinTypeId::Option), inner_t.clone()),
@@ -372,7 +325,7 @@ fn handle_to_json_for_con(
             let (tag, args) = handle.as_adt()?;
             match (tag.as_ref(), args.as_slice()) {
                 ("Promise", [promise_id]) => {
-                    rex_to_json(promise_id, &Type::builtin(BuiltinTypeId::Uuid), ts, opts)
+                    rex_to_json(promise_id, &Type::builtin(BuiltinTypeId::Uuid), ts)
                 }
                 _ => Err(type_mismatch_handle(
                     handle,
@@ -387,12 +340,12 @@ fn handle_to_json_for_con(
             match (tag.as_ref(), args.as_slice()) {
                 ("Ok", [x]) => {
                     let mut out = Map::new();
-                    out.insert("Ok".to_string(), rex_to_json(x, ok_t, ts, opts)?);
+                    out.insert("Ok".to_string(), rex_to_json(x, ok_t, ts)?);
                     Ok(Value::Object(out))
                 }
                 ("Err", [x]) => {
                     let mut out = Map::new();
-                    out.insert("Err".to_string(), rex_to_json(x, err_t, ts, opts)?);
+                    out.insert("Err".to_string(), rex_to_json(x, err_t, ts)?);
                     Ok(Value::Object(out))
                 }
                 _ => Err(type_mismatch_handle(
@@ -409,7 +362,7 @@ fn handle_to_json_for_con(
             let items = handle.as_array()?;
             let mut out = Vec::with_capacity(items.len());
             for item in &items {
-                out.push(rex_to_json(item, elem_t, ts, opts)?);
+                out.push(rex_to_json(item, elem_t, ts)?);
             }
             Ok(Value::Array(out))
         }
@@ -418,7 +371,7 @@ fn handle_to_json_for_con(
             let items = list_to_vec(handle)?;
             let mut out = Vec::with_capacity(items.len());
             for item in &items {
-                out.push(rex_to_json(item, elem_t, ts, opts)?);
+                out.push(rex_to_json(item, elem_t, ts)?);
             }
             Ok(Value::Array(out))
         }
@@ -427,12 +380,12 @@ fn handle_to_json_for_con(
             let entries = handle.as_dict()?;
             let mut out = Map::new();
             for (k, v) in &entries {
-                out.insert(k.to_string(), rex_to_json(v, elem_t, ts, opts)?);
+                out.insert(k.to_string(), rex_to_json(v, elem_t, ts)?);
             }
             Ok(Value::Object(out))
         }
 
-        _ => handle_to_json_for_adt(handle, con_name, con_args, ts, opts),
+        _ => handle_to_json_for_adt(handle, con_name, con_args, ts),
     }
 }
 
@@ -442,7 +395,6 @@ fn json_to_handle_for_adt(
     adt_name: &Symbol,
     type_args: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Handle, EngineError> {
     let adt = ts
         .adts
@@ -453,27 +405,12 @@ fn json_to_handle_for_adt(
     if adt.variants.len() == 1 {
         let v = &adt.variants[0];
         let arg_types = instantiate_types(&v.args, &subst);
-        return decode_direct_variant(heap, json, &v.name, &arg_types, ts, opts);
+        return decode_direct_variant(heap, json, &v.name, &arg_types, ts);
     }
 
     let enum_name = adt.name.to_string();
     let enum_like = adt.variants.iter().all(|v| v.args.is_empty());
     if enum_like {
-        if opts.int_enums.contains_key(&enum_name) {
-            if let Value::Number(n) = json
-                && let Some(i) = n.as_i64()
-            {
-                for (idx, v) in adt.variants.iter().enumerate() {
-                    if variant_discriminant(&enum_name, &v.name, idx, opts) == Some(i) {
-                        return heap.alloc_adt(runtime_ctor(&v.name), vec![]);
-                    }
-                }
-            }
-            return Err(error(format!(
-                "expected integer enum JSON for `{}`, got {}",
-                enum_name, json
-            )));
-        }
         if let Value::String(tag) = json {
             if let Some(v) = adt
                 .variants
@@ -517,7 +454,7 @@ fn json_to_handle_for_adt(
             .find(|v| local_name_matches(&v.name, tag))
         {
             let arg_types = instantiate_types(&v.args, &subst);
-            return decode_wrapped_variant(heap, payload, &v.name, &arg_types, ts, opts);
+            return decode_wrapped_variant(heap, payload, &v.name, &arg_types, ts);
         }
     }
 
@@ -532,7 +469,6 @@ fn handle_to_json_for_adt(
     adt_name: &Symbol,
     type_args: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Value, EngineError> {
     let adt = ts
         .adts
@@ -562,26 +498,11 @@ fn handle_to_json_for_adt(
     }
 
     if adt.variants.len() == 1 {
-        return encode_direct_variant(&tag, &args, &arg_types, ts, opts);
+        return encode_direct_variant(&tag, &args, &arg_types, ts);
     }
 
-    let enum_name = adt.name.to_string();
     let enum_like = adt.variants.iter().all(|v| v.args.is_empty());
     if enum_like && args.is_empty() {
-        if opts.int_enums.contains_key(&enum_name) {
-            let idx = adt
-                .variants
-                .iter()
-                .position(|v| local_name_matches(&v.name, local_name(&tag)))
-                .ok_or_else(|| error(format!("missing enum variant `{}`", tag)))?;
-            let d = variant_discriminant(&enum_name, &tag, idx, opts).ok_or_else(|| {
-                error(format!(
-                    "missing integer discriminant for enum `{}` variant `{}`",
-                    enum_name, tag
-                ))
-            })?;
-            return Ok(Value::Number(d.into()));
-        }
         return Ok(Value::String(local_name(&tag).to_string()));
     }
 
@@ -589,7 +510,7 @@ fn handle_to_json_for_adt(
         return Ok(Value::String(local_name(&tag).to_string()));
     }
 
-    let payload = encode_wrapped_variant(&args, &arg_types, ts, opts)?;
+    let payload = encode_wrapped_variant(&args, &arg_types, ts)?;
     let mut out = Map::new();
     out.insert(local_name(&tag).to_string(), payload);
     Ok(Value::Object(out))
@@ -601,7 +522,6 @@ fn decode_direct_variant(
     ctor: &Symbol,
     arg_types: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Handle, EngineError> {
     match arg_types {
         [] => match json {
@@ -616,14 +536,14 @@ fn decode_direct_variant(
             ))),
         },
         [t0] => {
-            let p = json_to_rex(heap, json, t0, ts, opts)?;
+            let p = json_to_rex(heap, json, t0, ts)?;
             heap.alloc_adt(runtime_ctor(ctor), vec![p])
         }
         _ => match json {
             Value::Array(items) if items.len() == arg_types.len() => {
                 let mut args = Vec::with_capacity(items.len());
                 for (item, t) in items.iter().zip(arg_types.iter()) {
-                    args.push(json_to_rex(heap, item, t, ts, opts)?);
+                    args.push(json_to_rex(heap, item, t, ts)?);
                 }
                 heap.alloc_adt(runtime_ctor(ctor), args)
             }
@@ -642,19 +562,18 @@ fn decode_wrapped_variant(
     ctor: &Symbol,
     arg_types: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Handle, EngineError> {
     match arg_types {
         [] => heap.alloc_adt(runtime_ctor(ctor), vec![]),
         [t0] => {
-            let p = json_to_rex(heap, payload, t0, ts, opts)?;
+            let p = json_to_rex(heap, payload, t0, ts)?;
             heap.alloc_adt(runtime_ctor(ctor), vec![p])
         }
         _ => match payload {
             Value::Array(items) if items.len() == arg_types.len() => {
                 let mut args = Vec::with_capacity(items.len());
                 for (item, t) in items.iter().zip(arg_types.iter()) {
-                    args.push(json_to_rex(heap, item, t, ts, opts)?);
+                    args.push(json_to_rex(heap, item, t, ts)?);
                 }
                 heap.alloc_adt(runtime_ctor(ctor), args)
             }
@@ -672,15 +591,14 @@ fn encode_direct_variant(
     args: &[Handle],
     arg_types: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Value, EngineError> {
     match arg_types {
         [] => Ok(Value::String(local_name(ctor).to_string())),
-        [t0] => rex_to_json(&args[0], t0, ts, opts),
+        [t0] => rex_to_json(&args[0], t0, ts),
         _ => {
             let mut out = Vec::with_capacity(args.len());
             for (arg, t) in args.iter().zip(arg_types.iter()) {
-                out.push(rex_to_json(arg, t, ts, opts)?);
+                out.push(rex_to_json(arg, t, ts)?);
             }
             Ok(Value::Array(out))
         }
@@ -691,15 +609,14 @@ fn encode_wrapped_variant(
     args: &[Handle],
     arg_types: &[Type],
     ts: &TypeSystem,
-    opts: &JsonOptions,
 ) -> Result<Value, EngineError> {
     match arg_types {
         [] => Ok(Value::Null),
-        [t0] => rex_to_json(&args[0], t0, ts, opts),
+        [t0] => rex_to_json(&args[0], t0, ts),
         _ => {
             let mut out = Vec::with_capacity(args.len());
             for (arg, t) in args.iter().zip(arg_types.iter()) {
-                out.push(rex_to_json(arg, t, ts, opts)?);
+                out.push(rex_to_json(arg, t, ts)?);
             }
             Ok(Value::Array(out))
         }
@@ -751,21 +668,6 @@ fn instantiate_type(t: &Type, subst: &BTreeMap<usize, Type>) -> Type {
                 .collect(),
         ),
     }
-}
-
-fn variant_discriminant(
-    enum_type_name: &str,
-    variant_name: &Symbol,
-    idx: usize,
-    opts: &JsonOptions,
-) -> Option<i64> {
-    let patches = opts.int_enums.get(enum_type_name)?;
-    for p in patches {
-        if p.enum_name == variant_name.as_ref() || p.enum_name == local_name(variant_name) {
-            return Some(p.discriminant);
-        }
-    }
-    Some(idx as i64)
 }
 
 fn list_to_vec(handle: &Handle) -> Result<Vec<Handle>, EngineError> {

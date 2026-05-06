@@ -2,7 +2,7 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
-    json::{JsonOptions, rex_to_json},
+    json::rex_to_json,
     parser::{Parser, Token},
     typesystem::{BuiltinTypeId, RexType, Type},
 };
@@ -234,7 +234,7 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
         .await
         .unwrap();
 
-    let actual_rex = rex_to_json(&v_handle, &ty, &type_system, &JsonOptions::default()).unwrap();
+    let actual_rex = rex_to_json(&v_handle, &ty, &type_system).unwrap();
 
     let actual_serde = serde_json::to_value(MyStruct {
         x: true,
