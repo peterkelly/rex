@@ -51,6 +51,23 @@ fn option_handle(value: &Handle) -> Result<Option<Handle>, EngineError> {
     }
 }
 
+fn integer_overflow(typ: &'static str) -> EngineError {
+    EngineError::from(format!("integer overflow ({typ})"))
+}
+
+fn integer_underflow(typ: &'static str) -> EngineError {
+    EngineError::from(format!("integer underflow ({typ})"))
+}
+
+fn checked_integer_error(value: i128, min: i128, max: i128, typ: &'static str) -> EngineError {
+    if value < min {
+        integer_underflow(typ)
+    } else {
+        debug_assert!(value > max);
+        integer_overflow(typ)
+    }
+}
+
 fn result_handle(value: &Handle) -> Result<Result<Handle, Handle>, EngineError> {
     let (tag, args) = value.as_adt()?;
     if tag.as_ref() == "Ok" && args.len() == 1 {
@@ -827,6 +844,89 @@ pub(crate) fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
 pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
+    macro_rules! export_checked_unsigned_add {
+        ($ty:ty) => {
+            engine.export("prim_add", |_: &State, a: $ty, b: $ty| {
+                a.checked_add(b)
+                    .ok_or_else(|| integer_overflow(stringify!($ty)))
+            })?;
+        };
+    }
+    macro_rules! export_checked_signed_add {
+        ($ty:ty) => {
+            engine.export("prim_add", |_: &State, a: $ty, b: $ty| {
+                a.checked_add(b).ok_or_else(|| {
+                    checked_integer_error(
+                        a as i128 + b as i128,
+                        <$ty>::MIN as i128,
+                        <$ty>::MAX as i128,
+                        stringify!($ty),
+                    )
+                })
+            })?;
+        };
+    }
+    macro_rules! export_checked_unsigned_sub {
+        ($ty:ty) => {
+            engine.export("prim_sub", |_: &State, a: $ty, b: $ty| {
+                a.checked_sub(b)
+                    .ok_or_else(|| integer_underflow(stringify!($ty)))
+            })?;
+        };
+    }
+    macro_rules! export_checked_signed_sub {
+        ($ty:ty) => {
+            engine.export("prim_sub", |_: &State, a: $ty, b: $ty| {
+                a.checked_sub(b).ok_or_else(|| {
+                    checked_integer_error(
+                        a as i128 - b as i128,
+                        <$ty>::MIN as i128,
+                        <$ty>::MAX as i128,
+                        stringify!($ty),
+                    )
+                })
+            })?;
+        };
+    }
+    macro_rules! export_checked_unsigned_mul {
+        ($ty:ty) => {
+            engine.export("prim_mul", |_: &State, a: $ty, b: $ty| {
+                a.checked_mul(b)
+                    .ok_or_else(|| integer_overflow(stringify!($ty)))
+            })?;
+        };
+    }
+    macro_rules! export_checked_signed_mul {
+        ($ty:ty) => {
+            engine.export("prim_mul", |_: &State, a: $ty, b: $ty| {
+                a.checked_mul(b).ok_or_else(|| {
+                    checked_integer_error(
+                        a as i128 * b as i128,
+                        <$ty>::MIN as i128,
+                        <$ty>::MAX as i128,
+                        stringify!($ty),
+                    )
+                })
+            })?;
+        };
+    }
+    macro_rules! export_checked_int_div {
+        ($ty:ty) => {
+            engine.export("prim_div", |_: &State, a: $ty, b: $ty| {
+                a.checked_div(b)
+                    .ok_or_else(|| integer_overflow(stringify!($ty)))
+            })?;
+        };
+    }
+    macro_rules! export_checked_int_rem {
+        ($ty:ty) => {
+            engine.export("prim_mod", |_: &State, a: $ty, b: $ty| {
+                a.checked_rem(b)
+                    .ok_or_else(|| integer_overflow(stringify!($ty)))
+            })?;
+        };
+    }
+
     // Additive identity
     engine.export_value("prim_zero", String::new())?;
     engine.export_value("prim_zero", 0u8)?;
@@ -853,14 +953,14 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     engine.export_value("prim_one", 1.0f64)?;
 
     // Addition
-    engine.export("prim_add", |_: &State, a: u8, b: u8| Ok(a + b))?;
-    engine.export("prim_add", |_: &State, a: u16, b: u16| Ok(a + b))?;
-    engine.export("prim_add", |_: &State, a: u32, b: u32| Ok(a + b))?;
-    engine.export("prim_add", |_: &State, a: u64, b: u64| Ok(a + b))?;
-    engine.export("prim_add", |_: &State, a: i8, b: i8| Ok(a + b))?;
-    engine.export("prim_add", |_: &State, a: i16, b: i16| Ok(a + b))?;
-    engine.export("prim_add", |_: &State, a: i32, b: i32| Ok(a + b))?;
-    engine.export("prim_add", |_: &State, a: i64, b: i64| Ok(a + b))?;
+    export_checked_unsigned_add!(u8);
+    export_checked_unsigned_add!(u16);
+    export_checked_unsigned_add!(u32);
+    export_checked_unsigned_add!(u64);
+    export_checked_signed_add!(i8);
+    export_checked_signed_add!(i16);
+    export_checked_signed_add!(i32);
+    export_checked_signed_add!(i64);
     engine.export("prim_add", |_: &State, a: f32, b: f32| Ok(a + b))?;
     engine.export("prim_add", |_: &State, a: f64, b: f64| Ok(a + b))?;
     engine.export("prim_add", |_: &State, a: String, b: String| {
@@ -868,14 +968,14 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     })?;
 
     // Subtraction and negation
-    engine.export("prim_sub", |_: &State, a: u8, b: u8| Ok(a - b))?;
-    engine.export("prim_sub", |_: &State, a: u16, b: u16| Ok(a - b))?;
-    engine.export("prim_sub", |_: &State, a: u32, b: u32| Ok(a - b))?;
-    engine.export("prim_sub", |_: &State, a: u64, b: u64| Ok(a - b))?;
-    engine.export("prim_sub", |_: &State, a: i8, b: i8| Ok(a - b))?;
-    engine.export("prim_sub", |_: &State, a: i16, b: i16| Ok(a - b))?;
-    engine.export("prim_sub", |_: &State, a: i32, b: i32| Ok(a - b))?;
-    engine.export("prim_sub", |_: &State, a: i64, b: i64| Ok(a - b))?;
+    export_checked_unsigned_sub!(u8);
+    export_checked_unsigned_sub!(u16);
+    export_checked_unsigned_sub!(u32);
+    export_checked_unsigned_sub!(u64);
+    export_checked_signed_sub!(i8);
+    export_checked_signed_sub!(i16);
+    export_checked_signed_sub!(i32);
+    export_checked_signed_sub!(i64);
     engine.export("prim_sub", |_: &State, a: f32, b: f32| Ok(a - b))?;
     engine.export("prim_sub", |_: &State, a: f64, b: f64| Ok(a - b))?;
     engine.export("prim_negate", |_: &State, a: i8| Ok(-a))?;
@@ -886,36 +986,36 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     engine.export("prim_negate", |_: &State, a: f64| Ok(-a))?;
 
     // Multiplication and division
-    engine.export("prim_mul", |_: &State, a: u8, b: u8| Ok(a * b))?;
-    engine.export("prim_mul", |_: &State, a: u16, b: u16| Ok(a * b))?;
-    engine.export("prim_mul", |_: &State, a: u32, b: u32| Ok(a * b))?;
-    engine.export("prim_mul", |_: &State, a: u64, b: u64| Ok(a * b))?;
-    engine.export("prim_mul", |_: &State, a: i8, b: i8| Ok(a * b))?;
-    engine.export("prim_mul", |_: &State, a: i16, b: i16| Ok(a * b))?;
-    engine.export("prim_mul", |_: &State, a: i32, b: i32| Ok(a * b))?;
-    engine.export("prim_mul", |_: &State, a: i64, b: i64| Ok(a * b))?;
+    export_checked_unsigned_mul!(u8);
+    export_checked_unsigned_mul!(u16);
+    export_checked_unsigned_mul!(u32);
+    export_checked_unsigned_mul!(u64);
+    export_checked_signed_mul!(i8);
+    export_checked_signed_mul!(i16);
+    export_checked_signed_mul!(i32);
+    export_checked_signed_mul!(i64);
     engine.export("prim_mul", |_: &State, a: f32, b: f32| Ok(a * b))?;
     engine.export("prim_mul", |_: &State, a: f64, b: f64| Ok(a * b))?;
-    engine.export("prim_div", |_: &State, a: u8, b: u8| Ok(a / b))?;
-    engine.export("prim_div", |_: &State, a: u16, b: u16| Ok(a / b))?;
-    engine.export("prim_div", |_: &State, a: u32, b: u32| Ok(a / b))?;
-    engine.export("prim_div", |_: &State, a: u64, b: u64| Ok(a / b))?;
-    engine.export("prim_div", |_: &State, a: i8, b: i8| Ok(a / b))?;
-    engine.export("prim_div", |_: &State, a: i16, b: i16| Ok(a / b))?;
-    engine.export("prim_div", |_: &State, a: i32, b: i32| Ok(a / b))?;
-    engine.export("prim_div", |_: &State, a: i64, b: i64| Ok(a / b))?;
+    export_checked_int_div!(u8);
+    export_checked_int_div!(u16);
+    export_checked_int_div!(u32);
+    export_checked_int_div!(u64);
+    export_checked_int_div!(i8);
+    export_checked_int_div!(i16);
+    export_checked_int_div!(i32);
+    export_checked_int_div!(i64);
     engine.export("prim_div", |_: &State, a: f32, b: f32| Ok(a / b))?;
     engine.export("prim_div", |_: &State, a: f64, b: f64| Ok(a / b))?;
 
     // Remainder
-    engine.export("prim_mod", |_: &State, a: u8, b: u8| Ok(a % b))?;
-    engine.export("prim_mod", |_: &State, a: u16, b: u16| Ok(a % b))?;
-    engine.export("prim_mod", |_: &State, a: u32, b: u32| Ok(a % b))?;
-    engine.export("prim_mod", |_: &State, a: u64, b: u64| Ok(a % b))?;
-    engine.export("prim_mod", |_: &State, a: i8, b: i8| Ok(a % b))?;
-    engine.export("prim_mod", |_: &State, a: i16, b: i16| Ok(a % b))?;
-    engine.export("prim_mod", |_: &State, a: i32, b: i32| Ok(a % b))?;
-    engine.export("prim_mod", |_: &State, a: i64, b: i64| Ok(a % b))?;
+    export_checked_int_rem!(u8);
+    export_checked_int_rem!(u16);
+    export_checked_int_rem!(u32);
+    export_checked_int_rem!(u64);
+    export_checked_int_rem!(i8);
+    export_checked_int_rem!(i16);
+    export_checked_int_rem!(i32);
+    export_checked_int_rem!(i64);
 
     // Numeric conversions (used by `std.json`).
     engine.export("prim_to_f64", |_: &State, x: u8| Ok(x as f64))?;

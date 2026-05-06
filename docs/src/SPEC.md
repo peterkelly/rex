@@ -326,6 +326,9 @@ Integer literals are overloaded over integral types.
   requires `AdditiveGroup`.
 - Division uses `Divisive`, which includes primitive integer and floating-point types. Integer
   division follows Rust's integer division semantics.
+- Integer `+`, `-`, `*`, `/`, and `%` are checked at runtime for primitive integer types. Arithmetic
+  overflow raises `integer overflow (T)` and arithmetic underflow raises `integer underflow (T)`,
+  where `T` is the concrete integer type.
 - Context can specialize `α` (for example, `let x: u64 = 4 in x`).
 - Unannotated `let` bindings whose definition is an integer literal are kept monomorphic. This lets
   use sites specialize the binding consistently in that scope (for example, `let x = 4 in (x + 1,
