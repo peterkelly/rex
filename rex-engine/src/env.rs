@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use rex_ast::expr::Symbol;
 
 use crate::EngineError;
-use crate::value::Pointer;
+use crate::value::{Handle, Heap, Pointer};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Environment(Arc<EnvEntry>);
@@ -13,6 +13,14 @@ pub struct Environment(Arc<EnvEntry>);
 struct EnvEntry {
     parent: Option<Environment>,
     bindings: BTreeMap<Symbol, Pointer>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RootedEnvironment(Arc<RootedEnvEntry>);
+
+struct RootedEnvEntry {
+    parent: Option<RootedEnvironment>,
+    bindings: BTreeMap<Symbol, Handle>,
 }
 
 impl Environment {
@@ -63,17 +71,6 @@ impl Environment {
         }
     }
 
-    pub(crate) fn trace_pointers_shared(&self, seen: &mut HashSet<usize>, out: &mut Vec<Pointer>) {
-        let mut current = Some(self);
-        while let Some(env) = current {
-            if !seen.insert(env.entry_id()) {
-                break;
-            }
-            out.extend(env.0.bindings.values().copied());
-            current = env.0.parent.as_ref();
-        }
-    }
-
     pub(crate) fn rewrite_pointers(
         &mut self,
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
@@ -101,45 +98,65 @@ impl Environment {
         Ok(())
     }
 
-    pub(crate) fn rewrite_pointers_shared(
-        &mut self,
-        rewritten: &mut HashMap<usize, Environment>,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        let mut entries = Vec::new();
-        let mut current: Option<&Environment> = Some(self);
-        let mut rebuilt = None;
-        while let Some(env) = current {
-            let id = env.entry_id();
-            if let Some(existing) = rewritten.get(&id) {
-                rebuilt = Some(existing.clone());
-                break;
-            }
-
-            let mut bindings = BTreeMap::new();
-            for (name, pointer) in &env.0.bindings {
-                bindings.insert(name.clone(), rewrite(*pointer)?);
-            }
-            entries.push((id, bindings));
-            current = env.0.parent.as_ref();
-        }
-
-        for (id, bindings) in entries.into_iter().rev() {
-            let env = Environment(Arc::new(EnvEntry {
-                parent: rebuilt,
-                bindings,
-            }));
-            rewritten.insert(id, env.clone());
-            rebuilt = Some(env);
-        }
-
-        *self = rebuilt.unwrap_or_default();
-        Ok(())
-    }
-
     fn entry_id(&self) -> usize {
         // EnvEntry arcs are immutable, so identity is enough within one rewrite pass.
         Arc::as_ptr(&self.0) as usize
+    }
+}
+
+impl RootedEnvironment {
+    pub(crate) fn from_environment(env: &Environment, heap: &Heap) -> Result<Self, EngineError> {
+        let mut rooted = HashMap::new();
+        Self::from_environment_shared(env, heap, &mut rooted)
+    }
+
+    fn from_environment_shared(
+        env: &Environment,
+        heap: &Heap,
+        rooted: &mut HashMap<usize, RootedEnvironment>,
+    ) -> Result<Self, EngineError> {
+        let id = env.entry_id();
+        if let Some(existing) = rooted.get(&id) {
+            return Ok(existing.clone());
+        }
+
+        let parent = env
+            .0
+            .parent
+            .as_ref()
+            .map(|parent| Self::from_environment_shared(parent, heap, rooted))
+            .transpose()?;
+        let mut bindings = BTreeMap::new();
+        for (name, pointer) in &env.0.bindings {
+            bindings.insert(name.clone(), heap.handle(*pointer)?);
+        }
+
+        let env = RootedEnvironment(Arc::new(RootedEnvEntry { parent, bindings }));
+        rooted.insert(id, env.clone());
+        Ok(env)
+    }
+
+    pub(crate) fn to_environment(&self) -> Result<Environment, EngineError> {
+        let mut entries = Vec::new();
+        let mut current = Some(self);
+        while let Some(env) = current {
+            let mut bindings = BTreeMap::new();
+            for (name, handle) in &env.0.bindings {
+                bindings.insert(name.clone(), handle.pointer()?);
+            }
+            entries.push(bindings);
+            current = env.0.parent.as_ref();
+        }
+
+        let mut rebuilt = None;
+        for bindings in entries.into_iter().rev() {
+            rebuilt = Some(Environment(Arc::new(EnvEntry {
+                parent: rebuilt,
+                bindings,
+            })));
+        }
+
+        Ok(rebuilt.unwrap_or_default())
     }
 }
 
@@ -155,37 +172,23 @@ mod tests {
     use crate::value::Heap;
 
     #[test]
-    fn shared_pointer_rewrite_visits_shared_entries_once() {
+    fn rooted_environment_survives_copying_gc() {
         let heap = Heap::new();
         let a = heap.alloc_ptr_i32(1).unwrap();
         let b = heap.alloc_ptr_i32(2).unwrap();
-        let c = heap.alloc_ptr_i32(3).unwrap();
 
-        let base = Environment::new().extend(Symbol::intern("a"), a);
-        let mut left = base.extend(Symbol::intern("b"), b);
-        let mut right = base.extend(Symbol::intern("c"), c);
+        let env = Environment::new()
+            .extend(Symbol::intern("a"), a)
+            .extend(Symbol::intern("b"), b);
+        let rooted = RootedEnvironment::from_environment(&env, &heap).unwrap();
 
-        let mut traced = Vec::new();
-        let mut seen = HashSet::new();
-        left.trace_pointers_shared(&mut seen, &mut traced);
-        right.trace_pointers_shared(&mut seen, &mut traced);
-        assert_eq!(traced.len(), 3);
+        heap.set_collect_on_every_alloc(true).unwrap();
+        heap.alloc_ptr_i32(3).unwrap();
 
-        let mut rewritten = HashMap::new();
-        let mut rewrite_count = 0;
-        let mut rewrite = |pointer| {
-            rewrite_count += 1;
-            Ok(pointer)
-        };
-        left.rewrite_pointers_shared(&mut rewritten, &mut rewrite)
-            .unwrap();
-        right
-            .rewrite_pointers_shared(&mut rewritten, &mut rewrite)
-            .unwrap();
-        assert_eq!(rewrite_count, 3);
-
-        let left_parent = left.0.parent.as_ref().unwrap();
-        let right_parent = right.0.parent.as_ref().unwrap();
-        assert!(Arc::ptr_eq(&left_parent.0, &right_parent.0));
+        let env = rooted.to_environment().unwrap();
+        let a = env.get(&Symbol::intern("a")).unwrap();
+        let b = env.get(&Symbol::intern("b")).unwrap();
+        assert_eq!(heap.pointer_as_i32(&a).unwrap(), 1);
+        assert_eq!(heap.pointer_as_i32(&b).unwrap(), 2);
     }
 }

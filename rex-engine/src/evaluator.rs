@@ -274,8 +274,6 @@ where
 
         self.runtime
             .typeclasses
-            .lock()
-            .map_err(|_| EngineError::Internal("typeclass registry poisoned".into()))?
             .resolve(&info.class, name, &param_type)
     }
 

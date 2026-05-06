@@ -1,6 +1,6 @@
 //! Core engine implementation for Rex.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt::{self, Write as _};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
@@ -54,7 +54,7 @@ use crate::stack::{
 use crate::value::FromPointer;
 use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec};
 use crate::{
-    Compiler, EngineError, Environment, Evaluator, FromRex, IntoRex,
+    Compiler, EngineError, Environment, Evaluator, FromRex, IntoRex, RootedEnvironment,
     evaluator::{EvalContext, EvaluatorRef},
 };
 
@@ -1746,7 +1746,7 @@ impl<State: Clone + Send + Sync + 'static> Default for NativeRegistry<State> {
 #[derive(Clone)]
 pub(crate) struct TypeclassInstance {
     head: Type,
-    def_env: Environment,
+    def_env: RootedEnvironment,
     methods: BTreeMap<Symbol, Arc<TypedExpr>>,
 }
 
@@ -1760,7 +1760,7 @@ impl TypeclassRegistry {
         &mut self,
         class: Symbol,
         head: Type,
-        def_env: Environment,
+        def_env: RootedEnvironment,
         methods: BTreeMap<Symbol, Arc<TypedExpr>>,
     ) -> Result<(), EngineError> {
         let entry = self.entries.entry(class.clone()).or_default();
@@ -1814,37 +1814,13 @@ impl TypeclassRegistry {
                             class: class.clone(),
                             typ: param_type.to_string(),
                         })?;
-                Ok((inst.def_env.clone(), typed.clone(), s))
+                Ok((inst.def_env.to_environment()?, typed.clone(), s))
             }
             _ => Err(EngineError::AmbiguousTypeclassImpl {
                 class: class.clone(),
                 typ: param_type.to_string(),
             }),
         }
-    }
-
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        let mut seen_envs = HashSet::new();
-        for instances in self.entries.values() {
-            for instance in instances {
-                instance.def_env.trace_pointers_shared(&mut seen_envs, out);
-            }
-        }
-    }
-
-    fn rewrite_pointers(
-        &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        let mut rewritten_envs = HashMap::new();
-        for instances in self.entries.values_mut() {
-            for instance in instances {
-                instance
-                    .def_env
-                    .rewrite_pointers_shared(&mut rewritten_envs, rewrite)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -2071,7 +2047,7 @@ where
 {
     pub(crate) state: Arc<State>,
     pub(crate) natives: Arc<NativeRegistry<State>>,
-    pub(crate) typeclasses: Arc<Mutex<TypeclassRegistry>>,
+    pub(crate) typeclasses: Arc<TypeclassRegistry>,
     pub(crate) type_system: Arc<TypeSystem>,
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
     pub(crate) async_call_policy: AsyncCallPolicy,
@@ -2084,10 +2060,6 @@ where
     State: Clone + Send + Sync + 'static,
 {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) -> Result<(), EngineError> {
-        self.typeclasses
-            .lock()
-            .map_err(|_| EngineError::Internal("typeclass registry poisoned".into()))?
-            .trace_pointers(out);
         let cache = self
             .typeclass_cache
             .lock()
@@ -2106,14 +2078,6 @@ where
             return Ok(());
         }
 
-        self.typeclasses
-            .lock()
-            .map_err(|_| EngineError::Internal("typeclass registry poisoned".into()))?
-            .rewrite_pointers(&mut |_| {
-                let pointer = roots.get(*cursor)?;
-                *cursor += 1;
-                Ok(pointer)
-            })?;
         let mut cache = self
             .typeclass_cache
             .lock()
@@ -2226,7 +2190,7 @@ where
         RuntimeCore {
             state: Arc::clone(&self.state),
             natives: Arc::new(self.natives.clone()),
-            typeclasses: Arc::new(Mutex::new(self.typeclasses.clone())),
+            typeclasses: Arc::new(self.typeclasses.clone()),
             type_system: Arc::new(self.type_system.clone()),
             typeclass_cache: Arc::clone(&self.typeclass_cache),
             async_call_policy: self.async_call_policy.clone(),
@@ -2988,8 +2952,8 @@ where
             )),
         );
 
-        self.typeclasses
-            .insert(class, head_ty, self.env.clone(), methods)?;
+        let def_env = RootedEnvironment::from_environment(&self.env, &self.heap)?;
+        self.typeclasses.insert(class, head_ty, def_env, methods)?;
 
         Ok(())
     }
@@ -3477,10 +3441,11 @@ where
             methods.insert(method.name.clone(), Arc::new(typed));
         }
 
+        let def_env = RootedEnvironment::from_environment(&self.env, &self.heap)?;
         self.typeclasses.insert(
             prepared.class.clone(),
             prepared.head.clone(),
-            self.env.clone(),
+            def_env,
             methods,
         )?;
         Ok(())

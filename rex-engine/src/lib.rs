@@ -23,6 +23,7 @@ pub use engine::{
     RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, collect_adts_error_to_engine,
 };
 pub use env::Environment;
+pub(crate) use env::RootedEnvironment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
 pub use evaluator::{Evaluator, EvaluatorRef};
 pub use modules::virtual_export_name;
