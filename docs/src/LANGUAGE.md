@@ -223,12 +223,12 @@ in
 ### Pattern Matching
 
 `match` performs structural matching. The scrutinee is followed by `with`, then one or more
-semicolon-terminated `when` arms inside a braced arm block:
+semicolon-terminated `case` arms inside a braced arm block:
 
 ```rex
 match xs with {
-  when Empty -> 0;
-  when Cons h t -> h;
+  case Empty -> 0;
+  case Cons h t -> h;
 }
 ```
 
@@ -245,8 +245,8 @@ Patterns include:
 
 ```rex,interactive
 match [1, 2, 3] with {
-  when h::t -> h;
-  when [] -> 0;
+  case h::t -> h;
+  case [] -> 0;
 }
 ```
 
@@ -343,8 +343,8 @@ type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
 match s with {
-  when A {x} -> { s with { x = x + 1 } };
-  when B {x} -> { s with { x = x + 2 } };
+  case A {x} -> { s with { x = x + 1 } };
+  case B {x} -> { s with { x = x + 2 } };
 }
 ```
 
@@ -415,8 +415,8 @@ class Size a where {
 instance Size (List t) where {
   size = \xs ->
     match xs with {
-      when Empty -> 0;
-      when Cons _ rest -> 1 + size rest;
+      case Empty -> 0;
+      case Cons _ rest -> 1 + size rest;
     };
 }
 ```

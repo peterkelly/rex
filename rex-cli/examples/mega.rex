@@ -78,51 +78,51 @@ let
     odds_count = count odds,
     pair_list = zip evens odds,
     pair_count = count pair_list,
-    pair_head = match pair_list with { when [] → (0, 0); when p::ps → p; },
+    pair_head = match pair_list with { case [] → (0, 0); case p::ps → p; },
     pair_first = pair_head.0,
     pair_second = pair_head.1,
     pair_mix = pair_first + pair_second,
     first_three = (get 0 nums, get 1 nums, get 2 nums),
     last_three = (get 237 nums, get 238 nums, get 239 nums),
-    head_num = match nums with { when [] → 0; when x::xs → x; },
-    head_opt = match nums with { when [] → None; when x::xs → Some x; },
-    opt_to_zero = λx → match x with { when None → 0; when Some v → v; },
+    head_num = match nums with { case [] → 0; case x::xs → x; },
+    head_opt = match nums with { case [] → None; case x::xs → Some x; },
+    opt_to_zero = λx → match x with { case None → 0; case Some v → v; },
     head_or_zero = opt_to_zero head_opt,
     deep_match =
         match nums with {
-            when [] → 0;
-            when x::xs →
+            case [] → 0;
+            case x::xs →
                 match xs with {
-                    when [] → x;
-                    when y::ys →
+                    case [] → x;
+                    case y::ys →
                         match ys with {
-                            when [] → x + y;
-                            when z::zs →
+                            case [] → x + y;
+                            case z::zs →
                                 match zs with {
-                                    when [] → x + y + z;
-                                    when w::ws → x + y + z + w;
+                                    case [] → x + y + z;
+                                    case w::ws → x + y + z + w;
                                 };
                         };
                 };
         },
     first_five =
         match nums with {
-            when [a, b, c, d, e] → a + b + c + d + e;
-            when a::rest → a;
-            when _ → 0;
+            case [a, b, c, d, e] → a + b + c + d + e;
+            case a::rest → a;
+            case _ → 0;
         },
     list_of_lists = [front20, mid20, slice20, tail20],
     list_summary =
         match list_of_lists with {
-            when [a, b, c, d] → sum a + sum b + sum c + sum d;
-            when _ → 0;
+            case [a, b, c, d] → sum a + sum b + sum c + sum d;
+            case _ → 0;
         },
     classify: i32 -> Result i32 i32 = λn → if n % 3 == 0 then Ok n else Err n,
     classified = map classify nums,
-    only_ok = filter_map (λx → match x with { when Ok v → Some v; when Err _ → None; }) classified,
+    only_ok = filter_map (λx → match x with { case Ok v → Some v; case Err _ → None; }) classified,
     ok_count = count only_ok,
     ok_sum = sum only_ok,
-    ok_head = match only_ok with { when [] → 0; when x::xs → x; },
+    ok_head = match only_ok with { case [] → 0; case x::xs → x; },
     mega26_result = mega26 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26,
     mega52_result = mega52 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52,
     mega64_result = mega64 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64,

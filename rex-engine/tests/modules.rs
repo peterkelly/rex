@@ -1805,8 +1805,8 @@ async fn std_json_encode_decode_smoke() {
         let
           b_ok =
             match (Json.from_json (Json.to_json true)) with {
-              when Ok b -> if b then 1 else 0;
-              when Err _ -> -1;
+              case Ok b -> if b then 1 else 0;
+              case Err _ -> -1;
             }
         in
           b_ok
@@ -1838,8 +1838,8 @@ async fn std_json_roundtrip_nested() {
 
           xs_ok =
             match (Json.from_json (Json.to_json xs)) with {
-              when Ok ys -> if ys == xs then 1 else 0;
-              when Err _ -> -1;
+              case Ok ys -> if ys == xs then 1 else 0;
+              case Err _ -> -1;
             },
 
           arr: Array (Result i32 string) =
@@ -1847,8 +1847,8 @@ async fn std_json_roundtrip_nested() {
 
           arr_ok =
             match (Json.from_json (Json.to_json arr)) with {
-              when Ok ys -> if ys == arr then 1 else 0;
-              when Err _ -> -1;
+              case Ok ys -> if ys == arr then 1 else 0;
+              case Err _ -> -1;
             }
         in
           (xs_ok, arr_ok)
@@ -1891,22 +1891,22 @@ async fn std_json_decode_errors_have_useful_messages() {
           both =
             let v = Json.Object { ok = Json.Number (prim_to_f64 (1 is i32)), err = Json.String "bad" } in
             match (Json.from_json v) with {
-              when Ok r -> let _r: Result i32 string = r in "unexpected ok";
-              when Err e -> e.message;
+              case Ok r -> let _r: Result i32 string = r in "unexpected ok";
+              case Err e -> e.message;
             },
 
           neither =
             let v = Json.Object {} in
             match (Json.from_json v) with {
-              when Ok r -> let _r: Result i32 string = r in "unexpected ok";
-              when Err e -> e.message;
+              case Ok r -> let _r: Result i32 string = r in "unexpected ok";
+              case Err e -> e.message;
             },
 
           wrong_kind =
             let v = Json.Bool true in
             match (Json.from_json v) with {
-              when Ok xs -> let _xs: List i32 = xs in "unexpected ok";
-              when Err e -> e.message;
+              case Ok xs -> let _xs: List i32 = xs in "unexpected ok";
+              case Err e -> e.message;
             },
 
           bad_list_elem =
@@ -1914,8 +1914,8 @@ async fn std_json_decode_errors_have_useful_messages() {
               Json.Array (prim_array_from_list [Json.Number (prim_to_f64 (1 is i32)), Json.String "oops"])
             in
             match (Json.from_json v) with {
-              when Ok xs -> let _xs: List i32 = xs in "unexpected ok";
-              when Err e -> e.message;
+              case Ok xs -> let _xs: List i32 = xs in "unexpected ok";
+              case Err e -> e.message;
             }
         in
           (both, neither, wrong_kind, bad_list_elem)
@@ -1964,14 +1964,14 @@ async fn std_json_numeric_decode_errors() {
         let
           u8_overflow =
             match (Json.from_json (Json.Number (prim_to_f64 (256 is i32)))) with {
-              when Ok n -> let _n: u8 = n in "unexpected ok";
-              when Err e -> e.message;
+              case Ok n -> let _n: u8 = n in "unexpected ok";
+              case Err e -> e.message;
             },
 
           i32_fractional =
             match (Json.from_json (Json.Number (prim_to_f64 1.5))) with {
-              when Ok n -> let _n: i32 = n in "unexpected ok";
-              when Err e -> e.message;
+              case Ok n -> let _n: i32 = n in "unexpected ok";
+              case Err e -> e.message;
             }
         in
           (u8_overflow, i32_fractional)
@@ -2075,20 +2075,20 @@ async fn std_json_parse_and_from_string_roundtrip() {
 
           parsed_ok =
             match (Json.parse (show v)) with {
-              when Ok v2 -> if show v2 == show v then 1 else 0;
-              when Err _ -> -1;
+              case Ok v2 -> if show v2 == show v then 1 else 0;
+              case Err _ -> -1;
             },
 
           xs: List i32 = [(1 is i32), (2 is i32), (3 is i32)],
           s = Json.stringify (Json.to_json xs),
           decoded_ok =
             match (Json.parse s) with {
-              when Err _ -> -1;
-              when Ok v0 ->
+              case Err _ -> -1;
+              case Ok v0 ->
                 (
                   match (Json.from_json v0) with {
-                    when Ok ys -> if ys == xs then 1 else 0;
-                    when Err _ -> -2;
+                    case Ok ys -> if ys == xs then 1 else 0;
+                    case Err _ -> -2;
                   }
                 );
             },
@@ -2096,8 +2096,8 @@ async fn std_json_parse_and_from_string_roundtrip() {
           bad_s = "{",
           parse_err =
             match (Json.parse bad_s) with {
-              when Ok _ -> 0;
-              when Err e -> if e.message != "" then 1 else 0;
+              case Ok _ -> 0;
+              case Err e -> if e.message != "" then 1 else 0;
             }
         in
           (parsed_ok, decoded_ok, parse_err)

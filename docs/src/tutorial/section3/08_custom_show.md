@@ -121,8 +121,8 @@ instance DemoShow i32 where {
 instance DemoShow (Option a) <= DemoShow a where {
   demo_show = \ox ->
     match ox with {
-      when Some x -> "Some(" + demo_show x + ")";
-      when None -> "None";
+      case Some x -> "Some(" + demo_show x + ")";
+      case None -> "None";
     };
 }
 (demo_show (Some 1), demo_show None)

@@ -40,6 +40,7 @@ impl Precedence {
 pub enum Token {
     // Reserved keywords
     As(Span),
+    Case(Span),
     Class(Span),
     Declare(Span),
     Else(Span),
@@ -161,6 +162,8 @@ impl Token {
                 // Reserved keywords
                 if capture.name("As").is_some() {
                     Token::As(span)
+                } else if capture.name("Case").is_some() {
+                    Token::Case(span)
                 } else if capture.name("Class").is_some() {
                     Token::Class(span)
                 } else if capture.name("Declare").is_some() {
@@ -351,6 +354,7 @@ impl Token {
             regex::Regex::from_str(concat!(
                 // Reserved keywords (with word boundaries)
                 r"(?P<As>\bas\b)|",
+                r"(?P<Case>\bcase\b)|",
                 r"(?P<Class>\bclass\b)|",
                 r"(?P<Declare>\bdeclare\b)|",
                 r"(?P<Else>\belse\b)|",
@@ -456,6 +460,7 @@ impl Spanned for Token {
         match self {
             // Reserved keywords
             As(span, ..) => span,
+            Case(span, ..) => span,
             Class(span, ..) => span,
             Declare(span, ..) => span,
             Else(span, ..) => span,
@@ -537,6 +542,7 @@ impl Spanned for Token {
         match self {
             // Reserved keywords
             As(span, ..) => span,
+            Case(span, ..) => span,
             Class(span, ..) => span,
             Declare(span, ..) => span,
             Else(span, ..) => span,
@@ -620,6 +626,7 @@ impl Display for Token {
         match self {
             // Reserved keywords
             As(..) => write!(f, "as"),
+            Case(..) => write!(f, "case"),
             Class(..) => write!(f, "class"),
             Declare(..) => write!(f, "declare"),
             Else(..) => write!(f, "else"),

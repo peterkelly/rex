@@ -14,29 +14,29 @@ fn compare_i32 : i32 -> i32 -> Order = \a b ->
 
 fn split_alt : List i32 -> (List i32, List i32) = \xs ->
   match xs with {
-    when [] -> ([], []);
-    when [x] -> ([x], []);
-    when x::y::rest ->
+    case [] -> ([], []);
+    case [x] -> ([x], []);
+    case x::y::rest ->
       let (xs1, ys1) = split_alt rest in (Cons x xs1, Cons y ys1);
   };
 
 fn merge : List i32 -> List i32 -> List i32 = \xs ys ->
   match (xs, ys) with {
-    when ([], _) -> ys;
-    when (_, []) -> xs;
-    when (x::xt, y::yt) ->
+    case ([], _) -> ys;
+    case (_, []) -> xs;
+    case (x::xt, y::yt) ->
       match (compare_i32 x y) with {
-        when Lt -> Cons x (merge xt ys);
-        when Eq -> Cons x (Cons y (merge xt yt));
-        when Gt -> Cons y (merge xs yt);
+        case Lt -> Cons x (merge xt ys);
+        case Eq -> Cons x (Cons y (merge xt yt));
+        case Gt -> Cons y (merge xs yt);
       };
   };
 
 fn mergesort : List i32 -> List i32 = \xs ->
   match xs with {
-    when [] -> [];
-    when [x] -> [x];
-    when _ ->
+    case [] -> [];
+    case [x] -> [x];
+    case _ ->
       let (left, right) = split_alt xs in
       merge (mergesort left) (mergesort right);
   };

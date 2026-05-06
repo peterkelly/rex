@@ -427,8 +427,8 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let tokens = Token::tokenize(
         r#"
         match shape with {
-            when Rectangle w h -> w * h;
-            when Circle r -> r;
+            case Rectangle w h -> w * h;
+            case Circle r -> r;
         }
         "#,
     )
@@ -452,8 +452,8 @@ async fn derive_types_implement_rex_adt_trait() {
     let tokens = Token::tokenize(
         r#"
         match (Rectangle 2 5) with {
-            when Rectangle w h -> w * h;
-            when Circle r -> r;
+            case Rectangle w h -> w * h;
+            case Circle r -> r;
         }
         "#,
     )

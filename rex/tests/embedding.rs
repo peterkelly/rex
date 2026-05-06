@@ -168,8 +168,8 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
             import sample as Sample;
             let x = (Right is Sample.Correctness) in
             match (x is Sample.Correctness) with {
-              when Right -> true;
-              when Wrong -> false;
+              case Right -> true;
+              case Wrong -> false;
             }
             "#,
         )

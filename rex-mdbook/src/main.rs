@@ -274,7 +274,7 @@ async function initRexLanguage(monaco, wasm) {
   monaco.languages.register({ id: "rex" });
   const quickFixKind = monaco.languages?.CodeActionKind?.QuickFix ?? "quickfix";
   monaco.languages.setMonarchTokensProvider("rex", {
-    keywords: ["declare", "import", "pub", "let", "in", "type", "match", "when", "if", "then", "else", "as", "for", "is", "fn"],
+    keywords: ["declare", "import", "pub", "let", "in", "type", "match", "case", "if", "then", "else", "as", "for", "is", "fn"],
     operators: ["=", "->", "=>", "|", ":", ",", "."],
     tokenizer: {
       root: [

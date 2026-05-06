@@ -36,8 +36,8 @@ fn classify_ph : f32 -> string = \ph ->
 
 fn qc_label_from_sensor : string -> Result string string = \raw ->
   match (parse_ph raw) with {
-    when Ok ph -> Ok (classify_ph ph);
-    when Err e -> Err e;
+    case Ok ph -> Ok (classify_ph ph);
+    case Err e -> Err e;
   };
 
 let sensor_reading = "7.3" in
@@ -369,7 +369,7 @@ errors. Use `let rec` for local recursion.
 
 #### 2) List construction and list patterns
 
-- Pattern matching: `x::xs` is valid in `when` patterns.
+- Pattern matching: `x::xs` is valid in `case` patterns.
 - Expression construction: `x::xs` and `Cons x xs` are equivalent (list literals are also valid).
   `Cons` uses normal constructor and function call style (`Cons head tail`).
 
@@ -390,9 +390,9 @@ For small enums and ADTs, write an explicit equality helper:
 ```rex
 node_eq = \a b ->
   match (a, b) with {
-    when (A, A) -> true;
-    when (B, B) -> true;
-    when _ -> false;
+    case (A, A) -> true;
+    case (B, B) -> true;
+    case _ -> false;
   }
 ```
 
@@ -413,8 +413,8 @@ let
   t0: Tree = Empty
 in
   match t0 with {
-    when Empty -> 0;
-    when Node {key, left, right} -> key;
+    case Empty -> 0;
+    case Node {key, left, right} -> key;
   }
 ```
 

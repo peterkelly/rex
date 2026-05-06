@@ -16,8 +16,8 @@ type Maybe a = Just a | Nothing;
 
 let fromMaybe = \d m ->
   match m with {
-    when Just x -> x;
-    when Nothing -> d;
+    case Just x -> x;
+    case Nothing -> d;
   }
 in
   fromMaybe 0 (Just 5)
@@ -30,7 +30,7 @@ Rex checks matches for exhaustiveness on ADTs and reports missing constructors.
 You’ll often see compact “inline” matches in examples:
 
 ```rex,interactive
-match (Some 1) with { when Some x -> x; when None -> 0; }
+match (Some 1) with { case Some x -> x; case None -> 0; }
 ```
 
 ## Common patterns
@@ -39,8 +39,8 @@ Wildcards:
 
 ```rex,interactive
 match [1, 2, 3] with {
-  when Empty -> 0;
-  when Cons _ _ -> 1;
+  case Empty -> 0;
+  case Cons _ _ -> 1;
 }
 ```
 
@@ -48,10 +48,10 @@ List patterns:
 
 ```rex,interactive
 match [1, 2] with {
-  when [] -> 0;
-  when [x] -> x;
-  when [x, y] -> x + y;
-  when _ -> 0;
+  case [] -> 0;
+  case [x] -> x;
+  case [x, y] -> x + y;
+  case _ -> 0;
 }
 ```
 
@@ -59,8 +59,8 @@ Cons patterns:
 
 ```rex,interactive
 match [1, 2, 3] with {
-  when h::t -> h;
-  when [] -> 0;
+  case h::t -> h;
+  case [] -> 0;
 }
 ```
 
@@ -73,7 +73,7 @@ type Point = Point { x: i32, y: i32 };
 
 let p = Point { x = 1, y = 2 } in
 match p with {
-  when Point { x: x, y: y } -> x + y;
+  case Point { x: x, y: y } -> x + y;
 }
 ```
 
@@ -82,9 +82,9 @@ Dict key presence patterns:
 ```rex,interactive
 let d = ({ a = 1, b = 2 }) is Dict i32 in
 match d with {
-  when {a, b} -> a + b;
-  when {a} -> a;
-  when {} -> 0;
+  case {a, b} -> a + b;
+  case {a} -> a;
+  case {} -> 0;
 }
 ```
 
@@ -97,8 +97,8 @@ type Bit = T | F;
 
 let v = T in
 match v with {
-  when T → 1;
-  when F -> 0;
+  case T → 1;
+  case F -> 0;
 }
 ```
 

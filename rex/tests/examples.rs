@@ -97,8 +97,8 @@ async fn example_match() {
 
             let v: Sum = A { x = 7 } in
               match v with {
-                when A {x} -> x;
-                when B {x} -> x + 100;
+                case A {x} -> x;
+                case B {x} -> x + 100;
               }
         "#,
         7,

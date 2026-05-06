@@ -671,8 +671,8 @@ async fn eval_record_update_refined_by_match() {
           foo: Foo = Bar { x = 1 }
         in
           match foo with {
-            when Bar {x} -> (match ({ foo with { x = x + 1 } }) with { when Bar {x} -> x; when Baz {x} -> x; });
-            when Baz {x} -> (match ({ foo with { x = x + 2 } }) with { when Bar {x} -> x; when Baz {x} -> x; });
+            case Bar {x} -> (match ({ foo with { x = x + 1 } }) with { case Bar {x} -> x; case Baz {x} -> x; });
+            case Baz {x} -> (match ({ foo with { x = x + 2 } }) with { case Bar {x} -> x; case Baz {x} -> x; });
           }
         "#,
     );
@@ -689,7 +689,7 @@ async fn eval_record_update_plain_record_type() {
         let
           f = \ (r : { x: i32, y: i32 }) -> { r with { y = 9 } }
         in
-          match (f { x = 1, y = 2 }) with { when {y} -> y; }
+          match (f { x = 1, y = 2 }) with { case {y} -> y; }
         "#,
     );
     let mut engine = engine_with_arith();
@@ -887,8 +887,8 @@ async fn eval_match_list() {
     let expr = parse(
         r#"
         match [1, 2, 3] with {
-            when [] -> 0;
-            when x::xs -> x;
+            case [] -> 0;
+            case x::xs -> x;
         }
         "#,
     );
@@ -906,7 +906,7 @@ async fn eval_cons_constructor_form_for_lists() {
             from_sugar = 1::2::[],
             from_ctor = Cons 1 (Cons 2 Empty)
         in
-            (from_sugar, from_ctor, match from_ctor with { when Cons h _t -> h; when [] -> 0; })
+            (from_sugar, from_ctor, match from_ctor with { case Cons h _t -> h; case [] -> 0; })
         "#,
     );
     let value = eval_expr(engine, expr.as_ref()).await.unwrap();
@@ -1022,7 +1022,7 @@ async fn eval_match_dict_and_tuple() {
             inc = \x -> x + 1
         in
             match { foo = 1, bar = 2 } with {
-                when {foo, bar} -> (inc foo, inc bar);
+                case {foo, bar} -> (inc foo, inc bar);
             }
         "#,
     );
@@ -1042,7 +1042,7 @@ async fn eval_match_dict_and_tuple() {
 
 #[tokio::test]
 async fn eval_match_missing_arm_errors() {
-    let expr = parse("match (Err 1) with { when Ok x -> x; }");
+    let expr = parse("match (Err 1) with { case Ok x -> x; }");
     let engine = Engine::with_prelude(()).unwrap();
     let result = eval_expr(engine, expr.as_ref()).await;
     match result {
@@ -1056,7 +1056,7 @@ async fn eval_match_missing_arm_errors() {
 
 #[tokio::test]
 async fn eval_match_invalid_pattern_type_error() {
-    let expr = parse("match (Ok 1) with { when [] -> 0; when x::xs -> 1; }");
+    let expr = parse("match (Ok 1) with { case [] -> 0; case x::xs -> 1; }");
     let engine = Engine::with_prelude(()).unwrap();
     let result = eval_expr(engine, expr.as_ref()).await;
     match result {
@@ -1073,12 +1073,12 @@ async fn eval_nested_match_list_sum() {
     let expr = parse(
         r#"
         match [1, 2, 3] with {
-            when x::xs ->
+            case x::xs ->
                 (match xs with {
-                    when [] -> x;
-                    when y::ys -> x + y;
+                    case [] -> x;
+                    case y::ys -> x + y;
                 });
-            when [] -> 0;
+            case [] -> 0;
         }
         "#,
     );
@@ -1094,8 +1094,8 @@ async fn eval_safe_div_pipeline() {
         let
             id = \x -> x,
             safeDiv = \a b -> if b == 0.0 then None else Some (a / b),
-            noneToZero = \x -> match x with { when None -> zero; when Some y -> y; },
-            someToOne = \x -> match x with { when Some _ -> one; when None -> zero; }
+            noneToZero = \x -> match x with { case None -> zero; case Some y -> y; },
+            someToOne = \x -> match x with { case Some _ -> one; case None -> zero; }
         in
             (
                 someToOne ((id safeDiv) (id 420.0) (id 6.9)),
@@ -1137,7 +1137,7 @@ async fn eval_user_adt_declaration() {
             value = Box 42
         in
             match value with {
-                when Box x -> x;
+                case Box x -> x;
             }
         "#,
     );
@@ -1214,8 +1214,8 @@ async fn eval_adt_record_projection_match_arm() {
             x = MyVariant1 { field1 = 1 }
         in
             match x with {
-                when MyVariant1 { field1 } -> x.field1;
-                when MyVariant2 _ -> 0;
+                case MyVariant1 { field1 } -> x.field1;
+                case MyVariant2 _ -> 0;
             }
         "#,
     );
@@ -1448,7 +1448,7 @@ async fn eval_result_filter_pipeline() {
             classify = \x -> if x < 2 then Err x else Ok x,
             xs = [0, 2, 3],
             ys = map classify xs,
-            zs = filter_map (\x -> match x with { when Ok v -> Some v; when Err _ -> None; }) ys,
+            zs = filter_map (\x -> match x with { case Ok v -> Some v; case Err _ -> None; }) ys,
             total = sum zs
         in
             (count ys, total)

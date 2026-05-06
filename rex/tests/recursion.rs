@@ -123,8 +123,8 @@ async fn mutual_list_cycle_let_rec() {
           b = Cons 2 a
         in
         match b with {
-          when Cons h _t -> h;
-          when Empty -> 0;
+          case Cons h _t -> h;
+          case Empty -> 0;
         }
     "#;
     assert_i32_result(expr, 2).await;
@@ -135,8 +135,8 @@ async fn self_referential_list_let_rec() {
     let expr = r#"
         let rec xs = Cons 1 xs in
         match xs with {
-          when Cons head _tail -> head;
-          when Empty -> 0;
+          case Cons head _tail -> head;
+          case Empty -> 0;
         }
     "#;
     assert_i32_result(expr, 1).await;
@@ -149,7 +149,7 @@ async fn factorial_plain_let() {
 
         let unrec = \r ->
           match r with {
-            when Rec f -> f;
+            case Rec f -> f;
           }
         in
         let fix = \f ->
@@ -172,7 +172,7 @@ async fn mutual_even_odd_plain_let() {
 
         let unrec = \r ->
           match r with {
-            when Rec f -> f;
+            case Rec f -> f;
           }
         in
         let fix = \f ->
@@ -196,7 +196,7 @@ async fn mutual_list_cycle_plain_let() {
 
         let unrec = \r ->
           match r with {
-            when Rec f -> f;
+            case Rec f -> f;
           }
         in
         let fix = \f ->
@@ -223,7 +223,7 @@ async fn self_referential_list_plain_let() {
 
         let unrec = \r ->
           match r with {
-            when Rec f -> f;
+            case Rec f -> f;
           }
         in
         let fix = \f ->

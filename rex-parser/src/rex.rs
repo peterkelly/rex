@@ -988,7 +988,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
             grammar_rule(
                 R::MatchArm,
                 seq([
-                    tok(T::When),
+                    tok(T::Case),
                     rule(R::Pattern),
                     tok(T::ArrowR),
                     rule(R::Expr),

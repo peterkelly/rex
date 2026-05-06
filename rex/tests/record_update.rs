@@ -15,11 +15,11 @@ async fn record_update_end_to_end() {
             foo2 = { foo with { x = 6 } },
             sum: Sum = A { x = 1 },
             sum2 = match sum with {
-                when A {x} -> { sum with { x = x + 1 } };
-                when B {x} -> { sum with { x = x + 2 } };
+                case A {x} -> { sum with { x = x + 1 } };
+                case B {x} -> { sum with { x = x + 2 } };
             }
         in
-            (foo2.x, match sum2 with { when A {x} -> x; when B {x} -> x; })
+            (foo2.x, match sum2 with { case A {x} -> x; case B {x} -> x; })
     "#;
     let tokens = Token::tokenize(code).unwrap();
     let mut parser = Parser::new(tokens);

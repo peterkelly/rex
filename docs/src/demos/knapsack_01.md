@@ -11,8 +11,8 @@ type Item = Item { w: i32, v: i32 };
 
 fn nth : List i32 -> i32 -> i32 = \xs i ->
   match xs with {
-    when [] -> 0;
-    when x::rest ->
+    case [] -> 0;
+    case x::rest ->
       if i == 0 then x else nth rest (i - 1);
   };
 
@@ -36,8 +36,8 @@ fn build_row : Item -> List i32 -> i32 -> i32 -> List i32 = \item prev cap max_c
 
 fn go : List Item -> List i32 -> i32 -> List i32 = \remaining row max_cap ->
   match remaining with {
-    when [] -> row;
-    when item::rest ->
+    case [] -> row;
+    case item::rest ->
       let next = build_row item row 0 max_cap in
       go rest next max_cap;
   };

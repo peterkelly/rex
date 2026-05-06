@@ -16,8 +16,8 @@ type Blob = Blob { bytes: List i32 };
 instance Size (List t) where {
   size = \xs ->
     match xs with {
-      when Empty -> 0;
-      when Cons _ t -> 1 + size t;
+      case Empty -> 0;
+      case Cons _ t -> 1 + size t;
     };
 }
 instance Size Blob where {
@@ -44,8 +44,8 @@ class Size a where {
 instance Size (List t) where {
   size = \xs ->
     match xs with {
-      when Empty -> 0;
-      when Cons _ t -> 1 + size t;
+      case Empty -> 0;
+      case Cons _ t -> 1 + size t;
     };
 }
 let
@@ -69,8 +69,8 @@ class Size a where {
 instance Size (List t) where {
   size = \xs ->
     match xs with {
-      when Empty -> 0;
-      when Cons _ t -> 1 + size t;
+      case Empty -> 0;
+      case Cons _ t -> 1 + size t;
     };
 }
 let
@@ -92,8 +92,8 @@ class Size a where {
 instance Size (List t) where {
   size = \xs ->
     match xs with {
-      when Empty -> 0;
-      when Cons _ t -> 1 + size t;
+      case Empty -> 0;
+      case Cons _ t -> 1 + size t;
     };
 }
 type Blob = Blob { name: string, bytes: List i32 };
@@ -117,8 +117,8 @@ class Size a where {
 instance Size (List t) where {
   size = \xs ->
     match xs with {
-      when Empty -> 0;
-      when Cons _ t -> 1 + size t;
+      case Empty -> 0;
+      case Cons _ t -> 1 + size t;
     };
 }
 let

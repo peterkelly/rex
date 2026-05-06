@@ -1056,7 +1056,7 @@ impl Display for Expr {
                 scrutinee.fmt(f)?;
                 " with { ".fmt(f)?;
                 for (pat, expr) in arms {
-                    "when ".fmt(f)?;
+                    "case ".fmt(f)?;
                     pat.fmt(f)?;
                     " -> ".fmt(f)?;
                     expr.fmt(f)?;

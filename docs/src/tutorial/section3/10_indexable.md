@@ -50,8 +50,8 @@ Problem: return the first list element safely.
 let
   head = \xs ->
     match xs with {
-      when [] -> None;
-      when x::_ -> Some x;
+      case [] -> None;
+      case x::_ -> Some x;
     }
 in
   (head [] is Option i32, head [10, 20, 30])

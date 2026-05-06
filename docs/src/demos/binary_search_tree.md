@@ -11,8 +11,8 @@ type Tree = Empty | Node { key: i32, left: Tree, right: Tree };
 
 fn insert : i32 -> Tree -> Tree = \k t ->
   match t with {
-    when Empty -> Node { key = k, left = Empty, right = Empty };
-    when Node {key, left, right} ->
+    case Empty -> Node { key = k, left = Empty, right = Empty };
+    case Node {key, left, right} ->
       if k < key then
         Node { key = key, left = insert k left, right = right }
       else if k > key then
@@ -23,8 +23,8 @@ fn insert : i32 -> Tree -> Tree = \k t ->
 
 fn contains : i32 -> Tree -> bool = \k t ->
   match t with {
-    when Empty -> false;
-    when Node {key, left, right} ->
+    case Empty -> false;
+    case Node {key, left, right} ->
       if k == key then true
       else if k < key then contains k left
       else contains k right;
@@ -32,8 +32,8 @@ fn contains : i32 -> Tree -> bool = \k t ->
 
 fn size : Tree -> i32 = \t ->
   match t with {
-    when Empty -> 0;
-    when Node {left, right} -> 1 + size left + size right;
+    case Empty -> 0;
+    case Node {left, right} -> 1 + size left + size right;
   };
 
 let

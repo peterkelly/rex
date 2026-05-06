@@ -294,8 +294,8 @@ import acme.status (Status, Failed);
 
 let fail: string -> Status = \msg -> Failed msg in
 match (fail "boom") with {
-  when Failed msg -> length msg;
-  when _ -> 0;
+  case Failed msg -> length msg;
+  case _ -> 0;
 }
 ```
 
@@ -514,8 +514,8 @@ avoiding hidden work:
 
 ```rex
 match (to_list bytes) with {
-    when Cons head _ -> head;
-    when Empty -> 0;
+    case Cons head _ -> head;
+    case Empty -> 0;
 }
 ```
 
@@ -573,8 +573,8 @@ class Size a where {
 instance Size (List t) where {
     size = \xs ->
         match xs {
-            when Empty -> 0;
-            when Cons _ rest -> 1 + size rest;
+            case Empty -> 0;
+            case Cons _ rest -> 1 + size rest;
         };
 }
 size [1, 2, 3]
@@ -613,8 +613,8 @@ class Size a where {
 instance Size (List t) where {
     size = \xs ->
         match xs {
-            when Empty -> 0;
-            when Cons _ rest -> 1 + size rest;
+            case Empty -> 0;
+            case Cons _ rest -> 1 + size rest;
         };
 }
 (size [1, 2, 3], size [])

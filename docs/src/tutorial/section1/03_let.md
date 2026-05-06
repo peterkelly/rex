@@ -54,8 +54,8 @@ Rex supports writing recursive helpers via `let rec`. This is the easiest way to
 let rec
   sum = \xs ->
     match xs with {
-      when [] -> 0;
-      when x::xs -> x + sum xs;
+      case [] -> 0;
+      case x::xs -> x + sum xs;
     }
 in
   sum [1, 2, 3, 4]

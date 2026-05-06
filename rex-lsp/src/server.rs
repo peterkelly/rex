@@ -2141,7 +2141,7 @@ fn code_actions_for_diagnostic(
                 } else {
                     "\n"
                 };
-                (diagnostic.range.end, format!("{newline}when _ -> null;"))
+                (diagnostic.range.end, format!("{newline}case _ -> null;"))
             });
         actions.push(code_action_insert(
             "Add wildcard arm to match".to_string(),
@@ -5399,7 +5399,7 @@ fn keyword_doc(word: &str) -> Option<&'static str> {
         "with" => {
             Some("Separates a match scrutinee from its arm block, or introduces a record update.")
         }
-        "when" => Some("Introduces a match arm."),
+        "case" => Some("Introduces a match arm."),
         "if" => Some("Conditional expression keyword."),
         "then" => Some("Conditional expression branch."),
         "else" => Some("Fallback branch of a conditional expression."),
@@ -6923,12 +6923,12 @@ fn wildcard_match_arm_insert(text: &str, range: Range) -> Option<(Position, Stri
         let arm_indent = format!("{closing_prefix}  ");
         Some((
             position_at_offset(text, line_start),
-            format!("{arm_indent}when _ -> null;\n"),
+            format!("{arm_indent}case _ -> null;\n"),
         ))
     } else {
         Some((
             position_at_offset(text, close_offset),
-            " when _ -> null;".to_string(),
+            " case _ -> null;".to_string(),
         ))
     }
 }

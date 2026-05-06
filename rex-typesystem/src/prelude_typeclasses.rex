@@ -368,15 +368,15 @@ instance Eq datetime where {
 instance Eq (List a) <= Eq a where {
     == = \xs ys ->
         match xs with {
-            when [] ->
+            case [] ->
                 (match ys with {
-                    when [] -> true;
-                    when _ -> false;
+                    case [] -> true;
+                    case _ -> false;
                 });
-            when x::xs1 ->
+            case x::xs1 ->
                 (match ys with {
-                    when y::ys1 -> if x == y then xs1 == ys1 else false;
-                    when [] -> false;
+                    case y::ys1 -> if x == y then xs1 == ys1 else false;
+                    case [] -> false;
                 });
         };
     != = \xs ys -> if xs == ys then false else true;
@@ -384,15 +384,15 @@ instance Eq (List a) <= Eq a where {
 instance Eq (Option a) <= Eq a where {
     == = \x y ->
         match x with {
-            when Some a0 ->
+            case Some a0 ->
                 (match y with {
-                    when Some b0 -> a0 == b0;
-                    when None -> false;
+                    case Some b0 -> a0 == b0;
+                    case None -> false;
                 });
-            when None ->
+            case None ->
                 (match y with {
-                    when None -> true;
-                    when Some _ -> false;
+                    case None -> true;
+                    case Some _ -> false;
                 });
         };
     != = \x y -> if x == y then false else true;
@@ -404,15 +404,15 @@ instance Eq (Array a) <= Eq a where {
 instance Eq (Result a e) <= Eq a, Eq e where {
     == = \x y ->
         match x with {
-            when Ok a0 ->
+            case Ok a0 ->
                 (match y with {
-                    when Ok b0 -> a0 == b0;
-                    when Err _ -> false;
+                    case Ok b0 -> a0 == b0;
+                    case Err _ -> false;
                 });
-            when Err e0 ->
+            case Err e0 ->
                 (match y with {
-                    when Err e1 -> e0 == e1;
-                    when Ok _ -> false;
+                    case Err e1 -> e0 == e1;
+                    case Ok _ -> false;
                 });
         };
     != = \x y -> if x == y then false else true;
@@ -590,8 +590,8 @@ instance Default (Result a e) <= Default a where {
 instance Show (List a) <= Show a where {
     show = \xs ->
         match xs with {
-            when [] -> "[]";
-            when x::xs1 ->
+            case [] -> "[]";
+            case x::xs1 ->
                 let
                     step = \out y -> out + ", " + show y
                 in
@@ -612,15 +612,15 @@ instance Show (Array a) <= Show a where {
 instance Show (Option a) <= Show a where {
     show = \x ->
         match x with {
-            when Some a0 -> "Some(" + show a0 + ")";
-            when None -> "None";
+            case Some a0 -> "Some(" + show a0 + ")";
+            case None -> "None";
         };
 }
 instance Show (Result a e) <= Show a, Show e where {
     show = \x ->
         match x with {
-            when Ok a0 -> "Ok(" + show a0 + ")";
-            when Err e0 -> "Err(" + show e0 + ")";
+            case Ok a0 -> "Ok(" + show a0 + ")";
+            case Err e0 -> "Err(" + show e0 + ")";
         };
 }
 {- Functor / Applicative / Monad / Foldable / Filterable / Sequence / Alternative instances -}
@@ -644,8 +644,8 @@ instance Applicative Option <= Functor Option where {
     pure = \x -> Some x;
     ap = \ff xx ->
         match ff with {
-            when Some f -> map f xx;
-            when None -> None;
+            case Some f -> map f xx;
+            case None -> None;
         };
 }
 instance Applicative Array <= Functor Array where {
@@ -656,8 +656,8 @@ instance Applicative (Result e) <= Functor (Result e) where {
     pure = \x -> Ok x;
     ap = \rf rx ->
         match rf with {
-            when Ok f -> map f rx;
-            when Err err -> Err err;
+            case Ok f -> map f rx;
+            case Err err -> Err err;
         };
 }
 instance Monad List <= Applicative List where {

@@ -102,7 +102,7 @@ LetBinding         <- Pattern (COLON TypeExpr)? ASSIGN Expr
 LetRecBinding      <- Pattern (COLON TypeExpr)? ASSIGN Expr
 IfExpr             <- IF cut(Expr THEN Expr ELSE Expr)
 MatchExpr          <- MATCH cut(label("expected `with {` after match scrutinee", Expr WITH) label("expected `{` after `with` in match expression", BRACE_L) MatchArm+ BRACE_R)
-MatchArm           <- WHEN Pattern ARROW_R Expr label("expected `;` after match arm expression", SEMI_COLON)
+MatchArm           <- CASE Pattern ARROW_R Expr label("expected `;` after match arm expression", SEMI_COLON)
 
 # Patterns
 

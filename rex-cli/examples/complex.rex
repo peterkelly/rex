@@ -15,22 +15,22 @@ let
         }, 
         right = Leaf { value = 3 } 
     },
-    v = match t with { when Leaf { value } → value; when Node {} → 0; },
+    v = match t with { case Leaf { value } → value; case Node {} → 0; },
     add = λ x y → x + y,
     mk_box = λ x → Box { value = x },
     unbox = λ b → b.value,
     sum = λ xs →
         match xs with {
-            when [] → 0;
-            when x::xs → x + sum xs;
+            case [] → 0;
+            case x::xs → x + sum xs;
         },
     pick = λ flag a b →
         if flag then a else b,
     use_dict = λ d →
         match d with {
-            when {a, b} → a + b;
-            when {a} → a;
-            when {} → 0;
+            case {a, b} → a + b;
+            case {a} → a;
+            case {} → 0;
         },
     nested = λ flag →
         let
@@ -46,11 +46,11 @@ in
     let
         r1 = nested true,
         r2 = nested false,
-        output = match r1 with { when {v, t, d} → v + t + d; },
-        alt = match r2 with { when {v, t, d} → v + t + d; },
+        output = match r1 with { case {v, t, d} → v + t + d; },
+        alt = match r2 with { case {v, t, d} → v + t + d; },
         opt = (Some output) is Option i32
     in
         match opt with {
-            when Some x → x + alt;
-            when None → foo 0 0;
+            case Some x → x + alt;
+            case None → foo 0 0;
         }

@@ -54,8 +54,8 @@ type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
 match s with {
-  when A {x} -> { s with { x = x + 1 } };
-  when B {x} -> { s with { x = x + 2 } };
+  case A {x} -> { s with { x = x + 1 } };
+  case B {x} -> { s with { x = x + 2 } };
 }
 ```
 
@@ -103,9 +103,9 @@ type Sum = A { x: i32 } | B { x: i32 } | C { x: i32 };
 
 let s: Sum = C { x = 1 } in
 match s with {
-  when A {x} -> { s with { x = x + 1 } };
-  when B {x} -> { s with { x = x + 2 } };
-  when C {x} -> { s with { x = x + 3 } };
+  case A {x} -> { s with { x = x + 1 } };
+  case B {x} -> { s with { x = x + 2 } };
+  case C {x} -> { s with { x = x + 3 } };
 }
 ```
 

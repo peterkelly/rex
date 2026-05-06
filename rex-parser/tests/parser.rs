@@ -86,7 +86,7 @@ fn test_grammar_contract_examples_parse() {
         ),
         (
             "match patterns",
-            "match [1] with { when x::xs -> x; when [] -> 0; }",
+            "match [1] with { case x::xs -> x; case [] -> 0; }",
         ),
     ] {
         let mut parser = Parser::new(Token::tokenize(code).unwrap_or_else(|err| {
@@ -108,7 +108,7 @@ fn test_grammar_contract_near_misses_fail() {
         ),
         (
             "match arms require braces",
-            "match xs with when [] -> 0",
+            "match xs with case [] -> 0",
             "expected `{` after `with` in match expression",
         ),
         (
@@ -254,7 +254,7 @@ fn test_max_nesting_cons_pattern_chain() {
         .map(|i| format!("x{i}"))
         .collect::<Vec<_>>()
         .join(" :: ");
-    let code = format!("match xs with {{ when {pattern} -> xs; }}");
+    let code = format!("match xs with {{ case {pattern} -> xs; }}");
     let mut parser = Parser::new(Token::tokenize(&code).unwrap());
     parser.set_limits(ParserLimits {
         max_nesting: Some(5),
@@ -1177,7 +1177,7 @@ fn test_type_annotations() {
 
 #[test]
 fn test_match_named_patterns() {
-    let expr = parse("match named with { when Ok x -> x; when Err e -> e; when _ -> default; }");
+    let expr = parse("match named with { case Ok x -> x; case Err e -> e; case _ -> default; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("named"),
@@ -1208,7 +1208,7 @@ fn test_match_named_patterns() {
 #[test]
 fn test_match_list_patterns() {
     let expr = parse(
-        "match list with { when [] -> empty; when [x] -> x; when [x, y, z] -> z; when x::xs -> xs; when _ -> fallback; }",
+        "match list with { case [] -> empty; case [x] -> x; case [x, y, z] -> z; case x::xs -> xs; case _ -> fallback; }",
     );
     let expected = Arc::new(Expr::Match(
         Span::default(),
@@ -1248,7 +1248,7 @@ fn test_match_list_patterns() {
 #[test]
 fn test_match_nested_patterns() {
     let expr =
-        parse("match t with { when Cons x (Cons _ xs) -> xs; when Pair (Just a) (Just b) -> a; }");
+        parse("match t with { case Cons x (Cons _ xs) -> xs; case Pair (Just a) (Just b) -> a; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("t"),
@@ -1298,7 +1298,7 @@ fn test_match_nested_patterns() {
 
 #[test]
 fn test_match_dict_pattern() {
-    let expr = parse("match obj with { when {foo, bar} -> foo bar; }");
+    let expr = parse("match obj with { case {foo, bar} -> foo bar; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("obj"),
@@ -1319,7 +1319,7 @@ fn test_match_dict_pattern() {
 
 #[test]
 fn test_match_cons_associativity() {
-    let expr = parse("match xs with { when h::t::u -> u; }");
+    let expr = parse("match xs with { case h::t::u -> u; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("xs"),
@@ -1342,7 +1342,7 @@ fn test_match_cons_associativity() {
 
 #[test]
 fn test_match_wildcard_cons() {
-    let expr = parse("match xs with { when (_::_) -> xs; }");
+    let expr = parse("match xs with { case (_::_) -> xs; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("xs"),
@@ -1361,7 +1361,7 @@ fn test_match_wildcard_cons() {
 
 #[test]
 fn test_match_empty_dict_pattern() {
-    let expr = parse("match obj with { when {} -> obj; }");
+    let expr = parse("match obj with { case {} -> obj; }");
     let expected = Arc::new(Expr::Match(
         Span::default(),
         v!("obj"),
@@ -1373,13 +1373,13 @@ fn test_match_empty_dict_pattern() {
 
 #[test]
 fn test_match_scrutinee_can_contain_braces() {
-    let expr = parse("match { foo = 1 } with { when {foo} -> foo; }");
+    let expr = parse("match { foo = 1 } with { case {foo} -> foo; }");
     match expr.as_ref() {
         Expr::Match(_, scrutinee, _) => assert!(matches!(scrutinee.as_ref(), Expr::Dict(..))),
         other => panic!("expected match, got {other:?}"),
     }
 
-    let expr = parse("match { foo with { x = 1 } } with { when _ -> 0; }");
+    let expr = parse("match { foo with { x = 1 } } with { case _ -> 0; }");
     match expr.as_ref() {
         Expr::Match(_, scrutinee, _) => {
             assert!(matches!(scrutinee.as_ref(), Expr::RecordUpdate(..)));
@@ -1387,7 +1387,7 @@ fn test_match_scrutinee_can_contain_braces() {
         other => panic!("expected match, got {other:?}"),
     }
 
-    let expr = parse("match if true then { foo = 1 } else { foo = 2 } with { when {foo} -> foo; }");
+    let expr = parse("match if true then { foo = 1 } else { foo = 2 } with { case {foo} -> foo; }");
     match expr.as_ref() {
         Expr::Match(_, scrutinee, _) => assert!(matches!(scrutinee.as_ref(), Expr::Ite(..))),
         other => panic!("expected match, got {other:?}"),
@@ -1396,7 +1396,7 @@ fn test_match_scrutinee_can_contain_braces() {
 
 #[test]
 fn test_match_requires_with_before_arms() {
-    let mut parser = Parser::new(Token::tokenize("match xs { when [] -> empty; }").unwrap());
+    let mut parser = Parser::new(Token::tokenize("match xs { case [] -> empty; }").unwrap());
     let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter().any(|e| e
@@ -1408,7 +1408,7 @@ fn test_match_requires_with_before_arms() {
 
 #[test]
 fn test_match_requires_braced_arms_after_with() {
-    let mut parser = Parser::new(Token::tokenize("match xs when [] -> empty").unwrap());
+    let mut parser = Parser::new(Token::tokenize("match xs case [] -> empty").unwrap());
     let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter().any(|e| e
@@ -1417,7 +1417,7 @@ fn test_match_requires_braced_arms_after_with() {
         "expected missing match block error, got: {errs:?}"
     );
 
-    let mut parser = Parser::new(Token::tokenize("match xs with when [] -> empty").unwrap());
+    let mut parser = Parser::new(Token::tokenize("match xs with case [] -> empty").unwrap());
     let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter().any(|e| e
@@ -1429,13 +1429,23 @@ fn test_match_requires_braced_arms_after_with() {
 
 #[test]
 fn test_match_arms_require_semicolon() {
-    let mut parser = Parser::new(Token::tokenize("match xs with { when [] -> empty }").unwrap());
+    let mut parser = Parser::new(Token::tokenize("match xs with { case [] -> empty }").unwrap());
     let errs = parser.parse_program().unwrap_err();
     assert!(
         errs.iter().any(|e| e
             .message
             .contains("expected `;` after match arm expression")),
         "expected missing match arm semicolon error, got: {errs:?}"
+    );
+}
+
+#[test]
+fn test_match_arms_reject_when_keyword() {
+    let mut parser = Parser::new(Token::tokenize("match xs with { when [] -> empty; }").unwrap());
+    let errs = parser.parse_program().unwrap_err();
+    assert!(
+        errs.iter().any(|e| e.message.contains("unexpected when")),
+        "expected old match arm keyword to be rejected, got: {errs:?}"
     );
 }
 

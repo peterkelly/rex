@@ -21,7 +21,7 @@ const keywordDocs = new Map([
   ['in', 'Begins the expression body for a let binding.'],
   ['type', 'Declares a type or ADT.'],
   ['match', 'Starts a pattern match expression.'],
-  ['when', 'Introduces a match arm.'],
+  ['case', 'Introduces a match arm.'],
   ['if', 'Conditional expression keyword.'],
   ['then', 'Conditional expression branch.'],
   ['else', 'Fallback branch of a conditional expression.'],

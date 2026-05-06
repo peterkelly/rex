@@ -12,29 +12,29 @@ type Edge = Edge Node Node;
 
 fn node_eq : Node -> Node -> bool = \a b ->
   match (a, b) with {
-    when (A, A) -> true;
-    when (B, B) -> true;
-    when (C, C) -> true;
-    when (D, D) -> true;
-    when _ -> false;
+    case (A, A) -> true;
+    case (B, B) -> true;
+    case (C, C) -> true;
+    case (D, D) -> true;
+    case _ -> false;
   };
 
 fn contains : List Node -> Node -> bool = \xs x ->
   match xs with {
-    when [] -> false;
-    when y::ys -> if node_eq y x then true else contains ys x;
+    case [] -> false;
+    case y::ys -> if node_eq y x then true else contains ys x;
   };
 
 fn append : List Node -> List Node -> List Node = \xs ys ->
   match xs with {
-    when [] -> ys;
-    when h::t -> Cons h (append t ys);
+    case [] -> ys;
+    case h::t -> Cons h (append t ys);
   };
 
 fn reverse_go : List Node -> List Node -> List Node = \rest acc ->
   match rest with {
-    when [] -> acc;
-    when h::t -> reverse_go t (Cons h acc);
+    case [] -> acc;
+    case h::t -> reverse_go t (Cons h acc);
   };
 
 fn reverse : List Node -> List Node = \xs ->
@@ -42,22 +42,22 @@ fn reverse : List Node -> List Node = \xs ->
 
 fn is_empty : List a -> bool = \xs ->
   match xs with {
-    when [] -> true;
-    when _::_ -> false;
+    case [] -> true;
+    case _::_ -> false;
   };
 
 fn remove_outgoing : List Edge -> Node -> List Edge = \edges n ->
   match edges with {
-    when [] -> [];
-    when Edge from to::rest ->
+    case [] -> [];
+    case Edge from to::rest ->
       if node_eq from n then remove_outgoing rest n
       else Cons (Edge from to) (remove_outgoing rest n);
   };
 
 fn in_degree : List Edge -> Node -> i32 = \edges n ->
   match edges with {
-    when [] -> 0;
-    when Edge from to::rest ->
+    case [] -> 0;
+    case Edge from to::rest ->
       let tail = in_degree rest n in
       if node_eq to n then 1 + tail else tail;
   };
@@ -67,8 +67,8 @@ fn push_unique : List Node -> Node -> List Node = \queue n ->
 
 fn enqueue_zeros : List Node -> List Node -> List Node -> List Edge -> List Node = \nodes queue seen edges ->
   match nodes with {
-    when [] -> queue;
-    when n::rest ->
+    case [] -> queue;
+    case n::rest ->
       let queue1 =
         if contains seen n then
           queue
@@ -82,12 +82,12 @@ fn enqueue_zeros : List Node -> List Node -> List Node -> List Edge -> List Node
 
 fn kahn : List Node -> List Node -> List Node -> List Edge -> List Node -> List Node = \queue seen order edges nodes ->
   match queue with {
-    when [] ->
+    case [] ->
       if is_empty edges then
         reverse order
       else
         [];
-    when n::rest ->
+    case n::rest ->
       let
         edges1 = remove_outgoing edges n,
         seen1 = Cons n seen,

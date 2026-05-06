@@ -57,11 +57,11 @@ let
   step2 = \x -> Some (x * 2)
 in
   match (Some 10) with {
-    when None -> None;
-    when Some v1 ->
+    case None -> None;
+    case Some v1 ->
       match (step1 v1) with {
-        when None -> None;
-        when Some v2 -> step2 v2;
+        case None -> None;
+        case Some v2 -> step2 v2;
       };
   }
 ```

@@ -198,7 +198,7 @@ record update is rejected (the field is “not definitely available”).
 
 The typechecker refines “which constructor is known” via two mechanisms:
 
-1. **Pattern matching**: within a `when K { ... } -> ...` arm, the scrutinee is known to be `K`.
+1. **Pattern matching**: within a `case K { ... } -> ...` arm, the scrutinee is known to be `K`.
 2. **Let-bound known constructors**: when a variable is bound to a value constructed with a
    record-carrying constructor, the variable may carry “known variant” information forward.
 
@@ -209,8 +209,8 @@ type Sum = A { x: i32 } | B { x: i32 };
 
 let s: Sum = A { x = 1 } in
 match s with {
-  when A {x} -> { s with { x = x + 1 } };
-  when B {x} -> { s with { x = x + 2 } };
+  case A {x} -> { s with { x = x + 1 } };
+  case B {x} -> { s with { x = x + 2 } };
 }
 ```
 

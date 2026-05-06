@@ -11,26 +11,26 @@ type Expr = Lit i32 | Add Expr Expr | Mul Expr Expr | Neg Expr;
 
 fn eval : Expr -> i32 = \e ->
   match e with {
-    when Lit n -> n;
-    when Add a b -> eval a + eval b;
-    when Mul a b -> eval a * eval b;
-    when Neg x -> 0 - eval x;
+    case Lit n -> n;
+    case Add a b -> eval a + eval b;
+    case Mul a b -> eval a * eval b;
+    case Neg x -> 0 - eval x;
   };
 
 fn depth : Expr -> i32 = \e ->
   match e with {
-    when Lit _ -> 1;
-    when Add a b ->
+    case Lit _ -> 1;
+    case Add a b ->
       if depth a > depth b then 1 + depth a else 1 + depth b;
-    when Mul a b ->
+    case Mul a b ->
       if depth a > depth b then 1 + depth a else 1 + depth b;
-    when Neg x -> 1 + depth x;
+    case Neg x -> 1 + depth x;
   };
 
 fn simplify_once : Expr -> Expr = \e ->
   match e with {
-    when Neg (Neg x) -> x;
-    when _ -> e;
+    case Neg (Neg x) -> x;
+    case _ -> e;
   };
 
 let

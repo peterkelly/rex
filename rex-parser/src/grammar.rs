@@ -11,6 +11,7 @@ use crate::peg::{Engine, EngineToken, Failure, FailureTracker, Mark, MemoEntry, 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TokenKind {
     As,
+    Case,
     Class,
     Declare,
     Else,
@@ -22,7 +23,6 @@ pub(crate) enum TokenKind {
     Match,
     Pub,
     Type,
-    When,
     Then,
     With,
     Where,
@@ -66,6 +66,7 @@ impl TokenKind {
     #[cfg(test)]
     pub(crate) const ALL: &'static [Self] = &[
         Self::As,
+        Self::Case,
         Self::Class,
         Self::Declare,
         Self::Else,
@@ -77,7 +78,6 @@ impl TokenKind {
         Self::Match,
         Self::Pub,
         Self::Type,
-        Self::When,
         Self::Then,
         Self::With,
         Self::Where,
@@ -128,6 +128,7 @@ impl TokenKind {
     pub(crate) fn matches(self, token: &Token) -> bool {
         match self {
             TokenKind::As => matches!(token, Token::As(..)),
+            TokenKind::Case => matches!(token, Token::Case(..)),
             TokenKind::Class => matches!(token, Token::Class(..)),
             TokenKind::Declare => matches!(token, Token::Declare(..)),
             TokenKind::Else => matches!(token, Token::Else(..)),
@@ -139,7 +140,6 @@ impl TokenKind {
             TokenKind::Match => matches!(token, Token::Match(..)),
             TokenKind::Pub => matches!(token, Token::Pub(..)),
             TokenKind::Type => matches!(token, Token::Type(..)),
-            TokenKind::When => matches!(token, Token::When(..)),
             TokenKind::Then => matches!(token, Token::Then(..)),
             TokenKind::With => matches!(token, Token::With(..)),
             TokenKind::Where => matches!(token, Token::Where(..)),
@@ -183,6 +183,7 @@ impl TokenKind {
     fn label(self) -> &'static str {
         match self {
             TokenKind::As => "`as`",
+            TokenKind::Case => "`case`",
             TokenKind::Class => "`class`",
             TokenKind::Declare => "`declare`",
             TokenKind::Else => "`else`",
@@ -194,7 +195,6 @@ impl TokenKind {
             TokenKind::Match => "`match`",
             TokenKind::Pub => "`pub`",
             TokenKind::Type => "`type`",
-            TokenKind::When => "`when`",
             TokenKind::Then => "`then`",
             TokenKind::With => "`with`",
             TokenKind::Where => "`where`",
@@ -238,6 +238,7 @@ impl TokenKind {
     fn peg_name(self) -> &'static str {
         match self {
             TokenKind::As => "AS",
+            TokenKind::Case => "CASE",
             TokenKind::Class => "CLASS",
             TokenKind::Declare => "DECLARE",
             TokenKind::Else => "ELSE",
@@ -249,7 +250,6 @@ impl TokenKind {
             TokenKind::Match => "MATCH",
             TokenKind::Pub => "PUB",
             TokenKind::Type => "TYPE",
-            TokenKind::When => "WHEN",
             TokenKind::Then => "THEN",
             TokenKind::With => "WITH",
             TokenKind::Where => "WHERE",
