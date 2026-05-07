@@ -11,8 +11,8 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 ## Crates
 
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `TypeExpr`, `CompilationUnit`, symbols, spans).
-- `rex-parser`: source parser. Entry points: `rex_parser::parse` and `rex_parser::parse_with_limits`.
-  - For untrusted code, pass `rex_parser::ParserLimits::safe_defaults()` to `parse_with_limits`.
+- `rex-parser`: source parser. Entry point: `rex_parser::parse`.
+  - Parsing enforces a fixed cap on AST nesting.
 - `rex-typesystem`: type system. Entry points:
   - `TypeSystem::new_with_prelude()?` to create a typing environment with standard types/classes.
   - `infer_typed(&mut ts, expr)` / `infer(&mut ts, expr)` for type inference.
@@ -59,7 +59,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::new_with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rex-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
-- **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parsing-limit and typechecker-limit APIs provide bounded recursion for production/untrusted workloads.
+- **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). The parser enforces a fixed AST-depth cap, and the typechecker-limit API provides bounded recursion for production/untrusted workloads.
 - **Import-use rewrite/validation**: module processing resolves import aliases across expression
   vars, constructor patterns, type references, and class references; unresolved qualified alias
   members are rejected as module errors before runtime.

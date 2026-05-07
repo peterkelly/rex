@@ -16,7 +16,7 @@ timeouts, memory limits).
 
 Recommended defaults for untrusted input:
 
-- Always cap parsing nesting depth with `rex::parser::ParserLimits::safe_defaults()` (or stricter).
+- Parsing enforces a fixed AST-depth cap.
 - Run evaluation in an isolation boundary you can hard-kill (separate process/container), with CPU/RSS/time limits.
 
 Evaluation API:
@@ -761,12 +761,12 @@ task primitives in the host crate.
 
 ### Parsing Limits
 
-For untrusted input, you can cap syntactic nesting depth during parsing:
+Parsing enforces a fixed AST-depth cap:
 
 ```rust
-use rex::parser::{ParserLimits, parse_with_limits};
+use rex::parser::parse;
 
-let program = parse_with_limits("(((1)))", ParserLimits::safe_defaults())
+let program = parse("(((1)))")
     .map_err(|errs| format!("parse error: {errs:?}"))?;
 ```
 
@@ -925,5 +925,5 @@ engine.inject_rex_adt::<PrimitiveEither>()?;
 Some workloads (very deep nesting) can exhaust parser/typechecker recursion depth. Prefer bounded
 limits for untrusted code:
 
-- `rex::parser::ParserLimits::safe_defaults`
+- parser AST depth
 - `rex_typesystem::TypeSystemLimits::safe_defaults`

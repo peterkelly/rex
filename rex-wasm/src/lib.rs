@@ -9,18 +9,15 @@ use rex_lsp::server::{
     document_symbols_for_source_public, format_for_source_public, goto_definition_for_source,
     hover_for_source, references_for_source_public, rename_for_source_public,
 };
-use rex_parser::{ParserLimits, error::ParseError, parse_with_limits};
+use rex_parser::{error::ParseError, parse};
 use rex_typesystem::{
     inference::infer,
     typesystem::{TypeSystem, TypeSystemLimits},
 };
 use wasm_bindgen::prelude::*;
 
-fn parse_program_with_limits(
-    source: &str,
-    limits: ParserLimits,
-) -> Result<CompilationUnit, String> {
-    parse_with_limits(source, limits).map_err(|errs| format_parse_errors(&errs))
+fn parse_program(source: &str) -> Result<CompilationUnit, String> {
+    parse(source).map_err(|errs| format_parse_errors(&errs))
 }
 
 fn format_parse_errors(errs: &[ParseError]) -> String {
@@ -34,12 +31,12 @@ fn format_parse_errors(errs: &[ParseError]) -> String {
 }
 
 pub fn parse_to_json(source: &str) -> Result<String, String> {
-    let program = parse_program_with_limits(source, ParserLimits::safe_defaults())?;
+    let program = parse_program(source)?;
     serde_json::to_string(&program).map_err(|e| format!("serialization error: {e}"))
 }
 
 pub fn infer_to_json(source: &str) -> Result<String, String> {
-    let program = parse_program_with_limits(source, ParserLimits::safe_defaults())?;
+    let program = parse_program(source)?;
 
     let mut ts = TypeSystem::new_with_prelude().map_err(|e| format!("type system error: {e}"))?;
     ts.set_limits(TypeSystemLimits::safe_defaults());
@@ -121,7 +118,7 @@ pub fn lsp_code_actions_to_json(source: &str, line: u32, character: u32) -> Resu
 }
 
 pub async fn eval_to_string(source: &str) -> Result<String, String> {
-    let _ = parse_program_with_limits(source, ParserLimits::unlimited())?;
+    let _ = parse_program(source)?;
 
     let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
     engine.type_system.set_limits(TypeSystemLimits::unlimited());
@@ -221,7 +218,7 @@ pub fn wasm_lsp_code_actions_to_json(
 
 #[wasm_bindgen(js_name = evalToJson)]
 pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
-    let _ = parse_program_with_limits(source, ParserLimits::unlimited()).map_err(as_js_err)?;
+    let _ = parse_program(source).map_err(as_js_err)?;
 
     let fut = async move {
         let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;

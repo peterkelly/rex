@@ -578,18 +578,17 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
 
 #[tokio::test]
 async fn eval_deep_list_does_not_overflow() {
-    // Regression test: deeply nested terms must not overflow the default Rust stack.
+    // Regression test: large runtime lists must not overflow the default Rust stack.
     const N: usize = 5_000;
     let mut code = String::new();
-    code.push_str("let xs = ");
-    for _ in 0..N {
-        code.push_str("Cons 0 (");
+    code.push_str("let xs = [");
+    for i in 0..N {
+        if i > 0 {
+            code.push_str(", ");
+        }
+        code.push('0');
     }
-    code.push_str("Empty");
-    for _ in 0..N {
-        code.push(')');
-    }
-    code.push_str(" in xs");
+    code.push_str("] in xs");
 
     let program = parse_rex(&code).unwrap();
     let expr = program.body.unwrap();

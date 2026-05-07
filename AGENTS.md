@@ -127,7 +127,7 @@ Never commit with a lowercase subject after the colon, for example:
 
 ## Guidelines for embedders running untrusted code
 
-- Always cap parsing nesting depth with `rex::parser::ParserLimits::safe_defaults()` (or stricter).
+- Parsing enforces a fixed AST-depth cap.
 - Prefer async evaluation with `Evaluator::eval`.
 
 ## Lockfiles

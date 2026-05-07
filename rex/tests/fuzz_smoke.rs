@@ -1,6 +1,6 @@
 use rex::{
     engine::{Engine, Module},
-    parser::{ParserLimits, parse_with_limits},
+    parser::parse,
     typesystem::{TypeSystem, infer},
 };
 
@@ -52,7 +52,7 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         }
 
         let input = s.clone();
-        let program = match parse_with_limits(&input, ParserLimits::safe_defaults()) {
+        let program = match parse(&input) {
             Ok(p) => p,
             Err(_) => continue,
         };

@@ -8,7 +8,7 @@ use rex_ast::{
     tup, u, v,
 };
 use rex_parser::error::ParseError;
-use rex_parser::{ParserLimits, parse as parse_rex, parse_with_limits, span};
+use rex_parser::{MAX_AST_DEPTH, parse as parse_rex, span};
 
 fn parse(code: &str) -> Arc<Expr> {
     parse_rex(code).unwrap().body.unwrap()
@@ -145,77 +145,59 @@ fn test_pub_without_declaration_is_not_consumed() {
 }
 
 #[test]
-fn test_max_nesting_depth_is_enforced_during_parse() {
-    let code = format!("{}0{}", "(".repeat(6), ")".repeat(6));
-    let errs = parse_with_limits(
-        &code,
-        ParserLimits {
-            max_nesting: Some(5),
-        },
-    )
-    .unwrap_err();
+fn test_max_ast_depth_is_enforced_during_parse() {
+    let code = format!(
+        "{}0{}",
+        "(".repeat(MAX_AST_DEPTH + 1),
+        ")".repeat(MAX_AST_DEPTH + 1)
+    );
+    let errs = parse_rex(&code).unwrap_err();
     assert!(
         errs.iter()
-            .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
-        "expected a max-nesting parse error, got: {errs:?}"
+            .any(|e| e.to_string().contains("maximum AST depth exceeded")),
+        "expected a max-AST-depth parse error, got: {errs:?}"
     );
 }
 
 #[test]
-fn test_max_nesting_binary_chain() {
-    let code = std::iter::repeat_n("1", 12).collect::<Vec<_>>().join(" + ");
-    let errs = parse_with_limits(
-        &code,
-        ParserLimits {
-            max_nesting: Some(5),
-        },
-    )
-    .unwrap_err();
+fn test_max_ast_depth_binary_chain() {
+    let code = std::iter::repeat_n("1", MAX_AST_DEPTH + 1)
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let errs = parse_rex(&code).unwrap_err();
     assert!(
         errs.iter()
-            .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
-        "expected a max-nesting parse error, got: {errs:?}"
+            .any(|e| e.to_string().contains("maximum AST depth exceeded")),
+        "expected a max-AST-depth parse error, got: {errs:?}"
     );
 }
 
 #[test]
-fn test_max_nesting_type_fun_chain() {
-    let ty_chain = std::iter::repeat_n("a", 12)
+fn test_max_ast_depth_type_fun_chain() {
+    let ty_chain = std::iter::repeat_n("a", MAX_AST_DEPTH + 1)
         .collect::<Vec<_>>()
         .join(" -> ");
     let code = format!("let t: {ty_chain} = x in t");
-    let errs = parse_with_limits(
-        &code,
-        ParserLimits {
-            max_nesting: Some(5),
-        },
-    )
-    .unwrap_err();
+    let errs = parse_rex(&code).unwrap_err();
     assert!(
         errs.iter()
-            .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
-        "expected a max-nesting parse error, got: {errs:?}"
+            .any(|e| e.to_string().contains("maximum AST depth exceeded")),
+        "expected a max-AST-depth parse error, got: {errs:?}"
     );
 }
 
 #[test]
-fn test_max_nesting_cons_pattern_chain() {
-    let pattern = (1..=12)
+fn test_max_ast_depth_cons_pattern_chain() {
+    let pattern = (1..=MAX_AST_DEPTH + 1)
         .map(|i| format!("x{i}"))
         .collect::<Vec<_>>()
         .join(" :: ");
     let code = format!("match xs with {{ case {pattern} -> xs; }}");
-    let errs = parse_with_limits(
-        &code,
-        ParserLimits {
-            max_nesting: Some(5),
-        },
-    )
-    .unwrap_err();
+    let errs = parse_rex(&code).unwrap_err();
     assert!(
         errs.iter()
-            .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
-        "expected a max-nesting parse error, got: {errs:?}"
+            .any(|e| e.to_string().contains("maximum AST depth exceeded")),
+        "expected a max-AST-depth parse error, got: {errs:?}"
     );
 }
 

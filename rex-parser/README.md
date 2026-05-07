@@ -19,6 +19,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## Limits
 
-- `ParserLimits`: controls syntactic nesting limits
 - `parse`: parses a complete Rex program from source text
-- `parse_with_limits`: parses with explicit syntactic nesting limits
+- Parsing enforces a fixed maximum AST nesting depth.

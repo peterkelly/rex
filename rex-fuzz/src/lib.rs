@@ -3,8 +3,6 @@
 
 use std::io::Read;
 
-use rex_parser::ParserLimits;
-
 pub const MAX_FUZZ_BYTES: usize = 1 << 20; // 1MiB
 
 pub fn env_usize(name: &str) -> Option<usize> {
@@ -20,16 +18,6 @@ pub fn read_stdin_bytes() -> Result<Vec<u8>, std::io::Error> {
 pub fn stack_bytes_from_env(default_mb: usize) -> usize {
     let stack_mb = env_usize("REX_FUZZ_STACK_MB").unwrap_or(default_mb);
     stack_mb.saturating_mul(1024 * 1024)
-}
-
-pub fn parser_limits_from_env() -> ParserLimits {
-    if let Some(max) = env_usize("REX_FUZZ_MAX_NESTING") {
-        ParserLimits {
-            max_nesting: Some(max),
-        }
-    } else {
-        ParserLimits::safe_defaults()
-    }
 }
 
 pub fn fuzz_source_input(input: &[u8]) -> String {

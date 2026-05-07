@@ -127,8 +127,6 @@ Other useful flags:
 - `--emit-type` (alias: `--type`): print inferred type as JSON and exit
 - `--stdin`: read a program from stdin
 - `--stack-size-mb`: control the runner thread stack size
-- `--max-nesting`: cap syntactic nesting depth during parsing
-- `--no-max-nesting`: disable the parsing nesting cap
 
 ## Standard Module (Prelude)
 

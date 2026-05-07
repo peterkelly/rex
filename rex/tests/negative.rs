@@ -1,7 +1,7 @@
 use rex::{
     ast::{CompilationUnit, Symbol},
     engine::{Engine, EngineError, Module},
-    parser::{ParseError, ParserLimits, parse_with_limits},
+    parser::{ParseError, parse},
     typesystem::TypeError,
 };
 
@@ -13,7 +13,7 @@ fn strip_span(mut err: TypeError) -> TypeError {
 }
 
 fn parse_program(code: &str) -> Result<CompilationUnit, Vec<ParseError>> {
-    parse_with_limits(code, ParserLimits::safe_defaults())
+    parse(code)
 }
 
 async fn compile_err(code: &str) -> EngineError {

@@ -11,7 +11,7 @@ use rex_ast::expr::{
 use rex_ast::span::{Position, Span, Spanned};
 
 use crate::{
-    ParserLimits,
+    MAX_AST_DEPTH,
     error::ParseError,
     grammar::{Cst, CstNode, GrammarParser, TokenKind},
     lexer::{Token, Tokens},
@@ -22,19 +22,13 @@ use crate::{
 
 pub(crate) struct PegParser {
     input: Input,
-    limits: ParserLimits,
 }
 
 impl PegParser {
     pub(crate) fn new(tokens: Tokens) -> Self {
         Self {
             input: Input::new(tokens),
-            limits: ParserLimits::default(),
         }
-    }
-
-    pub(crate) fn set_limits(&mut self, limits: ParserLimits) {
-        self.limits = limits;
     }
 
     pub(crate) fn parse_program(&mut self) -> Result<CompilationUnit, Vec<ParseError>> {
@@ -48,7 +42,7 @@ impl PegParser {
             .map_err(|failure| vec![parser_error_from_failure(&failure, &tokens, eof)])?;
         drop(parser);
 
-        AstBuilder::new(self.limits).program(&cst)
+        AstBuilder::new().program(&cst)
     }
 
     #[cfg(test)]
@@ -69,14 +63,11 @@ impl PegParser {
                 format!("unexpected {}", token),
             )]);
         }
-        AstBuilder::new(self.limits)
-            .pattern(&cst)
-            .map_err(|err| vec![err])
+        AstBuilder::new().pattern(&cst).map_err(|err| vec![err])
     }
 }
 
 struct AstBuilder {
-    limits: ParserLimits,
     expr_depth: usize,
     type_depth: usize,
     pattern_depth: usize,
@@ -92,9 +83,8 @@ enum GroupedApplicationStep<'cst> {
 }
 
 impl AstBuilder {
-    fn new(limits: ParserLimits) -> Self {
+    fn new() -> Self {
         Self {
-            limits,
             expr_depth: 0,
             type_depth: 0,
             pattern_depth: 0,
@@ -628,12 +618,10 @@ impl AstBuilder {
 
         let result = if operands.is_empty() {
             Err(ParseError::new(node.span, "expected expression"))
-        } else if let Some(max) = self.limits.max_nesting
-            && operators.len() >= max
-        {
+        } else if operators.len() >= MAX_AST_DEPTH {
             Err(ParseError::new(
                 node.span,
-                format!("maximum nesting depth exceeded (max {max})"),
+                format!("maximum AST depth exceeded (max {MAX_AST_DEPTH})"),
             ))
         } else {
             Ok(fold_binary_expr(operands, operators))
@@ -653,12 +641,10 @@ impl AstBuilder {
 
         while let Some((prefix, tail)) = grouped_tail_application(current) {
             peeled += 1;
-            if let Some(max) = self.limits.max_nesting
-                && self.expr_depth + peeled > max
-            {
+            if self.expr_depth + peeled > MAX_AST_DEPTH {
                 return Err(ParseError::new(
                     current.span,
-                    format!("maximum nesting depth exceeded (max {max})"),
+                    format!("maximum AST depth exceeded (max {MAX_AST_DEPTH})"),
                 ));
             }
 
@@ -1176,36 +1162,30 @@ impl AstBuilder {
     }
 
     fn check_expr_depth(&self, span: Span) -> Result<(), ParseError> {
-        if let Some(max) = self.limits.max_nesting
-            && self.expr_depth >= max
-        {
+        if self.expr_depth >= MAX_AST_DEPTH {
             return Err(ParseError::new(
                 span,
-                format!("maximum nesting depth exceeded (max {max})"),
+                format!("maximum AST depth exceeded (max {MAX_AST_DEPTH})"),
             ));
         }
         Ok(())
     }
 
     fn check_type_depth(&self, span: Span) -> Result<(), ParseError> {
-        if let Some(max) = self.limits.max_nesting
-            && self.type_depth >= max
-        {
+        if self.type_depth >= MAX_AST_DEPTH {
             return Err(ParseError::new(
                 span,
-                format!("maximum nesting depth exceeded (max {max})"),
+                format!("maximum AST depth exceeded (max {MAX_AST_DEPTH})"),
             ));
         }
         Ok(())
     }
 
     fn check_pattern_depth(&self, span: Span) -> Result<(), ParseError> {
-        if let Some(max) = self.limits.max_nesting
-            && self.pattern_depth >= max
-        {
+        if self.pattern_depth >= MAX_AST_DEPTH {
             return Err(ParseError::new(
                 span,
-                format!("maximum nesting depth exceeded (max {max})"),
+                format!("maximum AST depth exceeded (max {MAX_AST_DEPTH})"),
             ));
         }
         Ok(())

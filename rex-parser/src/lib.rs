@@ -30,28 +30,8 @@ use crate::{
     lexer::{Token, Tokens},
 };
 
-#[derive(Clone, Copy, Debug)]
-pub struct ParserLimits {
-    pub max_nesting: Option<usize>,
-}
-
-impl ParserLimits {
-    pub fn unlimited() -> Self {
-        Self { max_nesting: None }
-    }
-
-    pub fn safe_defaults() -> Self {
-        Self {
-            max_nesting: Some(512),
-        }
-    }
-}
-
-impl Default for ParserLimits {
-    fn default() -> Self {
-        Self::unlimited()
-    }
-}
+#[doc(hidden)]
+pub const MAX_AST_DEPTH: usize = 256;
 
 pub fn parse(input: &str) -> Result<CompilationUnit, Vec<ParseError>> {
     let tokens = Token::tokenize(input).map_err(|err| vec![ParseError::from_lexical_error(err)])?;
@@ -61,15 +41,5 @@ pub fn parse(input: &str) -> Result<CompilationUnit, Vec<ParseError>> {
 #[doc(hidden)]
 pub fn parse_with_tokens(tokens: Tokens) -> Result<CompilationUnit, Vec<ParseError>> {
     let mut parser = ast_builder::PegParser::new(tokens);
-    parser.parse_program()
-}
-
-pub fn parse_with_limits(
-    input: &str,
-    limits: ParserLimits,
-) -> Result<CompilationUnit, Vec<ParseError>> {
-    let tokens = Token::tokenize(input).map_err(|err| vec![ParseError::from_lexical_error(err)])?;
-    let mut parser = ast_builder::PegParser::new(tokens);
-    parser.set_limits(limits);
     parser.parse_program()
 }

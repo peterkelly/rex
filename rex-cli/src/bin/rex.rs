@@ -9,7 +9,7 @@ use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
     engine::{Engine, ValueDisplayOptions},
-    parser::{ParseError, ParserLimits, parse_with_limits as parse_rex_with_limits},
+    parser::{ParseError, parse as parse_rex},
 };
 use serde_json::json;
 
@@ -68,18 +68,6 @@ struct RunArgs {
     /// Stack size (in MiB) used for parsing/type inference/evaluation.
     #[arg(long = "stack-size-mb", default_value_t = 16)]
     stack_size_mb: usize,
-
-    /// Maximum nesting depth allowed during parsing (defaults to a safe limit).
-    #[arg(
-        long = "max-nesting",
-        value_name = "N",
-        conflicts_with = "no_max_nesting"
-    )]
-    max_nesting: Option<usize>,
-
-    /// Disable the parsing nesting-depth limit.
-    #[arg(long = "no-max-nesting")]
-    no_max_nesting: bool,
 }
 
 #[tokio::main]
@@ -125,8 +113,6 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
         emit_type,
         include,
         stack_size_mb: _stack_size_mb,
-        max_nesting,
-        no_max_nesting,
     } = args;
 
     let source = if let Some(code) = code {
@@ -143,16 +129,6 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
         return Err("missing input (file or `-c/--code`)".into());
     };
 
-    let parser_limits = if no_max_nesting {
-        ParserLimits::unlimited()
-    } else if let Some(max_nesting) = max_nesting {
-        ParserLimits {
-            max_nesting: Some(max_nesting),
-        }
-    } else {
-        ParserLimits::safe_defaults()
-    };
-
     run_source(
         &source,
         RunSourceOpts {
@@ -161,7 +137,6 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
             include,
             emit_ast,
             emit_type,
-            parser_limits,
         },
     )
     .await
@@ -173,7 +148,6 @@ struct RunSourceOpts {
     include: Vec<String>,
     emit_ast: bool,
     emit_type: bool,
-    parser_limits: ParserLimits,
 }
 
 fn init_engine(include: &[String]) -> Result<Engine, String> {
@@ -196,11 +170,9 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         include,
         emit_ast,
         emit_type,
-        parser_limits,
     } = opts;
 
-    let program =
-        parse_rex_with_limits(source, parser_limits).map_err(|errs| format_parse_errors(&errs))?;
+    let program = parse_rex(source).map_err(|errs| format_parse_errors(&errs))?;
 
     if emit_ast || emit_type {
         let type_json = if emit_type {
@@ -318,7 +290,7 @@ mod tests {
     #[test]
     fn emit_ast_and_type_are_json() {
         let source = "1 + 2";
-        let program = parse_rex_with_limits(source, ParserLimits::safe_defaults()).expect("parse");
+        let program = parse_rex(source).expect("parse");
 
         let ty_json = infer_type_json(source, None, false, &[]).expect("infer");
         let ast_out = emit_json(&program, true, None).expect("emit ast");

@@ -20,4 +20,3 @@ cargo run -p rex-fuzz --bin e2e < path/to/input
 ## Environment knobs
 
 - `REX_FUZZ_STACK_MB`: per-input thread stack size
-- `REX_FUZZ_MAX_NESTING`: parser nesting cap override
