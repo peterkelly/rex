@@ -5,12 +5,12 @@ use std::{
     sync::Arc,
 };
 
-use rex_lexer::span::{Position, Span};
 use rpds::HashTrieMapSync;
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
+use crate::span::{Position, Span};
 pub use crate::symbol::Symbol;
 
 pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;

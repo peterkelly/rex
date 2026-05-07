@@ -3,16 +3,15 @@ use std::sync::Arc;
 use rex_ast::{
     app, assert_expr_eq, b, d,
     expr::{Decl, Expr, ImportClause, ImportPath, NameRef, Pattern, Scope, Symbol, TypeExpr, Var},
-    f, l, s, tup, u, v,
+    f, l, s,
+    span::Span,
+    tup, u, v,
 };
-use rex_lexer::{Token, span, span::Span};
 use rex_parser::error::ParserErr;
-
-use rex_parser::{Parser, ParserLimits};
+use rex_parser::{ParserLimits, parse as parse_rex, parse_with_limits, span};
 
 fn parse(code: &str) -> Arc<Expr> {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().body.unwrap()
+    parse_rex(code).unwrap().body.unwrap()
 }
 
 fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
@@ -27,55 +26,12 @@ fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
 }
 
 #[test]
-fn test_parser_exposes_target_peg_grammar() {
-    let grammar = Parser::grammar();
-    let rule_lines = grammar
-        .lines()
-        .filter(|line| line.contains("<-"))
-        .collect::<Vec<_>>();
-    let arrow_column = rule_lines
-        .first()
-        .and_then(|line| line.find("<-"))
-        .expect("grammar has rule lines");
-    let longest_rule_name = rule_lines
-        .iter()
-        .map(|line| line.split_whitespace().next().unwrap().len())
-        .max()
-        .unwrap();
-
-    assert_eq!(arrow_column, longest_rule_name + 1);
-    assert!(
-        rule_lines
-            .iter()
-            .all(|line| line.find("<-") == Some(arrow_column)),
-        "all grammar arrows should be aligned"
-    );
-
-    for rule in ["CompilationUnit", "Decl", "TypeExpr", "Expr", "Pattern"] {
-        assert!(
-            rule_lines
-                .iter()
-                .any(|line| line.split_whitespace().next() == Some(rule)),
-            "missing grammar rule {rule}"
-        );
-    }
-    assert!(grammar.starts_with("\n# CompilationUnit\n\nCompilationUnit    <- Decl* Expr? EOF\n"));
-    assert!(grammar.contains("\n# Declarations\n\nDecl               <-"));
-    assert!(grammar.contains("\n# Expressions\n\nExpr               <-"));
-    assert!(grammar.contains("\n# Patterns\n\nPattern            <-"));
-    assert!(grammar.contains("ImportDecl         <- IMPORT cut("));
-    assert!(grammar.contains("label(\"expected `;` after function body\", SEMI_COLON)"));
-    assert!(!grammar.contains("'import'"));
-}
-
-#[test]
 fn test_parse_declaration_only_compilation_unit_has_no_body() {
     let code = r#"
         type Option a = None | Some a;
         fn id x: a -> a = x;
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
 
     assert_eq!(program.decls.len(), 2);
     assert!(program.body.is_none());
@@ -102,10 +58,7 @@ fn test_grammar_contract_examples_parse() {
             "match [1] with { case x::xs -> x; case [] -> 0; }",
         ),
     ] {
-        let mut parser = Parser::new(Token::tokenize(code).unwrap_or_else(|err| {
-            panic!("{name}: tokenize failed: {err}");
-        }));
-        parser.parse_program().unwrap_or_else(|errs| {
+        parse_rex(code).unwrap_or_else(|errs| {
             panic!("{name}: parse failed: {errs:?}");
         });
     }
@@ -131,10 +84,7 @@ fn test_grammar_contract_near_misses_fail() {
         ),
         ("dict items require equals", "{ a 1 }", "expected `with`"),
     ] {
-        let mut parser = Parser::new(Token::tokenize(code).unwrap_or_else(|err| {
-            panic!("{name}: tokenize failed: {err}");
-        }));
-        let errs = match parser.parse_program() {
+        let errs = match parse_rex(code) {
             Ok(program) => panic!("{name}: parse unexpectedly succeeded: {program:?}"),
             Err(errs) => errs,
         };
@@ -146,30 +96,25 @@ fn test_grammar_contract_near_misses_fail() {
 }
 
 #[test]
-fn test_parser_documents_ast_output_boundary() {
-    let boundary = Parser::ast_boundary();
-    assert!(boundary.contains("grammar-driven"));
-    assert!(boundary.contains("converts the resulting CST"));
-    assert!(boundary.contains("memoizes CST rule results"));
-}
-
-#[test]
 fn test_parse_comment() {
-    let mut parser = Parser::new(Token::tokenize("true {- this is a boolean -}").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("true {- this is a boolean -}")
+        .unwrap()
+        .body
+        .unwrap();
     assert_expr_eq!(expr, b!(span!(1:1 - 1:5); true));
 
-    let mut parser = Parser::new(Token::tokenize("{- this is a boolean -} false").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("{- this is a boolean -} false")
+        .unwrap()
+        .body
+        .unwrap();
     assert_expr_eq!(expr, b!(span!(1:25 - 1:30); false));
 
-    let mut parser = Parser::new(
-        Token::tokenize(
-            "(3.54 {- this is a float -}, {- this is an int -} 42, false {- this is a boolean -})",
-        )
-        .unwrap(),
-    );
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex(
+        "(3.54 {- this is a float -}, {- this is an int -} 42, false {- this is a boolean -})",
+    )
+    .unwrap()
+    .body
+    .unwrap();
     assert_expr_eq!(
         expr,
         tup!(
@@ -182,18 +127,8 @@ fn test_parse_comment() {
 }
 
 #[test]
-fn test_lexer_stream_exposes_no_whitespace_tokens() {
-    let tokens = Token::tokenize("  1\n\t+\r2  ").unwrap();
-    assert_eq!(tokens.items.len(), 3);
-    assert!(matches!(tokens.items[0], Token::Int(1, _)));
-    assert!(matches!(tokens.items[1], Token::Add(_)));
-    assert!(matches!(tokens.items[2], Token::Int(2, _)));
-}
-
-#[test]
 fn test_parser_consumes_whole_input() {
-    let mut parser = Parser::new(Token::tokenize("1 ;").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("1 ;").unwrap_err();
     assert!(
         errs.iter().any(|e| e.message.contains("unexpected ;")),
         "expected trailing-token error, got {errs:?}"
@@ -202,8 +137,7 @@ fn test_parser_consumes_whole_input() {
 
 #[test]
 fn test_pub_without_declaration_is_not_consumed() {
-    let mut parser = Parser::new(Token::tokenize("pub 1").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("pub 1").unwrap_err();
     assert!(
         errs.iter().any(|e| e.message.contains("unexpected pub")),
         "expected `pub` to remain visible to expression parsing, got {errs:?}"
@@ -213,12 +147,13 @@ fn test_pub_without_declaration_is_not_consumed() {
 #[test]
 fn test_max_nesting_depth_is_enforced_during_parse() {
     let code = format!("{}0{}", "(".repeat(6), ")".repeat(6));
-    let mut parser = Parser::new(Token::tokenize(&code).unwrap());
-    parser.set_limits(ParserLimits {
-        max_nesting: Some(5),
-    });
-
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_with_limits(
+        &code,
+        ParserLimits {
+            max_nesting: Some(5),
+        },
+    )
+    .unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -229,12 +164,13 @@ fn test_max_nesting_depth_is_enforced_during_parse() {
 #[test]
 fn test_max_nesting_binary_chain() {
     let code = std::iter::repeat_n("1", 12).collect::<Vec<_>>().join(" + ");
-    let mut parser = Parser::new(Token::tokenize(&code).unwrap());
-    parser.set_limits(ParserLimits {
-        max_nesting: Some(5),
-    });
-
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_with_limits(
+        &code,
+        ParserLimits {
+            max_nesting: Some(5),
+        },
+    )
+    .unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -248,12 +184,13 @@ fn test_max_nesting_type_fun_chain() {
         .collect::<Vec<_>>()
         .join(" -> ");
     let code = format!("let t: {ty_chain} = x in t");
-    let mut parser = Parser::new(Token::tokenize(&code).unwrap());
-    parser.set_limits(ParserLimits {
-        max_nesting: Some(5),
-    });
-
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_with_limits(
+        &code,
+        ParserLimits {
+            max_nesting: Some(5),
+        },
+    )
+    .unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -268,12 +205,13 @@ fn test_max_nesting_cons_pattern_chain() {
         .collect::<Vec<_>>()
         .join(" :: ");
     let code = format!("match xs with {{ case {pattern} -> xs; }}");
-    let mut parser = Parser::new(Token::tokenize(&code).unwrap());
-    parser.set_limits(ParserLimits {
-        max_nesting: Some(5),
-    });
-
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_with_limits(
+        &code,
+        ParserLimits {
+            max_nesting: Some(5),
+        },
+    )
+    .unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.to_string().contains("maximum nesting depth exceeded")),
@@ -283,8 +221,7 @@ fn test_max_nesting_cons_pattern_chain() {
 
 #[test]
 fn test_add() {
-    let mut parser = Parser::new(Token::tokenize("1 + 2").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("1 + 2").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -298,8 +235,7 @@ fn test_add() {
         )
     );
 
-    let mut parser = Parser::new(Token::tokenize("(6.9 + 3.17)").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("(6.9 + 3.17)").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -313,8 +249,7 @@ fn test_add() {
         )
     );
 
-    let mut parser = Parser::new(Token::tokenize("(+) 420").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("(+) 420").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -331,8 +266,7 @@ fn test_parse_type_decl() {
     type MyADT a b c = MyCtor1 | MyCtor2 a b | MyCtor3 { field1: c };
     42
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Type(decl) => {
@@ -374,8 +308,7 @@ fn test_parse_type_decl_requires_semicolon() {
     type MyADT = MyCtor
     42
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex(code).unwrap_err();
     assert!(
         errs.iter()
             .any(|err| err.message.contains("expected `;` after type declaration")),
@@ -389,8 +322,7 @@ fn test_parse_type_decl_semicolon_preserves_ident_expr_boundary() {
     type MyADT = MyCtor;
     value
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Type(decl) => {
@@ -409,8 +341,7 @@ fn test_parse_fn_decl_simple() {
     fn add x: i32 -> y: i32 -> i32 = x + y;
     add 1 2
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -439,8 +370,7 @@ fn test_parse_fn_decl_signature_form_with_lambda_body() {
     fn add : i32 -> i32 -> i32 = \x y -> x + y;
     add 1 2
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -471,8 +401,7 @@ fn test_parse_fn_sig_multiline_lambda() {
       x + 1;
     f 1
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -496,8 +425,7 @@ fn test_parse_fn_sig_body_uses_semicolon_not_indentation() {
 x + 1;
     f 1
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -515,8 +443,7 @@ fn test_parse_fn_decl_requires_semicolon() {
     fn inc : i32 -> i32 = \x -> x + 1
     inc 1
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex(code).unwrap_err();
     assert!(
         errs.iter()
             .any(|err| err.message.contains("expected `;` after function body")),
@@ -530,8 +457,7 @@ fn test_parse_fn_decl_signature_form_eta_expands_non_lambda_body() {
     fn inc : i32 -> i32 = add 1;
     inc
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -554,8 +480,7 @@ fn test_parse_fn_decl_signature_form_where_constraints() {
     fn my_fun : a -> b -> c where Iterable (a, b) = \x y -> x;
     my_fun
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -576,8 +501,7 @@ fn test_parse_fn_decl_signature_form_rejects_mismatched_lambda_arity() {
     fn add : i32 -> i32 -> i32 = \x -> x;
     add
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    assert!(parser.parse_program().is_err());
+    assert!(parse_rex(code).is_err());
 }
 
 #[test]
@@ -586,8 +510,7 @@ fn test_parse_fn_decl_where_constraints() {
     fn my_fun x: a -> y: b -> c where Iterable (a, b) = x;
     my_fun
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -616,8 +539,7 @@ fn test_parse_declare_fn_decl_where_constraints() {
     declare fn my_fun x: a -> y: b -> c where Iterable (a, b);
     42
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
@@ -647,8 +569,7 @@ fn test_parse_declare_fn_decl_bare_signature() {
     declare fn info a -> string where Show a;
     0
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
@@ -678,8 +599,7 @@ fn test_parse_declare_fn_decl_bare_signature_with_colon() {
     declare fn info : a -> string where Show a;
     0
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::DeclareFn(fd) => {
@@ -709,8 +629,7 @@ fn test_parse_declare_fn_decl_requires_semicolon() {
     declare fn info : a -> string
     0
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex(code).unwrap_err();
     assert!(
         errs.iter().any(|err| err
             .message
@@ -725,8 +644,7 @@ fn test_parse_declare_fn_decl_rejects_body() {
     declare fn my_fun x: a -> a = x;
     0
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    assert!(parser.parse_program().is_err());
+    assert!(parse_rex(code).is_err());
 }
 
 #[test]
@@ -735,8 +653,7 @@ fn test_parse_fn_decl_param_fun_type_requires_parens() {
     fn apply x: (a -> c) -> y: a -> c = x y;
     apply
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -761,8 +678,7 @@ fn test_parse_fn_decl_parenthesized_params_allow_fun_types() {
     fn reduce (f: a -> a -> a) -> (x: t a) -> a = x;
     reduce
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -784,8 +700,7 @@ fn test_parse_fn_decl_parenthesized_params_require_arrow_delimiter() {
     fn reduce (f: a -> a -> a) (x: t a) -> a = x;
     reduce
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    assert!(parser.parse_program().is_err());
+    assert!(parse_rex(code).is_err());
 }
 
 #[test]
@@ -794,8 +709,7 @@ fn test_parse_unit_type() {
     fn unit_id x: () -> () = x;
     unit_id ()
     "#;
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
     match &program.decls[0] {
         Decl::Fn(fd) => {
@@ -810,8 +724,7 @@ fn test_parse_unit_type() {
 
 #[test]
 fn test_sub() {
-    let mut parser = Parser::new(Token::tokenize("1 - 2").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("1 - 2").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -825,8 +738,7 @@ fn test_sub() {
         )
     );
 
-    let mut parser = Parser::new(Token::tokenize("(6.9 - 3.17)").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("(6.9 - 3.17)").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -840,8 +752,7 @@ fn test_sub() {
         )
     );
 
-    let mut parser = Parser::new(Token::tokenize("(-) 4.20").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("(-) 4.20").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -854,8 +765,7 @@ fn test_sub() {
 
 #[test]
 fn test_negate() {
-    let mut parser = Parser::new(Token::tokenize("-1").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("-1").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -865,8 +775,7 @@ fn test_negate() {
         )
     );
 
-    let mut parser = Parser::new(Token::tokenize("(-1)").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("(-1)").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -876,8 +785,7 @@ fn test_negate() {
         )
     );
 
-    let mut parser = Parser::new(Token::tokenize("(- 6.9)").unwrap());
-    let expr = parser.parse_program().unwrap().body.unwrap();
+    let expr = parse_rex("(- 6.9)").unwrap().body.unwrap();
     assert_expr_eq!(
         expr,
         app!(
@@ -918,8 +826,7 @@ fn test_projection_tuple_index_expr() {
 
 #[test]
 fn test_projection_expr_colon_rejected() {
-    let mut parser = Parser::new(Token::tokenize("x:field").unwrap());
-    assert!(parser.parse_program().is_err());
+    assert!(parse_rex("x:field").is_err());
 }
 
 #[test]
@@ -1409,8 +1316,7 @@ fn test_match_scrutinee_can_contain_braces() {
 
 #[test]
 fn test_match_requires_with_before_arms() {
-    let mut parser = Parser::new(Token::tokenize("match xs { case [] -> empty; }").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("match xs { case [] -> empty; }").unwrap_err();
     assert!(
         errs.iter().any(|e| e
             .message
@@ -1421,8 +1327,7 @@ fn test_match_requires_with_before_arms() {
 
 #[test]
 fn test_match_requires_braced_arms_after_with() {
-    let mut parser = Parser::new(Token::tokenize("match xs case [] -> empty").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("match xs case [] -> empty").unwrap_err();
     assert!(
         errs.iter().any(|e| e
             .message
@@ -1430,8 +1335,7 @@ fn test_match_requires_braced_arms_after_with() {
         "expected missing match block error, got: {errs:?}"
     );
 
-    let mut parser = Parser::new(Token::tokenize("match xs with case [] -> empty").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("match xs with case [] -> empty").unwrap_err();
     assert!(
         errs.iter().any(|e| e
             .message
@@ -1442,8 +1346,7 @@ fn test_match_requires_braced_arms_after_with() {
 
 #[test]
 fn test_match_arms_require_semicolon() {
-    let mut parser = Parser::new(Token::tokenize("match xs with { case [] -> empty }").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("match xs with { case [] -> empty }").unwrap_err();
     assert!(
         errs.iter().any(|e| e
             .message
@@ -1454,8 +1357,7 @@ fn test_match_arms_require_semicolon() {
 
 #[test]
 fn test_match_arms_reject_when_keyword() {
-    let mut parser = Parser::new(Token::tokenize("match xs with { when [] -> empty; }").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("match xs with { when [] -> empty; }").unwrap_err();
     assert!(
         errs.iter().any(|e| e.message.contains("unexpected when")),
         "expected old match arm keyword to be rejected, got: {errs:?}"
@@ -1465,8 +1367,7 @@ fn test_match_arms_reject_when_keyword() {
 #[test]
 fn test_import_clause_all() {
     let code = "import foo.bar (*);\n()";
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1477,8 +1378,7 @@ fn test_import_clause_all() {
 #[test]
 fn test_import_clause_items_with_alias() {
     let code = "import foo.bar (x, y as z);\n()";
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1496,8 +1396,7 @@ fn test_import_clause_items_with_alias() {
 #[test]
 fn test_import_clause_rejects_module_alias_combo() {
     let code = "import foo.bar (x) as Bar;\n()";
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let err = parser.parse_program().unwrap_err();
+    let err = parse_rex(code).unwrap_err();
     assert!(
         err[0]
             .message
@@ -1508,16 +1407,14 @@ fn test_import_clause_rejects_module_alias_combo() {
 #[test]
 fn test_import_clause_rejects_duplicate_local_names() {
     let code = "import foo.bar (x, y as x);\n()";
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let err = parser.parse_program().unwrap_err();
+    let err = parse_rex(code).unwrap_err();
     assert!(err[0].message.contains("duplicate imported name `x`"));
 }
 
 #[test]
 fn test_import_relative_current_dir_path() {
     let code = "import ./foo/bar (x);\n()";
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1537,8 +1434,7 @@ fn test_import_relative_current_dir_path() {
 #[test]
 fn test_import_relative_parent_dir_path() {
     let code = "import ../../foo/bar as FB;\n()";
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
@@ -1563,8 +1459,7 @@ fn test_import_relative_parent_dir_path() {
 #[test]
 fn test_import_requires_semicolon() {
     let code = "import foo.bar\n()";
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex(code).unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.message.contains("expected `;` after import declaration")),
@@ -1574,8 +1469,7 @@ fn test_import_requires_semicolon() {
 
 #[test]
 fn test_errors() {
-    let mut parser = Parser::new(Token::tokenize("1 + 2 + in + 3").unwrap());
-    let res = parser.parse_program();
+    let res = parse_rex("1 + 2 + in + 3");
     assert_eq!(
         res,
         Err(vec![ParserErr::new(
@@ -1584,15 +1478,13 @@ fn test_errors() {
         )])
     );
 
-    let mut parser = Parser::new(Token::tokenize("1 + 2 in + 3").unwrap());
-    let res = parser.parse_program();
+    let res = parse_rex("1 + 2 in + 3");
     assert_eq!(
         res,
         Err(vec![ParserErr::new(Span::new(1, 7, 1, 9), "unexpected in")])
     );
 
-    let mut parser = Parser::new(Token::tokenize("get 0 [    ").unwrap());
-    let res = parser.parse_program();
+    let res = parse_rex("get 0 [    ");
     assert_eq!(
         res,
         Err(vec![ParserErr::new(
@@ -1601,8 +1493,7 @@ fn test_errors() {
         )])
     );
 
-    let mut parser = Parser::new(Token::tokenize("elem0 (  ").unwrap());
-    let res = parser.parse_program();
+    let res = parse_rex("elem0 (  ");
     assert_eq!(
         res,
         Err(vec![ParserErr::new(
@@ -1611,17 +1502,13 @@ fn test_errors() {
         )])
     );
 
-    let mut parser = Parser::new(
-        Token::tokenize(
-            "
+    let res = parse_rex(
+        "
         { a = 1, b }
         { a = 1, b = 2, c }
         { a = 1, b = 3, c = 3, d }
         ",
-        )
-        .unwrap(),
     );
-    let res = parser.parse_program();
     assert_eq!(
         res,
         Err(vec![
@@ -1646,8 +1533,7 @@ instance Default i32 where {
 default
 "#;
 
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 2);
 
     match &program.decls[0] {
@@ -1679,8 +1565,7 @@ instance Marker i32;
 true
 "#;
 
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 2);
     assert!(matches!(
         program.body.as_ref().unwrap().as_ref(),
@@ -1700,8 +1585,7 @@ instance Default i32
 default
 "#;
 
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex(code).unwrap_err();
     assert!(
         errs.iter().any(|err| err
             .message
@@ -1720,8 +1604,7 @@ instance Sample.Default i32 where {
 default
 "#;
 
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     assert_eq!(program.decls.len(), 1);
 
     let Decl::Instance(decl) = &program.decls[0] else {
@@ -1774,8 +1657,7 @@ fn test_parse_hole_in_nested_expression_positions() {
 
 #[test]
 fn test_parse_hole_not_allowed_in_type_annotation_failure_case() {
-    let mut parser = Parser::new(Token::tokenize("let x : ? = 1 in x").unwrap());
-    let errs = parser.parse_program().unwrap_err();
+    let errs = parse_rex("let x : ? = 1 in x").unwrap_err();
     assert!(
         errs.iter()
             .any(|e| e.message.contains("expected type") || e.message.contains("unexpected")),

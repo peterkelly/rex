@@ -2,24 +2,22 @@
 
 Rex is implemented as a small set of focused crates that form a pipeline:
 
-1. **Lexing** (`rex-lexer`): converts source text into a `Vec<Token>` with spans.
-2. **Parsing** (`rex-parser`): converts tokens into a `rex_ast::expr::CompilationUnit { decls, body }`.
-3. **Typing** (`rex-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_typesystem::TypedExpr`.
-4. **Evaluation** (`rex-engine`): evaluates `TypedExpr` to a runtime `rex_engine::Handle`.
+1. **Parsing** (`rex-parser`): converts source text into a `rex_ast::expr::CompilationUnit { decls, body }`.
+2. **Typing** (`rex-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_typesystem::TypedExpr`.
+3. **Evaluation** (`rex-engine`): evaluates `TypedExpr` to a runtime `rex_engine::Handle`.
 
 The crates are designed so you can use them independently (e.g. parser-only tooling, typechecking-only checks, or embedding the full evaluator).
 
 ## Crates
 
-- `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `TypeExpr`, `CompilationUnit`, symbols).
-- `rex-lexer`: tokenizer + spans (`Span`, `Position`).
-- `rex-parser`: recursive-descent parser. Entry point: `rex_parser::Parser::parse_program`.
-  - For untrusted code, set `ParserLimits::safe_defaults` before parsing.
+- `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `TypeExpr`, `CompilationUnit`, symbols, spans).
+- `rex-parser`: source parser. Entry points: `rex_parser::parse` and `rex_parser::parse_with_limits`.
+  - For untrusted code, pass `rex_parser::ParserLimits::safe_defaults()` to `parse_with_limits`.
 - `rex-typesystem`: type system. Entry points:
   - `TypeSystem::new_with_prelude()?` to create a typing environment with standard types/classes.
   - `infer_typed(&mut ts, expr)` / `infer(&mut ts, expr)` for type inference.
   - The inference implementation itself lives in `rex-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
-  - For untrusted code, set `TypeSystemLimits::safe_defaults` before inference.
+  - For untrusted code, set `rex_typesystem::TypeSystemLimits::safe_defaults()` before inference.
 - `rex-engine`: runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
@@ -61,7 +59,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - **Prelude split**: The type system prelude is a combination of:
   - ADT/typeclass *heads* injected by `TypeSystem::new_with_prelude()?`
   - typeclass method *bodies* (written in Rex) loaded from `rex-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
-- **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parser/typechecker limit APIs provide bounded recursion for production/untrusted workloads.
+- **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). Parsing-limit and typechecker-limit APIs provide bounded recursion for production/untrusted workloads.
 - **Import-use rewrite/validation**: module processing resolves import aliases across expression
   vars, constructor patterns, type references, and class references; unresolved qualified alias
   members are rejected as module errors before runtime.
@@ -72,7 +70,7 @@ Rex now prefers structured internal representations (for example `NameRef`, `Bui
 `CanonicalSymbol`, and module/type/class maps) across parser, type system, evaluator, and LSP
 rewrite paths. Remaining string usage is intentional in these boundary layers:
 
-- **Source text and parsing**: lexer/parser operate on source strings by definition.
+- **Source text and parsing**: the parser accepts source strings by definition.
 - **Human-facing diagnostics and display**: error messages, hover text, CLI rendering, and debug
   output stringify symbols/types for readability.
 - **Protocol/serialization boundaries**: JSON/LSP payloads are string-based and convert structured

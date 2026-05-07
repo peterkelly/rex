@@ -1,6 +1,6 @@
 use rex::{
     engine::{Engine, EngineError, Handle, Heap, Module, Value},
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError},
 };
 
@@ -12,9 +12,7 @@ fn strip_type_span(mut err: TypeError) -> TypeError {
 }
 
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    let tokens = Token::tokenize(code).unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::global();
     module.add_decls(program.decls.clone());

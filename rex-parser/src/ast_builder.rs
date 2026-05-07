@@ -8,15 +8,13 @@ use rex_ast::expr::{
     ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Scope,
     Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
-use rex_lexer::{
-    Token, Tokens,
-    span::{Position, Span, Spanned},
-};
+use rex_ast::span::{Position, Span, Spanned};
 
 use crate::{
     ParserLimits,
     error::ParserErr,
     grammar::{Cst, CstNode, GrammarParser, TokenKind},
+    lexer::{Token, Tokens},
     op::Operator,
     peg::{Failure, Input},
     rex::{self, RexRule},

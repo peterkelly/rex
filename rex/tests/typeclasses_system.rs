@@ -1,6 +1,6 @@
 use rex::{
     engine::{Engine, Module, ValueDisplayOptions},
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
 
@@ -25,11 +25,7 @@ fn type_compatible(actual: &Type, expected: &Type) -> bool {
 }
 
 async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String> {
-    let tokens = Token::tokenize(code).map_err(|e| format!("lex error: {e}"))?;
-    let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program()
-        .map_err(|errs| format!("parse error: {errs:?}"))?;
+    let program = parse_rex(code).map_err(|errs| format!("parse error: {errs:?}"))?;
 
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::global();

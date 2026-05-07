@@ -9,7 +9,7 @@ use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
     engine::{Engine, ValueDisplayOptions},
-    parser::{Parser as RexParser, ParserErr, ParserLimits, Token},
+    parser::{ParserErr, ParserLimits, parse_with_limits as parse_rex_with_limits},
 };
 use serde_json::json;
 
@@ -199,12 +199,8 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         parser_limits,
     } = opts;
 
-    let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
-    let mut parser = RexParser::new(tokens);
-    parser.set_limits(parser_limits);
-    let program = parser
-        .parse_program()
-        .map_err(|errs| format_parse_errors(&errs))?;
+    let program =
+        parse_rex_with_limits(source, parser_limits).map_err(|errs| format_parse_errors(&errs))?;
 
     if emit_ast || emit_type {
         let type_json = if emit_type {
@@ -322,11 +318,7 @@ mod tests {
     #[test]
     fn emit_ast_and_type_are_json() {
         let source = "1 + 2";
-        let tokens = Token::tokenize(source).expect("lex");
-        let mut parser = RexParser::new(tokens);
-        parser.set_limits(ParserLimits::safe_defaults());
-
-        let program = parser.parse_program().expect("parse");
+        let program = parse_rex_with_limits(source, ParserLimits::safe_defaults()).expect("parse");
 
         let ty_json = infer_type_json(source, None, false, &[]).expect("infer");
         let ast_out = emit_json(&program, true, None).expect("emit ast");

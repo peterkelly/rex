@@ -1,5 +1,5 @@
 use rex_ast::expr::{Decl, NameRef, Symbol, TypeDecl, TypeExpr, TypeVariant};
-use rex_lexer::span::Span;
+use rex_ast::span::Span;
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Predicate, RexType, Scheme, Type, TypeKind, TypeVar},
     types::{collect_adts_in_types, order_adt_family},

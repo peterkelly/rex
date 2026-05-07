@@ -12,8 +12,7 @@ application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 
 ```rust
 use rex_engine::{Engine, Module};
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rex_parser::parse;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -23,9 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     globals.export_value("answer", 42i32)?;
     engine.inject_module(globals)?;
 
-    let tokens = Token::tokenize("answer + 1")?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|errs| {
+    let program = parse("answer + 1").map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
     let body = program.body.as_ref().ok_or_else(|| {

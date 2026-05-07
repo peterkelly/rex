@@ -1,16 +1,10 @@
-#![forbid(unsafe_code)]
-#![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
-
 //! Lexical analysis for Rex.
 
 use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-pub use span::{Position, Span, Spanned};
-
-pub mod macros;
-pub mod span;
+pub use rex_ast::span::{Position, Span, Spanned};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Precedence(u8);

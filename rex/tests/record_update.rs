@@ -1,6 +1,6 @@
 use rex::{
     engine::{Engine, Module, Value},
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -21,9 +21,7 @@ async fn record_update_end_to_end() {
         in
             (foo2.x, match sum2 with { case A {x} -> x; case B {x} -> x; })
     "#;
-    let tokens = Token::tokenize(code).unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
 
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::global();

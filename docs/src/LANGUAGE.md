@@ -125,7 +125,7 @@ The lambda syntax is `\x -> expr`. Some docs/examples may also use Unicode `λ` 
 - `true`, `false`
 - integers and floats (integer literals are overloaded over `Integral` and default to `i32` when ambiguous)
 - strings: `"hello"`
-- UUID and datetime literals (if present in your lexer source)
+- UUID and datetime literals, when enabled by the parser
 
 Examples:
 

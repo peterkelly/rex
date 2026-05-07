@@ -4,8 +4,8 @@
 
 Rex is a Cargo workspace. The most important crates are:
 
-- `rex-lexer`: tokenization + spans
-- `rex-parser`: parsing into a `CompilationUnit { decls, body }`
+- `rex-parser`: source parsing into a `CompilationUnit { decls, body }`
+- `rex-ast`: AST nodes, symbols, and spans
 - `rex-typesystem`: Hindley–Milner inference + type classes + ADTs
 - `rex-engine`: typed evaluation + native injection
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex types/values
@@ -21,7 +21,7 @@ Run the full test suite:
 cargo test
 ```
 
-There is also a lightweight “fuzz smoke” test that runs a deterministic lex→parse→infer→eval loop.
+There is also a lightweight “fuzz smoke” test that runs a deterministic parse→infer→eval loop.
 You can scale iterations with `REX_FUZZ_ITERS`:
 
 ```sh
@@ -41,7 +41,7 @@ printf '(' | cargo run -q -p rex-fuzz --bin parse
 
 Tuning knobs (environment variables):
 
-- `REX_FUZZ_MAX_NESTING`: parser nesting cap (defaults to `ParserLimits::safe_defaults()`)
+- `REX_FUZZ_MAX_NESTING`: parser nesting cap (defaults to `rex_parser::ParserLimits::safe_defaults()`)
 - `REX_FUZZ_STACK_MB`: stack size (MiB) for the harness thread
 
 If you edit Rust code, also run:

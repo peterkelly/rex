@@ -2,18 +2,13 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use rex_engine::{Engine, Module};
-use rex_fuzz::{FuzzError, parser_limits_from_env, read_stdin_bytes, tokenize_fuzz_input};
-use rex_parser::Parser;
+use rex_fuzz::{FuzzError, fuzz_source_input, parser_limits_from_env, read_stdin_bytes};
+use rex_parser::parse_with_limits;
 use rex_typesystem::{inference::infer, typesystem::TypeSystem};
 
 async fn run_one(input: &[u8]) {
-    let Some(tokens) = tokenize_fuzz_input(input) else {
-        return;
-    };
-    let mut parser = Parser::new(tokens);
-    parser.set_limits(parser_limits_from_env());
-
-    let program = match parser.parse_program() {
+    let source = fuzz_source_input(input);
+    let program = match parse_with_limits(&source, parser_limits_from_env()) {
         Ok(p) => p,
         Err(_) => return,
     };

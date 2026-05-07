@@ -1,18 +1,15 @@
 # Rex Parser (`rex-parser`)
 
-This crate parses token streams into the Rex AST (`rex-ast`), producing a `CompilationUnit { decls, body }`
+This crate parses Rex source into the Rex AST (`rex-ast`), producing a `CompilationUnit { decls, body }`
 or a list of parse errors with spans.
 
 ## Usage
 
 ```rust
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rex_parser::parse;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let tokens = Token::tokenize("1 + 2")?;
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().map_err(|errs| {
+    let program = parse("1 + 2").map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
     let _ = program;
@@ -23,4 +20,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## Limits
 
 - `ParserLimits`: controls syntactic nesting limits
-- `parse_program`: parses a complete Rex program from the token stream
+- `parse`: parses a complete Rex program from source text
+- `parse_with_limits`: parses with explicit syntactic nesting limits

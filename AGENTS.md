@@ -14,7 +14,6 @@ computations and data manipulation.
 
 ## Pipeline for executing Rex programs
 
-- lexer (`rex-lexer`)
 - parser (`rex-parser`)
 - type inference (`rex-typesystem`)
 - evaluator (`rex-engine`)
@@ -22,9 +21,8 @@ computations and data manipulation.
 ## Crates in this workspace
 
 - `rex`: Crate acting as entry point for embedding in other Rust programs, CLI tool for testing. Also contains examples and integration tests.
-- `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `CompilationUnit`, symbols).
-- `rex-lexer`: tokenizer + spans.
-- `rex-parser`: recursive-descent parser producing `CompilationUnit { decls, body }`.
+- `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `CompilationUnit`, symbols, spans).
+- `rex-parser`: source parser producing `CompilationUnit { decls, body }`.
 - `rex-typesystem`: Hindley–Milner inference + ADTs + type classes; prelude typeclasses live here.
 - `rex-engine`: typed evaluation and runtime intrinsics.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge between Rust types and Rex values.
@@ -129,7 +127,7 @@ Never commit with a lowercase subject after the colon, for example:
 
 ## Guidelines for embedders running untrusted code
 
-- Always cap parsing nesting depth with `ParserLimits::safe_defaults()` (or stricter).
+- Always cap parsing nesting depth with `rex::parser::ParserLimits::safe_defaults()` (or stricter).
 - Prefer async evaluation with `Evaluator::eval`.
 
 ## Lockfiles

@@ -2,18 +2,14 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use rex_fuzz::{
-    FuzzError, parser_limits_from_env, read_stdin_bytes, run_with_stack, stack_bytes_from_env,
-    tokenize_fuzz_input,
+    FuzzError, fuzz_source_input, parser_limits_from_env, read_stdin_bytes, run_with_stack,
+    stack_bytes_from_env,
 };
-use rex_parser::Parser;
+use rex_parser::parse_with_limits;
 
 fn run_one(input: &[u8]) {
-    let Some(tokens) = tokenize_fuzz_input(input) else {
-        return;
-    };
-    let mut parser = Parser::new(tokens);
-    parser.set_limits(parser_limits_from_env());
-    let _ = parser.parse_program();
+    let source = fuzz_source_input(input);
+    let _ = parse_with_limits(&source, parser_limits_from_env());
 }
 
 fn main() -> Result<(), FuzzError> {

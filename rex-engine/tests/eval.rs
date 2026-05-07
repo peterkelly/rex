@@ -3,8 +3,7 @@ use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
 use rex_engine::{
     Engine, EngineError, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module, Value,
 };
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
     types::{BuiltinTypeId, RexType, Scheme, Type},
@@ -12,13 +11,11 @@ use rex_typesystem::{
 use std::sync::Arc;
 
 fn parse(code: &str) -> Arc<Expr> {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().body.unwrap()
+    parse_rex(code).unwrap().body.unwrap()
 }
 
 fn parse_program(code: &str) -> CompilationUnit {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap()
+    parse_rex(code).unwrap()
 }
 
 fn strip_span(mut err: TypeError) -> TypeError {
@@ -594,9 +591,7 @@ async fn eval_deep_list_does_not_overflow() {
     }
     code.push_str(" in xs");
 
-    let tokens = Token::tokenize(&code).unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(&code).unwrap();
     let expr = program.body.unwrap();
     let engine = Engine::with_prelude(()).unwrap();
     let value = eval_expr(engine, expr.as_ref()).await.unwrap();

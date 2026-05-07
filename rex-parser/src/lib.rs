@@ -8,10 +8,14 @@
 //! straightforward to step through in a debugger.
 
 pub mod error;
+#[doc(hidden)]
+pub mod lexer;
 pub mod op;
+pub use rex_ast::span;
 
 mod ast_builder;
 mod grammar;
+mod macros;
 mod peg;
 mod rex;
 // The `.peg` file parser is a test-time verifier for checked grammar specs.
@@ -20,9 +24,11 @@ mod rex;
 mod peg_syntax;
 
 use rex_ast::expr::CompilationUnit;
-use rex_lexer::Tokens;
 
-use crate::error::ParserErr;
+use crate::{
+    error::ParserErr,
+    lexer::{Token, Tokens},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ParserLimits {
@@ -47,30 +53,23 @@ impl Default for ParserLimits {
     }
 }
 
-pub struct Parser {
-    peg: ast_builder::PegParser,
+pub fn parse(input: &str) -> Result<CompilationUnit, Vec<ParserErr>> {
+    let tokens = Token::tokenize(input).map_err(|err| vec![ParserErr::from_lexical_error(err)])?;
+    parse_with_tokens(tokens)
 }
 
-impl Parser {
-    pub fn ast_boundary() -> &'static str {
-        rex::AST_BOUNDARY
-    }
+#[doc(hidden)]
+pub fn parse_with_tokens(tokens: Tokens) -> Result<CompilationUnit, Vec<ParserErr>> {
+    let mut parser = ast_builder::PegParser::new(tokens);
+    parser.parse_program()
+}
 
-    pub fn grammar() -> &'static str {
-        rex::REX_PEG_GRAMMAR
-    }
-
-    pub fn new(tokens: Tokens) -> Parser {
-        Parser {
-            peg: ast_builder::PegParser::new(tokens),
-        }
-    }
-
-    pub fn set_limits(&mut self, limits: ParserLimits) {
-        self.peg.set_limits(limits);
-    }
-
-    pub fn parse_program(&mut self) -> Result<CompilationUnit, Vec<ParserErr>> {
-        self.peg.parse_program()
-    }
+pub fn parse_with_limits(
+    input: &str,
+    limits: ParserLimits,
+) -> Result<CompilationUnit, Vec<ParserErr>> {
+    let tokens = Token::tokenize(input).map_err(|err| vec![ParserErr::from_lexical_error(err)])?;
+    let mut parser = ast_builder::PegParser::new(tokens);
+    parser.set_limits(limits);
+    parser.parse_program()
 }

@@ -1,6 +1,6 @@
 use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
-use rex_lexer::{Token, span::Span};
-use rex_parser::Parser;
+use rex_ast::span::Span;
+use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
     inference::{infer, infer_typed},
@@ -110,13 +110,11 @@ fn adt_constructors_are_present() {
 }
 
 fn parse_expr(code: &str) -> Arc<Expr> {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().body.unwrap()
+    parse_rex(code).unwrap().body.unwrap()
 }
 
 fn parse_program(code: &str) -> CompilationUnit {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap()
+    parse_rex(code).unwrap()
 }
 
 #[test]
@@ -136,11 +134,7 @@ fn infer_deep_list_does_not_overflow() {
     let parse_handle = std::thread::Builder::new()
         .name("infer_deep_list_parse".into())
         .stack_size(128 * 1024 * 1024)
-        .spawn(move || {
-            let tokens = Token::tokenize(&code).unwrap();
-            let mut parser = Parser::new(tokens);
-            parser.parse_program()
-        })
+        .spawn(move || parse_rex(&code))
         .unwrap();
     let program = parse_handle.join().unwrap().unwrap();
     let expr = program.body.unwrap();

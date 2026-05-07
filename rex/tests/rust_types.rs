@@ -2,7 +2,7 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{Engine, EngineError, FromRex, Handle, Heap, Module, Value},
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
 fn inject_globals(
@@ -16,8 +16,7 @@ fn inject_globals(
 
 /// Helper to evaluate a Rex expression and return the result handle.
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
-    let tokens = Token::tokenize(expr).unwrap();
-    let program = Parser::new(tokens).parse_program().unwrap();
+    let program = parse_rex(expr).unwrap();
     let heap = engine.heap.clone();
     let (value, ty) = engine
         .into_evaluator()

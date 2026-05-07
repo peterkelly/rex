@@ -10,6 +10,8 @@
 pub mod expr;
 pub mod id;
 pub mod macros;
+pub mod span;
 pub mod symbol;
 
+pub use span::{Position, Span, Spanned};
 pub use symbol::Symbol;

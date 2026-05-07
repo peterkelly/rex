@@ -1,7 +1,7 @@
 use rex::{
     ast::{CompilationUnit, Symbol},
     engine::{Engine, EngineError, Module},
-    parser::{Parser, ParserErr, ParserLimits, Token},
+    parser::{ParserErr, ParserLimits, parse_with_limits},
     typesystem::TypeError,
 };
 
@@ -13,10 +13,7 @@ fn strip_span(mut err: TypeError) -> TypeError {
 }
 
 fn parse_program(code: &str) -> Result<CompilationUnit, Vec<ParserErr>> {
-    let tokens = Token::tokenize(code).expect("lexer should not panic");
-    let mut parser = Parser::new(tokens);
-    parser.set_limits(ParserLimits::safe_defaults());
-    parser.parse_program()
+    parse_with_limits(code, ParserLimits::safe_defaults())
 }
 
 async fn compile_err(code: &str) -> EngineError {

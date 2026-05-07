@@ -14,7 +14,6 @@ crate-type = ["cdylib", "rlib"]
 futures = { workspace = true }
 rex-ast = { path = "../rex-ast", version = "3.9.12" }
 rex-engine = { path = "../rex-engine", version = "3.9.12" }
-rex-lexer = { path = "../rex-lexer", version = "3.9.12" }
 rex-lsp = { path = "../rex-lsp", version = "3.9.12" }
 rex-parser = { path = "../rex-parser", version = "3.9.12" }
 rex-typesystem = { path = "../rex-typesystem", version = "3.9.12" }

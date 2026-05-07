@@ -2,10 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rex_lexer::{
-    Token, Tokens,
-    span::{Span, Spanned},
-};
+use rex_ast::span::{Span, Spanned};
+
+use crate::lexer::{Token, Tokens};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Pos(pub usize);
@@ -554,7 +553,7 @@ where
 mod tests {
     use std::cell::Cell;
 
-    use rex_lexer::span::{Position, Span};
+    use rex_ast::span::{Position, Span};
 
     use super::*;
 

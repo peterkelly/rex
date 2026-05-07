@@ -17,7 +17,7 @@ macro_rules! assert_expr_eq {
 #[macro_export]
 macro_rules! b {
     ($x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Bool(::rex_lexer::Span::default(), $x))
+        ::std::sync::Arc::new($crate::expr::Expr::Bool($crate::span::Span::default(), $x))
     };
 
     ($span:expr; $x:expr) => {
@@ -32,7 +32,7 @@ macro_rules! b {
 #[macro_export]
 macro_rules! u {
     ($x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Uint(::rex_lexer::Span::default(), $x))
+        ::std::sync::Arc::new($crate::expr::Expr::Uint($crate::span::Span::default(), $x))
     };
 
     ($span:expr; $x:expr) => {
@@ -47,7 +47,7 @@ macro_rules! u {
 #[macro_export]
 macro_rules! i {
     ($x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Int(::rex_lexer::Span::default(), $x))
+        ::std::sync::Arc::new($crate::expr::Expr::Int($crate::span::Span::default(), $x))
     };
 
     ($span:expr; $x:expr) => {
@@ -62,7 +62,7 @@ macro_rules! i {
 #[macro_export]
 macro_rules! f {
     ($x:expr) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Float(::rex_lexer::Span::default(), $x))
+        ::std::sync::Arc::new($crate::expr::Expr::Float($crate::span::Span::default(), $x))
     };
 
     ($span:expr; $x:expr) => {
@@ -78,7 +78,7 @@ macro_rules! f {
 macro_rules! s {
     ($x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::String(
-            ::rex_lexer::Span::default(),
+            $crate::span::Span::default(),
             $x.to_string(),
         ))
     };
@@ -99,7 +99,7 @@ macro_rules! s {
 #[macro_export]
 macro_rules! tup {
     ($($xs:expr),* $(,)?) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Tuple(::rex_lexer::Span::default(), vec![$($xs),*]))
+        ::std::sync::Arc::new($crate::expr::Expr::Tuple($crate::span::Span::default(), vec![$($xs),*]))
     };
 
     ($span:expr; $($xs:expr),* $(,)?) => {
@@ -114,7 +114,7 @@ macro_rules! tup {
 #[macro_export]
 macro_rules! l {
     ($($xs:expr),* $(,)?) => {
-        ::std::sync::Arc::new($crate::expr::Expr::List(::rex_lexer::Span::default(), vec![$($xs),*]))
+        ::std::sync::Arc::new($crate::expr::Expr::List($crate::span::Span::default(), vec![$($xs),*]))
     };
 
     ($span:expr; $($xs:expr),* $(,)?) => {
@@ -129,7 +129,7 @@ macro_rules! l {
 #[macro_export]
 macro_rules! d {
     ($($k:ident = $v:expr),* $(,)?) => {
-        ::std::sync::Arc::new($crate::expr::Expr::Dict(::rex_lexer::Span::default(), {
+        ::std::sync::Arc::new($crate::expr::Expr::Dict($crate::span::Span::default(), {
             let mut map = ::std::collections::BTreeMap::new();
             $(map.insert($crate::expr::Symbol::intern(stringify!($k)), $v);)*
             map
@@ -157,7 +157,7 @@ macro_rules! d {
 macro_rules! v {
     ($x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Var($crate::expr::Var {
-            span: ::rex_lexer::Span::default(),
+            span: $crate::span::Span::default(),
             name: $crate::expr::Symbol::intern(&($x).to_string()),
         }))
     };
@@ -182,7 +182,7 @@ macro_rules! v {
 macro_rules! app {
     ($f:expr, $x:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::App(
-            ::rex_lexer::Span::default(),
+            $crate::span::Span::default(),
             ($f).into(),
             ($x).into(),
         ))
@@ -210,7 +210,7 @@ macro_rules! app {
 macro_rules! lam {
     (λ $x:ident -> $e:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Lam(
-            ::rex_lexer::Span::default(),
+            $crate::span::Span::default(),
             $crate::expr::Scope::new_sync(),
             $crate::expr::Var::new(stringify!($x)),
             None,
@@ -247,7 +247,7 @@ macro_rules! lam {
 macro_rules! let_in {
     (let $x:ident = ($e1:expr) in $e2:expr) => {
         ::std::sync::Arc::new($crate::expr::Expr::Let(
-            ::rex_lexer::Span::default(),
+            $crate::span::Span::default(),
             $crate::expr::Var::new(stringify!($x)),
             None,
             ($e1).into(),
@@ -281,7 +281,7 @@ macro_rules! let_in {
 macro_rules! ite {
     (if ($e1:expr) { $e2:expr } else { $e3:expr }) => {
         ::std::sync::Arc::new($crate::expr::Expr::Ite(
-            ::rex_lexer::Span::default(),
+            $crate::span::Span::default(),
             ($e1).into(),
             ($e2).into(),
             ($e3).into(),

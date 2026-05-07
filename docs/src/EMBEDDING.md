@@ -2,10 +2,9 @@
 
 Rex is designed as a small pipeline you can embed at whatever stage you need:
 
-1. `rex-lexer`: source → `Tokens`
-2. `rex-parser`: tokens -> `CompilationUnit { decls, body }`
-3. `rex-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
-4. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Handle`
+1. `rex-parser`: source → `CompilationUnit { decls, body }`
+2. `rex-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
+3. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Handle`
 
 This document focuses on common embedding patterns.
 
@@ -17,7 +16,7 @@ timeouts, memory limits).
 
 Recommended defaults for untrusted input:
 
-- Always cap parsing nesting depth with `ParserLimits::safe_defaults()` (or stricter).
+- Always cap parsing nesting depth with `rex::parser::ParserLimits::safe_defaults()` (or stricter).
 - Run evaluation in an isolation boundary you can hard-kill (separate process/container), with CPU/RSS/time limits.
 
 Evaluation API:
@@ -36,7 +35,7 @@ Evaluation API:
 `Evaluator::run` consumes both the evaluator and the compiled program.
 
 ```rust
-use rex::Engine;
+use rex::engine::Engine;
 
 let engine = Engine::with_prelude(())?;
 let mut compiler = engine.into_compiler();
@@ -105,11 +104,12 @@ consumes the evaluator.
 ## Evaluate Rex Code Directly
 
 ```rust
-use rex::{Engine, Module, Parser, Token};
+use rex::{
+    engine::{Engine, Module},
+    parser::parse,
+};
 
-let tokens = Token::tokenize("let x = 1 + 2 in x * 3")?;
-let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
@@ -144,7 +144,7 @@ exports fail early with module errors.
 If you want full control:
 
 ```rust
-use rex::{Engine, EngineOptions, PreludeMode};
+use rex::engine::{Engine, EngineOptions, PreludeMode};
 
 let mut engine = Engine::with_options(
     (),
@@ -166,7 +166,7 @@ This is fully supported in `rex-engine`. You can compose module loading from:
 ### 1) Use Built-In Resolvers
 
 ```rust
-use rex::{Engine};
+use rex::engine::Engine;
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -195,7 +195,7 @@ For host-managed modules, add a resolver that maps `module_name` to source text.
 
 ```rust
 use rex_engine::{ModuleId, ResolveRequest, ResolvedModule};
-use rex::{Engine};
+use rex::engine::Engine;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -325,7 +325,10 @@ Rex code calls it through `sample.render_label`.
 Example:
 
 ```rust
-use rex::{Engine, EngineError, Module, Rex};
+use rex::{
+    Rex,
+    engine::{Engine, EngineError, Module},
+};
 
 #[derive(Clone, Debug, PartialEq, Rex)]
 enum Side {
@@ -396,7 +399,7 @@ runtime can suspend them as explicit pending evaluation frames.
 ```rust
 use futures::FutureExt;
 use rex_engine::{Engine, EvaluatorRef, Handle, Module};
-use rex::{BuiltinTypeId, Scheme, Type};
+use rex::typesystem::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
 engine.add_default_resolvers();
@@ -526,11 +529,12 @@ match (to_list bytes) with {
 ## Typecheck Without Evaluating
 
 ```rust
-use rex::{Parser, Token, TypeSystem, infer};
+use rex::{
+    parser::parse,
+    typesystem::{TypeSystem, infer},
+};
 
-let tokens = Token::tokenize("map (\\x -> x) [1, 2, 3]")?;
-let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parse("map (\\x -> x) [1, 2, 3]").map_err(|errs| format!("{errs:?}"))?;
 
 let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
@@ -572,7 +576,10 @@ Users can declare new type classes and instances directly in Rex source. As the 
 ### Typecheck: Inject Class/Instance Decls into `TypeSystem`
 
 ```rust
-use rex::{Parser, Token, TypeSystem, infer};
+use rex::{
+    parser::parse,
+    typesystem::{TypeSystem, infer},
+};
 
 let code = r#"
 class Size a where {
@@ -588,9 +595,7 @@ instance Size (List t) where {
 size [1, 2, 3]
 "#;
 
-let tokens = Token::tokenize(code)?;
-let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 
 let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
@@ -616,7 +621,7 @@ assert_eq!(ty.to_string(), "i32");
 
 ```rust
 use rex_engine::{Engine, EngineError, Module};
-use rex::{Parser, Token};
+use rex::parser::parse;
 
 let code = r#"
 class Size a where {
@@ -632,9 +637,7 @@ instance Size (List t) where {
 (size [1, 2, 3], size [])
 "#;
 
-let tokens = Token::tokenize(code)?;
-let mut parser = Parser::new(tokens);
-let program = parser.parse_program().map_err(|errs| format!("{errs:?}"))?;
+let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 
 let mut engine = Engine::with_prelude(())?;
 let mut globals = Module::global();
@@ -674,6 +677,7 @@ Integer literals are overloaded (`Integral a`) and can specialize at call sites.
 direct calls, `let` bindings, and lambda wrappers:
 
 ```rust
+use rex::parser::parse;
 use rex_engine::{Engine, Module};
 
 for code in [
@@ -687,11 +691,7 @@ for code in [
     globals.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
     engine.inject_module(globals)?;
 
-    let tokens = Token::tokenize(code)?;
-    let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program()
-        .map_err(|errs| format!("parse error: {errs:?}"))?;
+    let program = parse(code).map_err(|errs| format!("parse error: {errs:?}"))?;
     let body = program
         .body
         .as_ref()
@@ -710,6 +710,7 @@ If your host functions are async, stage them in a module with `export_async` and
 `Evaluator::eval`.
 
 ```rust
+use rex::parser::parse;
 use rex_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
@@ -717,11 +718,7 @@ let mut globals = Module::global();
 globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
 engine.inject_module(globals)?;
 
-let tokens = Token::tokenize("inc 1")?;
-let mut parser = Parser::new(tokens);
-let program = parser
-    .parse_program()
-    .map_err(|errs| format!("parse error: {errs:?}"))?;
+let program = parse("inc 1").map_err(|errs| format!("parse error: {errs:?}"))?;
 let body = program
     .body
     .as_ref()
@@ -767,11 +764,10 @@ task primitives in the host crate.
 For untrusted input, you can cap syntactic nesting depth during parsing:
 
 ```rust
-use rex::{Parser, ParserLimits, Token};
+use rex::parser::{ParserLimits, parse_with_limits};
 
-let mut parser = Parser::new(Token::tokenize("(((1)))")?);
-parser.set_limits(ParserLimits::safe_defaults());
-let program = parser.parse_program()?;
+let program = parse_with_limits("(((1)))", ParserLimits::safe_defaults())
+    .map_err(|errs| format!("parse error: {errs:?}"))?;
 ```
 
 ## Bridge Rust Types with `#[derive(Rex)]`
@@ -831,7 +827,11 @@ Fragment::inject_rex(&mut engine)?;
 ```
 
 ```rust
-use rex::{Engine, FromRex, Parser, Token, Rex};
+use rex::{
+    Rex,
+    engine::{Engine, FromRex},
+    parser::parse,
+};
 
 #[derive(Rex, Debug, PartialEq)]
 enum Maybe<T> {
@@ -842,8 +842,7 @@ enum Maybe<T> {
 let mut engine = Engine::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
-let body = Parser::new(Token::tokenize("Just 1")?)
-    .parse_program()
+let body = parse("Just 1")
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .body
     .expect("snippet must contain a final expression");
@@ -926,5 +925,5 @@ engine.inject_rex_adt::<PrimitiveEither>()?;
 Some workloads (very deep nesting) can exhaust parser/typechecker recursion depth. Prefer bounded
 limits for untrusted code:
 
-- `rex::ParserLimits::safe_defaults`
+- `rex::parser::ParserLimits::safe_defaults`
 - `rex_typesystem::TypeSystemLimits::safe_defaults`

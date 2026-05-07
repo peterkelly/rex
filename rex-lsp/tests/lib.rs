@@ -4,7 +4,7 @@ use lsp_types::{
 };
 use rex::{
     engine::{Engine, Module},
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
 };
 use rex_ast::expr::{Decl, Expr, NameRef, TypeExpr};
 use rex_engine::ValueDisplayOptions;
@@ -55,9 +55,7 @@ fn assert_internal_name_ref(name: &NameRef) {
 }
 
 async fn eval_source_to_display(code: &str) -> (String, String) {
-    let tokens = Token::tokenize(code).expect("tokenize source");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().expect("parse source");
+    let program = parse_rex(code).expect("parse source");
     let mut engine = Engine::with_prelude(()).expect("build engine");
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
@@ -113,9 +111,7 @@ import dep as D;
 let x : D.Boxed = D.Boxed 1 in
 x is D.Boxed
 "#;
-    let tokens = Token::tokenize(source).expect("tokenize");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().expect("parse");
+    let program = parse_rex(source).expect("parse");
     let (rewritten, _ts, _imports, diags) =
         prepare_program_with_imports(&uri, &program).expect("prepare");
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
@@ -176,9 +172,7 @@ instance D.Pick i32 where {
 }
 pick is i32
 "#;
-    let tokens = Token::tokenize(source).expect("tokenize");
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().expect("parse");
+    let program = parse_rex(source).expect("parse");
     let (rewritten, _ts, _imports, diags) =
         prepare_program_with_imports(&uri, &program).expect("prepare");
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");

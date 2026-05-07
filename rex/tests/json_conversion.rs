@@ -3,7 +3,7 @@ use rex::{
     ast::{CompilationUnit, Symbol},
     engine::{Engine, Handle, Heap, Value},
     json::{json_to_rex, rex_to_json},
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
 };
 use serde::Serialize;
@@ -38,9 +38,7 @@ fn temp_dir(name: &str) -> PathBuf {
 }
 
 fn parse_program(source: &str) -> CompilationUnit {
-    let tokens = Token::tokenize(source).unwrap();
-    let mut parser = Parser::new(tokens);
-    parser.parse_program().unwrap()
+    parse_rex(source).unwrap()
 }
 
 fn fixed_uuid() -> Uuid {

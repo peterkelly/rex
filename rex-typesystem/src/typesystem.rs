@@ -7,7 +7,7 @@ use rex_ast::expr::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
     Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr,
 };
-use rex_lexer::span::Span;
+use rex_ast::span::Span;
 
 use crate::prelude;
 

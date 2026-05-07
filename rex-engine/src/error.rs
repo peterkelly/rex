@@ -2,8 +2,7 @@ use std::path::PathBuf;
 use std::process::ExitStatus;
 
 use rex_ast::expr::Symbol;
-use rex_lexer::LexicalError;
-use rex_parser::error::ParserErr;
+use rex_parser::{error::ParserErr, lexer::LexicalError};
 use rex_typesystem::error::TypeError;
 
 use crate::modules::ModuleId;
@@ -64,10 +63,6 @@ pub enum ModuleError {
         name: Symbol,
     },
     Lex {
-        source: LexicalError,
-    },
-    LexInModule {
-        module: ModuleId,
         source: LexicalError,
     },
     Parse {
@@ -158,9 +153,6 @@ impl std::fmt::Display for ModuleError {
                 )
             }
             ModuleError::Lex { source } => write!(f, "lex error: {source}"),
-            ModuleError::LexInModule { module, source } => {
-                write!(f, "lex error in module {module}: {source}")
-            }
             ModuleError::Parse { errors } => {
                 write!(f, "parse error:")?;
                 for err in errors {
@@ -205,7 +197,6 @@ impl std::error::Error for ModuleError {
             ModuleError::NotUtf8 { source, .. } => Some(source),
             ModuleError::NotUtf8Remote { source, .. } => Some(source),
             ModuleError::Lex { source } => Some(source),
-            ModuleError::LexInModule { source, .. } => Some(source),
             ModuleError::CurlFailed { source } => Some(source),
             _ => None,
         }

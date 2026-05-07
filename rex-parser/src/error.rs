@@ -1,6 +1,8 @@
 use std::fmt::{self, Display, Formatter};
 
-use rex_lexer::span::Span;
+use rex_ast::span::Span;
+
+use crate::lexer::LexicalError;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParserErr {
@@ -15,6 +17,16 @@ impl ParserErr {
             message: message.into(),
         }
     }
+
+    pub(crate) fn from_lexical_error(err: LexicalError) -> ParserErr {
+        let span = match &err {
+            LexicalError::UnexpectedToken(span) | LexicalError::InvalidLiteral { span, .. } => {
+                *span
+            }
+            LexicalError::Internal(_) => Span::default(),
+        };
+        ParserErr::new(span, format!("lex error: {err}"))
+    }
 }
 
 impl Display for ParserErr {
@@ -22,3 +34,5 @@ impl Display for ParserErr {
         write!(f, "{}: {}", self.span.begin, self.message)
     }
 }
+
+impl std::error::Error for ParserErr {}

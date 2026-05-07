@@ -15,7 +15,7 @@ use rex_ast::expr::{
     ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern,
     Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
 };
-use rex_lexer::span::Span;
+use rex_ast::span::Span;
 use rex_typesystem::{
     error::{CollectAdtsError, TypeError},
     inference::{infer, infer_typed},

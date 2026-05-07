@@ -4,13 +4,12 @@
 use futures::executor::block_on;
 use rex_ast::expr::CompilationUnit;
 use rex_engine::{Engine, ValueDisplayOptions};
-use rex_lexer::Token;
 use rex_lsp::server::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,
     document_symbols_for_source_public, format_for_source_public, goto_definition_for_source,
     hover_for_source, references_for_source_public, rename_for_source_public,
 };
-use rex_parser::{Parser, ParserLimits, error::ParserErr};
+use rex_parser::{ParserLimits, error::ParserErr, parse_with_limits};
 use rex_typesystem::{
     inference::infer,
     typesystem::{TypeSystem, TypeSystemLimits},
@@ -21,12 +20,7 @@ fn parse_program_with_limits(
     source: &str,
     limits: ParserLimits,
 ) -> Result<CompilationUnit, String> {
-    let tokens = Token::tokenize(source).map_err(|e| format!("lex error: {e}"))?;
-    let mut parser = Parser::new(tokens);
-    parser.set_limits(limits);
-    parser
-        .parse_program()
-        .map_err(|errs| format_parse_errors(&errs))
+    parse_with_limits(source, limits).map_err(|errs| format_parse_errors(&errs))
 }
 
 fn format_parse_errors(errs: &[ParserErr]) -> String {

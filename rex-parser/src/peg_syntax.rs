@@ -1,13 +1,13 @@
 //! Test-time parser for checked `.peg` grammar files.
 //!
-//! Rex source is tokenized by `rex-lexer`, but `.peg` files are their own tiny
+//! Rex source is tokenized by the parser crate, but `.peg` files are their own tiny
 //! source language with different punctuation and reserved words. This module
 //! supplies the `.peg` lexer, grammar, and CST-to-syntax conversion while
 //! reusing the same generic PEG interpreter as the Rex parser.
 
 use std::{collections::BTreeSet, fmt};
 
-use rex_lexer::span::Span as RexSpan;
+use rex_ast::span::Span as RexSpan;
 
 use crate::{
     grammar::{Cst, CstNode, Grammar, GrammarParser, Item as GrammarItem, Peg, Terminal},

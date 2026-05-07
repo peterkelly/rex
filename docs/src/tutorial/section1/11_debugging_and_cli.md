@@ -2,10 +2,9 @@
 
 Rex is compiled and evaluated in stages:
 
-1. Lexing
-2. Parsing
-3. Type inference / checking
-4. Evaluation
+1. Parsing
+2. Type inference / checking
+3. Evaluation
 
 Most debugging is about figuring out *which stage* is failing and adding just enough information
 to make the problem obvious.

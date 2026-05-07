@@ -3,7 +3,7 @@ use crate::{
     types::{BuiltinTypeId, Scheme, Type, TypeKind, TypeVar, TypeVarId, Types},
 };
 use rex_ast::expr::Symbol;
-use rex_lexer::span::Span;
+use rex_ast::span::Span;
 use rpds::HashTrieMapSync;
 
 pub type Subst = HashTrieMapSync<TypeVarId, Type>;

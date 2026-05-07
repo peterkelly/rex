@@ -10,8 +10,8 @@ use rex_ast::expr::{
     ImportDecl, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol,
     TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
-use rex_lexer::{Span, Token};
-use rex_parser::Parser as RexParser;
+use rex_ast::span::Span;
+use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{Predicate, Type};
 use rex_util::sha256_hex;
 use uuid::Uuid;
@@ -2136,15 +2136,7 @@ pub(crate) fn parse_program_from_source(
     source: &str,
     context: Option<&ModuleId>,
 ) -> Result<CompilationUnit, EngineError> {
-    let tokens = Token::tokenize(source).map_err(|e| match context {
-        Some(id) => EngineError::from(crate::ModuleError::LexInModule {
-            module: id.clone(),
-            source: e,
-        }),
-        None => EngineError::from(crate::ModuleError::Lex { source: e }),
-    })?;
-    let mut parser = RexParser::new(tokens);
-    let program = parser.parse_program().map_err(|errs| match context {
+    let program = parse_rex(source).map_err(|errs| match context {
         Some(id) => EngineError::from(crate::ModuleError::ParseInModule {
             module: id.clone(),
             errors: errs,

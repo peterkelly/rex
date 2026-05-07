@@ -4,8 +4,8 @@ This crate contains small stdin-driven binaries used for fuzzing and regression 
 
 ## Binaries
 
-- `parse`: tokenize + parse a single input (parser-focused coverage)
-- `e2e`: tokenize + parse + typecheck + eval a single input (end-to-end coverage)
+- `parse`: parse a single source input (parser-focused coverage)
+- `e2e`: parse + typecheck + eval a single source input (end-to-end coverage)
 
 ## Running
 

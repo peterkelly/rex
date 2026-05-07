@@ -1,6 +1,6 @@
 use rex::{
     engine::{Engine, Module, Value},
-    parser::{Parser, ParserErr, Token},
+    parser::{ParserErr, parse as parse_rex},
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -13,11 +13,8 @@ fn format_parse_errors(errs: &[ParserErr]) -> String {
 }
 
 async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expected_type: Type) {
-    let tokens = Token::tokenize(source).unwrap_or_else(|err| panic!("{name}: lex error: {err}"));
-    let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program()
-        .unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)));
+    let program =
+        parse_rex(source).unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)));
 
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::global();

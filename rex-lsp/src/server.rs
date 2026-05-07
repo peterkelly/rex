@@ -14,12 +14,13 @@ use rex_ast::expr::{
     ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint,
     TypeDecl, TypeExpr, TypeVariant, Var,
 };
+use rex_ast::span::{Position as RexPosition, Span, Spanned};
 use rex_engine::{Engine, EngineError, ModuleError};
-use rex_lexer::{
-    LexicalError, Token, Tokens,
-    span::{Position as RexPosition, Span, Spanned},
+use rex_parser::{
+    error::ParserErr,
+    lexer::{LexicalError, Token, Tokens},
+    parse_with_tokens,
 };
-use rex_parser::{Parser, error::ParserErr};
 use rex_typesystem::{
     error::TypeError as TsTypeError,
     inference::infer_typed,
@@ -150,10 +151,7 @@ fn tokenize_and_parse(
     text: &str,
 ) -> std::result::Result<(Tokens, CompilationUnit), TokenizeOrParseError> {
     let tokens = Token::tokenize(text).map_err(TokenizeOrParseError::Lex)?;
-    let mut parser = Parser::new(tokens.clone());
-    let program = parser
-        .parse_program()
-        .map_err(TokenizeOrParseError::Parse)?;
+    let program = parse_with_tokens(tokens.clone()).map_err(TokenizeOrParseError::Parse)?;
     Ok((tokens, program))
 }
 

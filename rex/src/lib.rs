@@ -10,11 +10,9 @@ pub mod typesystem;
 pub use rex_proc_macro::Rex;
 
 pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionError> {
-    let tokens = parser::Token::tokenize(source).map_err(|e| {
-        engine::CompileError::from(engine::EngineError::from(format!("lex error: {e}")))
+    parser::parse_with_limits(source, parser::ParserLimits::unlimited()).map_err(|errs| {
+        engine::CompileError::from(engine::EngineError::from(format!("parse error: {errs:?}")))
     })?;
-    let mut parser = parser::Parser::new(tokens);
-    parser.set_limits(parser::ParserLimits::unlimited());
 
     let mut engine = engine::Engine::with_prelude(()).map_err(|e| {
         engine::CompileError::from(engine::EngineError::from(format!(

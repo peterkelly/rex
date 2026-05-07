@@ -10,7 +10,6 @@ version.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 rex-ast = { path = "../rex-ast", version = "3.9.12" }
-rex-lexer = { path = "../rex-lexer", version = "3.9.12" }
 rex-parser = { path = "../rex-parser", version = "3.9.12" }
 chrono = { workspace = true }
 uuid = { workspace = true }
@@ -21,5 +20,4 @@ rex-util = { path = "../rex-util", version = "3.9.12" }
 workspace = true
 
 [dev-dependencies]
-rex-lexer = { path = "../rex-lexer", version = "3.9.12" }
 rex-parser = { path = "../rex-parser", version = "3.9.12" }

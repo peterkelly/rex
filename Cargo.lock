@@ -739,7 +739,6 @@ dependencies = [
  "clap",
  "rex-ast",
  "rex-engine",
- "rex-lexer",
  "rex-parser",
  "rex-proc-macro",
  "rex-typesystem",
@@ -759,7 +758,6 @@ dependencies = [
  "async-trait",
  "chrono",
  "regex",
- "rex-lexer",
  "rpds",
  "serde",
  "serde_json",
@@ -789,7 +787,6 @@ dependencies = [
  "chrono",
  "futures",
  "rex-ast",
- "rex-lexer",
  "rex-parser",
  "rex-typesystem",
  "rex-util",
@@ -807,22 +804,11 @@ version = "3.9.12"
 dependencies = [
  "rex-ast",
  "rex-engine",
- "rex-lexer",
  "rex-parser",
  "rex-typesystem",
  "rex-util",
  "thiserror",
  "tokio",
-]
-
-[[package]]
-name = "rex-lexer"
-version = "3.9.12"
-dependencies = [
- "regex",
- "serde",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]
@@ -833,7 +819,6 @@ dependencies = [
  "rex",
  "rex-ast",
  "rex-engine",
- "rex-lexer",
  "rex-parser",
  "rex-typesystem",
  "rex-util",
@@ -855,8 +840,8 @@ version = "3.9.12"
 dependencies = [
  "regex",
  "rex-ast",
- "rex-lexer",
  "rex-util",
+ "serde",
  "thiserror",
 ]
 
@@ -875,7 +860,6 @@ version = "3.9.12"
 dependencies = [
  "chrono",
  "rex-ast",
- "rex-lexer",
  "rex-parser",
  "rex-util",
  "rpds",
@@ -897,7 +881,6 @@ dependencies = [
  "futures",
  "rex-ast",
  "rex-engine",
- "rex-lexer",
  "rex-lsp",
  "rex-parser",
  "rex-typesystem",

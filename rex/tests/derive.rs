@@ -3,7 +3,7 @@ use rex::{
     ast::Symbol,
     engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
     json::rex_to_json,
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
 use serde::Serialize;
@@ -19,9 +19,7 @@ fn inject_globals(
 }
 
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    let tokens = Token::tokenize(code).unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
 
     let mut engine = Engine::with_prelude(())?;
     MyInnerStruct::inject_rex(&mut engine)?;
@@ -217,9 +215,7 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
         "renamed": 9
     });
 
-    let tokens = Token::tokenize(code).unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex(code).unwrap();
 
     let mut engine = Engine::with_prelude(()).unwrap();
     MyInnerStruct::inject_rex(&mut engine).unwrap();
@@ -301,19 +297,14 @@ async fn derive_generic_worked_example_polymorphic_adt() {
 
     // On the Rex side, `Just` stays polymorphic because the injected `AdtDecl` used a type var `T`
     // in the argument type. That lets the same constructor be used at multiple instantiations.
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         let id = \x -> Just x in
             (id 1, id true)
         "#,
     )
-    .map_err(|e| format!("lex error: {e}"))
+    .map_err(|errs| format!("parse error: {errs:?}"))
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser
-        .parse_program()
-        .map_err(|errs| format!("parse error: {errs:?}"))
-        .unwrap();
 
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
@@ -346,7 +337,7 @@ enum Shape {
 
 #[tokio::test]
 async fn derive_can_be_used_in_injected_native_functions() {
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         bump_y (MyStruct {
             x = true,
@@ -360,8 +351,6 @@ async fn derive_can_be_used_in_injected_native_functions() {
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
 
     fn engine_with_struct_exports() -> Engine {
         let mut engine = Engine::with_prelude(()).unwrap();
@@ -402,9 +391,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     let bumped = MyStruct::from_rex(&v_handle).unwrap();
     assert_eq!(bumped.y, 43);
 
-    let tokens = Token::tokenize("const_struct.y").unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex("const_struct.y").unwrap();
     let (v, ty) = engine_with_struct_exports()
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -424,7 +411,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     })
     .unwrap();
 
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         match shape with {
             case Rectangle w h -> w * h;
@@ -433,8 +420,6 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
     let (v, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -449,7 +434,7 @@ async fn derive_types_implement_rex_adt_trait() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_rex_adt::<Shape>().unwrap();
 
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         match (Rectangle 2 5) with {
             case Rectangle w h -> w * h;
@@ -458,8 +443,6 @@ async fn derive_types_implement_rex_adt_trait() {
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
     let (v, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -484,9 +467,7 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     })
     .unwrap();
 
-    let tokens = Token::tokenize("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -560,7 +541,7 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
             .contains_key(&Symbol::intern("RootNode"))
     );
 
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         RootNode {
             left = LeftBranch { leaf = SharedLeaf { value = 1 } },
@@ -569,8 +550,6 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -662,9 +641,7 @@ async fn derive_leaf_rex_type_field_does_not_require_rex_adt_dependency() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Fragment::inject_rex(&mut engine).unwrap();
 
-    let tokens = Token::tokenize("Fragment [1, 2, 3]").unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex("Fragment [1, 2, 3]").unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -681,10 +658,8 @@ async fn derive_leaf_rex_type_record_fields_support_manual_leaf_types() {
     let mut engine = Engine::with_prelude(()).unwrap();
     BoundingBox::inject_rex(&mut engine).unwrap();
 
-    let tokens =
-        Token::tokenize("BoundingBox { min = (1.0, 2.0, 3.0), max = (4.0, 5.0, 6.0) }").unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program =
+        parse_rex("BoundingBox { min = (1.0, 2.0, 3.0), max = (4.0, 5.0, 6.0) }").unwrap();
     let (v_handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())

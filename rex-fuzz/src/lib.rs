@@ -3,7 +3,6 @@
 
 use std::io::Read;
 
-use rex_lexer::{Token, Tokens};
 use rex_parser::ParserLimits;
 
 pub const MAX_FUZZ_BYTES: usize = 1 << 20; // 1MiB
@@ -33,10 +32,10 @@ pub fn parser_limits_from_env() -> ParserLimits {
     }
 }
 
-pub fn tokenize_fuzz_input(input: &[u8]) -> Option<Tokens> {
+pub fn fuzz_source_input(input: &[u8]) -> String {
     let input = &input[..input.len().min(MAX_FUZZ_BYTES)];
     let source = String::from_utf8_lossy(input);
-    Token::tokenize(&source).ok()
+    source.into_owned()
 }
 
 #[derive(Debug, thiserror::Error)]

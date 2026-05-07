@@ -4,7 +4,7 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply},
 };
 
@@ -174,9 +174,7 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_rex_adt::<ManualRecord>().unwrap();
 
-    let tokens = Token::tokenize("ManualRecord { enabled = true, count = 41 }").unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex("ManualRecord { enabled = true, count = 41 }").unwrap();
     let (handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -198,9 +196,7 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     let mut engine = Engine::with_prelude(()).unwrap();
     DerivedRecord::inject_rex(&mut engine).unwrap();
 
-    let tokens = Token::tokenize("DerivedRecord { enabled = true, count = 41 }").unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
+    let program = parse_rex("DerivedRecord { enabled = true, count = 41 }").unwrap();
     let (handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -222,7 +218,7 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_rex_adt::<ManualEnum>().unwrap();
 
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         match (Count 9) with {
             case Flag b -> if b then 1 else 0;
@@ -231,8 +227,6 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -247,7 +241,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
     let mut engine = Engine::with_prelude(()).unwrap();
     DerivedEnum::inject_rex(&mut engine).unwrap();
 
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         match (Count 9) with {
             case Flag b -> if b then 1 else 0;
@@ -256,8 +250,6 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -350,7 +342,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
     module.add_adt_decl(adt).unwrap();
     engine.inject_module(module).unwrap();
 
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         match (Wrap 9) with {
             case Wrap x -> x + 1;
@@ -358,8 +350,6 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())
@@ -381,7 +371,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
     module.add_adt_decl(adt).unwrap();
     engine.inject_module(module).unwrap();
 
-    let tokens = Token::tokenize(
+    let program = parse_rex(
         r#"
         match (Boxed 9) with {
             case Boxed x -> x + 1;
@@ -389,8 +379,6 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
         "#,
     )
     .unwrap();
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse_program().unwrap();
     let (handle, ty) = engine
         .into_evaluator()
         .eval(program.body.as_ref().unwrap().as_ref())

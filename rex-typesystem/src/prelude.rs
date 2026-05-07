@@ -1,8 +1,7 @@
 use std::sync::OnceLock;
 
 use rex_ast::expr::{CompilationUnit, Decl, Symbol};
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rex_parser::parse;
 
 use crate::{
     error::TypeError,
@@ -28,10 +27,7 @@ pub fn prelude_typeclasses_program() -> Result<&'static CompilationUnit, TypeErr
     static PROGRAM: OnceLock<Result<CompilationUnit, String>> = OnceLock::new();
     let parsed = PROGRAM.get_or_init(|| {
         let source = include_str!("prelude_typeclasses.rex");
-        let tokens =
-            Token::tokenize(source).map_err(|e| format!("prelude_typeclasses: lex error: {e}"))?;
-        let mut parser = Parser::new(tokens);
-        match parser.parse_program() {
+        match parse(source) {
             Ok(program) => Ok(program),
             Err(errs) => {
                 let mut out = String::from("prelude_typeclasses: parse error:");

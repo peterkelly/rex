@@ -7,7 +7,7 @@ use rex::{
         Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, RexDefault, Value,
         virtual_export_name,
     },
-    parser::{Parser, Token},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Scheme, Type, TypeError, TypeKind},
 };
 use uuid::Uuid;
@@ -268,8 +268,7 @@ async fn have_role_async(state: HostState, role: String) -> Result<bool, EngineE
 }
 
 fn parse(code: &str) -> Arc<Expr> {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().body.unwrap()
+    parse_rex(code).unwrap().body.unwrap()
 }
 fn tuple_items(value: &Handle) -> Vec<Handle> {
     let Value::Tuple(items) = value.value().unwrap() else {

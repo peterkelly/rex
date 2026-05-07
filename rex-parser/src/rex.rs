@@ -12,10 +12,10 @@ use crate::grammar::{
     rep, rep1, rule, seq, tok,
 };
 
-pub(crate) const AST_BOUNDARY: &str = include_str!("AST_BOUNDARY.md");
 // `rex.rs` is the executable source of truth. This checked-in `.peg` text
 // is a review/debugging artifact, and unit tests prove it is the exact
 // canonical rendering of the Rust grammar below.
+#[cfg(test)]
 pub(crate) const REX_PEG_GRAMMAR: &str = include_str!("rex.peg");
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]

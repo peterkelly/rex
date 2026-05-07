@@ -4,9 +4,12 @@ use std::{
     sync::Arc,
 };
 
-use rex_lexer::{Token, span::Span};
+use rex_ast::span::Span;
 
-use crate::peg::{Engine, EngineToken, Failure, FailureTracker, Mark, MemoEntry, Pos, span_at};
+use crate::{
+    lexer::Token,
+    peg::{Engine, EngineToken, Failure, FailureTracker, Mark, MemoEntry, Pos, span_at},
+};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) enum TokenKind {

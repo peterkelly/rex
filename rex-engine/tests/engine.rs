@@ -2,21 +2,18 @@ use std::sync::Arc;
 
 use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
 use rex_engine::{Engine, EngineError, Module, Value};
-use rex_lexer::Token;
-use rex_parser::Parser;
+use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
     types::{BuiltinTypeId, Type, TypeVar},
 };
 
 fn parse(code: &str) -> Arc<Expr> {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap().body.unwrap()
+    parse_rex(code).unwrap().body.unwrap()
 }
 
 fn parse_program(code: &str) -> CompilationUnit {
-    let mut parser = Parser::new(Token::tokenize(code).unwrap());
-    parser.parse_program().unwrap()
+    parse_rex(code).unwrap()
 }
 
 fn strip_span(mut err: TypeError) -> TypeError {
