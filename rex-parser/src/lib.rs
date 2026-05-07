@@ -26,7 +26,7 @@ mod peg_syntax;
 use rex_ast::expr::CompilationUnit;
 
 use crate::{
-    error::ParserErr,
+    error::ParseError,
     lexer::{Token, Tokens},
 };
 
@@ -53,13 +53,13 @@ impl Default for ParserLimits {
     }
 }
 
-pub fn parse(input: &str) -> Result<CompilationUnit, Vec<ParserErr>> {
-    let tokens = Token::tokenize(input).map_err(|err| vec![ParserErr::from_lexical_error(err)])?;
+pub fn parse(input: &str) -> Result<CompilationUnit, Vec<ParseError>> {
+    let tokens = Token::tokenize(input).map_err(|err| vec![ParseError::from_lexical_error(err)])?;
     parse_with_tokens(tokens)
 }
 
 #[doc(hidden)]
-pub fn parse_with_tokens(tokens: Tokens) -> Result<CompilationUnit, Vec<ParserErr>> {
+pub fn parse_with_tokens(tokens: Tokens) -> Result<CompilationUnit, Vec<ParseError>> {
     let mut parser = ast_builder::PegParser::new(tokens);
     parser.parse_program()
 }
@@ -67,8 +67,8 @@ pub fn parse_with_tokens(tokens: Tokens) -> Result<CompilationUnit, Vec<ParserEr
 pub fn parse_with_limits(
     input: &str,
     limits: ParserLimits,
-) -> Result<CompilationUnit, Vec<ParserErr>> {
-    let tokens = Token::tokenize(input).map_err(|err| vec![ParserErr::from_lexical_error(err)])?;
+) -> Result<CompilationUnit, Vec<ParseError>> {
+    let tokens = Token::tokenize(input).map_err(|err| vec![ParseError::from_lexical_error(err)])?;
     let mut parser = ast_builder::PegParser::new(tokens);
     parser.set_limits(limits);
     parser.parse_program()

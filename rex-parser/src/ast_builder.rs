@@ -12,7 +12,7 @@ use rex_ast::span::{Position, Span, Spanned};
 
 use crate::{
     ParserLimits,
-    error::ParserErr,
+    error::ParseError,
     grammar::{Cst, CstNode, GrammarParser, TokenKind},
     lexer::{Token, Tokens},
     op::Operator,
@@ -37,7 +37,7 @@ impl PegParser {
         self.limits = limits;
     }
 
-    pub(crate) fn parse_program(&mut self) -> Result<CompilationUnit, Vec<ParserErr>> {
+    pub(crate) fn parse_program(&mut self) -> Result<CompilationUnit, Vec<ParseError>> {
         let grammar = rex::rex_grammar();
         let mut engine = self.input.engine();
         let tokens = engine.tokens().to_vec();
@@ -52,7 +52,7 @@ impl PegParser {
     }
 
     #[cfg(test)]
-    fn parse_pattern_for_test(&mut self) -> Result<Pattern, Vec<ParserErr>> {
+    fn parse_pattern_for_test(&mut self) -> Result<Pattern, Vec<ParseError>> {
         let grammar = rex::rex_grammar();
         let mut engine = self.input.engine();
         let tokens = engine.tokens().to_vec();
@@ -64,7 +64,7 @@ impl PegParser {
         drop(parser);
         if !matches!(engine.current_token(), Token::Eof(..)) {
             let token = engine.current_token();
-            return Err(vec![ParserErr::new(
+            return Err(vec![ParseError::new(
                 *token.span(),
                 format!("unexpected {}", token),
             )]);
@@ -80,7 +80,7 @@ struct AstBuilder {
     expr_depth: usize,
     type_depth: usize,
     pattern_depth: usize,
-    errors: Vec<ParserErr>,
+    errors: Vec<ParseError>,
 }
 
 enum GroupedApplicationStep<'cst> {
@@ -102,7 +102,7 @@ impl AstBuilder {
         }
     }
 
-    fn program(mut self, node: &CstNode<RexRule>) -> Result<CompilationUnit, Vec<ParserErr>> {
+    fn program(mut self, node: &CstNode<RexRule>) -> Result<CompilationUnit, Vec<ParseError>> {
         let mut decls = Vec::new();
         for decl in child_rules(node, RexRule::Decl) {
             match self.decl(decl) {
@@ -132,7 +132,7 @@ impl AstBuilder {
         }
     }
 
-    fn decl(&mut self, node: &CstNode<RexRule>) -> Result<Decl, ParserErr> {
+    fn decl(&mut self, node: &CstNode<RexRule>) -> Result<Decl, ParseError> {
         let public = first_rule(node, RexRule::PublicDecl);
         let (is_pub, body) = if let Some(public) = public {
             (true, expect_rule(public, RexRule::DeclBody)?)
@@ -159,14 +159,14 @@ impl AstBuilder {
         if let Some(decl) = first_rule(body, RexRule::InstanceDecl) {
             return self.instance_decl(decl, is_pub).map(Decl::Instance);
         }
-        Err(ParserErr::new(body.span, "expected declaration"))
+        Err(ParseError::new(body.span, "expected declaration"))
     }
 
     fn import_decl(
         &mut self,
         node: &CstNode<RexRule>,
         is_pub: bool,
-    ) -> Result<ImportDecl, ParserErr> {
+    ) -> Result<ImportDecl, ParseError> {
         let path_node = expect_rule(node, RexRule::ImportPath)?;
         let (path, default_alias) = self.import_path(path_node)?;
         let clause = first_rule(node, RexRule::ImportClause)
@@ -175,7 +175,7 @@ impl AstBuilder {
 
         let alias = if let Some(alias_node) = first_rule(node, RexRule::ImportAlias) {
             if clause.is_some() {
-                return Err(ParserErr::new(
+                return Err(ParseError::new(
                     alias_node.span,
                     "cannot combine `as <alias>` with import clause `(...)`",
                 ));
@@ -184,7 +184,7 @@ impl AstBuilder {
         } else {
             default_alias
                 .or_else(|| clause.as_ref().map(|_| Symbol::intern("_")))
-                .ok_or_else(|| ParserErr::new(node.span, "import requires `as <alias>`"))?
+                .ok_or_else(|| ParseError::new(node.span, "import requires `as <alias>`"))?
         };
 
         Ok(ImportDecl {
@@ -199,7 +199,7 @@ impl AstBuilder {
     fn import_path(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<(ImportPath, Option<Symbol>), ParserErr> {
+    ) -> Result<(ImportPath, Option<Symbol>), ParseError> {
         if let Some(remote) = first_rule(node, RexRule::RemoteImportPath) {
             let token = expect_token(remote, TokenKind::HttpsUrl)?;
             let Token::HttpsUrl(url, ..) = token else {
@@ -257,7 +257,7 @@ impl AstBuilder {
         Ok((ImportPath::Local { segments, sha }, alias))
     }
 
-    fn import_clause(&mut self, node: &CstNode<RexRule>) -> Result<ImportClause, ParserErr> {
+    fn import_clause(&mut self, node: &CstNode<RexRule>) -> Result<ImportClause, ParseError> {
         if direct_tokens(node, TokenKind::Mul).next().is_some() {
             return Ok(ImportClause::All);
         }
@@ -272,7 +272,7 @@ impl AstBuilder {
                 .transpose()?;
             let local_name = alias.clone().unwrap_or_else(|| name.clone());
             if !local_names.insert(local_name.clone()) {
-                return Err(ParserErr::new(
+                return Err(ParseError::new(
                     item_node.span,
                     format!("duplicate imported name `{local_name}`"),
                 ));
@@ -282,7 +282,7 @@ impl AstBuilder {
         Ok(ImportClause::Items(items))
     }
 
-    fn type_decl(&mut self, node: &CstNode<RexRule>, is_pub: bool) -> Result<TypeDecl, ParserErr> {
+    fn type_decl(&mut self, node: &CstNode<RexRule>, is_pub: bool) -> Result<TypeDecl, ParseError> {
         let name = Symbol::intern(&ident_text(expect_token(node, TokenKind::Ident)?)?);
         let params = child_rules(node, RexRule::TypeParam)
             .map(|param| {
@@ -303,7 +303,7 @@ impl AstBuilder {
         })
     }
 
-    fn type_variant(&mut self, node: &CstNode<RexRule>) -> Result<TypeVariant, ParserErr> {
+    fn type_variant(&mut self, node: &CstNode<RexRule>) -> Result<TypeVariant, ParseError> {
         let name = Symbol::intern(&ident_text(expect_token(node, TokenKind::Ident)?)?);
         let args = child_rules(node, RexRule::TypeAtom)
             .map(|atom| self.type_atom(atom))
@@ -311,7 +311,7 @@ impl AstBuilder {
         Ok(TypeVariant { name, args })
     }
 
-    fn fn_decl(&mut self, node: &CstNode<RexRule>, is_pub: bool) -> Result<FnDecl, ParserErr> {
+    fn fn_decl(&mut self, node: &CstNode<RexRule>, is_pub: bool) -> Result<FnDecl, ParseError> {
         let name_token = expect_token(node, TokenKind::Ident)?;
         let name = Var::with_span(*name_token.span(), ident_text(name_token)?);
 
@@ -364,7 +364,7 @@ impl AstBuilder {
         &mut self,
         node: &CstNode<RexRule>,
         is_pub: bool,
-    ) -> Result<DeclareFnDecl, ParserErr> {
+    ) -> Result<DeclareFnDecl, ParseError> {
         let name_token = expect_token(node, TokenKind::Ident)?;
         let name = Var::with_span(*name_token.span(), ident_text(name_token)?);
 
@@ -403,7 +403,7 @@ impl AstBuilder {
         &mut self,
         node: &CstNode<RexRule>,
         is_pub: bool,
-    ) -> Result<ClassDecl, ParserErr> {
+    ) -> Result<ClassDecl, ParseError> {
         let name = Symbol::intern(&ident_text(expect_token(node, TokenKind::Ident)?)?);
         let params = child_rules(node, RexRule::TypeParam)
             .map(|param| {
@@ -425,7 +425,7 @@ impl AstBuilder {
                             typ: self.type_expr(expect_rule(method, RexRule::TypeExpr)?)?,
                         })
                     })
-                    .collect::<Result<Vec<_>, ParserErr>>()
+                    .collect::<Result<Vec<_>, ParseError>>()
             })
             .transpose()?
             .unwrap_or_default();
@@ -443,7 +443,7 @@ impl AstBuilder {
         &mut self,
         node: &CstNode<RexRule>,
         is_pub: bool,
-    ) -> Result<InstanceDecl, ParserErr> {
+    ) -> Result<InstanceDecl, ParseError> {
         let class = self
             .name_ref(expect_rule(node, RexRule::NameRef)?)?
             .to_dotted_symbol();
@@ -461,7 +461,7 @@ impl AstBuilder {
                             body: Arc::new(self.expr(expect_rule(method, RexRule::Expr)?)?),
                         })
                     })
-                    .collect::<Result<Vec<_>, ParserErr>>()
+                    .collect::<Result<Vec<_>, ParseError>>()
             })
             .transpose()?
             .unwrap_or_default();
@@ -475,7 +475,7 @@ impl AstBuilder {
         })
     }
 
-    fn fn_params(&mut self, node: &CstNode<RexRule>) -> Result<Vec<(Var, TypeExpr)>, ParserErr> {
+    fn fn_params(&mut self, node: &CstNode<RexRule>) -> Result<Vec<(Var, TypeExpr)>, ParseError> {
         if let Some(group) = first_rule(node, RexRule::LegacyParamGroup) {
             return child_rules(group, RexRule::LegacyParam)
                 .map(|param| self.legacy_param(param))
@@ -492,21 +492,21 @@ impl AstBuilder {
             .collect()
     }
 
-    fn named_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParserErr> {
+    fn named_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
         let var = Var::with_span(*token.span(), ident_text(token)?);
         let ann = self.type_app(expect_rule(node, RexRule::TypeApp)?)?;
         Ok((var, ann))
     }
 
-    fn paren_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParserErr> {
+    fn paren_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
         let var = Var::with_span(*token.span(), ident_text(token)?);
         let ann = self.type_expr(expect_rule(node, RexRule::TypeExpr)?)?;
         Ok((var, ann))
     }
 
-    fn legacy_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParserErr> {
+    fn legacy_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
         let var = Var::with_span(*token.span(), ident_text(token)?);
         let ann = self.type_expr(expect_rule(node, RexRule::TypeExpr)?)?;
@@ -516,14 +516,14 @@ impl AstBuilder {
     fn where_constraints(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<Vec<TypeConstraint>, ParserErr> {
+    ) -> Result<Vec<TypeConstraint>, ParseError> {
         self.type_constraints(expect_rule(node, RexRule::TypeConstraints)?)
     }
 
     fn type_constraints(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<Vec<TypeConstraint>, ParserErr> {
+    ) -> Result<Vec<TypeConstraint>, ParseError> {
         child_rules(node, RexRule::TypeConstraint)
             .map(|constraint| {
                 Ok(TypeConstraint::new(
@@ -534,11 +534,11 @@ impl AstBuilder {
             .collect()
     }
 
-    fn type_expr(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParserErr> {
+    fn type_expr(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParseError> {
         self.type_fun(expect_rule(node, RexRule::TypeFun)?)
     }
 
-    fn type_fun(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParserErr> {
+    fn type_fun(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParseError> {
         self.check_type_depth(node.span)?;
         self.type_depth += 1;
         let lhs = self.type_app(expect_rule(node, RexRule::TypeApp)?)?;
@@ -553,10 +553,10 @@ impl AstBuilder {
         result
     }
 
-    fn type_app(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParserErr> {
+    fn type_app(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParseError> {
         let mut atoms = child_rules(node, RexRule::TypeAtom);
         let Some(first) = atoms.next() else {
-            return Err(ParserErr::new(node.span, "expected type"));
+            return Err(ParseError::new(node.span, "expected type"));
         };
         let mut lhs = self.type_atom(first)?;
         for atom in atoms {
@@ -567,7 +567,7 @@ impl AstBuilder {
         Ok(lhs)
     }
 
-    fn type_atom(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParserErr> {
+    fn type_atom(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParseError> {
         if let Some(name) = first_rule(node, RexRule::NameRef) {
             return Ok(TypeExpr::Name(name.span, self.name_ref(name)?));
         }
@@ -577,7 +577,7 @@ impl AstBuilder {
         self.type_record(expect_rule(node, RexRule::TypeRecord)?)
     }
 
-    fn type_paren(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParserErr> {
+    fn type_paren(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParseError> {
         if first_rule(node, RexRule::UnitType).is_some() {
             return Ok(TypeExpr::Tuple(node.span, Vec::new()));
         }
@@ -591,7 +591,7 @@ impl AstBuilder {
         self.type_expr(expect_rule(grouped, RexRule::TypeExpr)?)
     }
 
-    fn type_record(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParserErr> {
+    fn type_record(&mut self, node: &CstNode<RexRule>) -> Result<TypeExpr, ParseError> {
         let fields = child_rules(node, RexRule::TypeField)
             .map(|field| {
                 Ok((
@@ -599,11 +599,11 @@ impl AstBuilder {
                     self.type_expr(expect_rule(field, RexRule::TypeExpr)?)?,
                 ))
             })
-            .collect::<Result<Vec<_>, ParserErr>>()?;
+            .collect::<Result<Vec<_>, ParseError>>()?;
         Ok(TypeExpr::Record(node.span, fields))
     }
 
-    fn expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         self.check_expr_depth(node.span)?;
         self.expr_depth += 1;
 
@@ -627,11 +627,11 @@ impl AstBuilder {
         }
 
         let result = if operands.is_empty() {
-            Err(ParserErr::new(node.span, "expected expression"))
+            Err(ParseError::new(node.span, "expected expression"))
         } else if let Some(max) = self.limits.max_nesting
             && operators.len() >= max
         {
-            Err(ParserErr::new(
+            Err(ParseError::new(
                 node.span,
                 format!("maximum nesting depth exceeded (max {max})"),
             ))
@@ -646,7 +646,7 @@ impl AstBuilder {
     fn try_grouped_tail_application_expr(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<Option<Expr>, ParserErr> {
+    ) -> Result<Option<Expr>, ParseError> {
         let mut current = node;
         let mut steps = Vec::new();
         let mut peeled = 0usize;
@@ -656,7 +656,7 @@ impl AstBuilder {
             if let Some(max) = self.limits.max_nesting
                 && self.expr_depth + peeled > max
             {
-                return Err(ParserErr::new(
+                return Err(ParseError::new(
                     current.span,
                     format!("maximum nesting depth exceeded (max {max})"),
                 ));
@@ -695,7 +695,7 @@ impl AstBuilder {
         &mut self,
         terms: Vec<&CstNode<RexRule>>,
         tail: Expr,
-    ) -> Result<Expr, ParserErr> {
+    ) -> Result<Expr, ParseError> {
         let mut terms = terms.into_iter();
         let Some(first) = terms.next() else {
             return Ok(tail);
@@ -713,7 +713,7 @@ impl AstBuilder {
         Ok(Expr::App(span, Arc::new(base), Arc::new(tail)))
     }
 
-    fn unary_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn unary_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let mut expr = self.application_expr(expect_rule(node, RexRule::ApplicationExpr)?)?;
         for ann in child_rules(node, RexRule::TypeExpr) {
             let ann = self.type_expr(ann)?;
@@ -723,10 +723,10 @@ impl AstBuilder {
         Ok(expr)
     }
 
-    fn application_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn application_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let mut terms = child_rules(node, RexRule::PostfixExpr);
         let Some(first) = terms.next() else {
-            return Err(ParserErr::new(node.span, "expected expression"));
+            return Err(ParseError::new(node.span, "expected expression"));
         };
         let mut base = self.postfix_expr(first)?;
         let begin = base.span().begin;
@@ -738,7 +738,7 @@ impl AstBuilder {
         Ok(base)
     }
 
-    fn postfix_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn postfix_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let mut base = self.atom_expr(expect_rule(node, RexRule::AtomExpr)?)?;
         for field in child_rules(node, RexRule::FieldName) {
             let (name, end) = self.field_name(field)?;
@@ -748,19 +748,19 @@ impl AstBuilder {
         Ok(base)
     }
 
-    fn field_name(&mut self, node: &CstNode<RexRule>) -> Result<(Symbol, Position), ParserErr> {
+    fn field_name(&mut self, node: &CstNode<RexRule>) -> Result<(Symbol, Position), ParseError> {
         let token = first_token(node).ok_or_else(|| internal_err(node.span, "expected field"))?;
         match token {
             Token::Ident(name, span, ..) => Ok((Symbol::intern(name), span.end)),
             Token::Int(value, span) => Ok((Symbol::intern(&value.to_string()), span.end)),
-            _ => Err(ParserErr::new(
+            _ => Err(ParseError::new(
                 *token.span(),
                 "expected field name after `.`",
             )),
         }
     }
 
-    fn atom_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn atom_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         if let Some(token) = first_token(node) {
             match token {
                 Token::Bool(val, span, ..) => return Ok(Expr::Bool(*span, *val)),
@@ -802,7 +802,7 @@ impl AstBuilder {
         self.neg_expr(expect_rule(node, RexRule::NegExpr)?)
     }
 
-    fn paren_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn paren_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         if first_rule(node, RexRule::UnitExpr).is_some() {
             return Ok(Expr::Tuple(node.span, Vec::new()));
         }
@@ -826,21 +826,21 @@ impl AstBuilder {
             .with_span(grouped.span))
     }
 
-    fn list_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn list_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let items = child_rules(node, RexRule::Expr)
             .map(|expr| self.expr(expr).map(Arc::new))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Expr::List(node.span, items))
     }
 
-    fn brace_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn brace_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         if let Some(dict) = first_rule(node, RexRule::DictExpr) {
             return self.dict_expr(dict);
         }
         self.record_update_expr(expect_rule(node, RexRule::RecordUpdateExpr)?)
     }
 
-    fn dict_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn dict_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let mut items = BTreeMap::new();
         for (idx, child) in node.children.iter().enumerate() {
             match child {
@@ -853,7 +853,7 @@ impl AstBuilder {
                     let span = next_token_after(node, idx)
                         .map(|token| *token.span())
                         .unwrap_or(item.span);
-                    self.errors.push(ParserErr::new(span, "expected `=`"));
+                    self.errors.push(ParseError::new(span, "expected `=`"));
                 }
                 _ => {}
             }
@@ -861,7 +861,7 @@ impl AstBuilder {
         Ok(Expr::Dict(node.span, items))
     }
 
-    fn record_update_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn record_update_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let base = self.expr(expect_rule(node, RexRule::Expr)?)?;
         let dict = self.dict_expr(expect_rule(node, RexRule::DictExpr)?)?;
         let updates = match &dict {
@@ -871,7 +871,7 @@ impl AstBuilder {
         Ok(Expr::RecordUpdate(node.span, Arc::new(base), updates))
     }
 
-    fn neg_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn neg_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let op = expect_token(node, TokenKind::Sub)?;
         let expr = self.expr(expect_rule(node, RexRule::Expr)?)?;
         Ok(Expr::App(
@@ -881,7 +881,7 @@ impl AstBuilder {
         ))
     }
 
-    fn lambda_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn lambda_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let mut params = VecDeque::new();
         for param in child_rules(node, RexRule::LambdaParam) {
             params.push_back(self.lambda_param(param)?);
@@ -917,7 +917,7 @@ impl AstBuilder {
     fn lambda_param(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<(Span, Var, Option<TypeExpr>), ParserErr> {
+    ) -> Result<(Span, Var, Option<TypeExpr>), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
         let var = Var::with_span(*token.span(), ident_text(token)?);
         let ann = first_rule(node, RexRule::TypeExpr)
@@ -926,7 +926,7 @@ impl AstBuilder {
         Ok((node.span, var, ann))
     }
 
-    fn let_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn let_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let body_node = child_rules(node, RexRule::Expr)
             .last()
             .ok_or_else(|| internal_err(node.span, "expected let body"))?;
@@ -979,7 +979,7 @@ impl AstBuilder {
     fn let_binding(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<(Pattern, Option<TypeExpr>, Expr), ParserErr> {
+    ) -> Result<(Pattern, Option<TypeExpr>, Expr), ParseError> {
         let mut pat = self.pattern(expect_rule(node, RexRule::Pattern)?)?;
         let ann = first_rule(node, RexRule::TypeExpr)
             .map(|node| self.type_expr(node))
@@ -996,10 +996,10 @@ impl AstBuilder {
     fn let_rec_binding(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<(Var, Option<TypeExpr>, Arc<Expr>), ParserErr> {
+    ) -> Result<(Var, Option<TypeExpr>, Arc<Expr>), ParseError> {
         let pat = self.pattern(expect_rule(node, RexRule::Pattern)?)?;
         let Some(var) = pattern_binding_var(&pat) else {
-            return Err(ParserErr::new(
+            return Err(ParseError::new(
                 *pat.span(),
                 "let rec only supports variable bindings",
             ));
@@ -1011,7 +1011,7 @@ impl AstBuilder {
         Ok((var, ann, expr))
     }
 
-    fn if_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn if_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let exprs = child_rules(node, RexRule::Expr).collect::<Vec<_>>();
         if exprs.len() != 3 {
             return Err(internal_err(node.span, "expected if expression parts"));
@@ -1027,7 +1027,7 @@ impl AstBuilder {
         ))
     }
 
-    fn match_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParserErr> {
+    fn match_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {
         let scrutinee = self.expr(expect_rule(node, RexRule::Expr)?)?;
         let arms = child_rules(node, RexRule::MatchArm)
             .map(|arm| {
@@ -1036,11 +1036,11 @@ impl AstBuilder {
                     Arc::new(self.expr(expect_rule(arm, RexRule::Expr)?)?),
                 ))
             })
-            .collect::<Result<Vec<_>, ParserErr>>()?;
+            .collect::<Result<Vec<_>, ParseError>>()?;
         Ok(Expr::Match(node.span, Arc::new(scrutinee), arms))
     }
 
-    fn pattern(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParserErr> {
+    fn pattern(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParseError> {
         self.check_pattern_depth(node.span)?;
         self.pattern_depth += 1;
         let lhs = self.app_pattern(expect_rule(node, RexRule::AppPattern)?);
@@ -1060,7 +1060,7 @@ impl AstBuilder {
         result
     }
 
-    fn app_pattern(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParserErr> {
+    fn app_pattern(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParseError> {
         if let Some(name_node) = first_rule(node, RexRule::NameRef) {
             let name = self.name_ref(name_node)?;
             let args = child_rules(node, RexRule::PatternAtom)
@@ -1076,13 +1076,13 @@ impl AstBuilder {
         span: Span,
         name: NameRef,
         args: Vec<Pattern>,
-    ) -> Result<Pattern, ParserErr> {
+    ) -> Result<Pattern, ParseError> {
         if name.as_ref() == "_" {
             if args.is_empty() {
                 return Ok(Pattern::Wildcard(span));
             }
             let span = args.first().map(|arg| *arg.span()).unwrap_or(span);
-            return Err(ParserErr::new(
+            return Err(ParseError::new(
                 span,
                 "constructor patterns must start with an identifier",
             ));
@@ -1105,7 +1105,7 @@ impl AstBuilder {
         ))
     }
 
-    fn pattern_atom(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParserErr> {
+    fn pattern_atom(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParseError> {
         if let Some(token) = first_token(node)
             && let Token::Ident(name, span, ..) = token
         {
@@ -1130,7 +1130,7 @@ impl AstBuilder {
     fn dict_pattern_field(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<(Symbol, Pattern), ParserErr> {
+    ) -> Result<(Symbol, Pattern), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
         let name = ident_text(token)?;
         let key = Symbol::intern(&name);
@@ -1141,7 +1141,7 @@ impl AstBuilder {
         Ok((key, pat))
     }
 
-    fn paren_pattern(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParserErr> {
+    fn paren_pattern(&mut self, node: &CstNode<RexRule>) -> Result<Pattern, ParseError> {
         let patterns = child_rules(node, RexRule::Pattern).collect::<Vec<_>>();
         match patterns.as_slice() {
             [] => Ok(Pattern::Tuple(node.span, Vec::new())),
@@ -1154,32 +1154,32 @@ impl AstBuilder {
         }
     }
 
-    fn name_ref(&mut self, node: &CstNode<RexRule>) -> Result<NameRef, ParserErr> {
+    fn name_ref(&mut self, node: &CstNode<RexRule>) -> Result<NameRef, ParseError> {
         let segments = direct_tokens(node, TokenKind::Ident)
             .map(|token| ident_text(token).map(|name| Symbol::intern(&name)))
             .collect::<Result<Vec<_>, _>>()?;
         if segments.is_empty() {
-            Err(ParserErr::new(node.span, "expected identifier"))
+            Err(ParseError::new(node.span, "expected identifier"))
         } else {
             Ok(NameRef::from_segments(segments))
         }
     }
 
-    fn value_name(&mut self, node: &CstNode<RexRule>) -> Result<Symbol, ParserErr> {
-        let token = first_token(node).ok_or_else(|| ParserErr::new(node.span, "expected name"))?;
+    fn value_name(&mut self, node: &CstNode<RexRule>) -> Result<Symbol, ParseError> {
+        let token = first_token(node).ok_or_else(|| ParseError::new(node.span, "expected name"))?;
         if let Ok(name) = ident_text(token) {
             return Ok(Symbol::intern(&name));
         }
         let name = operator_token_name(token)
-            .ok_or_else(|| ParserErr::new(*token.span(), "expected name"))?;
+            .ok_or_else(|| ParseError::new(*token.span(), "expected name"))?;
         Ok(Symbol::intern(name))
     }
 
-    fn check_expr_depth(&self, span: Span) -> Result<(), ParserErr> {
+    fn check_expr_depth(&self, span: Span) -> Result<(), ParseError> {
         if let Some(max) = self.limits.max_nesting
             && self.expr_depth >= max
         {
-            return Err(ParserErr::new(
+            return Err(ParseError::new(
                 span,
                 format!("maximum nesting depth exceeded (max {max})"),
             ));
@@ -1187,11 +1187,11 @@ impl AstBuilder {
         Ok(())
     }
 
-    fn check_type_depth(&self, span: Span) -> Result<(), ParserErr> {
+    fn check_type_depth(&self, span: Span) -> Result<(), ParseError> {
         if let Some(max) = self.limits.max_nesting
             && self.type_depth >= max
         {
-            return Err(ParserErr::new(
+            return Err(ParseError::new(
                 span,
                 format!("maximum nesting depth exceeded (max {max})"),
             ));
@@ -1199,11 +1199,11 @@ impl AstBuilder {
         Ok(())
     }
 
-    fn check_pattern_depth(&self, span: Span) -> Result<(), ParserErr> {
+    fn check_pattern_depth(&self, span: Span) -> Result<(), ParseError> {
         if let Some(max) = self.limits.max_nesting
             && self.pattern_depth >= max
         {
-            return Err(ParserErr::new(
+            return Err(ParseError::new(
                 span,
                 format!("maximum nesting depth exceeded (max {max})"),
             ));
@@ -1295,7 +1295,7 @@ fn make_binary_expr(lhs: Expr, operator: &Token, rhs: Expr) -> Expr {
     )
 }
 
-fn hash_suffix(node: &CstNode<RexRule>) -> Result<Option<String>, ParserErr> {
+fn hash_suffix(node: &CstNode<RexRule>) -> Result<Option<String>, ParseError> {
     for token in node.children.iter().filter_map(|child| match child {
         Cst::Token(token) => Some(token),
         _ => None,
@@ -1309,13 +1309,13 @@ fn hash_suffix(node: &CstNode<RexRule>) -> Result<Option<String>, ParserErr> {
     Ok(None)
 }
 
-fn expect_binary_operator(node: &CstNode<RexRule>) -> Result<&Token, ParserErr> {
+fn expect_binary_operator(node: &CstNode<RexRule>) -> Result<&Token, ParseError> {
     first_token(node)
         .filter(|token| TokenKind::BinaryOperator.matches(token))
-        .ok_or_else(|| ParserErr::new(node.span, "expected binary operator"))
+        .ok_or_else(|| ParseError::new(node.span, "expected binary operator"))
 }
 
-fn parser_error_from_failure(failure: &Failure, tokens: &[Token], eof: Span) -> ParserErr {
+fn parser_error_from_failure(failure: &Failure, tokens: &[Token], eof: Span) -> ParseError {
     let token = tokens
         .get(failure.pos.0)
         .cloned()
@@ -1329,7 +1329,7 @@ fn parser_error_from_failure(failure: &Failure, tokens: &[Token], eof: Span) -> 
     } else {
         format!("unexpected {}", token)
     };
-    ParserErr::new(failure.span, message)
+    ParseError::new(failure.span, message)
 }
 
 fn child_rules(
@@ -1379,7 +1379,7 @@ fn only_rule(node: &CstNode<RexRule>, rule: RexRule) -> Option<&CstNode<RexRule>
     matches.next().is_none().then_some(first)
 }
 
-fn expect_rule(node: &CstNode<RexRule>, rule: RexRule) -> Result<&CstNode<RexRule>, ParserErr> {
+fn expect_rule(node: &CstNode<RexRule>, rule: RexRule) -> Result<&CstNode<RexRule>, ParseError> {
     first_rule(node, rule).ok_or_else(|| internal_err(node.span, "expected grammar node"))
 }
 
@@ -1400,7 +1400,7 @@ fn first_token(node: &CstNode<RexRule>) -> Option<&Token> {
     })
 }
 
-fn expect_token(node: &CstNode<RexRule>, kind: TokenKind) -> Result<&Token, ParserErr> {
+fn expect_token(node: &CstNode<RexRule>, kind: TokenKind) -> Result<&Token, ParseError> {
     direct_tokens(node, kind)
         .next()
         .ok_or_else(|| internal_err(node.span, "expected token"))
@@ -1416,15 +1416,15 @@ fn next_token_after(node: &CstNode<RexRule>, index: usize) -> Option<&Token> {
         })
 }
 
-fn ident_text(token: &Token) -> Result<String, ParserErr> {
+fn ident_text(token: &Token) -> Result<String, ParseError> {
     match token {
         Token::Ident(name, ..) => Ok(name.clone()),
-        _ => Err(ParserErr::new(*token.span(), "expected identifier")),
+        _ => Err(ParseError::new(*token.span(), "expected identifier")),
     }
 }
 
-fn internal_err(span: Span, message: &'static str) -> ParserErr {
-    ParserErr::new(span, format!("internal parser error: {message}"))
+fn internal_err(span: Span, message: &'static str) -> ParseError {
+    ParseError::new(span, format!("internal parser error: {message}"))
 }
 
 fn operator_token_name(token: &Token) -> Option<&'static str> {
@@ -1477,7 +1477,7 @@ struct SignatureFnParts {
     constraints: Vec<TypeConstraint>,
 }
 
-fn flatten_signature_fn(sig: TypeExpr, body: Arc<Expr>) -> Result<SignatureFnParts, ParserErr> {
+fn flatten_signature_fn(sig: TypeExpr, body: Arc<Expr>) -> Result<SignatureFnParts, ParseError> {
     let mut param_tys = Vec::new();
     let mut cur = sig;
     let ret = loop {
@@ -1490,7 +1490,7 @@ fn flatten_signature_fn(sig: TypeExpr, body: Arc<Expr>) -> Result<SignatureFnPar
         }
     };
     if param_tys.is_empty() {
-        return Err(ParserErr::new(
+        return Err(ParseError::new(
             *ret.span(),
             "expected function type after `:`; use `let` for values",
         ));
@@ -1510,7 +1510,7 @@ fn flatten_signature_fn(sig: TypeExpr, body: Arc<Expr>) -> Result<SignatureFnPar
             cur = next.clone();
         }
         if lam_params.len() != arity {
-            return Err(ParserErr::new(
+            return Err(ParseError::new(
                 *body.span(),
                 format!(
                     "lambda has {} parameter(s) but signature expects {}",
@@ -1592,7 +1592,7 @@ mod tests {
             .reset_spans()
     }
 
-    fn parse_pattern_err(source: &str) -> Vec<ParserErr> {
+    fn parse_pattern_err(source: &str) -> Vec<ParseError> {
         let mut parser = PegParser::new(Token::tokenize(source).expect("tokenize pattern"));
         parser
             .parse_pattern_for_test()

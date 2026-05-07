@@ -17,7 +17,7 @@ use rex_ast::expr::{
 use rex_ast::span::{Position as RexPosition, Span, Spanned};
 use rex_engine::{Engine, EngineError, ModuleError};
 use rex_parser::{
-    error::ParserErr,
+    error::ParseError,
     lexer::{LexicalError, Token, Tokens},
     parse_with_tokens,
 };
@@ -58,7 +58,7 @@ const BUILTIN_VALUES: &[&str] = &["true", "false", "null", "Some", "None", "Ok",
 #[derive(Debug)]
 enum TokenizeOrParseError {
     Lex(LexicalError),
-    Parse(Vec<ParserErr>),
+    Parse(Vec<ParseError>),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

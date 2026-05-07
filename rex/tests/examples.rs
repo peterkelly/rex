@@ -1,10 +1,10 @@
 use rex::{
     engine::{Engine, Module, Value},
-    parser::{ParserErr, parse as parse_rex},
+    parser::{ParseError, parse as parse_rex},
     typesystem::{BuiltinTypeId, Type},
 };
 
-fn format_parse_errors(errs: &[ParserErr]) -> String {
+fn format_parse_errors(errs: &[ParseError]) -> String {
     let mut out = String::from("parse error:");
     for err in errs {
         out.push_str(&format!("\n  {err}"));

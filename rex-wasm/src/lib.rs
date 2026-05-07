@@ -9,7 +9,7 @@ use rex_lsp::server::{
     document_symbols_for_source_public, format_for_source_public, goto_definition_for_source,
     hover_for_source, references_for_source_public, rename_for_source_public,
 };
-use rex_parser::{ParserLimits, error::ParserErr, parse_with_limits};
+use rex_parser::{ParserLimits, error::ParseError, parse_with_limits};
 use rex_typesystem::{
     inference::infer,
     typesystem::{TypeSystem, TypeSystemLimits},
@@ -23,7 +23,7 @@ fn parse_program_with_limits(
     parse_with_limits(source, limits).map_err(|errs| format_parse_errors(&errs))
 }
 
-fn format_parse_errors(errs: &[ParserErr]) -> String {
+fn format_parse_errors(errs: &[ParseError]) -> String {
     let mut out = String::from("parse error:");
     for err in errs {
         out.push('\n');

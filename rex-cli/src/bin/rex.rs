@@ -9,7 +9,7 @@ use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
     engine::{Engine, ValueDisplayOptions},
-    parser::{ParserErr, ParserLimits, parse_with_limits as parse_rex_with_limits},
+    parser::{ParseError, ParserLimits, parse_with_limits as parse_rex_with_limits},
 };
 use serde_json::json;
 
@@ -297,7 +297,7 @@ fn infer_type_json(
     }))
 }
 
-fn format_parse_errors(errs: &[ParserErr]) -> String {
+fn format_parse_errors(errs: &[ParseError]) -> String {
     let mut out = String::from("parse error:");
     for err in errs {
         out.push_str(&format!("\n  {err}"));

@@ -7,7 +7,7 @@ use rex_ast::{
     span::Span,
     tup, u, v,
 };
-use rex_parser::error::ParserErr;
+use rex_parser::error::ParseError;
 use rex_parser::{ParserLimits, parse as parse_rex, parse_with_limits, span};
 
 fn parse(code: &str) -> Arc<Expr> {
@@ -1472,7 +1472,7 @@ fn test_errors() {
     let res = parse_rex("1 + 2 + in + 3");
     assert_eq!(
         res,
-        Err(vec![ParserErr::new(
+        Err(vec![ParseError::new(
             Span::new(1, 9, 1, 11),
             "unexpected in"
         )])
@@ -1481,13 +1481,16 @@ fn test_errors() {
     let res = parse_rex("1 + 2 in + 3");
     assert_eq!(
         res,
-        Err(vec![ParserErr::new(Span::new(1, 7, 1, 9), "unexpected in")])
+        Err(vec![ParseError::new(
+            Span::new(1, 7, 1, 9),
+            "unexpected in"
+        )])
     );
 
     let res = parse_rex("get 0 [    ");
     assert_eq!(
         res,
-        Err(vec![ParserErr::new(
+        Err(vec![ParseError::new(
             Span::new(1, 12, 1, 12),
             "unexpected EOF"
         )])
@@ -1496,7 +1499,7 @@ fn test_errors() {
     let res = parse_rex("elem0 (  ");
     assert_eq!(
         res,
-        Err(vec![ParserErr::new(
+        Err(vec![ParseError::new(
             Span::new(1, 10, 1, 10),
             "unexpected EOF"
         )])
@@ -1512,9 +1515,9 @@ fn test_errors() {
     assert_eq!(
         res,
         Err(vec![
-            ParserErr::new(Span::new(2, 20, 2, 21), "expected `=`"),
-            ParserErr::new(Span::new(3, 27, 3, 28), "expected `=`"),
-            ParserErr::new(Span::new(4, 34, 4, 35), "expected `=`")
+            ParseError::new(Span::new(2, 20, 2, 21), "expected `=`"),
+            ParseError::new(Span::new(3, 27, 3, 28), "expected `=`"),
+            ParseError::new(Span::new(4, 34, 4, 35), "expected `=`")
         ])
     );
 }
