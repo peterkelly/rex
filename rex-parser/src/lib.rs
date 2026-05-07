@@ -11,7 +11,6 @@ pub mod error;
 #[doc(hidden)]
 pub mod lexer;
 pub mod op;
-pub use rex_ast::span;
 
 mod ast_builder;
 mod grammar;

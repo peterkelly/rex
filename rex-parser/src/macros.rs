@@ -1,16 +1,16 @@
 #[macro_export]
 macro_rules! span {
     () => {
-        $crate::span::Span::default()
+        ::rex_ast::span::Span::default()
     };
 
     ($begin_ln:literal : $begin_col:literal - $end_ln:literal : $end_col:literal) => {
-        $crate::span::Span {
-            begin: $crate::span::Position {
+        ::rex_ast::span::Span {
+            begin: ::rex_ast::span::Position {
                 line: $begin_ln,
                 column: $begin_col,
             },
-            end: $crate::span::Position {
+            end: ::rex_ast::span::Position {
                 line: $end_ln,
                 column: $end_col,
             },
@@ -18,12 +18,12 @@ macro_rules! span {
     };
 
     ($begin_ln:expr , $begin_col:expr, $end_ln:expr , $end_col:expr) => {
-        $crate::span::Span {
-            begin: $crate::span::Position {
+        ::rex_ast::span::Span {
+            begin: ::rex_ast::span::Position {
                 line: $begin_ln,
                 column: $begin_col,
             },
-            end: $crate::span::Position {
+            end: ::rex_ast::span::Position {
                 line: $end_ln,
                 column: $end_col,
             },
