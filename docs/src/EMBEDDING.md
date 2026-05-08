@@ -773,10 +773,17 @@ let program = parse("(((1)))")
 ## Bridge Rust Types with `#[derive(Rex)]`
 
 The derive:
+- implements `RexType`
+- implements `RexAdt`
+- implements `IntoRex`
+- implements `FromRex`
+- adds inherent helper methods such as `inject_rex`, `rex_adt_decl`, and `rex_adt_family`
 - declares an ADT in the Rex type system
 - injects runtime constructors (so Rex can *build* values)
 - discovers and registers the full acyclic ADT family needed by the root type
-- implements `FromRex`/`IntoRex` for converting Rust ↔ Rex
+
+The derive does not implement `RexDefault`; `inject_rex_with_default` is available only when the
+type already provides that trait.
 
 Fields of type `Vec<T>` are exposed as `Array T` and convert to/from Rex
 runtime arrays. When constructing or updating derived records from Rex code, use

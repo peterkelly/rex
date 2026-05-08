@@ -6,11 +6,18 @@ This crate provides procedural macros for bridging Rust types and Rex values.
 
 The derive generates:
 
+- `rex::typesystem::RexType`
+- `rex::typesystem::RexAdt`
+- `rex::engine::IntoRex`
+- `rex::engine::FromRex`
+- inherent helper methods such as `inject_rex`, `rex_adt_decl`, and `rex_adt_family`
 - an ADT declaration suitable for injection into an `Engine`
 - ADT-family discovery so `inject_rex` registers all reachable acyclic derived dependencies
-- `IntoRex` / `FromRex` implementations to convert between Rust values and Rex runtime values
 
 Derived fields of type `Vec<T>` are represented as `Array T` and convert to/from Rex runtime arrays.
+
+The derive does not implement `rex::engine::RexDefault`; `inject_rex_with_default` is available
+only when the type already provides that trait.
 
 In practice this means injecting the top-level derived Rust type is enough for acyclic families of
 derived ADTs; manual dependency ordering is no longer required. Cyclic ADT families are still

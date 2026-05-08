@@ -1,10 +1,144 @@
-pub use rex_engine::{
-    AsyncCallExecutor, AsyncCallPolicy, ClassMethodCapability, ClassMethodRequirement,
-    CompileError, CompiledExterns, CompiledProgram, CompiledProgramBoundary, Compiler, Context,
-    Engine, EngineError, EngineOptions, EvalError, Evaluator, ExecutionBounds, ExecutionError,
-    Export, FromRex, Handle, Heap, HostFnAsync, HostFnSync, IntoRex, Module, NativeCapability,
-    NativeFuture, NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME,
-    ResolveRequest, ResolvedModule, ResolvedModuleContent, RexDefault, RuntimeCapabilities,
-    RuntimeCompatibility, RuntimeEnv, RuntimeEnvBoundary, RuntimeLinkContract, Value,
-    ValueDisplayOptions, collect_adts_error_to_engine, virtual_export_name,
-};
+//! Compile and run Rex programs from a Rust host.
+//!
+//! This module is the main embedding API. A host creates an
+//! [`Engine`](crate::engine::Engine), injects Rex modules or Rust-backed
+//! [`Module`](crate::engine::Module) exports, compiles user source into a
+//! [`CompiledProgram`](crate::engine::CompiledProgram), and runs it with an
+//! [`Evaluator`](crate::engine::Evaluator). Convenience methods such as
+//! [`eval_snippet`](crate::engine::Evaluator::eval_snippet) combine
+//! compilation and execution for the common single-shot case.
+//!
+//! The public types here are re-exported from the engine crate so applications
+//! can depend on `rex` as their primary embedding crate.
+
+/// Hook used by [`AsyncCallPolicy`] to decide where admitted async host calls run.
+pub use rex_engine::AsyncCallExecutor;
+
+/// Runtime policy for polling or dispatching async host-call futures.
+pub use rex_engine::AsyncCallPolicy;
+
+/// Runtime-side implementation metadata for a type class method.
+pub use rex_engine::ClassMethodCapability;
+
+/// A type class method required by a compiled program at runtime.
+pub use rex_engine::ClassMethodRequirement;
+
+/// Error from the compile phase of the Rex pipeline.
+pub use rex_engine::CompileError;
+
+/// Summary of external native and type class bindings referenced by compiled code.
+pub use rex_engine::CompiledExterns;
+
+/// A prepared Rex program that can be validated and evaluated once.
+pub use rex_engine::CompiledProgram;
+
+/// Metadata describing what a [`CompiledProgram`] captures and whether it is serializable.
+pub use rex_engine::CompiledProgramBoundary;
+
+/// Compile-time view of an [`Engine`] used to prepare Rex source for execution.
+pub use rex_engine::Compiler;
+
+/// Host-call context passed to dynamic native functions.
+pub use rex_engine::Context;
+
+/// Configurable Rex engine for host modules, type information, and runtime policy.
+pub use rex_engine::Engine;
+
+/// Common error type used by the parser, type system bridge, module loader, and evaluator.
+pub use rex_engine::EngineError;
+
+/// Options used when constructing an [`Engine`].
+pub use rex_engine::EngineOptions;
+
+/// Error from the evaluation phase after code has compiled.
+pub use rex_engine::EvalError;
+
+/// Single-shot runtime used to validate and run a compiled Rex program.
+pub use rex_engine::Evaluator;
+
+/// Admission limits for evaluator work and pending async host calls.
+pub use rex_engine::ExecutionBounds;
+
+/// Error returned by APIs that perform both compilation and evaluation.
+pub use rex_engine::ExecutionError;
+
+/// A staged Rust-backed function export before it is injected into an [`Engine`].
+pub use rex_engine::Export;
+
+/// Convert a Rex runtime value into a Rust value.
+pub use rex_engine::FromRex;
+
+/// A garbage-collected handle to a Rex runtime value.
+pub use rex_engine::Handle;
+
+/// Allocation arena and ownership root for Rex runtime values.
+pub use rex_engine::Heap;
+
+/// Trait implemented by typed asynchronous Rust functions that can be exported to Rex.
+pub use rex_engine::HostFnAsync;
+
+/// Trait implemented by typed synchronous Rust functions that can be exported to Rex.
+pub use rex_engine::HostFnSync;
+
+/// Convert a Rust value into a Rex runtime value.
+pub use rex_engine::IntoRex;
+
+/// Staged host module containing Rex declarations and Rust-backed exports.
+pub use rex_engine::Module;
+
+/// Runtime-side metadata for one native function implementation.
+pub use rex_engine::NativeCapability;
+
+/// Boxed future returned by handle-based async native functions.
+pub use rex_engine::NativeFuture;
+
+/// Native function signature required by a compiled program at runtime.
+pub use rex_engine::NativeRequirement;
+
+/// Name of the automatically injected Rex prelude module.
+pub use rex_engine::PRELUDE_MODULE_NAME;
+
+/// Controls whether the Rex prelude is installed when constructing an [`Engine`].
+pub use rex_engine::PreludeMode;
+
+/// Internal module name used for declarations injected into the root environment.
+pub use rex_engine::ROOT_MODULE_NAME;
+
+/// Request passed to a custom module resolver.
+pub use rex_engine::ResolveRequest;
+
+/// Module payload returned by a resolver.
+pub use rex_engine::ResolvedModule;
+
+/// Source or pre-parsed AST content returned by a resolver.
+pub use rex_engine::ResolvedModuleContent;
+
+/// Trait for producing a Rex default value for a Rust-facing type.
+pub use rex_engine::RexDefault;
+
+/// Runtime capabilities available to satisfy a compiled program's link contract.
+pub use rex_engine::RuntimeCapabilities;
+
+/// Compatibility report between compiled requirements and runtime capabilities.
+pub use rex_engine::RuntimeCompatibility;
+
+/// Preflight view of runtime linkage available to an evaluator.
+pub use rex_engine::RuntimeEnv;
+
+/// Metadata describing what a [`RuntimeEnv`] captures and whether it is serializable.
+pub use rex_engine::RuntimeEnvBoundary;
+
+/// Runtime ABI and callable requirements captured by a [`CompiledProgram`].
+pub use rex_engine::RuntimeLinkContract;
+
+/// Raw Rex runtime value stored in the heap.
+pub use rex_engine::Value;
+
+/// Formatting options for displaying Rex runtime values.
+pub use rex_engine::ValueDisplayOptions;
+
+/// Convert ADT collection errors into an embedder-facing [`EngineError`].
+pub use rex_engine::collect_adts_error_to_engine;
+
+/// Build the internal symbol used for a virtual module export.
+pub use rex_engine::virtual_export_name;

@@ -2282,11 +2282,28 @@ pub(crate) trait FromPointer: Sized {
     fn from_pointer(heap: &Heap, pointer: &Pointer) -> Result<Self, EngineError>;
 }
 
+/// Convert a Rust value into a heap-allocated Rex runtime value.
+///
+/// Typed host exports use this trait to turn Rust return values into Rex
+/// values. Embedders can also call it directly when building values for dynamic
+/// native functions or tests.
+///
+/// The implementation must allocate any runtime data in the supplied [`Heap`]
+/// and return a rooted [`Handle`] that remains valid across evaluator heap
+/// movement.
 pub trait IntoRex {
+    /// Allocate `self` into `heap` and return the resulting Rex value handle.
     fn into_rex(self, heap: &Heap) -> Result<Handle, EngineError>;
 }
 
+/// Decode a Rex runtime value into a Rust value.
+///
+/// Typed host exports use this trait to turn Rex arguments into Rust function
+/// parameters. Implementations should validate that the [`Handle`] has the
+/// expected shape and return an [`EngineError`] when the runtime value cannot be
+/// represented as `Self`.
 pub trait FromRex: Sized {
+    /// Read `handle` as `Self`.
     fn from_rex(handle: &Handle) -> Result<Self, EngineError>;
 }
 

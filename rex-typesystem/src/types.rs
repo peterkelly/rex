@@ -1046,18 +1046,62 @@ impl AdtDecl {
     }
 }
 
+/// Rust-side type metadata for values that can appear at a Rex boundary.
+///
+/// Implement this trait for any Rust type that appears in a typed host function
+/// signature, a derived Rex ADT field, or other embedder-facing conversion
+/// point. The returned [`Type`] is the Rex type that users see in signatures and
+/// type errors.
+///
+/// Primitive Rust types such as integers, floats, `bool`, `String`, `Vec<T>`,
+/// `Option<T>`, and `Result<T, E>` already implement `RexType`. For Rust structs
+/// and enums that should be visible as Rex algebraic data types, prefer
+/// `#[derive(rex::Rex)]`, which implements both `RexType` and [`RexAdt`].
 pub trait RexType {
+    /// Return the Rex type corresponding to `Self`.
+    ///
+    /// This type is used when Rex builds host function signatures, checks calls
+    /// to native functions, and discovers the declarations needed for ADT
+    /// registration.
     fn rex_type() -> Type;
 
+    /// Append Rex ADT declarations required by this type to `out`.
+    ///
+    /// The default implementation is intentionally empty, which is correct for
+    /// primitive and leaf types that do not introduce Rex ADT declarations.
+    /// Derived ADTs override this to collect declarations for the full acyclic
+    /// family reachable from `Self` and then append their own declaration.
+    ///
+    /// Callers that register the family are responsible for ordering and
+    /// validating the declarations before injection.
     fn collect_rex_family(_out: &mut Vec<AdtDecl>) -> Result<(), TypeError> {
         Ok(())
     }
 }
 
-/// Shared ADT declaration surface for derived and manually implemented Rust types.
+/// Rust-side declaration metadata for a type represented as a Rex ADT.
+///
+/// `RexAdt` extends [`RexType`] for Rust structs and enums that have a named Rex
+/// algebraic data type declaration. The engine and module APIs use this trait to
+/// register constructors and type declarations before Rex code constructs or
+/// consumes values of the Rust type.
+///
+/// Most embedders should derive this with `#[derive(rex::Rex)]`. Manual
+/// implementations are useful for hand-written bridges or types whose Rex shape
+/// differs from their Rust fields.
 pub trait RexAdt: RexType {
+    /// Return the single Rex ADT declaration for `Self`.
+    ///
+    /// This should describe only the type represented by `Self`; dependencies
+    /// belong in [`RexType::collect_rex_family`].
     fn rex_adt_decl() -> Result<AdtDecl, TypeError>;
 
+    /// Return the ADT family needed to register `Self`.
+    ///
+    /// The default implementation delegates to [`RexType::collect_rex_family`].
+    /// Derived implementations of `collect_rex_family` include dependencies and
+    /// `Self`; manual implementations can override this method when they need a
+    /// custom family collection strategy.
     fn rex_adt_family() -> Result<Vec<AdtDecl>, TypeError> {
         let mut out = Vec::new();
         <Self as RexType>::collect_rex_family(&mut out)?;

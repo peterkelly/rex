@@ -1,3 +1,10 @@
+//! JSON conversion helpers for runtime Rex values.
+//!
+//! These functions are useful when a host chooses a Rex type at runtime and
+//! needs to cross the embedding boundary through JSON [`Value`](serde_json::Value)
+//! rather than through Rust generics and [`IntoRex`](crate::engine::IntoRex) /
+//! [`FromRex`](crate::engine::FromRex).
+
 use crate::engine::{EngineError, Handle, Heap};
 use rex_ast::Symbol;
 use rex_typesystem::{
@@ -19,7 +26,7 @@ fn runtime_ctor(name: &Symbol) -> Symbol {
     Symbol::intern(local_name(name))
 }
 
-/// Convert a JSON [`Value`] into a typed Rex runtime value (`Handle`) allocated on `heap`.
+/// Convert a JSON [`Value`] into a typed Rex runtime value ([`Handle`]) allocated on `heap`.
 ///
 /// The conversion is compatible with serde-style JSON representations for Rex-compatible Rust
 /// types, but operates entirely via runtime Rex types (`Type`) plus the evaluator heap.
@@ -76,7 +83,7 @@ pub fn json_to_rex(
     }
 }
 
-/// Convert a typed Rex runtime value (`Handle`) to a JSON [`Value`].
+/// Convert a typed Rex runtime value ([`Handle`]) to a JSON [`Value`].
 ///
 /// The conversion is compatible with serde-style JSON representations for Rex-compatible Rust
 /// types, but operates on runtime values stored in the evaluator heap.
