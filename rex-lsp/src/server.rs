@@ -9,12 +9,12 @@ use lsp_types::{
     Diagnostic, DiagnosticSeverity, DocumentSymbol, GotoDefinitionResponse, Hover, HoverContents,
     Location, MarkupContent, MarkupKind, Position, Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
 };
-use rex_ast::expr::{
+use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl,
     ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint,
     TypeDecl, TypeExpr, TypeVariant, Var,
 };
-use rex_ast::span::{Position as RexPosition, Span, Spanned};
+use rex_ast::{Position as RexPosition, Span, Spanned};
 use rex_engine::{Engine, EngineError, ModuleError};
 use rex_parser::{
     error::ParseError,

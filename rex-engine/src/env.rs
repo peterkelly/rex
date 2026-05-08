@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 
 use crate::EngineError;
 use crate::value::{Handle, Heap, Pointer};

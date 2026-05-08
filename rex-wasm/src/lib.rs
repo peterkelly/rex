@@ -2,7 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use futures::executor::block_on;
-use rex_ast::expr::CompilationUnit;
+use rex_ast::CompilationUnit;
 use rex_engine::{Engine, ValueDisplayOptions};
 use rex_lsp::server::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,

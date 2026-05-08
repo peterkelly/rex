@@ -7,7 +7,7 @@
 
 use std::{collections::BTreeSet, fmt};
 
-use rex_ast::span::Span as RexSpan;
+use rex_ast::Span as RexSpan;
 
 use crate::{
     grammar::{Cst, CstNode, Grammar, GrammarParser, Item as GrammarItem, Peg, Terminal},

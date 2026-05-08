@@ -1,4 +1,4 @@
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_engine::{Engine, EngineError, Handle};
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind};
 

@@ -1,4 +1,4 @@
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_engine::{EngineError, Heap, Value, ValueDisplayOptions};
 
 #[test]

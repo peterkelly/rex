@@ -3,11 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use rex_ast::expr::{
+use rex_ast::{
     ClassDecl, ClassMethodSig, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, InstanceMethodImpl,
-    Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr,
+    Scope, Span, Symbol, TypeConstraint, TypeDecl, TypeExpr,
 };
-use rex_ast::span::Span;
 
 use crate::prelude;
 

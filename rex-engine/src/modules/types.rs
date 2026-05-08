@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 
-use rex_ast::expr::{CompilationUnit, Decl, Symbol};
+use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_typesystem::types::Type;
 
 use crate::Handle;

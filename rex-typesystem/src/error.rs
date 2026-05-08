@@ -1,6 +1,5 @@
 use crate::types::{Type, TypeVarId};
-use rex_ast::expr::Symbol;
-use rex_ast::span::Span;
+use rex_ast::{Span, Symbol};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum TypeError {

@@ -1,2 +1,6 @@
-pub use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
-pub use rex_ast::{Position, Span, Spanned};
+pub use rex_ast::{
+    ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, Id,
+    ImportClause, ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef,
+    Pattern, Position, Scope, Span, Spanned, Symbol, TypeConstraint, TypeDecl, TypeExpr,
+    TypeVariant, Var,
+};

@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 use std::sync::Arc;
 
-use rex_ast::expr::{Expr, Symbol};
+use rex_ast::{Expr, Symbol};
 use rex_typesystem::{
     error::TypeError,
     types::{Type, TypedExpr, Types},

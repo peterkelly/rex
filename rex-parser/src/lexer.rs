@@ -4,7 +4,7 @@ use std::fmt::{self, Display, Formatter};
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use rex_ast::span::{Span, Spanned};
+use rex_ast::{Span, Spanned};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Precedence(u8);

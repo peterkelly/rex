@@ -11,7 +11,7 @@ use crate::{
     },
     unification::{Subst, Unifier, compose_subst, subst_is_empty, unify},
 };
-use rex_ast::expr::{Expr, Pattern, Symbol, TypeConstraint, TypeExpr};
+use rex_ast::{Expr, Pattern, Symbol, TypeConstraint, TypeExpr};
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,

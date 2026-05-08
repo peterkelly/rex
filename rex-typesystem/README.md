@@ -14,7 +14,7 @@ This crate implements a Hindley-Milner style type system with parametric polymor
 ## Quickstart
 
 ```rust
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_ts::{BuiltinTypeId, Predicate, Type, TypeSystem};
 
 fn main() -> Result<(), rex_ts::TypeError> {
@@ -34,7 +34,7 @@ fn main() -> Result<(), rex_ts::TypeError> {
 
 ## Inference
 
-The inference entry points are `infer(&mut ts, expr)` (predicates + type) and `infer_typed(&mut ts, expr)` (typed AST + predicates + type), both of which work on `rex_ast::expr::Expr`. Literal behavior follows the current language requirement:
+The inference entry points are `infer(&mut ts, expr)` (predicates + type) and `infer_typed(&mut ts, expr)` (typed AST + predicates + type), both of which work on `rex_ast::Expr`. Literal behavior follows the current language requirement:
 
 The inference engine and its tests live in `src/inference.rs`; `src/typesystem.rs` contains the shared type-system data structures, unification machinery, and declaration/typeclass registration code that inference builds on.
 

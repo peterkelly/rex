@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use rex_ast::expr::{
+use rex_ast::Span;
+use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
     ImportDecl, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol,
     TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
-use rex_ast::span::Span;
 use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{Predicate, Type};
 use rex_util::sha256_hex;

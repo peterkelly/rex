@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rex_ast::expr::{Pattern, Symbol};
+use rex_ast::{Pattern, Symbol};
 use rex_typesystem::types::{Type, TypedExpr};
 
 use crate::EngineError;

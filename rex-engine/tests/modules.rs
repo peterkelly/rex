@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_engine::{
     Engine, EngineError, EngineOptions, EvaluatorRef, Handle, Module, PreludeMode, Value,
 };

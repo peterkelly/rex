@@ -11,11 +11,11 @@ use futures::{
     FutureExt,
     future::{BoxFuture, poll_fn},
 };
-use rex_ast::expr::{
+use rex_ast::Span;
+use rex_ast::{
     ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, NameRef, Pattern,
     Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, Var,
 };
-use rex_ast::span::Span;
 use rex_typesystem::{
     error::{CollectAdtsError, TypeError},
     inference::{infer, infer_typed},

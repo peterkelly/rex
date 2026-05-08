@@ -22,7 +22,7 @@ mod rex;
 #[cfg(test)]
 mod peg_syntax;
 
-use rex_ast::expr::CompilationUnit;
+use rex_ast::CompilationUnit;
 
 use crate::{
     error::ParseError,

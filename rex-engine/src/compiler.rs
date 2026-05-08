@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use rex_ast::expr::{CompilationUnit, Expr, Symbol};
+use rex_ast::{CompilationUnit, Expr, Symbol};
 use rex_typesystem::types::{TypedExpr, TypedExprKind};
 use uuid::Uuid;
 

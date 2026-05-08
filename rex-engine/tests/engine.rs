@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
+use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
 use rex_engine::{Engine, EngineError, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{

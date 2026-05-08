@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
+use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
 use rex_engine::{
     Engine, EngineError, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module, Value,
 };

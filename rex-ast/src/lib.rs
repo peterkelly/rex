@@ -7,11 +7,17 @@
 //! and transform. Anything with complicated control flow generally belongs in a
 //! later phase (parser, type checker, engine).
 
-pub mod expr;
-pub mod id;
-pub mod macros;
-pub mod span;
-pub mod symbol;
+mod ast;
+mod id;
+mod macros;
+mod span;
+mod symbol;
 
+pub use ast::{
+    ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
+    ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Scope,
+    TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
+};
+pub use id::Id;
 pub use span::{Position, Span, Spanned};
 pub use symbol::Symbol;

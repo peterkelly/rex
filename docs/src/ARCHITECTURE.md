@@ -2,7 +2,7 @@
 
 Rex is implemented as a small set of focused crates that form a pipeline:
 
-1. **Parsing** (`rex-parser`): converts source text into a `rex_ast::expr::CompilationUnit { decls, body }`.
+1. **Parsing** (`rex-parser`): converts source text into a `rex_ast::CompilationUnit { decls, body }`.
 2. **Typing** (`rex-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_typesystem::TypedExpr`.
 3. **Evaluation** (`rex-engine`): evaluates `TypedExpr` to a runtime `rex_engine::Handle`.
 

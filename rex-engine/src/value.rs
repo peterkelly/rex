@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_typesystem::types::{Type, TypedExpr};
 use uuid::Uuid;
 

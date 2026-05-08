@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_typesystem::{
     types::{BuiltinTypeId, Scheme, Type, TypeKind, Types},
     unification::unify,

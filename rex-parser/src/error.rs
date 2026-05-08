@@ -1,6 +1,6 @@
 use std::fmt::{self, Display, Formatter};
 
-use rex_ast::span::Span;
+use rex_ast::Span;
 
 use crate::lexer::LexicalError;
 

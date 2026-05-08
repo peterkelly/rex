@@ -1,5 +1,5 @@
 use crate::engine::{EngineError, Handle, Heap};
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Type, TypeKind},
     typesystem::TypeSystem,

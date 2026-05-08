@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use rex_ast::span::{Span, Spanned};
+use rex_ast::{Span, Spanned};
 
 use crate::lexer::{Token, Tokens};
 
@@ -553,7 +553,7 @@ where
 mod tests {
     use std::cell::Cell;
 
-    use rex_ast::span::{Position, Span};
+    use rex_ast::{Position, Span};
 
     use super::*;
 

@@ -539,12 +539,12 @@ let program = parse("map (\\x -> x) [1, 2, 3]").map_err(|errs| format!("{errs:?}
 let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
     match decl {
-        rex_ast::expr::Decl::Type(d) => ts.register_type_decl(d)?,
-        rex_ast::expr::Decl::Class(d) => ts.register_class_decl(d)?,
-        rex_ast::expr::Decl::Instance(d) => {
+        rex_ast::Decl::Type(d) => ts.register_type_decl(d)?,
+        rex_ast::Decl::Class(d) => ts.register_class_decl(d)?,
+        rex_ast::Decl::Instance(d) => {
             ts.register_instance_decl(d)?;
         }
-        rex_ast::expr::Decl::Fn(d) => ts.register_fn_decls(std::slice::from_ref(d))?,
+        rex_ast::Decl::Fn(d) => ts.register_fn_decls(std::slice::from_ref(d))?,
     }
 }
 
@@ -600,12 +600,12 @@ let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 let mut ts = TypeSystem::new_with_prelude()?;
 for decl in &program.decls {
     match decl {
-        rex_ast::expr::Decl::Type(d) => ts.register_type_decl(d)?,
-        rex_ast::expr::Decl::Class(d) => ts.register_class_decl(d)?,
-        rex_ast::expr::Decl::Instance(d) => {
+        rex_ast::Decl::Type(d) => ts.register_type_decl(d)?,
+        rex_ast::Decl::Class(d) => ts.register_class_decl(d)?,
+        rex_ast::Decl::Instance(d) => {
             ts.register_instance_decl(d)?;
         }
-        rex_ast::expr::Decl::Fn(d) => ts.register_fn_decls(std::slice::from_ref(d))?,
+        rex_ast::Decl::Fn(d) => ts.register_fn_decls(std::slice::from_ref(d))?,
     }
 }
 

@@ -1,11 +1,8 @@
 use std::sync::Arc;
 
 use rex_ast::{
-    app, assert_expr_eq, b, d,
-    expr::{Decl, Expr, ImportClause, ImportPath, NameRef, Pattern, Scope, Symbol, TypeExpr, Var},
-    f, l, s,
-    span::Span,
-    tup, u, v,
+    Decl, Expr, ImportClause, ImportPath, NameRef, Pattern, Scope, Span, Symbol, TypeExpr, Var,
+    app, assert_expr_eq, b, d, f, l, s, tup, u, v,
 };
 use rex_parser::error::ParseError;
 use rex_parser::{MAX_AST_DEPTH, parse as parse_rex, span};

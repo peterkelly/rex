@@ -6,7 +6,7 @@ use rex::{
     engine::{Engine, Module},
     parser::parse as parse_rex,
 };
-use rex_ast::expr::{Decl, Expr, NameRef, TypeExpr};
+use rex_ast::{Decl, Expr, NameRef, TypeExpr};
 use rex_engine::ValueDisplayOptions;
 use rex_lsp::server::*;
 use serde_json::{Map, Value, json};

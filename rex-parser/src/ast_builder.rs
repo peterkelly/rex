@@ -3,12 +3,12 @@ use std::{
     sync::Arc,
 };
 
-use rex_ast::expr::{
+use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
     ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Scope,
     Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
-use rex_ast::span::{Position, Span, Spanned};
+use rex_ast::{Position, Span, Spanned};
 
 use crate::{
     MAX_AST_DEPTH,

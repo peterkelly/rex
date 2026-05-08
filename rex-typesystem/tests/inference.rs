@@ -1,5 +1,4 @@
-use rex_ast::expr::{CompilationUnit, Decl, Expr, Symbol};
-use rex_ast::span::Span;
+use rex_ast::{CompilationUnit, Decl, Expr, Span, Symbol};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,

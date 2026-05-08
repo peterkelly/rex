@@ -2,7 +2,7 @@
 
 The PEG parser is grammar-driven. `rex.rs` defines the formal Rex grammar
 as Rust data, `grammar.rs` interprets that grammar over lexer tokens, and
-`ast_builder.rs` converts the resulting CST into `rex_ast::expr` values.
+`ast_builder.rs` converts the resulting CST into `rex_ast` values.
 `PEG_FORMAT.md` defines the canonical text format used when this Rust grammar
 is rendered to a checked `.peg` file.
 

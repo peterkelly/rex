@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use rex_ast::span::Span;
+use rex_ast::Span;
 
 use crate::{
     lexer::Token,

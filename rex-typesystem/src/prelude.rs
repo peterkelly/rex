@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use rex_ast::expr::{CompilationUnit, Decl, Symbol};
+use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_parser::parse;
 
 use crate::{

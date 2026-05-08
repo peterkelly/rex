@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::process::ExitStatus;
 
-use rex_ast::expr::Symbol;
+use rex_ast::Symbol;
 use rex_parser::{error::ParseError, lexer::LexicalError};
 use rex_typesystem::error::TypeError;
 

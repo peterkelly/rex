@@ -10,8 +10,10 @@ use rpds::HashTrieMapSync;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::span::{Position, Span};
-pub use crate::symbol::Symbol;
+use crate::{
+    span::{Position, Span},
+    symbol::Symbol,
+};
 
 pub type Scope = HashTrieMapSync<Symbol, Arc<Expr>>;
 

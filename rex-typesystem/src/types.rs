@@ -4,7 +4,7 @@ use crate::{
     unification::{Subst, subst_is_empty},
 };
 use chrono::{DateTime, Utc};
-use rex_ast::expr::{Pattern, Symbol};
+use rex_ast::{Pattern, Symbol};
 use rpds::HashTrieMapSync;
 use std::{
     cmp::Ordering,
