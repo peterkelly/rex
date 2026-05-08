@@ -5,13 +5,14 @@ use rex_typesystem::{
     types::{collect_adts_in_types, order_adt_family},
 };
 
-use crate::EvaluatorRef;
-use crate::engine::{
-    Export, HostFnAsync, HostFnSync, NativeFuture, SchedulerNativeResult,
-    adt_family_error_to_engine,
+use crate::{
+    Context, Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME,
+    engine::{
+        Export, HostFnAsync, HostFnSync, NativeFuture, SchedulerNativeResult,
+        adt_family_error_to_engine,
+    },
+    stack::{NativeLogShow, NativeTask},
 };
-use crate::stack::{NativeLogShow, NativeTask};
-use crate::{Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME};
 
 /// A staged host module that you build up in Rust and later inject into an [`Engine`].
 ///
@@ -458,7 +459,7 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{EvaluatorRef, Handle, Module};
+    /// use rex_engine::{Context, Handle, Module};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut module = Module::<()>::new("acme.dynamic");
@@ -469,7 +470,7 @@ where
     /// );
     ///
     /// module
-    ///     .export_native("id_ptr", scheme, 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Handle]| {
+    ///     .export_native("id_ptr", scheme, 1, |_ctx: Context<()>, _typ: &Type, args: &[Handle]| {
     ///         Ok(args[0].clone())
     ///     })
     ///     .unwrap();
@@ -482,7 +483,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+        F: for<'a> Fn(Context<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
             + Send
             + Sync
             + 'static,
@@ -501,7 +502,7 @@ where
     ///
     /// ```rust,ignore
     /// use futures::FutureExt;
-    /// use rex_engine::{EvaluatorRef, Module};
+    /// use rex_engine::{Context, Module};
     /// use rex_typesystem::{BuiltinTypeId, Scheme, Type};
     ///
     /// let mut module = Module::<()>::new("acme.dynamic");
@@ -512,8 +513,8 @@ where
     ///         "answer_async",
     ///         scheme,
     ///         0,
-    ///         |engine: EvaluatorRef<()>, _typ: Type, _args| {
-    ///             async move { engine.heap().alloc_i32(42) }.boxed()
+    ///         |ctx: Context<()>, _typ: Type, _args| {
+    ///             async move { ctx.heap().alloc_i32(42) }.boxed()
     ///         },
     ///     )
     ///     .unwrap();
@@ -526,7 +527,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static,
+        F: Fn(Context<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static,
     {
         self.exports
             .push(Export::from_native_async(name, scheme, arity, handler)?);

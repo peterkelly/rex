@@ -4,7 +4,7 @@ use rex::{
     Rex,
     ast::{Expr, Symbol},
     engine::{
-        Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, RexDefault, Value,
+        Context, Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, RexDefault, Value,
         virtual_export_name,
     },
     parser::parse as parse_rex,
@@ -226,7 +226,7 @@ impl Entity2 {
 }
 
 impl RexDefault<HostState> for Entity1 {
-    fn rex_default(engine: rex::engine::EvaluatorRef<HostState>) -> Result<Handle, EngineError> {
+    fn rex_default(engine: Context<HostState>) -> Result<Handle, EngineError> {
         let entity = Entity1 {
             account_id: engine.state().account_id,
             project_id: engine.state().project_id,

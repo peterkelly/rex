@@ -387,7 +387,7 @@ APIs and provide an explicit `Scheme` + arity:
 - `Module::export_native`
 - `Module::export_native_async`
 
-These callbacks receive `EvaluatorRef<State>` (not just `&State`), so they can:
+These callbacks receive `Context<State>` (not just `&State`), so they can:
 
 - read state via `engine.state()`
 - allocate new values via `engine.heap()`
@@ -398,7 +398,7 @@ runtime can suspend them as explicit pending evaluation frames.
 
 ```rust
 use futures::FutureExt;
-use rex_engine::{Engine, EvaluatorRef, Handle, Module};
+use rex_engine::{Engine, Context, Handle, Module};
 use rex::typesystem::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
@@ -407,12 +407,12 @@ engine.add_default_resolvers();
 let mut m = Module::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
 
-m.export_native("id_handle", scheme.clone(), 1, |_engine: EvaluatorRef<()>, _typ: &Type, args: &[Handle]| {
+m.export_native("id_handle", scheme.clone(), 1, |_ctx: Context<()>, _typ: &Type, args: &[Handle]| {
     Ok(args[0].clone())
 })?;
 
-m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |engine: EvaluatorRef<()>, _typ: Type, _args: Vec<Handle>| {
-    async move { engine.heap().alloc_i32(42) }.boxed()
+m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(BuiltinTypeId::I32)), 0, |ctx: Context<()>, _typ: Type, _args: Vec<Handle>| {
+    async move { ctx.heap().alloc_i32(42) }.boxed()
 })?;
 
 engine.inject_module(m)?;
@@ -455,7 +455,7 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
 - If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
 - `export` / `export_async` callbacks receive `&State` as their first parameter.
 - Handle-based native APIs (`export_native*`) receive
-  `EvaluatorRef<State>` so
+  `Context<State>` so
   they can allocate public handles through the heap and read `engine.state()`.
 
 ```rust

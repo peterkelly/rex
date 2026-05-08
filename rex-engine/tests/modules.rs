@@ -7,9 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use futures::FutureExt;
 use rex_ast::Symbol;
-use rex_engine::{
-    Engine, EngineError, EngineOptions, EvaluatorRef, Handle, Module, PreludeMode, Value,
-};
+use rex_engine::{Context, Engine, EngineError, EngineOptions, Handle, Module, PreludeMode, Value};
 use rex_typesystem::{
     error::TypeError,
     types::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Scheme, Type, TypeKind},
@@ -485,8 +483,8 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "pick",
             i32_binop_scheme(),
             2,
-            |engine: EvaluatorRef<bool>, _: &Type, args: &[Handle]| {
-                let idx = if *engine.state() { 1 } else { 0 };
+            |ctx: Context<bool>, _: &Type, args: &[Handle]| {
+                let idx = if *ctx.state() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("missing argument".into()))
@@ -498,14 +496,13 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
             "heap_i32",
             i32_value_scheme(),
             0,
-            |engine: EvaluatorRef<bool>, _: &Type, _args| {
+            |ctx: Context<bool>, _: &Type, _args| {
                 assert!(
-                    engine
-                        .type_system()
+                    ctx.type_system()
                         .adts
                         .contains_key(&Symbol::intern("Option"))
                 );
-                engine.heap().alloc_i32(123)
+                ctx.heap().alloc_i32(123)
             },
         )
         .unwrap();
@@ -515,11 +512,11 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     module
         .export_native("pick_typed", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: EvaluatorRef<bool>, typ: &Type, args: &[Handle]| {
+            move |ctx: Context<bool>, typ: &Type, args: &[Handle]| {
                 if typ == &expected_type {
                     typed_called.store(true, Ordering::Relaxed);
                 }
-                let idx = if *engine.state() { 1 } else { 0 };
+                let idx = if *ctx.state() { 1 } else { 0 };
                 args.get(idx)
                     .cloned()
                     .ok_or_else(|| EngineError::Internal("missing argument".into()))
@@ -620,8 +617,8 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
             "make_run_spec",
             Scheme::new(vec![], vec![], LocalRunSpec::rex_type()),
             0,
-            |engine: EvaluatorRef<()>, _typ: &Type, _args: &[Handle]| {
-                engine.heap().alloc_adt(Symbol::intern("Pending"), vec![])
+            |ctx: Context<()>, _typ: &Type, _args: &[Handle]| {
+                ctx.heap().alloc_adt(Symbol::intern("Pending"), vec![])
             },
         )
         .unwrap();
@@ -652,8 +649,8 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "pick_async",
             i32_binop_scheme(),
             2,
-            |engine: EvaluatorRef<bool>, _: Type, args: Vec<Handle>| {
-                let idx = if *engine.state() { 1 } else { 0 };
+            |ctx: Context<bool>, _: Type, args: Vec<Handle>| {
+                let idx = if *ctx.state() { 1 } else { 0 };
                 async move {
                     args.get(idx)
                         .cloned()
@@ -668,8 +665,8 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
             "heap_i32_async",
             i32_value_scheme(),
             0,
-            |engine: EvaluatorRef<bool>, _: Type, _args: Vec<Handle>| {
-                async move { engine.heap().alloc_i32(77) }.boxed()
+            |ctx: Context<bool>, _: Type, _args: Vec<Handle>| {
+                async move { ctx.heap().alloc_i32(77) }.boxed()
             },
         )
         .unwrap();
@@ -679,9 +676,9 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     module
         .export_native_async("pick_typed_async", i32_binop_scheme(), 2, {
             let typed_called = Arc::clone(&typed_called);
-            move |engine: EvaluatorRef<bool>, typ: Type, args: Vec<Handle>| {
+            move |ctx: Context<bool>, typ: Type, args: Vec<Handle>| {
                 let type_match = typ == expected_type;
-                let idx = if *engine.state() { 1 } else { 0 };
+                let idx = if *ctx.state() { 1 } else { 0 };
                 let typed_called = Arc::clone(&typed_called);
                 async move {
                     if type_match {
@@ -742,7 +739,7 @@ fn module_native_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<()>, _: &Type, _args: &[Handle]| {
+            |_ctx: Context<()>, _: &Type, _args: &[Handle]| {
                 Err(EngineError::Internal("unused".into()))
             },
         )
@@ -764,7 +761,7 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
             "bad_async",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<()>, _: Type, _args: Vec<Handle>| {
+            |_ctx: Context<()>, _: Type, _args: Vec<Handle>| {
                 async { Err(EngineError::Internal("unused".into())) }.boxed()
             },
         )
@@ -1310,8 +1307,8 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
             "pending",
             Scheme::new(vec![], vec![], Type::con("RunSpec", 0)),
             0,
-            |engine: EvaluatorRef<()>, _: &Type, _args| {
-                engine.heap().alloc_adt(Symbol::intern("Pending"), vec![])
+            |ctx: Context<()>, _: &Type, _args| {
+                ctx.heap().alloc_adt(Symbol::intern("Pending"), vec![])
             },
         )
         .unwrap();

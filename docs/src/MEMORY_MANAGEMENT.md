@@ -66,7 +66,7 @@ That heap then moves with the prepared runtime state into `Compiler` and `Evalua
 
 - Evaluation returns `Handle`, not `Value`.
 - Callers can inspect via the returned handle or allocate more values from native callbacks through
-  `EvaluatorRef::heap()`.
+  `Context::heap()`.
 
 This keeps allocation authority clear: the preparation phase creates the heap, and the evaluator's
 runtime core is the single store used during execution.
@@ -108,7 +108,7 @@ Runtime conversion traits are handle-centric:
 
 Public native injection paths pass handles, including module runtime exports
 (`export_native` / `export_native_async`). These callbacks receive
-`EvaluatorRef<State>`, so they can allocate public handles through
+`Context<State>`, so they can allocate public handles through
 `engine.heap()` and inspect host state via `engine.state()`. `Value` is used
 where direct payload inspection is required.
 

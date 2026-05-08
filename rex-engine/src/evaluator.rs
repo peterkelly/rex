@@ -32,23 +32,23 @@ where
 }
 
 #[derive(Clone)]
-pub struct EvaluatorRef<State = ()>
+pub struct Context<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
     runtime: RuntimeCore<State>,
     #[allow(dead_code)]
     #[doc(hidden)]
-    pub(crate) context: EvalContext,
+    pub(crate) call_site: CallSite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[doc(hidden)]
-pub(crate) struct EvalContext {
+pub(crate) struct CallSite {
     pub parent: Option<Pointer>,
 }
 
-impl EvalContext {
+impl CallSite {
     pub(crate) fn child(parent: Pointer) -> Self {
         Self {
             parent: Some(parent),
@@ -217,19 +217,19 @@ where
     }
 }
 
-impl<State> EvaluatorRef<State>
+impl<State> Context<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new_with_context(runtime: &RuntimeCore<State>, context: EvalContext) -> Self {
+    pub(crate) fn new_at_call_site(runtime: &RuntimeCore<State>, call_site: CallSite) -> Self {
         Self {
             runtime: runtime.clone(),
-            context,
+            call_site,
         }
     }
 
     pub(crate) fn new_with_parent(runtime: &RuntimeCore<State>, parent: Pointer) -> Self {
-        Self::new_with_context(runtime, EvalContext::child(parent))
+        Self::new_at_call_site(runtime, CallSite::child(parent))
     }
 
     pub fn state(&self) -> &State {

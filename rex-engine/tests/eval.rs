@@ -1,8 +1,6 @@
 use futures::FutureExt;
 use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
-use rex_engine::{
-    Engine, EngineError, EvaluatorRef, FromRex, Handle, Heap, IntoRex, Module, Value,
-};
+use rex_engine::{Context, Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -839,9 +837,7 @@ fn engine_export_native_rejects_invalid_arity_scheme_pair() {
             "bad",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<()>, _: &Type, _args| {
-                Err(EngineError::Internal("unused".into()))
-            },
+            |_ctx: Context<()>, _: &Type, _args| Err(EngineError::Internal("unused".into())),
         )
         .unwrap_err();
     let msg = err.to_string();
@@ -868,7 +864,7 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
             "bad_async",
             unary_scheme,
             2,
-            |_engine: EvaluatorRef<()>, _: Type, _args| {
+            |_ctx: Context<()>, _: Type, _args| {
                 async { Err(EngineError::Internal("unused".into())) }.boxed()
             },
         )

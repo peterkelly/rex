@@ -25,7 +25,7 @@ pub use engine::{
 pub use env::Environment;
 pub(crate) use env::RootedEnvironment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
-pub use evaluator::{Evaluator, EvaluatorRef};
+pub use evaluator::{Context, Evaluator};
 pub use modules::virtual_export_name;
 pub use modules::{
     CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ResolveRequest,

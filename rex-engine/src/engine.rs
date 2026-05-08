@@ -5,7 +5,7 @@ use std::fmt::{self, Write as _};
 use std::future::Future;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll};
+use std::task::{Context as TaskContext, Poll};
 
 use futures::{
     FutureExt,
@@ -55,7 +55,7 @@ use crate::value::FromPointer;
 use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec};
 use crate::{
     Compiler, EngineError, Environment, Evaluator, FromRex, IntoRex, RootedEnvironment,
-    evaluator::{EvalContext, EvaluatorRef},
+    evaluator::{CallSite, Context},
 };
 
 fn runtime_ctor_symbol(name: &Symbol) -> Symbol {
@@ -79,7 +79,7 @@ pub trait RexDefault<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn rex_default(engine: EvaluatorRef<State>) -> Result<Handle, EngineError>;
+    fn rex_default(ctx: Context<State>) -> Result<Handle, EngineError>;
 }
 
 pub const ROOT_MODULE_NAME: &str = "__root__";
@@ -464,23 +464,23 @@ pub(crate) enum SchedulerNativeResult {
 }
 
 pub type SyncNativeCallable<State> = Arc<
-    dyn for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+    dyn for<'a> Fn(Context<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
         + Send
         + Sync
         + 'static,
 >;
 pub type AsyncNativeCallable<State> =
-    Arc<dyn Fn(EvaluatorRef<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static>;
+    Arc<dyn Fn(Context<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static>;
 
 pub(crate) type SyncNativePointerCallable<State> = Arc<
-    dyn for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
+    dyn for<'a> Fn(Context<State>, &'a Type, &'a [Pointer]) -> Result<Pointer, EngineError>
         + Send
         + Sync
         + 'static,
 >;
 pub(crate) type SchedulerNativeCallable<State> = Arc<
     dyn for<'a> Fn(
-            EvaluatorRef<State>,
+            Context<State>,
             Type,
             &'a [Pointer],
         ) -> Result<SchedulerNativeResult, EngineError>
@@ -488,9 +488,8 @@ pub(crate) type SchedulerNativeCallable<State> = Arc<
         + Sync
         + 'static,
 >;
-pub(crate) type AsyncNativePointerCallable<State> = Arc<
-    dyn Fn(EvaluatorRef<State>, Type, Vec<Pointer>) -> NativeHandleFuture + Send + Sync + 'static,
->;
+pub(crate) type AsyncNativePointerCallable<State> =
+    Arc<dyn Fn(Context<State>, Type, Vec<Pointer>) -> NativeHandleFuture + Send + Sync + 'static>;
 
 type ExportInjector<State> =
     Box<dyn FnOnce(&mut Engine<State>, &str) -> Result<(), EngineError> + Send + 'static>;
@@ -611,7 +610,7 @@ where
         handler: F,
     ) -> Result<Self, EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+        F: for<'a> Fn(Context<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
             + Send
             + Sync
             + 'static,
@@ -643,7 +642,7 @@ where
     ) -> Result<Self, EngineError>
     where
         F: for<'a> Fn(
-                EvaluatorRef<State>,
+                Context<State>,
                 Type,
                 Vec<Pointer>,
             ) -> Result<SchedulerNativeResult, EngineError>
@@ -676,7 +675,7 @@ where
         handler: F,
     ) -> Result<Self, EngineError>
     where
-        F: Fn(EvaluatorRef<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static,
+        F: Fn(Context<State>, Type, Vec<Handle>) -> NativeFuture + Send + Sync + 'static,
     {
         validate_native_export_scheme(&scheme, arity)?;
         let name = name.into();
@@ -1359,7 +1358,7 @@ impl<State: Clone + Send + Sync + 'static> std::fmt::Debug for NativeCallable<St
 
 pub(crate) struct NativeAsyncCall<State: Clone + Send + Sync + 'static> {
     callable: AsyncNativePointerCallable<State>,
-    context: EvalContext,
+    call_site: CallSite,
     typ: Type,
     args: Vec<Pointer>,
 }
@@ -1370,13 +1369,13 @@ where
 {
     fn new(
         callable: AsyncNativePointerCallable<State>,
-        context: EvalContext,
+        call_site: CallSite,
         typ: Type,
         args: Vec<Pointer>,
     ) -> Self {
         Self {
             callable,
-            context,
+            call_site,
             typ,
             args,
         }
@@ -1389,16 +1388,13 @@ where
         let mut cursor = 0;
         self.refresh_from_roots(&roots, &mut cursor)?;
         let args = self.args;
-        let future = (self.callable)(
-            EvaluatorRef::new_with_context(runtime, self.context),
-            self.typ,
-            args,
-        );
+        let ctx = Context::new_at_call_site(runtime, self.call_site);
+        let future = (self.callable)(ctx, self.typ, args);
         Ok(runtime.async_call_policy.prepare(future))
     }
 
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        if let Some(parent) = self.context.parent {
+        if let Some(parent) = self.call_site.parent {
             out.push(parent);
         }
         out.extend(self.args.iter().copied());
@@ -1409,8 +1405,8 @@ where
         roots: &TempRoots,
         cursor: &mut usize,
     ) -> Result<(), EngineError> {
-        if self.context.parent.is_some() {
-            self.context.parent = Some(roots.get(*cursor)?);
+        if self.call_site.parent.is_some() {
+            self.call_site.parent = Some(roots.get(*cursor)?);
             *cursor += 1;
         }
         for arg in &mut self.args {
@@ -1427,24 +1423,24 @@ pub(crate) enum NativeCallResult<State: Clone + Send + Sync + 'static> {
 }
 
 impl<State: Clone + Send + Sync + 'static> NativeCallable<State> {
-    fn call_with_context(
+    fn call_at_site(
         &self,
         runtime: &RuntimeCore<State>,
         typ: Type,
         args: &[Pointer],
-        context: EvalContext,
+        call_site: CallSite,
     ) -> Result<NativeCallResult<State>, EngineError> {
         match self {
             NativeCallable::Sync(f) => {
-                (f)(EvaluatorRef::new_with_context(runtime, context), &typ, args)
-                    .map(NativeCallResult::Ready)
+                let ctx = Context::new_at_call_site(runtime, call_site);
+                (f)(ctx, &typ, args).map(NativeCallResult::Ready)
             }
             NativeCallable::Scheduler(_) => Err(EngineError::Internal(
                 "scheduler native called through pointer-returning native ABI".into(),
             )),
             NativeCallable::Async(f) => Ok(NativeCallResult::Pending(NativeAsyncCall::new(
                 Arc::clone(f),
-                context,
+                call_site,
                 typ,
                 args.to_vec(),
             ))),
@@ -1527,10 +1523,10 @@ impl NativeFn {
         Ok(())
     }
 
-    pub(crate) fn call_zero_with_context<State: Clone + Send + Sync + 'static>(
+    pub(crate) fn call_zero_at_site<State: Clone + Send + Sync + 'static>(
         &self,
         runtime: &RuntimeCore<State>,
-        context: EvalContext,
+        call_site: CallSite,
     ) -> Result<NativeCallResult<State>, EngineError> {
         if self.arity != 0 {
             return Err(EngineError::NativeArity {
@@ -1539,20 +1535,20 @@ impl NativeFn {
                 got: 0,
             });
         }
-        runtime.native_callable(self.native_id)?.call_with_context(
+        runtime.native_callable(self.native_id)?.call_at_site(
             runtime,
             self.typ.clone(),
             &[],
-            context,
+            call_site,
         )
     }
 
-    fn apply_with_context<State: Clone + Send + Sync + 'static>(
+    fn apply_at_site<State: Clone + Send + Sync + 'static>(
         mut self,
         runtime: &RuntimeCore<State>,
         arg: Pointer,
         arg_type: Option<&Type>,
-        context: EvalContext,
+        call_site: CallSite,
     ) -> Result<NativeApplyResult<State>, EngineError> {
         // `self` is an owned copy cloned from heap storage; we mutate it to
         // accumulate partial-application state and never mutate shared values.
@@ -1595,21 +1591,16 @@ impl NativeFn {
 
         match runtime.native_callable(self.native_id)? {
             NativeCallable::Scheduler(f) => {
-                match f(
-                    EvaluatorRef::new_with_context(runtime, context),
-                    full_ty,
-                    &self.applied,
-                )? {
+                let ctx = Context::new_at_call_site(runtime, call_site);
+                match f(ctx, full_ty, &self.applied)? {
                     SchedulerNativeResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
                     SchedulerNativeResult::Task(task) => Ok(NativeApplyResult::Task(task)),
                 }
             }
-            callable => {
-                match callable.call_with_context(runtime, full_ty, &self.applied, context)? {
-                    NativeCallResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
-                    NativeCallResult::Pending(future) => Ok(NativeApplyResult::Pending(future)),
-                }
-            }
+            callable => match callable.call_at_site(runtime, full_ty, &self.applied, call_site)? {
+                NativeCallResult::Ready(value) => Ok(NativeApplyResult::Value(value)),
+                NativeCallResult::Pending(future) => Ok(NativeApplyResult::Pending(future)),
+            },
         }
     }
 }
@@ -2876,7 +2867,7 @@ where
         handler: F,
     ) -> Result<(), EngineError>
     where
-        F: for<'a> Fn(EvaluatorRef<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
+        F: for<'a> Fn(Context<State>, &'a Type, &'a [Handle]) -> Result<Handle, EngineError>
             + Send
             + Sync
             + 'static,
@@ -2964,7 +2955,7 @@ where
     ) -> Result<(), EngineError>
     where
         F: for<'a> Fn(
-                EvaluatorRef<State>,
+                Context<State>,
                 Type,
                 Vec<Pointer>,
             ) -> Result<SchedulerNativeResult, EngineError>
@@ -3091,13 +3082,11 @@ where
                 continue;
             }
             let ctor_name = ctor.clone();
-            let func: SyncNativePointerCallable<State> = Arc::new(
-                move |engine: EvaluatorRef<State>, _: &Type, args: &[Pointer]| {
-                    engine
-                        .heap()
+            let func: SyncNativePointerCallable<State> =
+                Arc::new(move |ctx: Context<State>, _: &Type, args: &[Pointer]| {
+                    ctx.heap()
                         .alloc_ptr_adt(runtime_ctor_symbol(&ctor_name), args.to_vec())
-                },
-            );
+                });
             let arity = type_arity(&scheme.typ);
             self.register_native(ctor, scheme, arity, NativeCallable::Sync(func))?;
         }
@@ -4471,7 +4460,7 @@ impl PendingNative {
         }
     }
 
-    fn poll(&mut self, cx: &mut Context<'_>) -> bool {
+    fn poll(&mut self, cx: &mut TaskContext<'_>) -> bool {
         match &mut self.state {
             PendingNativeState::Polling(future) => match future.as_mut().poll(cx) {
                 Poll::Ready(result) => {
@@ -4614,7 +4603,7 @@ where
         }
     }
 
-    fn poll_pending_native_once(&mut self, cx: &mut Context<'_>) -> Option<usize> {
+    fn poll_pending_native_once(&mut self, cx: &mut TaskContext<'_>) -> Option<usize> {
         for (index, pending) in self.pending_native.iter_mut().enumerate() {
             if pending.poll(cx) {
                 return Some(index);
@@ -7095,8 +7084,8 @@ where
     }
 
     if runtime.type_system.class_methods.contains_key(&over.name) {
-        let evaluator = EvaluatorRef::new_with_parent(runtime, parent);
-        return match evaluator.resolve_class_method_plan(&over.name, &full_ty)? {
+        let ctx = Context::new_with_parent(runtime, parent);
+        return match ctx.resolve_class_method_plan(&over.name, &full_ty)? {
             Ok((env, method)) => {
                 let args = over
                     .applied
@@ -7113,12 +7102,12 @@ where
         };
     }
 
-    let context = EvalContext::child(parent);
-    let imp = EvaluatorRef::new_with_context(runtime, context)
+    let call_site = CallSite::child(parent);
+    let ctx = Context::new_at_call_site(runtime, call_site)
         .resolve_native_impl(over.name.as_ref(), &full_ty)?;
-    match imp
+    match ctx
         .func
-        .call_with_context(runtime, full_ty, &over.applied, context)?
+        .call_at_site(runtime, full_ty, &over.applied, call_site)?
     {
         NativeCallResult::Ready(value) => Ok(EvalApplyResult::Value(value)),
         NativeCallResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
@@ -7166,7 +7155,7 @@ where
             })
         }
         Cell::Native(native) => {
-            match native.apply_with_context(runtime, arg, arg_type, EvalContext::child(parent))? {
+            match native.apply_at_site(runtime, arg, arg_type, CallSite::child(parent))? {
                 NativeApplyResult::Value(value) => Ok(EvalApplyResult::Value(value)),
                 NativeApplyResult::Task(task) => Ok(EvalApplyResult::PushNative(task)),
                 NativeApplyResult::Pending(future) => Ok(EvalApplyResult::AwaitNative(future)),
@@ -7288,7 +7277,7 @@ where
             _ => Ok(None),
         })?;
         if let Some(native) = native {
-            match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
+            match native.call_zero_at_site(runtime, CallSite::child(parent))? {
                 NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
                 NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
             }
@@ -7296,11 +7285,11 @@ where
             Ok(EvalVarResult::Value(ptr))
         }
     } else if runtime.type_system.class_methods.contains_key(name) {
-        let evaluator = EvaluatorRef::new_with_parent(runtime, parent);
-        if let Some(pointer) = evaluator.cached_class_method(name, typ) {
+        let ctx = Context::new_with_parent(runtime, parent);
+        if let Some(pointer) = ctx.cached_class_method(name, typ) {
             return Ok(EvalVarResult::Value(pointer));
         }
-        match evaluator.resolve_class_method_plan(name, typ)? {
+        match ctx.resolve_class_method_plan(name, typ)? {
             Ok((env, specialized)) => Ok(EvalVarResult::Push {
                 expr: Arc::new(specialized),
                 env,
@@ -7308,21 +7297,20 @@ where
             Err(pointer) => Ok(EvalVarResult::Value(pointer)),
         }
     } else {
-        let value =
-            EvaluatorRef::new_with_parent(runtime, parent).resolve_native(name.as_ref(), typ)?;
-        let native = runtime.heap.with_access(|heap| match heap.get(&value)? {
+        let ctx = Context::new_with_parent(runtime, parent).resolve_native(name.as_ref(), typ)?;
+        let native = runtime.heap.with_access(|heap| match heap.get(&ctx)? {
             Cell::Native(native) if native.arity == 0 && native.applied.is_empty() => {
                 Ok(Some(native.clone()))
             }
             _ => Ok(None),
         })?;
         if let Some(native) = native {
-            match native.call_zero_with_context(runtime, EvalContext::child(parent))? {
-                NativeCallResult::Ready(value) => Ok(EvalVarResult::Value(value)),
+            match native.call_zero_at_site(runtime, CallSite::child(parent))? {
+                NativeCallResult::Ready(ctx) => Ok(EvalVarResult::Value(ctx)),
                 NativeCallResult::Pending(future) => Ok(EvalVarResult::AwaitNative(future)),
             }
         } else {
-            Ok(EvalVarResult::Value(value))
+            Ok(EvalVarResult::Value(ctx))
         }
     }
 }
