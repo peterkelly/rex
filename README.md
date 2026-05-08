@@ -1,12 +1,8 @@
 # 🦖 Rex
 
-[![MIT licensed][mit-badge]][mit-url]
-[![Docs][docs-badge]][docs-url]
-
-[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
-[mit-url]: https://github.com/peterkelly/rex/blob/master/LICENSE
-[docs-badge]: https://img.shields.io/badge/docs-online-blue
-[docs-url]: https://peterkelly.github.io/rex/
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![docs](https://img.shields.io/badge/docs-online-blue)](https://docs.rs/rex)
+[![crates.io](https://img.shields.io/crates/v/rex.svg)](https://crates.io/crates/rex)
 
 <p align="center">
   <img src="logo.jpg" width="400">
