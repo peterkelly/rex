@@ -13,16 +13,16 @@ version.workspace = true
 github-imports = []
 
 [dependencies]
-rex-ast = { path = "../rex-ast", version = "3.9.12" }
+rex-ast = { path = "../rex-ast", version = "3.9.13" }
 thiserror = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-rex-typesystem = { path = "../rex-typesystem", version = "3.9.12" }
+rex-typesystem = { path = "../rex-typesystem", version = "3.9.13" }
 futures = { workspace = true }
 tracing = { workspace = true }
-rex-parser = { path = "../rex-parser", version = "3.9.12" }
+rex-parser = { path = "../rex-parser", version = "3.9.13" }
 serde_json = { workspace = true }
-rex-util = { path = "../rex-util", version = "3.9.12" }
+rex-util = { path = "../rex-util", version = "3.9.13" }
 
 [lints]
 workspace = true

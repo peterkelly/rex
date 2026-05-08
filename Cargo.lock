@@ -734,7 +734,7 @@ checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
 
 [[package]]
 name = "rex"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "clap",
  "rex-ast",
@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "rex-ast"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "async-trait",
  "chrono",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "rex-cli"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "clap",
  "rex",
@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "rex-engine"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "chrono",
  "futures",
@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "rex-fuzz"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "rex-ast",
  "rex-engine",
@@ -813,11 +813,11 @@ dependencies = [
 
 [[package]]
 name = "rex-lexer"
-version = "3.9.12"
+version = "3.9.13"
 
 [[package]]
 name = "rex-lsp"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "lsp-types",
  "rex",
@@ -833,14 +833,14 @@ dependencies = [
 
 [[package]]
 name = "rex-mdbook"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "serde_json",
 ]
 
 [[package]]
 name = "rex-parser"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "regex",
  "rex-ast",
@@ -851,7 +851,7 @@ dependencies = [
 
 [[package]]
 name = "rex-proc-macro"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "rex-typesystem"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "chrono",
  "rex-ast",
@@ -873,14 +873,14 @@ dependencies = [
 
 [[package]]
 name = "rex-util"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "rex-wasm"
-version = "3.9.12"
+version = "3.9.13"
 dependencies = [
  "futures",
  "rex-ast",
