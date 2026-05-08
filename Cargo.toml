@@ -6,7 +6,6 @@ members = [
     "rex-cli",
     "rex-engine",
     "rex-fuzz",
-    "rex-lexer",
     "rex-lsp",
     "rex-mdbook",
     "rex-parser",

@@ -812,10 +812,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rex-lexer"
-version = "3.9.13"
-
-[[package]]
 name = "rex-lsp"
 version = "3.9.13"
 dependencies = [
