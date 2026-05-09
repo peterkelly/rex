@@ -133,18 +133,28 @@ function validateTextDocument(textDocument) {
     const current = text[i];
     const next = text[i + 1];
 
-    if (current === '{' && next === '-') {
+    if (stack.length === 0 && (current === '"' || current === "'")) {
+      i = skipString(text, i, current);
+      continue;
+    }
+
+    if (stack.length === 0 && current === '/' && next === '/') {
+      i = skipLineComment(text, i + 2);
+      continue;
+    }
+
+    if (current === '/' && next === '*') {
       stack.push(i);
       i += 1;
       continue;
     }
 
-    if (current === '-' && next === '}') {
+    if (current === '*' && next === '/') {
       if (stack.length === 0) {
         diagnostics.push({
           severity: DiagnosticSeverity.Error,
           range: rangeFor(textDocument, i, i + 2),
-          message: 'Unmatched block comment closer (-}).',
+          message: 'Unmatched block comment closer (*/).',
           source: 'rex-lsp'
         });
         if (diagnostics.length >= maxDiagnostics) {
@@ -161,7 +171,7 @@ function validateTextDocument(textDocument) {
     diagnostics.push({
       severity: DiagnosticSeverity.Error,
       range: rangeFor(textDocument, start, start + 2),
-      message: 'Unclosed block comment opener ({-).',
+      message: 'Unclosed block comment opener (/*).',
       source: 'rex-lsp'
     });
     if (diagnostics.length >= maxDiagnostics) {
@@ -170,6 +180,29 @@ function validateTextDocument(textDocument) {
   }
 
   connection.sendDiagnostics({ uri: textDocument.uri, diagnostics });
+}
+
+function skipString(text, start, quote) {
+  let i = start + 1;
+  while (i < text.length) {
+    if (text[i] === '\\') {
+      i += 2;
+      continue;
+    }
+    if (text[i] === quote) {
+      return i;
+    }
+    i += 1;
+  }
+  return text.length - 1;
+}
+
+function skipLineComment(text, start) {
+  let i = start;
+  while (i < text.length && text[i] !== '\n' && text[i] !== '\r') {
+    i += 1;
+  }
+  return i;
 }
 
 function rangeFor(textDocument, startOffset, endOffset) {

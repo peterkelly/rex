@@ -1,8 +1,8 @@
-{- CLI example: counting bytes from stdin
+/* CLI example: counting bytes from stdin
 
 Run:
   echo -n "hello" | cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_io_count_stdin.rex
--}
+*/
 
 import std.io;
 

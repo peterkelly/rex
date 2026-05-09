@@ -30,6 +30,12 @@ pub fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
 pub(crate) fn diagnostic_for_lexical_error(err: &LexicalError) -> Diagnostic {
     let (span, message) = match err {
         LexicalError::UnexpectedToken(span) => (*span, "Unexpected token".to_string()),
+        LexicalError::UnclosedBlockComment(span) => {
+            (*span, "Unclosed block comment opener (/*).".to_string())
+        }
+        LexicalError::UnmatchedBlockCommentClose(span) => {
+            (*span, "Unmatched block comment closer (*/).".to_string())
+        }
         LexicalError::InvalidLiteral {
             kind,
             text,
@@ -91,7 +97,7 @@ pub(crate) fn push_comment_diagnostics(tokens: &Tokens, diagnostics: &mut Vec<Di
                 if cursor >= tokens.items.len() {
                     diagnostics.push(diagnostic_for_span(
                         span,
-                        "Unclosed block comment opener ({-).",
+                        "Unclosed block comment opener (/*).",
                     ));
                     break;
                 }
@@ -101,7 +107,7 @@ pub(crate) fn push_comment_diagnostics(tokens: &Tokens, diagnostics: &mut Vec<Di
             Token::CommentR(span) => {
                 diagnostics.push(diagnostic_for_span(
                     span,
-                    "Unmatched block comment closer (-}).",
+                    "Unmatched block comment closer (*/).",
                 ));
                 index += 1;
             }

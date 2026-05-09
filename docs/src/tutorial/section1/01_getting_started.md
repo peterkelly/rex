@@ -46,10 +46,10 @@ The program above:
 
 ## Comments
 
-Comments use `{- ... -}`:
+Comments use `// ...` for line comments and `/* ... */` for block comments:
 
 ```rex,interactive
-{- This is a comment -}
+/* This is a comment */
 1 + 2
 ```
 

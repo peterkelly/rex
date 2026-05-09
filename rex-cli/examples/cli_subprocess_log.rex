@@ -1,4 +1,4 @@
-{- CLI example: logging + Show
+/* CLI example: logging + Show
 
 Run:
   cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_subprocess_log.rex
@@ -7,7 +7,7 @@ Run:
 Notes:
   - info/debug/warn/error return a rendered string (via Show a)
     and also emit a tracing log event at the corresponding level.
--}
+*/
 
 import std.io;
 import std.process;

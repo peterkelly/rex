@@ -20,6 +20,15 @@ Regression tests live in:
   - binary `C t a` is `Predicate { class: C, typ: (t, a) }`
   - etc.
 
+## Lexical Comments
+
+Rex comments are lexical trivia and are removed before parsing:
+
+- `//` starts a line comment that runs to the next newline or end of file.
+- `/* ... */` starts a block comment. Block comments may span lines.
+- Nested block comments are not supported.
+- The legacy `{- ... -}` spelling is ordinary syntax, not a comment.
+
 ## Module Imports
 
 Rex distinguishes between:

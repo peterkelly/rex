@@ -27,8 +27,8 @@ impl Precedence {
     }
 }
 
-/// A Token represents a lexical token in the Rex programming language. It
-/// includes the values of literals, identifiers, and comments.
+/// A Token represents a lexical token in the Rex programming language,
+/// including the values of literals and identifiers.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Token {
@@ -113,6 +113,10 @@ pub enum Token {
 pub enum LexicalError {
     #[error("Unexpected token {0}")]
     UnexpectedToken(Span),
+    #[error("unclosed block comment opener (/*)")]
+    UnclosedBlockComment(Span),
+    #[error("unmatched block comment closer (*/)")]
+    UnmatchedBlockCommentClose(Span),
     #[error("invalid {kind} literal `{text}`: {error}")]
     InvalidLiteral {
         kind: &'static str,
@@ -122,6 +126,26 @@ pub enum LexicalError {
     },
     #[error("internal lexer error: {0}")]
     Internal(String),
+}
+
+fn advance_position(lexeme: &str, line: &mut usize, column: &mut usize) {
+    let mut chars = lexeme.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                *line += 1;
+                *column = 1;
+            }
+            '\n' => {
+                *line += 1;
+                *column = 1;
+            }
+            _ => *column += 1,
+        }
+    }
 }
 
 impl Token {
@@ -139,12 +163,8 @@ impl Token {
             };
             let begin_line = line;
             let begin_column = column;
-            column += lexeme.chars().count();
+            advance_position(lexeme, &mut line, &mut column);
             let span = Span::new(begin_line, begin_column, line, column);
-            if lexeme == "\n" {
-                line += 1;
-                column = 1;
-            }
 
             // Be careful of the ordering of these groups.
             //
@@ -201,10 +221,14 @@ impl Token {
                     Token::ArrowR(span)
                 } else if capture.name("BackSlash").is_some() {
                     Token::BackSlash(span)
+                } else if capture.name("BlockComment").is_some()
+                    || capture.name("LineComment").is_some()
+                {
+                    continue;
                 } else if capture.name("CommentL").is_some() {
-                    Token::CommentL(span)
+                    return Err(LexicalError::UnclosedBlockComment(span));
                 } else if capture.name("CommentR").is_some() {
-                    Token::CommentR(span)
+                    return Err(LexicalError::UnmatchedBlockCommentClose(span));
                 } else if capture.name("BraceL").is_some() {
                     Token::BraceL(span)
                 } else if capture.name("BraceR").is_some() {
@@ -369,8 +393,10 @@ impl Token {
                 r"(?P<ArrowL><-|←)|",
                 r"(?P<ArrowR>->|→)|",
                 r"(?P<BackSlash>\\|λ)|",
-                r"(?P<CommentL>\{-)|",
-                r"(?P<CommentR>-\})|",
+                r"(?P<BlockComment>(?s:/\*.*?\*/))|",
+                r"(?P<LineComment>//[^\n\r]*)|",
+                r"(?P<CommentL>/\*)|",
+                r"(?P<CommentR>\*/)|",
                 r"(?P<BraceL>\{)|",
                 r"(?P<BraceR>\})|",
                 r"(?P<BracketL>\[)|",
@@ -389,7 +415,7 @@ impl Token {
                 r"(?P<Question>\?)|",
                 r"(?P<SemiColon>;)|",
                 r"(?P<SkipSpace>( |\t))|",
-                r"(?P<SkipLineBreak>(\n|\r))|",
+                r"(?P<SkipLineBreak>(\r\n|\n|\r))|",
                 // Operators
                 r"(?P<Concat>\+\+)|",
                 r"(?P<Add>\+)|",
@@ -650,8 +676,8 @@ impl Display for Token {
             Colon(..) => write!(f, ":"),
             ColonColon(..) => write!(f, "::"),
             Comma(..) => write!(f, ","),
-            CommentL(..) => write!(f, "{{-"),
-            CommentR(..) => write!(f, "-}}"),
+            CommentL(..) => write!(f, "/*"),
+            CommentR(..) => write!(f, "*/"),
             Dot(..) => write!(f, "."),
             DotDot(..) => write!(f, ".."),
             HashTag(..) => write!(f, "#"),

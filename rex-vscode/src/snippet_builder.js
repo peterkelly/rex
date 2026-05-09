@@ -9,7 +9,7 @@ function buildFunctionCallTemplate(name, typeSignature, options = {}) {
     text += ` \${${i}:arg${i}}`;
   }
   if (options.includeTypeComment && typeSignature) {
-    text += ` {- ${name} : ${typeSignature} -}`;
+    text += ` /* ${name} : ${typeSignature} */`;
   }
   return text;
 }

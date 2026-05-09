@@ -78,7 +78,7 @@ Because list patterns (`[]`, `x::xs`, `Cons`) are list-only, convert array resul
 
 ```rex,interactive
 let
-  {- We use to_array here to simulate a host function result of type Array i32. -}
+  /* We use to_array here to simulate a host function result of type Array i32. */
   data = to_array [1, 2, 3]
 in
   match (to_list data) with {
@@ -91,7 +91,7 @@ The same shape without `to_list` fails with a type mismatch (array vs list):
 
 ```rex,interactive
 let
-  {- We use to_array here to simulate a host function result of type Array i32. -}
+  /* We use to_array here to simulate a host function result of type Array i32. */
   data = to_array [1, 2, 3]
 in
   match data with {

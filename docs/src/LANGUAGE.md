@@ -105,7 +105,8 @@ Path resolution:
 - Whitespace, including newlines, is generally insignificant and indentation has no syntactic
   meaning. Top-level `type`, `fn`, and `declare fn` declarations, marker classes/instances, and
   class/instance items use explicit semicolon terminators.
-- Comments use `{- ... -}` and are stripped before parsing.
+- Comments use `// ...` for line comments and `/* ... */` for block comments. They are
+  stripped before parsing.
 - Nested block comments are not supported in current Rex builds.
 
 ### Identifiers and Operators

@@ -18,11 +18,11 @@ assert.strictEqual(
 );
 assert.strictEqual(
   buildFunctionCallTemplate('map', '(a -> b) -> List a -> List b', { includeTypeComment: true }),
-  'map ${1:arg1} ${2:arg2} {- map : (a -> b) -> List a -> List b -}'
+  'map ${1:arg1} ${2:arg2} /* map : (a -> b) -> List a -> List b */'
 );
 assert.strictEqual(
   buildFunctionCallTemplate('id', 'i32', { includeTypeComment: true }),
-  'id {- id : i32 -}'
+  'id /* id : i32 */'
 );
 
 console.log('snippet builder tests passed');

@@ -16,13 +16,13 @@
     "comments": {
       "patterns": [
         {
-          "name": "comment.line.double-dash.rex",
-          "match": "--.*$"
+          "name": "comment.line.double-slash.rex",
+          "match": "(?<!:)//.*$"
         },
         {
           "name": "comment.block.rex",
-          "begin": "\\{-",
-          "end": "-\\}",
+          "begin": "/\\*",
+          "end": "\\*/",
           "patterns": [
             {"include": "#comments"}
           ]

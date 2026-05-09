@@ -20,9 +20,10 @@ impl ParseError {
 
     pub(crate) fn from_lexical_error(err: LexicalError) -> ParseError {
         let span = match &err {
-            LexicalError::UnexpectedToken(span) | LexicalError::InvalidLiteral { span, .. } => {
-                *span
-            }
+            LexicalError::UnexpectedToken(span)
+            | LexicalError::UnclosedBlockComment(span)
+            | LexicalError::UnmatchedBlockCommentClose(span)
+            | LexicalError::InvalidLiteral { span, .. } => *span,
             LexicalError::Internal(_) => Span::default(),
         };
         ParseError::new(span, format!("lex error: {err}"))

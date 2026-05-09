@@ -94,20 +94,20 @@ fn test_grammar_contract_near_misses_fail() {
 
 #[test]
 fn test_parse_comment() {
-    let expr = parse_rex("true {- this is a boolean -}")
+    let expr = parse_rex("true /* this is a boolean */")
         .unwrap()
         .body
         .unwrap();
     assert_expr_eq!(expr, b!(span!(1:1 - 1:5); true));
 
-    let expr = parse_rex("{- this is a boolean -} false")
+    let expr = parse_rex("/* this is a boolean */ false")
         .unwrap()
         .body
         .unwrap();
     assert_expr_eq!(expr, b!(span!(1:25 - 1:30); false));
 
     let expr = parse_rex(
-        "(3.54 {- this is a float -}, {- this is an int -} 42, false {- this is a boolean -})",
+        "(3.54 /* this is a float */, /* this is an int */ 42, false /* this is a boolean */)",
     )
     .unwrap()
     .body
@@ -120,6 +120,36 @@ fn test_parse_comment() {
             u!(span!(1:51 - 1:53); 42),
             b!(span!(1:55 - 1:60); false),
         )
+    );
+
+    let expr = parse_rex("// this is a line comment\nfalse")
+        .unwrap()
+        .body
+        .unwrap();
+    assert_expr_eq!(expr, b!(span!(2:1 - 2:6); false));
+
+    let expr = parse_rex("/* arbitrary @ text\n */ 42")
+        .unwrap()
+        .body
+        .unwrap();
+    assert_expr_eq!(expr, u!(span!(2:5 - 2:7); 42));
+}
+
+#[test]
+fn test_legacy_comment_syntax_is_not_supported() {
+    // Rex used to use Haskell-style block comments (`{- ... -}`); those were
+    // replaced by C-style comments (`/* ... */` and `// ...`).
+    let errs = parse_rex("true {- this used to be a comment -}").unwrap_err();
+    assert!(
+        errs.iter().any(|err| err.message.contains("unexpected")),
+        "expected old comment delimiters to parse as ordinary syntax, got {errs:?}"
+    );
+
+    let errs = parse_rex("1 /* unclosed").unwrap_err();
+    assert!(
+        errs.iter()
+            .any(|err| err.message.contains("unclosed block comment")),
+        "expected unclosed block comment error, got {errs:?}"
     );
 }
 

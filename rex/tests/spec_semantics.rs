@@ -27,6 +27,26 @@ async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
 }
 
 #[tokio::test]
+async fn spec_c_style_comments_are_trivia() {
+    let (_heap, handle, ty) = eval(
+        r#"
+        /* Block comments may contain arbitrary text like @#$.
+           They are removed before parsing. */
+        let x = 1 in
+        x + 2 // line comments run to the end of the line
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match handle.value().unwrap() {
+        Value::I32(n) => assert_eq!(n, 3),
+        _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
+    }
+}
+
+#[tokio::test]
 async fn spec_record_update_requires_refinement_for_sum_types() {
     let code = r#"
 type Foo = Bar { x: i32 } | Baz { x: i32 };

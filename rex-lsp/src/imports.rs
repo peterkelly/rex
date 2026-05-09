@@ -1008,6 +1008,14 @@ pub fn prepare_program_with_imports(
                         "lex error in module `{}` at {}:{}",
                         module_label, span.begin.line, span.begin.column
                     ),
+                    LexicalError::UnclosedBlockComment(span) => format!(
+                        "lex error in module `{}` at {}:{}: unclosed block comment opener (/*)",
+                        module_label, span.begin.line, span.begin.column
+                    ),
+                    LexicalError::UnmatchedBlockCommentClose(span) => format!(
+                        "lex error in module `{}` at {}:{}: unmatched block comment closer (*/)",
+                        module_label, span.begin.line, span.begin.column
+                    ),
                     LexicalError::InvalidLiteral {
                         kind,
                         text,

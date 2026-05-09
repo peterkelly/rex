@@ -95,6 +95,30 @@ process.wait p
 }
 
 #[test]
+fn diagnostics_handle_c_style_comments() {
+    let uri = Url::parse("inmemory:///comments.rex").expect("uri");
+
+    let ok = diagnostics_from_text(&uri, "/* arbitrary @#$ text */\n1 // line comment");
+    assert!(ok.is_empty(), "unexpected diagnostics: {ok:?}");
+
+    let unclosed = diagnostics_from_text(&uri, "1 /* unfinished");
+    assert!(
+        unclosed
+            .iter()
+            .any(|diag| diag.message.contains("Unclosed block comment opener")),
+        "expected unclosed block comment diagnostic, got {unclosed:?}"
+    );
+
+    let unmatched = diagnostics_from_text(&uri, "1 */");
+    assert!(
+        unmatched
+            .iter()
+            .any(|diag| diag.message.contains("Unmatched block comment closer")),
+        "expected unmatched block comment diagnostic, got {unmatched:?}"
+    );
+}
+
+#[test]
 fn diagnostics_resolve_imports_from_open_document_snapshot() {
     let dir = temp_dir("diagnostics_resolve_imports_from_open_document_snapshot");
     let main = dir.join("main.rex");

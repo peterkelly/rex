@@ -20,7 +20,7 @@ npm install
 code --extensionDevelopmentPath=$(pwd)
 ```
 
-Open a `.rex` file to activate the extension. The language server reports unmatched `{-` and `-}` comment delimiters.
+Open a `.rex` file to activate the extension. The language server reports unmatched `/*` and `*/` comment delimiters.
 
 Go to definition works on:
 - Local bindings (`let`, lambda params, match pattern vars).

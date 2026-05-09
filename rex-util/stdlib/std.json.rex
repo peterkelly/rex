@@ -1,10 +1,10 @@
 
-{- JSON values and typeclass-based conversion.
+/* JSON values and typeclass-based conversion.
 
    Note: Rex class method names are global, so we intentionally use
    encode_json/decode_json as the method names and expose
    module-scoped to_json/from_json wrappers.
--}
+*/
 
 pub type Value
     = Null
