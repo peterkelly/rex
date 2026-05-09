@@ -2,7 +2,7 @@
 //!
 //! Most embedders do not need to construct these types by hand. They are useful
 //! when building tools around Rex source, accepting pre-parsed modules from a
-//! custom resolver, or compiling an expression after calling [`parse`].
+//! custom importer, or compiling an expression after calling [`parse`].
 //!
 //! [`parse`]: crate::parser::parse
 

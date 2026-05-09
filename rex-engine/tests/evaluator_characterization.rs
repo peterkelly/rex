@@ -13,7 +13,7 @@ async fn eval_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), En
 #[tokio::test]
 async fn owning_evaluator_resources_can_be_kept_after_run() {
     let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let program = compiler.compile_snippet("(7 is i32)").unwrap();
+    let program = compiler.compile_snippet("(7 is i32)").await.unwrap();
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
     let heap = evaluator.heap().clone();

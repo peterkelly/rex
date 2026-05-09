@@ -44,8 +44,14 @@ pub use rex_engine::Context;
 /// Configurable Rex engine for host modules, type information, and runtime policy.
 pub use rex_engine::Engine;
 
+/// Importer implementation that rejects every module import.
+pub use rex_engine::DenyImporter;
+
 /// Common error type used by the parser, type system bridge, module loader, and evaluator.
 pub use rex_engine::EngineError;
+
+/// Error raised while importing or preparing modules.
+pub use rex_engine::ModuleError;
 
 /// Options used when constructing an [`Engine`].
 pub use rex_engine::EngineOptions;
@@ -83,8 +89,17 @@ pub use rex_engine::HostFnSync;
 /// Convert a Rust value into a Rex runtime value.
 pub use rex_engine::IntoRex;
 
+/// Request passed to a module importer.
+pub use rex_engine::ImportRequest;
+
+/// Async module import boundary implemented by embedders.
+pub use rex_engine::Importer;
+
 /// Staged host module containing Rex declarations and Rust-backed exports.
 pub use rex_engine::Module;
+
+/// Stable identity assigned to an imported module.
+pub use rex_engine::ModuleId;
 
 /// Runtime-side metadata for one native function implementation.
 pub use rex_engine::NativeCapability;
@@ -104,13 +119,13 @@ pub use rex_engine::PreludeMode;
 /// Internal module name used for declarations injected into the root environment.
 pub use rex_engine::ROOT_MODULE_NAME;
 
-/// Request passed to a custom module resolver.
-pub use rex_engine::ResolveRequest;
+/// Importer implementation for bundled stdlib modules.
+pub use rex_engine::StdlibImporter;
 
-/// Module payload returned by a resolver.
+/// Module payload returned by an importer.
 pub use rex_engine::ResolvedModule;
 
-/// Source or pre-parsed AST content returned by a resolver.
+/// Source or pre-parsed AST content returned by an importer.
 pub use rex_engine::ResolvedModuleContent;
 
 /// Trait for producing a Rex default value for a Rust-facing type.

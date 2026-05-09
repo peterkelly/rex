@@ -49,7 +49,6 @@ fn inject_globals<State: Clone + Send + Sync + 'static>(
 #[tokio::test]
 async fn module_render_label_with_module_scoped_adts_left_and_right() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("sample");
     module.add_rex_adt::<Side>().unwrap();
@@ -119,7 +118,6 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
 #[tokio::test]
 async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("sample");
     module.add_rex_adt::<Label>().unwrap();
@@ -154,7 +152,6 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     // `is Sample.Correctness` ascription currently remain ambiguous. This test ensures
     // we keep surfacing that ambiguity instead of silently picking one constructor.
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("sample");
     module.add_rex_adt::<Side>().unwrap();
@@ -698,7 +695,7 @@ async fn overloaded_exports_types_and_values() {
     )
     "#;
 
-    let (_, inferred) = engine.infer_snippet(expr).unwrap();
+    let (_, inferred) = engine.infer_snippet(expr).await.unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
     let value = engine.into_evaluator().eval(parse(expr).as_ref()).await;
@@ -763,7 +760,7 @@ async fn overloaded_async_exports_types_and_values() {
     )
     "#;
 
-    let (_, inferred) = engine.infer_snippet(expr).unwrap();
+    let (_, inferred) = engine.infer_snippet(expr).await.unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
     let value = engine.into_evaluator().eval(parse(expr).as_ref()).await;

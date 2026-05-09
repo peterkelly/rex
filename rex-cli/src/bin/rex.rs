@@ -4,16 +4,18 @@
 use std::fs;
 use std::io::IsTerminal;
 use std::io::{self, Read};
+use std::sync::Arc;
 
 use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
-    engine::{Engine, ValueDisplayOptions},
+    engine::{Engine, ImportRequest, Importer, ValueDisplayOptions},
     parser::{ParseError, parse as parse_rex},
 };
 use serde_json::json;
 
 use rex_cli::cli_prelude;
+use rex_cli::filesystem_importer::FilesystemImporter;
 
 #[derive(Parser)]
 #[command(name = "rex")]
@@ -150,17 +152,19 @@ struct RunSourceOpts {
     emit_type: bool,
 }
 
-fn init_engine(include: &[String]) -> Result<Engine, String> {
+fn init_engine(include: &[String]) -> Result<(Engine, Arc<dyn Importer>), String> {
     let mut engine =
         Engine::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
-    engine.add_default_resolvers();
     cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| e.to_string())?;
+    let mut filesystem_importer = FilesystemImporter::new();
     for root in include {
-        engine
-            .add_include_resolver(root)
+        filesystem_importer
+            .add_include_root(root)
             .map_err(|e| e.to_string())?;
     }
-    Ok(engine)
+    let importer: Arc<dyn Importer> = Arc::new(filesystem_importer);
+    engine.add_importer_arc("filesystem", Arc::clone(&importer));
+    Ok((engine, importer))
 }
 
 async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
@@ -176,7 +180,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
     if emit_ast || emit_type {
         let type_json = if emit_type {
-            Some(infer_type_json(source, file.as_deref(), snippet, &include)?)
+            Some(infer_type_json(source, file.as_deref(), snippet, &include).await?)
         } else {
             None
         };
@@ -185,7 +189,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         return Ok(());
     }
 
-    let engine = init_engine(&include)?;
+    let (engine, importer) = init_engine(&include)?;
 
     let evaluator = engine.into_evaluator();
 
@@ -197,7 +201,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
                 .map_err(|e| format!("{e}"))?
         } else {
             evaluator
-                .eval_module_file(&path)
+                .eval_module_with_importer(ImportRequest::new(path), importer)
                 .await
                 .map_err(|e| format!("{e}"))?
         }
@@ -233,24 +237,31 @@ fn emit_json(
     }
 }
 
-fn infer_type_json(
+async fn infer_type_json(
     source: &str,
     file: Option<&str>,
     snippet: bool,
     include: &[String],
 ) -> Result<serde_json::Value, String> {
-    let mut engine = init_engine(include)?;
+    let (mut engine, importer) = init_engine(include)?;
 
     let (preds, ty) = if let Some(path) = file {
         if snippet {
             engine
                 .infer_snippet_at(source, path)
+                .await
                 .map_err(|e| format!("{e}"))?
         } else {
-            engine.infer_module_file(path).map_err(|e| format!("{e}"))?
+            engine
+                .infer_module_with_importer(ImportRequest::new(path), importer)
+                .await
+                .map_err(|e| format!("{e}"))?
         }
     } else {
-        engine.infer_snippet(source).map_err(|e| format!("{e}"))?
+        engine
+            .infer_snippet(source)
+            .await
+            .map_err(|e| format!("{e}"))?
     };
 
     let constraints = preds
@@ -287,12 +298,14 @@ mod tests {
         Cli::command().debug_assert();
     }
 
-    #[test]
-    fn emit_ast_and_type_are_json() {
+    #[tokio::test]
+    async fn emit_ast_and_type_are_json() {
         let source = "1 + 2";
         let program = parse_rex(source).expect("parse");
 
-        let ty_json = infer_type_json(source, None, false, &[]).expect("infer");
+        let ty_json = infer_type_json(source, None, false, &[])
+            .await
+            .expect("infer");
         let ast_out = emit_json(&program, true, None).expect("emit ast");
         let type_out = emit_json(&program, false, Some(ty_json.clone())).expect("emit type");
         let both_out = emit_json(&program, true, Some(ty_json)).expect("emit both");
@@ -302,8 +315,8 @@ mod tests {
         serde_json::from_str::<serde_json::Value>(&both_out).expect("both json");
     }
 
-    #[test]
-    fn emit_type_resolves_imports() {
+    #[tokio::test]
+    async fn emit_type_resolves_imports() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock is before unix epoch")
@@ -325,13 +338,15 @@ mod tests {
             bar.add (bar.triple 10) 2
         "#;
         let include = vec![root.to_string_lossy().to_string()];
-        let json = infer_type_json(source, None, false, &include).expect("infer");
+        let json = infer_type_json(source, None, false, &include)
+            .await
+            .expect("infer");
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
     }
 
-    #[test]
-    fn emit_type_file_snippet_uses_file_as_import_base() {
+    #[tokio::test]
+    async fn emit_type_file_snippet_uses_file_as_import_base() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock is before unix epoch")
@@ -356,13 +371,17 @@ mod tests {
         std::fs::write(&main, source).expect("write main.rex");
         let main = main.to_string_lossy().to_string();
 
-        let module_err = infer_type_json(source, Some(&main), false, &[]).expect_err("module");
+        let module_err = infer_type_json(source, Some(&main), false, &[])
+            .await
+            .expect_err("module");
         assert!(
             module_err.contains("declaration-only"),
             "unexpected error: {module_err}"
         );
 
-        let json = infer_type_json(source, Some(&main), true, &[]).expect("infer snippet file");
+        let json = infer_type_json(source, Some(&main), true, &[])
+            .await
+            .expect("infer snippet file");
         let _ = std::fs::remove_dir_all(&root);
         assert_eq!(json.get("type").and_then(|v| v.as_str()), Some("i32"));
     }

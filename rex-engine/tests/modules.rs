@@ -5,14 +5,18 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use futures::FutureExt;
+use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Symbol;
-use rex_engine::{Context, Engine, EngineError, EngineOptions, Handle, Module, PreludeMode, Value};
+use rex_engine::{
+    Context, Engine, EngineError, EngineOptions, Handle, ImportRequest, Importer, Module,
+    ModuleError, ModuleId, PreludeMode, ResolvedModule, ResolvedModuleContent, Value,
+};
 use rex_typesystem::{
     error::TypeError,
     types::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Scheme, Type, TypeKind},
     typesystem::TypeVarSupply,
 };
+use rex_util::{ImportPathError, resolve_local_import_path, sha256_hex};
 use uuid::Uuid;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -27,6 +31,107 @@ fn write_file(path: &Path, contents: &str) {
         fs::create_dir_all(parent).unwrap();
     }
     fs::write(path, contents).unwrap();
+}
+
+#[derive(Clone, Default)]
+struct TestFilesystemImporter {
+    include_roots: Vec<PathBuf>,
+}
+
+impl TestFilesystemImporter {
+    fn with_include_root(root: PathBuf) -> Self {
+        Self {
+            include_roots: vec![root.canonicalize().unwrap()],
+        }
+    }
+}
+
+impl Importer for TestFilesystemImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            let (module_name, expected_sha) = match req.module_name.split_once('#') {
+                Some((base, sha)) if !sha.is_empty() => (base.to_string(), Some(sha.to_string())),
+                _ => (req.module_name, None),
+            };
+
+            if module_name.ends_with(".rex") || Path::new(&module_name).components().count() > 1 {
+                return resolve_rex_file(PathBuf::from(module_name), expected_sha, "local");
+            }
+
+            let segs: Vec<&str> = module_name.split('.').collect();
+            let base_dir = match req.importer {
+                Some(ModuleId::Local { path }) => path.parent().map(|p| p.to_path_buf()),
+                _ => std::env::current_dir().ok(),
+            };
+            if let Some(base_dir) = base_dir {
+                let path = match resolve_local_import_path(base_dir.as_path(), &segs) {
+                    Ok(Some(path)) => path,
+                    Ok(None) => return Ok(None),
+                    Err(ImportPathError::EscapesRoot) => {
+                        return Err(ModuleError::ImportEscapesRoot.into());
+                    }
+                };
+                if let Some(module) = resolve_rex_file(path, expected_sha.clone(), "local")? {
+                    return Ok(Some(module));
+                }
+            }
+
+            for root in &self.include_roots {
+                let mut path = root.clone();
+                for seg in &segs[..segs.len().saturating_sub(1)] {
+                    path.push(seg);
+                }
+                let Some(last) = segs.last() else {
+                    continue;
+                };
+                path.push(format!("{last}.rex"));
+                if let Some(module) = resolve_rex_file(path, expected_sha.clone(), "include")? {
+                    return Ok(Some(module));
+                }
+            }
+
+            Ok(None)
+        })
+    }
+}
+
+fn resolve_rex_file(
+    path: PathBuf,
+    expected_sha: Option<String>,
+    kind: &'static str,
+) -> Result<Option<ResolvedModule>, EngineError> {
+    let Ok(canon) = path.canonicalize() else {
+        return Ok(None);
+    };
+    let bytes = match fs::read(&canon) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(None),
+    };
+    let hash = sha256_hex(&bytes);
+    if let Some(expected) = expected_sha {
+        let expected = expected.to_ascii_lowercase();
+        if !hash.starts_with(&expected) {
+            return Err(ModuleError::ShaMismatchPath {
+                kind,
+                path: canon,
+                expected,
+                actual: hash,
+            }
+            .into());
+        }
+    }
+    let source = String::from_utf8(bytes).map_err(|source| ModuleError::NotUtf8 {
+        kind,
+        path: canon.clone(),
+        source,
+    })?;
+    Ok(Some(ResolvedModule {
+        id: ModuleId::Local { path: canon },
+        content: ResolvedModuleContent::Source(source),
+    }))
 }
 
 fn engine_with_prelude() -> Engine {
@@ -112,12 +217,28 @@ async fn engine_options_can_disable_prelude() {
     assert!(msg.contains("map"), "unexpected error: {msg}");
 }
 
-async fn eval_module_file<State: Clone + Send + Sync + 'static>(
+async fn eval_module_via_fs<State: Clone + Send + Sync + 'static>(
     engine: Engine<State>,
     path: &Path,
 ) -> Result<(Handle, Type), EngineError> {
-    let source = fs::read_to_string(path).unwrap();
-    eval_snippet_at(engine, &source, path).await
+    eval_module_via_importer(engine, path, Arc::new(TestFilesystemImporter::default())).await
+}
+
+async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
+    engine: Engine<State>,
+    path: &Path,
+    importer: Arc<dyn Importer>,
+) -> Result<(Handle, Type), EngineError> {
+    let source = fs::read_to_string(path).map_err(|err| {
+        EngineError::Internal(format!("failed to read {}: {err}", path.display()))
+    })?;
+    let mut engine = engine;
+    engine.add_importer_arc("test-fs", importer);
+    engine
+        .into_evaluator()
+        .eval_snippet_at(&source, path)
+        .await
+        .map_err(|err| err.into_engine_error())
 }
 
 async fn eval_snippet<State: Clone + Send + Sync + 'static>(
@@ -136,6 +257,8 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     source: &str,
     importer_path: impl AsRef<Path>,
 ) -> Result<(Handle, Type), EngineError> {
+    let mut engine = engine;
+    engine.add_importer("test-fs", TestFilesystemImporter::default());
     engine
         .into_evaluator()
         .eval_snippet_at(source, importer_path)
@@ -173,9 +296,9 @@ async fn module_import_local_pub() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -185,16 +308,22 @@ async fn module_import_local_pub() {
 }
 
 #[tokio::test]
-async fn compile_module_file_accepts_declaration_only_local_module() {
-    let dir = temp_dir("compile_module_file_accepts_declaration_only_local_module");
+async fn compile_module_with_importer_accepts_declaration_only_local_module() {
+    let dir = temp_dir("compile_module_with_importer_accepts_declaration_only_local_module");
     let module = dir.join("foo.rex");
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let mut compiler = engine.into_compiler();
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
-    let program = compiler.compile_module_file(&module).unwrap();
+    let program = compiler
+        .compile_module_with_importer(
+            ImportRequest::new(module.to_string_lossy()),
+            Arc::new(TestFilesystemImporter::default()),
+        )
+        .await
+        .unwrap();
     let ty = program.result_type().clone();
     let value_ptr = compiler.into_evaluator().run(program).await.unwrap();
     assert_eq!(ty, Type::tuple(vec![]));
@@ -213,11 +342,13 @@ async fn snippet_import_reloads_when_local_module_changes() {
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    engine.add_importer("test-fs", TestFilesystemImporter::default());
+
     let mut compiler = engine.into_compiler();
 
     let _ = compiler
         .compile_snippet_at("import foo (value);\nvalue 0", &importer)
+        .await
         .unwrap();
 
     // Same module path, changed contents: import resolution must observe updated
@@ -225,6 +356,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
     let program = compiler
         .compile_snippet_at("import foo (value);\nvalue 0", &importer)
+        .await
         .unwrap();
     let ty = program.result_type().clone();
     let value_ptr = compiler.into_evaluator().run(program).await.unwrap();
@@ -257,8 +389,8 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
         "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, _ty) = eval_snippet_at(
         engine,
         r#"
@@ -300,8 +432,8 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
         "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet_at(
         engine,
         r#"
@@ -352,9 +484,9 @@ async fn module_import_selected_clause_can_import_class_exports() {
         "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 7),
@@ -376,8 +508,8 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
         "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet_at(
         engine,
         r#"
@@ -427,9 +559,9 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -441,7 +573,6 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
 #[tokio::test]
 async fn module_injected_from_rust_sync_and_async_exports() {
     let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("host.math");
     module
@@ -475,7 +606,6 @@ async fn module_injected_from_rust_sync_and_async_exports() {
 #[tokio::test]
 async fn module_injected_from_rust_native_pointer_exports_sync() {
     let mut engine = Engine::with_prelude(true).unwrap();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("host.ptrsync");
     module
@@ -563,7 +693,6 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
 #[tokio::test]
 async fn module_injected_from_rust_allows_overloaded_export_names() {
     let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("host.over");
     module.export("id", |_state: &(), x: i32| Ok(x)).unwrap();
@@ -608,7 +737,6 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
 #[tokio::test]
 async fn module_injected_from_rust_exposes_module_local_embedder_types() {
     let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("host.delay");
     module.add_rex_adt::<LocalRunSpec>().unwrap();
@@ -641,7 +769,6 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
 #[tokio::test]
 async fn module_injected_from_rust_native_pointer_exports_async() {
     let mut engine = Engine::with_prelude(true).unwrap();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("host.ptrasync");
     module
@@ -776,7 +903,6 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
 #[tokio::test]
 async fn module_injected_from_rust_wildcard_import() {
     let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("host.ops");
     module
@@ -839,9 +965,9 @@ async fn module_import_rejects_private_access() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -872,10 +998,11 @@ async fn module_import_include_roots() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    engine.add_include_resolver(&include_root).unwrap();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+    let importer = Arc::new(TestFilesystemImporter::with_include_root(include_root));
+    let (value_ptr, ty) = eval_module_via_importer(engine, &main, importer)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -895,8 +1022,8 @@ async fn snippet_can_import_with_explicit_base() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet_at(
         engine,
         r#"
@@ -938,9 +1065,9 @@ async fn module_import_wildcard_clause() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -970,9 +1097,9 @@ async fn module_import_selected_clause_with_alias() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -1001,9 +1128,9 @@ async fn module_import_selected_clause_missing_export() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1033,9 +1160,9 @@ async fn module_import_selected_clause_can_import_type_exports() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1067,9 +1194,9 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1101,9 +1228,9 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1135,9 +1262,9 @@ async fn module_import_wildcard_clause_imports_type_exports_too() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, _ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1174,9 +1301,9 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 11),
@@ -1208,9 +1335,9 @@ async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     let TypeKind::Tuple(items) = ty.as_ref() else {
         panic!("expected tuple type, got {ty}");
     };
@@ -1250,9 +1377,9 @@ async fn module_import_selected_clause_type_name_does_not_create_value_facet() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1283,9 +1410,9 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1296,7 +1423,6 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
 #[tokio::test]
 async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_imports() {
     let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("host.types");
     module
@@ -1360,9 +1486,9 @@ async fn module_import_missing_class_export_in_instance_header() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1394,9 +1520,9 @@ async fn module_import_missing_type_export_in_fn_signature() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1432,9 +1558,9 @@ async fn module_import_missing_type_export_in_instance_head() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1468,9 +1594,9 @@ async fn module_import_missing_class_export_in_fn_where_constraint() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1504,9 +1630,9 @@ async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1542,9 +1668,9 @@ async fn module_import_missing_class_export_in_class_super_constraint() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1576,9 +1702,9 @@ async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1611,9 +1737,9 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 0),
@@ -1644,9 +1770,9 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let (value_ptr, ty) = eval_module_file(engine, &main).await.unwrap();
+    let engine = engine_with_prelude();
+
+    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 0),
@@ -1677,9 +1803,9 @@ async fn module_import_missing_type_export_in_let_annotation_with_alias_named_bi
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1716,9 +1842,9 @@ async fn module_import_selected_clause_duplicate_name() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1747,9 +1873,9 @@ async fn module_import_selected_clause_conflicts_with_local() {
 "#,
     );
 
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
-    let err = match eval_module_file(engine, &main).await {
+    let engine = engine_with_prelude();
+
+    let err = match eval_module_via_fs(engine, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1759,8 +1885,8 @@ async fn module_import_selected_clause_conflicts_with_local() {
 
 #[tokio::test]
 async fn std_json_encode_decode_smoke() {
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet(
         engine,
         r#"
@@ -1785,8 +1911,8 @@ async fn std_json_encode_decode_smoke() {
 
 #[tokio::test]
 async fn std_json_roundtrip_nested() {
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet(
         engine,
         r#"
@@ -1845,8 +1971,8 @@ async fn std_json_roundtrip_nested() {
 
 #[tokio::test]
 async fn std_json_decode_errors_have_useful_messages() {
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet(engine,
         r#"
         import std.json as Json;
@@ -1918,8 +2044,8 @@ async fn std_json_decode_errors_have_useful_messages() {
 
 #[tokio::test]
 async fn std_json_numeric_decode_errors() {
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet(
         engine,
         r#"
@@ -1970,8 +2096,8 @@ async fn std_json_numeric_decode_errors() {
 
 #[tokio::test]
 async fn std_json_show_renders_valid_json() {
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet(
         engine,
         r#"
@@ -2022,8 +2148,8 @@ async fn std_json_show_renders_valid_json() {
 
 #[tokio::test]
 async fn std_json_parse_and_from_string_roundtrip() {
-    let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
+    let engine = engine_with_prelude();
+
     let (value_ptr, ty) = eval_snippet(
         engine,
         r#"

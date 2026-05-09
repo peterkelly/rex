@@ -548,7 +548,7 @@ mod tests {
         "#;
 
         let mut engine = Engine::with_prelude(()).unwrap();
-        engine.add_default_resolvers();
+
         inject_cli_prelude_engine(&mut engine).unwrap();
         engine.into_evaluator().eval_snippet(code).await.unwrap();
     }
@@ -563,7 +563,7 @@ mod tests {
         "#;
 
         let mut engine = Engine::with_prelude(()).unwrap();
-        engine.add_default_resolvers();
+
         inject_cli_prelude_engine(&mut engine).unwrap();
         let (value, ty) = engine.into_evaluator().eval_snippet(code).await.unwrap();
         assert_eq!(

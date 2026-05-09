@@ -101,6 +101,7 @@ async fn compiler_consumes_into_evaluator() {
     let mut compiler = engine.into_compiler();
     let program = compiler
         .compile_snippet("let answer = 40 + 2 in answer")
+        .await
         .unwrap();
     let evaluator = compiler.into_evaluator();
     let value = evaluator.run(program).await.unwrap();
@@ -287,7 +288,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     });
 
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler.compile_snippet("inc 1").unwrap();
+    let program = compiler.compile_snippet("inc 1").await.unwrap();
 
     assert_eq!(program.externs().natives, vec![Symbol::intern("inc")]);
     assert_eq!(
@@ -365,7 +366,7 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
     });
 
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler.compile_snippet("inc 1").unwrap();
+    let program = compiler.compile_snippet("inc 1").await.unwrap();
 
     let mut runtime_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut runtime_engine, |module| {
@@ -402,6 +403,7 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
                 answer
             "#,
         )
+        .await
         .unwrap();
 
     assert!(program.externs().is_empty(), "{:?}", program.externs());
@@ -426,7 +428,7 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
     });
 
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler.compile_snippet("answer + 1").unwrap();
+    let program = compiler.compile_snippet("answer + 1").await.unwrap();
 
     assert_eq!(program.externs().natives, vec![Symbol::intern("answer")]);
     assert_eq!(program.externs().class_methods, vec![Symbol::intern("+")]);
@@ -468,6 +470,7 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
             pick 1
             "#,
         )
+        .await
         .unwrap();
 
     assert_eq!(

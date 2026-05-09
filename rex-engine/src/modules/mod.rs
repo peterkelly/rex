@@ -1,4 +1,4 @@
-//! Module system: resolvers, loading, and import rewriting.
+//! Module system: importers, loading, and import rewriting.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -18,28 +18,23 @@ use uuid::Uuid;
 
 use crate::{CompileError, Engine, EngineError};
 
-#[cfg(not(target_arch = "wasm32"))]
-mod filesystem;
+mod importers;
 mod module;
-mod resolvers;
 mod system;
 mod types;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use filesystem::{default_local_resolver, include_resolver};
+pub use importers::{StdlibImporter, stdlib_importer};
 pub use module::Module;
-pub use resolvers::default_stdlib_resolver;
-pub use system::ResolverFn;
+pub use system::{DenyImporter, Importer};
 pub use types::virtual_export_name;
 pub use types::{
-    CanonicalSymbol, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ResolveRequest,
+    CanonicalSymbol, ImportRequest, ModuleExports, ModuleId, ModuleInstance, ModuleKey,
     ResolvedModule, ResolvedModuleContent, SymbolKind, VirtualModule,
 };
 
-pub(crate) use system::ModuleSystem;
+pub(crate) use system::{ImportChain, ModuleSystem};
 pub(crate) use types::{module_key_for_module, prefix_for_module};
 
-use system::wrap_resolver;
 use types::qualify;
 
 fn import_specifier(path: &ImportPath) -> String {
@@ -64,10 +59,6 @@ fn import_specifier(path: &ImportPath) -> String {
             }
         }
     }
-}
-
-fn spec_base_name(spec: &str) -> &str {
-    spec.split_once('#').map_or(spec, |(base, _)| base)
 }
 
 fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
@@ -1989,6 +1980,7 @@ fn tarjan_scc_module_ids(
 
     fn strong_connect(
         v: &ModuleId,
+        node_set: &BTreeSet<ModuleId>,
         edges: &BTreeMap<ModuleId, Vec<ModuleId>>,
         st: &mut TarjanState,
     ) {
@@ -2001,8 +1993,11 @@ fn tarjan_scc_module_ids(
 
         if let Some(neighbors) = edges.get(v) {
             for w in neighbors {
+                if !node_set.contains(w) {
+                    continue;
+                }
                 if !st.index_of.contains_key(w) {
-                    strong_connect(w, edges, st);
+                    strong_connect(w, node_set, edges, st);
                     let lw = st.lowlink.get(w).copied();
                     if let (Some(lw), Some(lv)) = (lw, st.lowlink.get_mut(v)) {
                         *lv = (*lv).min(lw);
@@ -2032,9 +2027,10 @@ fn tarjan_scc_module_ids(
     }
 
     let mut st = TarjanState::default();
+    let node_set = nodes.iter().cloned().collect::<BTreeSet<_>>();
     for node in nodes {
         if !st.index_of.contains_key(node) {
-            strong_connect(node, edges, &mut st);
+            strong_connect(node, &node_set, edges, &mut st);
         }
     }
     st.components
@@ -2246,128 +2242,133 @@ where
         Ok(())
     }
 
-    fn load_module_types_via_scc(
-        &mut self,
+    fn load_module_types_via_scc<'a>(
+        &'a mut self,
         root: ResolvedModule,
-        loaded: &mut BTreeMap<ModuleId, ModuleExports>,
-        loading: &mut BTreeSet<ModuleId>,
-    ) -> Result<ModuleExports, EngineError> {
-        #[derive(Clone)]
-        struct PendingModule {
-            resolved: ResolvedModule,
-            program: CompilationUnit,
-            prefix: String,
-        }
-
-        if let Some(exports) = loaded.get(&root.id)
-            && !loading.contains(&root.id)
-        {
-            return Ok(exports.clone());
-        }
-
-        let mut pending: BTreeMap<ModuleId, PendingModule> = BTreeMap::new();
-        let mut edges: BTreeMap<ModuleId, Vec<ModuleId>> = BTreeMap::new();
-        let mut stack = vec![root.clone()];
-
-        while let Some(resolved) = stack.pop() {
-            let fingerprint = self.refresh_if_stale(&resolved)?;
-            if pending.contains_key(&resolved.id) {
-                continue;
-            }
-            if loaded.contains_key(&resolved.id) && !loading.contains(&resolved.id) {
-                continue;
+        chain: &'a ImportChain,
+        loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
+        loading: &'a mut BTreeSet<ModuleId>,
+    ) -> BoxFuture<'a, Result<ModuleExports, EngineError>> {
+        Box::pin(async move {
+            #[derive(Clone)]
+            struct PendingModule {
+                resolved: ResolvedModule,
+                program: CompilationUnit,
+                prefix: String,
             }
 
-            let prefix = prefix_for_module(&resolved.id);
-            let program = program_from_resolved(&resolved)?;
-            let exports = exports_from_program(&program, &prefix, &resolved.id);
-            loaded.insert(resolved.id.clone(), exports);
-            loading.insert(resolved.id.clone());
-            if let ResolvedModuleContent::Source(source) = &resolved.content {
-                self.module_sources
-                    .insert(resolved.id.clone(), source.clone());
+            if let Some(exports) = loaded.get(&root.id)
+                && !loading.contains(&root.id)
+            {
+                return Ok(exports.clone());
             }
-            let qualified = qualify_program(&program, &prefix);
-            let interfaces = interface_decls_from_program(&qualified);
-            self.module_interface_cache
-                .insert(resolved.id.clone(), interfaces);
 
-            let imports = graph_imports_for_program(&program, self.default_imports());
-            for import_decl in imports {
-                let spec = import_specifier(&import_decl.path);
-                if self.virtual_module_exports(spec_base_name(&spec)).is_some() {
+            let mut pending: BTreeMap<ModuleId, PendingModule> = BTreeMap::new();
+            let mut edges: BTreeMap<ModuleId, Vec<ModuleId>> = BTreeMap::new();
+            let mut stack = vec![root.clone()];
+
+            while let Some(resolved) = stack.pop() {
+                let fingerprint = self.refresh_if_stale(&resolved)?;
+                if pending.contains_key(&resolved.id) {
                     continue;
                 }
-                let imported = self.modules.resolve(ResolveRequest {
-                    module_name: spec,
-                    importer: Some(resolved.id.clone()),
-                })?;
-                edges
-                    .entry(resolved.id.clone())
-                    .or_default()
-                    .push(imported.id.clone());
-                if (loading.contains(&imported.id) || !loaded.contains_key(&imported.id))
-                    && !pending.contains_key(&imported.id)
-                {
-                    stack.push(imported);
+                if loaded.contains_key(&resolved.id) && !loading.contains(&resolved.id) {
+                    continue;
+                }
+
+                let prefix = prefix_for_module(&resolved.id);
+                let program = program_from_resolved(&resolved)?;
+                let exports = exports_from_program(&program, &prefix, &resolved.id);
+                loaded.insert(resolved.id.clone(), exports);
+                loading.insert(resolved.id.clone());
+                if let ResolvedModuleContent::Source(source) = &resolved.content {
+                    self.module_sources
+                        .insert(resolved.id.clone(), source.clone());
+                }
+                let qualified = qualify_program(&program, &prefix);
+                let interfaces = interface_decls_from_program(&qualified);
+                self.module_interface_cache
+                    .insert(resolved.id.clone(), interfaces);
+
+                let imports = graph_imports_for_program(&program, self.default_imports());
+                for import_decl in imports {
+                    let spec = import_specifier(&import_decl.path);
+                    let imported = chain
+                        .import(ImportRequest {
+                            module_name: spec,
+                            importer: Some(resolved.id.clone()),
+                        })
+                        .await?;
+                    edges
+                        .entry(resolved.id.clone())
+                        .or_default()
+                        .push(imported.id.clone());
+                    if (loading.contains(&imported.id) || !loaded.contains_key(&imported.id))
+                        && !pending.contains_key(&imported.id)
+                    {
+                        stack.push(imported);
+                    }
+                }
+
+                let module_id = resolved.id.clone();
+                pending.insert(
+                    module_id.clone(),
+                    PendingModule {
+                        resolved,
+                        program,
+                        prefix,
+                    },
+                );
+                if let Some(fingerprint) = fingerprint {
+                    self.module_source_fingerprints
+                        .insert(module_id, fingerprint);
                 }
             }
 
-            let module_id = resolved.id.clone();
-            pending.insert(
-                module_id.clone(),
-                PendingModule {
-                    resolved,
-                    program,
-                    prefix,
-                },
-            );
-            if let Some(fingerprint) = fingerprint {
-                self.module_source_fingerprints
-                    .insert(module_id, fingerprint);
+            if pending.is_empty() {
+                return loaded.get(&root.id).cloned().ok_or_else(|| {
+                    EngineError::Internal("missing module exports after SCC load".into())
+                });
             }
-        }
 
-        if pending.is_empty() {
-            return loaded.get(&root.id).cloned().ok_or_else(|| {
-                EngineError::Internal("missing module exports after SCC load".into())
-            });
-        }
+            let pending_ids: Vec<ModuleId> = pending.keys().cloned().collect();
+            let sccs = tarjan_scc_module_ids(&pending_ids, &edges);
 
-        let pending_ids: Vec<ModuleId> = pending.keys().cloned().collect();
-        let sccs = tarjan_scc_module_ids(&pending_ids, &edges);
-
-        // Tarjan yields SCCs in reverse topological order of the SCC DAG, so
-        // dependencies are processed before dependents.
-        for component in sccs {
-            let has_cycle = component.len() > 1;
-            if has_cycle {
+            // Tarjan yields SCCs in reverse topological order of the SCC DAG, so
+            // dependencies are processed before dependents.
+            for component in sccs {
+                let has_cycle = component.len() > 1;
+                if has_cycle {
+                    for module_id in &component {
+                        self.ensure_cycle_interfaces_published(module_id)?;
+                    }
+                }
                 for module_id in &component {
-                    self.ensure_cycle_interfaces_published(module_id)?;
+                    let node = pending.get(module_id).ok_or_else(|| {
+                        EngineError::Internal("missing pending module node".into())
+                    })?;
+                    let rewritten = self
+                        .rewrite_program_with_imports(
+                            &node.program,
+                            Some(node.resolved.id.clone()),
+                            &node.prefix,
+                            chain,
+                            loaded,
+                            loading,
+                        )
+                        .await?;
+                    self.inject_decls(&rewritten.decls)?;
+                }
+                for module_id in component {
+                    loading.remove(&module_id);
                 }
             }
-            for module_id in &component {
-                let node = pending
-                    .get(module_id)
-                    .ok_or_else(|| EngineError::Internal("missing pending module node".into()))?;
-                let rewritten = self.rewrite_program_with_imports(
-                    &node.program,
-                    Some(node.resolved.id.clone()),
-                    &node.prefix,
-                    loaded,
-                    loading,
-                )?;
-                self.inject_decls(&rewritten.decls)?;
-            }
-            for module_id in component {
-                loading.remove(&module_id);
-            }
-        }
 
-        loaded
-            .get(&root.id)
-            .cloned()
-            .ok_or_else(|| EngineError::Internal("missing root exports after SCC load".into()))
+            loaded
+                .get(&root.id)
+                .cloned()
+                .ok_or_else(|| EngineError::Internal("missing root exports after SCC load".into()))
+        })
     }
 
     fn ensure_cycle_interfaces_published(
@@ -2401,22 +2402,22 @@ where
         &'a mut self,
         import_decl: &'a ImportDecl,
         importer: Option<ModuleId>,
+        chain: &'a ImportChain,
     ) -> BoxFuture<'a, Result<ModuleExports, EngineError>> {
         Box::pin(async move {
             let spec = import_specifier(&import_decl.path);
-            if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
-                return Ok(exports);
-            }
-            let imported = self.modules.resolve(ResolveRequest {
-                module_name: spec,
-                importer,
-            })?;
+            let imported = chain
+                .import(ImportRequest {
+                    module_name: spec,
+                    importer,
+                })
+                .await?;
             self.refresh_if_stale(&imported)?;
             if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
                 self.ensure_cycle_interfaces_published(&imported.id)?;
                 return Ok(exports);
             }
-            let inst = self.load_module_from_resolved(imported).await?;
+            let inst = self.load_module_from_resolved(imported, chain).await?;
             Ok(inst.exports)
         })
     }
@@ -2426,6 +2427,7 @@ where
         bindings: &mut ImportBindings,
         decls: &[Decl],
         importer: Option<ModuleId>,
+        chain: &ImportChain,
         policy: &ImportBindingPolicy<'_>,
     ) -> Result<(), EngineError> {
         let default_imports = self.default_imports().to_vec();
@@ -2436,7 +2438,11 @@ where
             }
             let import_decl = default_import_decl(&module_name);
             let exports = self
-                .resolve_module_exports_from_import_decl_async(&import_decl, importer.clone())
+                .resolve_module_exports_from_import_decl_async(
+                    &import_decl,
+                    importer.clone(),
+                    chain,
+                )
                 .await?;
             for (local, target) in exports.values() {
                 if !policy.forbidden_values.contains(local)
@@ -2469,49 +2475,22 @@ where
         Ok(())
     }
 
-    pub fn add_resolver<F>(&mut self, name: impl Into<String>, f: F)
+    pub fn add_importer<I>(&mut self, name: impl Into<String>, importer: I)
     where
-        F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError>
-            + Send
-            + Sync
-            + 'static,
+        I: Importer + 'static,
     {
-        self.modules.add_resolver(name, wrap_resolver(f));
+        self.modules.add_importer(name, Arc::new(importer));
     }
 
-    pub fn add_default_resolvers(&mut self) {
-        self.modules
-            .add_resolver("stdlib", default_stdlib_resolver());
-
-        #[cfg(not(target_arch = "wasm32"))]
-        self.modules.add_resolver("local", default_local_resolver());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn add_include_resolver(&mut self, root: impl AsRef<Path>) -> Result<(), EngineError> {
-        let canon =
-            root.as_ref()
-                .canonicalize()
-                .map_err(|e| crate::ModuleError::InvalidIncludeRoot {
-                    path: root.as_ref().to_path_buf(),
-                    source: e,
-                })?;
-        self.modules.add_resolver(
-            format!("include:{}", canon.display()),
-            include_resolver(canon),
-        );
-        Ok(())
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    pub fn add_include_resolver(&mut self, _root: impl AsRef<Path>) -> Result<(), EngineError> {
-        Err(EngineError::UnsupportedExpr)
+    pub fn add_importer_arc(&mut self, name: impl Into<String>, importer: Arc<dyn Importer>) {
+        self.modules.add_importer(name, importer);
     }
 
     pub(crate) fn import_bindings_for_decls<'a>(
         &'a mut self,
         decls: &'a [Decl],
         importer: Option<ModuleId>,
+        chain: &'a ImportChain,
         policy: &'a ImportBindingPolicy<'_>,
     ) -> BoxFuture<'a, Result<ImportBindings, EngineError>> {
         Box::pin(async move {
@@ -2521,11 +2500,15 @@ where
                     continue;
                 };
                 let exports = self
-                    .resolve_module_exports_from_import_decl_async(import_decl, importer.clone())
+                    .resolve_module_exports_from_import_decl_async(
+                        import_decl,
+                        importer.clone(),
+                        chain,
+                    )
                     .await?;
                 add_import_bindings(&mut bindings, import_decl, &exports, policy)?;
             }
-            self.add_default_import_bindings(&mut bindings, decls, importer, policy)
+            self.add_default_import_bindings(&mut bindings, decls, importer, chain, policy)
                 .await?;
             Ok(bindings)
         })
@@ -2534,6 +2517,7 @@ where
     pub(crate) fn load_module_from_resolved<'a>(
         &'a mut self,
         resolved: ResolvedModule,
+        chain: &'a ImportChain,
     ) -> BoxFuture<'a, Result<ModuleInstance, EngineError>> {
         Box::pin(async move {
             let source_fingerprint = self.refresh_if_stale(&resolved)?;
@@ -2568,6 +2552,7 @@ where
                 .import_bindings_for_decls(
                     &program.decls,
                     Some(resolved.id.clone()),
+                    chain,
                     &import_policy,
                 )
                 .await?;
@@ -2604,249 +2589,249 @@ where
         })
     }
 
-    fn load_module_types_from_resolved(
-        &mut self,
+    fn load_module_types_from_resolved<'a>(
+        &'a mut self,
         resolved: ResolvedModule,
-        loaded: &mut BTreeMap<ModuleId, ModuleExports>,
-        loading: &mut BTreeSet<ModuleId>,
-    ) -> Result<ModuleExports, EngineError> {
-        if let Some(exports) = loaded.get(&resolved.id) {
-            return Ok(exports.clone());
-        }
+        chain: &'a ImportChain,
+        loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
+        loading: &'a mut BTreeSet<ModuleId>,
+    ) -> BoxFuture<'a, Result<ModuleExports, EngineError>> {
+        Box::pin(async move {
+            if let Some(exports) = loaded.get(&resolved.id) {
+                return Ok(exports.clone());
+            }
 
-        if loading.contains(&resolved.id)
-            && let Some(exports) = loaded.get(&resolved.id)
-        {
-            return Ok(exports.clone());
-        }
-        self.load_module_types_via_scc(resolved, loaded, loading)
+            if loading.contains(&resolved.id)
+                && let Some(exports) = loaded.get(&resolved.id)
+            {
+                return Ok(exports.clone());
+            }
+            self.load_module_types_via_scc(resolved, chain, loaded, loading)
+                .await
+        })
     }
 
-    fn resolve_module_exports_for_rewrite(
-        &mut self,
-        import_decl: &ImportDecl,
+    fn resolve_module_exports_for_rewrite<'a>(
+        &'a mut self,
+        import_decl: &'a ImportDecl,
         importer: Option<ModuleId>,
-        loaded: &mut BTreeMap<ModuleId, ModuleExports>,
-        loading: &mut BTreeSet<ModuleId>,
-    ) -> Result<ModuleExports, EngineError> {
-        let spec = import_specifier(&import_decl.path);
-        if let Some(exports) = self.virtual_module_exports(spec_base_name(&spec)) {
-            return Ok(exports);
-        }
-        let imported = self.modules.resolve(ResolveRequest {
-            module_name: spec,
-            importer,
-        })?;
-        self.refresh_if_stale(&imported)?;
-        if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
-            self.ensure_cycle_interfaces_published(&imported.id)?;
-            return Ok(exports);
-        }
-        self.load_module_types_from_resolved(imported, loaded, loading)
+        chain: &'a ImportChain,
+        loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
+        loading: &'a mut BTreeSet<ModuleId>,
+    ) -> BoxFuture<'a, Result<ModuleExports, EngineError>> {
+        Box::pin(async move {
+            let spec = import_specifier(&import_decl.path);
+            let imported = chain
+                .import(ImportRequest {
+                    module_name: spec,
+                    importer,
+                })
+                .await?;
+            self.refresh_if_stale(&imported)?;
+            if let Some(exports) = self.module_exports_cache.get(&imported.id).cloned() {
+                self.ensure_cycle_interfaces_published(&imported.id)?;
+                return Ok(exports);
+            }
+            self.load_module_types_from_resolved(imported, chain, loaded, loading)
+                .await
+        })
     }
 
-    pub(crate) fn rewrite_program_with_imports(
-        &mut self,
-        compilation_unit: &CompilationUnit,
+    pub(crate) fn rewrite_program_with_imports<'a>(
+        &'a mut self,
+        compilation_unit: &'a CompilationUnit,
         importer: Option<ModuleId>,
-        prefix: &str,
-        loaded: &mut BTreeMap<ModuleId, ModuleExports>,
-        loading: &mut BTreeSet<ModuleId>,
-    ) -> Result<CompilationUnit, EngineError> {
-        let mut bindings = ImportBindings::default();
-        let local_values = decl_value_names(&compilation_unit.decls);
-        let local_types = decl_type_names(&compilation_unit.decls);
-        let import_policy = ImportBindingPolicy {
-            forbidden_values: &local_values,
-            forbidden_types: &local_types,
-        };
-        for decl in &compilation_unit.decls {
-            let Decl::Import(import_decl) = decl else {
-                continue;
+        prefix: &'a str,
+        chain: &'a ImportChain,
+        loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
+        loading: &'a mut BTreeSet<ModuleId>,
+    ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>> {
+        Box::pin(async move {
+            let mut bindings = ImportBindings::default();
+            let local_values = decl_value_names(&compilation_unit.decls);
+            let local_types = decl_type_names(&compilation_unit.decls);
+            let import_policy = ImportBindingPolicy {
+                forbidden_values: &local_values,
+                forbidden_types: &local_types,
             };
-            let exports = self.resolve_module_exports_for_rewrite(
-                import_decl,
-                importer.clone(),
-                loaded,
-                loading,
-            )?;
-            add_import_bindings(&mut bindings, import_decl, &exports, &import_policy)?;
-        }
-
-        let default_imports = self.default_imports().to_vec();
-        for module_name in default_imports {
-            let alias = Symbol::intern(&module_name);
-            if contains_import_alias(&compilation_unit.decls, &alias) {
-                continue;
+            for decl in &compilation_unit.decls {
+                let Decl::Import(import_decl) = decl else {
+                    continue;
+                };
+                let exports = self
+                    .resolve_module_exports_for_rewrite(
+                        import_decl,
+                        importer.clone(),
+                        chain,
+                        loaded,
+                        loading,
+                    )
+                    .await?;
+                add_import_bindings(&mut bindings, import_decl, &exports, &import_policy)?;
             }
-            let import_decl = default_import_decl(&module_name);
-            let exports = self.resolve_module_exports_for_rewrite(
-                &import_decl,
-                importer.clone(),
-                loaded,
-                loading,
-            )?;
-            for (local, target) in exports.values() {
-                if !local_values.contains(local) && !bindings.imported_values.contains_key(local) {
-                    bindings
-                        .imported_values
-                        .insert(local.clone(), target.clone());
+
+            let default_imports = self.default_imports().to_vec();
+            for module_name in default_imports {
+                let alias = Symbol::intern(&module_name);
+                if contains_import_alias(&compilation_unit.decls, &alias) {
+                    continue;
+                }
+                let import_decl = default_import_decl(&module_name);
+                let exports = self
+                    .resolve_module_exports_for_rewrite(
+                        &import_decl,
+                        importer.clone(),
+                        chain,
+                        loaded,
+                        loading,
+                    )
+                    .await?;
+                for (local, target) in exports.values() {
+                    if !local_values.contains(local)
+                        && !bindings.imported_values.contains_key(local)
+                    {
+                        bindings
+                            .imported_values
+                            .insert(local.clone(), target.clone());
+                    }
+                }
+                for (local, target) in exports.types() {
+                    if !local_types.contains(local) && !bindings.imported_types.contains_key(local)
+                    {
+                        bindings
+                            .imported_types
+                            .insert(local.clone(), target.clone());
+                    }
+                }
+                for (local, target) in exports.classes() {
+                    if !local_types.contains(local)
+                        && !bindings.imported_classes.contains_key(local)
+                    {
+                        bindings
+                            .imported_classes
+                            .insert(local.clone(), target.clone());
+                    }
                 }
             }
-            for (local, target) in exports.types() {
-                if !local_types.contains(local) && !bindings.imported_types.contains_key(local) {
-                    bindings
-                        .imported_types
-                        .insert(local.clone(), target.clone());
-                }
-            }
-            for (local, target) in exports.classes() {
-                if !local_types.contains(local) && !bindings.imported_classes.contains_key(local) {
-                    bindings
-                        .imported_classes
-                        .insert(local.clone(), target.clone());
-                }
-            }
-        }
 
-        let qualified = qualify_program(compilation_unit, prefix);
-        validate_import_uses(&qualified, &bindings.alias_exports, None)?;
-        Ok(rewrite_import_uses(
-            &qualified,
-            &bindings.alias_exports,
-            &bindings.imported_values,
-            &bindings.imported_types,
-            &bindings.imported_classes,
-            Some(&local_types),
-            None,
-        ))
-    }
-
-    pub(crate) fn read_local_module_bytes(
-        &self,
-        path: &Path,
-    ) -> Result<(ModuleId, Vec<u8>), EngineError> {
-        let canon = path
-            .canonicalize()
-            .map_err(|e| crate::ModuleError::InvalidModulePath {
-                path: path.to_path_buf(),
-                source: e,
-            })?;
-        let bytes = std::fs::read(&canon).map_err(|e| crate::ModuleError::ReadFailed {
-            path: canon.clone(),
-            source: e,
-        })?;
-        Ok((ModuleId::Local { path: canon }, bytes))
-    }
-
-    pub(crate) fn decode_local_module_source(
-        &self,
-        id: &ModuleId,
-        bytes: Vec<u8>,
-    ) -> Result<String, EngineError> {
-        let path = match id {
-            ModuleId::Local { path, .. } => path.clone(),
-            other => {
-                return Err(EngineError::Internal(format!(
-                    "decode_local_module_source called with non-local module id {other}"
-                )));
-            }
-        };
-        String::from_utf8(bytes).map_err(|e| {
-            crate::ModuleError::NotUtf8 {
-                kind: "local",
-                path,
-                source: e,
-            }
-            .into()
+            let qualified = qualify_program(compilation_unit, prefix);
+            validate_import_uses(&qualified, &bindings.alias_exports, None)?;
+            Ok(rewrite_import_uses(
+                &qualified,
+                &bindings.alias_exports,
+                &bindings.imported_values,
+                &bindings.imported_types,
+                &bindings.imported_classes,
+                Some(&local_types),
+                None,
+            ))
         })
     }
 
-    pub fn infer_module_file(
+    pub async fn infer_module_with_importer(
         &mut self,
-        path: impl AsRef<Path>,
+        request: ImportRequest,
+        importer: Arc<dyn Importer>,
     ) -> Result<(Vec<Predicate>, Type), CompileError> {
-        let (id, bytes) = self.read_local_module_bytes(path.as_ref())?;
-        let source = self.decode_local_module_source(&id, bytes)?;
-        self.infer_module_source(ResolvedModule {
-            id,
-            content: ResolvedModuleContent::Source(source),
-        })
-        .map_err(CompileError::from)
-    }
-
-    fn infer_module_source(
-        &mut self,
-        resolved: ResolvedModule,
-    ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-
-        loading.insert(resolved.id.clone());
-
-        let prefix = prefix_for_module(&resolved.id);
-        let program = program_from_resolved(&resolved)?;
-
-        let rewritten = self.rewrite_program_with_imports(
-            &program,
-            Some(resolved.id.clone()),
-            &prefix,
-            &mut loaded,
-            &mut loading,
-        )?;
-        self.inject_decls(&rewritten.decls)?;
-
-        let body = rewritten
-            .body
-            .unwrap_or_else(|| Arc::new(Expr::Tuple(Span::default(), Vec::new())));
-        let (preds, ty) = self.infer_type(body.as_ref())?;
-
-        let exports = exports_from_program(&program, &prefix, &resolved.id);
-        loaded.insert(resolved.id.clone(), exports);
-        loading.remove(&resolved.id);
-
-        Ok((preds, ty))
-    }
-
-    pub fn infer_snippet(&mut self, source: &str) -> Result<(Vec<Predicate>, Type), CompileError> {
-        self.infer_snippet_with_importer(source, None)
+        let chain = self
+            .modules
+            .import_chain()
+            .with_importer("with-importer", importer);
+        let resolved = chain.import(request).await.map_err(CompileError::from)?;
+        self.infer_module_source(resolved, &chain)
+            .await
             .map_err(CompileError::from)
     }
 
-    pub fn infer_snippet_at(
+    pub(crate) fn infer_module_source<'a>(
+        &'a mut self,
+        resolved: ResolvedModule,
+        chain: &'a ImportChain,
+    ) -> BoxFuture<'a, Result<(Vec<Predicate>, Type), EngineError>> {
+        Box::pin(async move {
+            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+
+            loading.insert(resolved.id.clone());
+
+            let prefix = prefix_for_module(&resolved.id);
+            let program = program_from_resolved(&resolved)?;
+
+            let rewritten = self
+                .rewrite_program_with_imports(
+                    &program,
+                    Some(resolved.id.clone()),
+                    &prefix,
+                    chain,
+                    &mut loaded,
+                    &mut loading,
+                )
+                .await?;
+            self.inject_decls(&rewritten.decls)?;
+
+            let body = rewritten
+                .body
+                .unwrap_or_else(|| Arc::new(Expr::Tuple(Span::default(), Vec::new())));
+            let (preds, ty) = self.infer_type(body.as_ref())?;
+
+            let exports = exports_from_program(&program, &prefix, &resolved.id);
+            loaded.insert(resolved.id.clone(), exports);
+            loading.remove(&resolved.id);
+
+            Ok((preds, ty))
+        })
+    }
+
+    pub async fn infer_snippet(
+        &mut self,
+        source: &str,
+    ) -> Result<(Vec<Predicate>, Type), CompileError> {
+        self.infer_snippet_with_importer(source, None)
+            .await
+            .map_err(CompileError::from)
+    }
+
+    pub async fn infer_snippet_at(
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
     ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let path = importer_path.as_ref().to_path_buf();
         self.infer_snippet_with_importer(source, Some(path))
+            .await
             .map_err(CompileError::from)
     }
 
-    fn infer_snippet_with_importer(
-        &mut self,
-        source: &str,
+    fn infer_snippet_with_importer<'a>(
+        &'a mut self,
+        source: &'a str,
         importer_path: Option<PathBuf>,
-    ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        let program = parse_program_from_source(source, None)?;
+    ) -> BoxFuture<'a, Result<(Vec<Predicate>, Type), EngineError>> {
+        Box::pin(async move {
+            let program = parse_program_from_source(source, None)?;
 
-        let importer = importer_path.map(|p| ModuleId::Local { path: p });
+            let importer = importer_path.map(|p| ModuleId::Local { path: p });
 
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+            let chain = self.modules.import_chain();
 
-        let prefix = format!("@snippet{}", Uuid::new_v4());
-        let rewritten = self.rewrite_program_with_imports(
-            &program,
-            importer,
-            &prefix,
-            &mut loaded,
-            &mut loading,
-        )?;
-        self.inject_decls(&rewritten.decls)?;
-        let body = rewritten
-            .body
-            .ok_or(EngineError::MissingBody { context: "snippet" })?;
-        self.infer_type(body.as_ref())
+            let prefix = format!("@snippet{}", Uuid::new_v4());
+            let rewritten = self
+                .rewrite_program_with_imports(
+                    &program,
+                    importer,
+                    &prefix,
+                    &chain,
+                    &mut loaded,
+                    &mut loading,
+                )
+                .await?;
+            self.inject_decls(&rewritten.decls)?;
+            let body = rewritten
+                .body
+                .ok_or(EngineError::MissingBody { context: "snippet" })?;
+            self.infer_type(body.as_ref())
+        })
     }
 }

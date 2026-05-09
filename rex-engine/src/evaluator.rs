@@ -10,13 +10,12 @@ use rex_typesystem::{
     typesystem::TypeSystem,
     unification::{Subst, unify},
 };
-use rex_util::sha256_hex;
 
 use crate::engine::{
     CompiledProgram, NativeImpl, OverloadedFn, RuntimeCapabilities, RuntimeCompatibility,
     RuntimeCore, eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
 };
-use crate::modules::{ModuleId, ResolvedModule, ResolvedModuleContent};
+use crate::modules::{ImportRequest, Importer, ModuleId, ResolvedModule, ResolvedModuleContent};
 use crate::value::{Handle, Heap, Pointer};
 use crate::{
     CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, RuntimeEnv,
@@ -107,8 +106,9 @@ where
     }
 
     pub async fn eval(self, expr: &Expr) -> Result<(Handle, Type), ExecutionError> {
-        self.prepare_and_run(|compiler| compiler.compile_expr(expr))
-            .await
+        let mut this = self;
+        let program = this.compiler.compile_expr(expr)?;
+        this.run_prepared(program).await
     }
 
     async fn run_prepared(
@@ -122,56 +122,23 @@ where
         Ok((value, typ))
     }
 
-    async fn prepare_and_run<F>(mut self, compile: F) -> Result<(Handle, Type), ExecutionError>
-    where
-        F: FnOnce(&mut Compiler<State>) -> Result<CompiledProgram, CompileError>,
-    {
-        let program = compile(&mut self.compiler)?;
-        self.run_prepared(program).await
-    }
-
-    pub async fn eval_module_file(
+    pub async fn eval_module_with_importer(
         mut self,
-        path: impl AsRef<Path>,
+        request: ImportRequest,
+        importer: Arc<dyn Importer>,
     ) -> Result<(Handle, Type), ExecutionError> {
         let result: Result<(Handle, Type), ExecutionError> = {
             let engine = &mut self.compiler.engine;
-            let (id, bytes) = engine
-                .read_local_module_bytes(path.as_ref())
+            let chain = engine
+                .modules
+                .import_chain()
+                .with_importer("with-importer", importer);
+            let resolved = chain.import(request).await.map_err(CompileError::from)?;
+            let inst = engine
+                .load_module_from_resolved(resolved, &chain)
+                .await
                 .map_err(CompileError::from)?;
-            let source_fingerprint = sha256_hex(&bytes);
-            if let Some(inst) = engine.modules.cached(&id).map_err(EvalError::from)? {
-                if inst.source_fingerprint.as_deref() == Some(source_fingerprint.as_str()) {
-                    Ok((inst.init_value, inst.init_type))
-                } else {
-                    engine
-                        .invalidate_module_caches(&id)
-                        .map_err(EvalError::from)?;
-                    let source = engine
-                        .decode_local_module_source(&id, bytes)
-                        .map_err(CompileError::from)?;
-                    let inst = engine
-                        .load_module_from_resolved(ResolvedModule {
-                            id,
-                            content: ResolvedModuleContent::Source(source),
-                        })
-                        .await
-                        .map_err(CompileError::from)?;
-                    Ok((inst.init_value, inst.init_type))
-                }
-            } else {
-                let source = engine
-                    .decode_local_module_source(&id, bytes)
-                    .map_err(CompileError::from)?;
-                let inst = engine
-                    .load_module_from_resolved(ResolvedModule {
-                        id,
-                        content: ResolvedModuleContent::Source(source),
-                    })
-                    .await
-                    .map_err(CompileError::from)?;
-                Ok((inst.init_value, inst.init_type))
-            }
+            Ok((inst.init_value, inst.init_type))
         };
         result
     }
@@ -188,11 +155,15 @@ where
             if let Some(inst) = engine.modules.cached(&id).map_err(EvalError::from)? {
                 Ok((inst.init_value, inst.init_type))
             } else {
+                let chain = engine.modules.import_chain();
                 let inst = engine
-                    .load_module_from_resolved(ResolvedModule {
-                        id,
-                        content: ResolvedModuleContent::Source(source.to_string()),
-                    })
+                    .load_module_from_resolved(
+                        ResolvedModule {
+                            id,
+                            content: ResolvedModuleContent::Source(source.to_string()),
+                        },
+                        &chain,
+                    )
                     .await
                     .map_err(CompileError::from)?;
                 Ok((inst.init_value, inst.init_type))
@@ -202,8 +173,9 @@ where
     }
 
     pub async fn eval_snippet(self, source: &str) -> Result<(Handle, Type), ExecutionError> {
-        self.prepare_and_run(|compiler| compiler.compile_snippet(source))
-            .await
+        let mut this = self;
+        let program = this.compiler.compile_snippet(source).await?;
+        this.run_prepared(program).await
     }
 
     pub async fn eval_snippet_at(
@@ -211,9 +183,12 @@ where
         source: &str,
         importer_path: impl AsRef<Path>,
     ) -> Result<(Handle, Type), ExecutionError> {
-        let path = importer_path.as_ref().to_path_buf();
-        self.prepare_and_run(|compiler| compiler.compile_snippet_at(source, &path))
-            .await
+        let mut this = self;
+        let program = this
+            .compiler
+            .compile_snippet_at(source, importer_path.as_ref())
+            .await?;
+        this.run_prepared(program).await
     }
 }
 

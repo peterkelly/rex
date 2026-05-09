@@ -36,7 +36,6 @@ use crate::{
 /// use rex_engine::{Engine, Module};
 ///
 /// let mut engine = Engine::with_prelude(()).unwrap();
-/// engine.add_default_resolvers();
 ///
 /// let mut math = Module::new("acme.math");
 /// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();

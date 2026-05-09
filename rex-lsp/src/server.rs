@@ -1,9 +1,10 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
+use futures::future::BoxFuture;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CompletionItem, CompletionItemKind,
     Diagnostic, DiagnosticSeverity, DocumentSymbol, GotoDefinitionResponse, Hover, HoverContents,
@@ -15,7 +16,10 @@ use rex_ast::{
     TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_ast::{Position as RexPosition, Span, Spanned};
-use rex_engine::{Engine, EngineError, ModuleError};
+use rex_engine::{
+    Engine, EngineError, ImportRequest, Importer, ModuleError, ModuleId, ResolvedModule,
+    ResolvedModuleContent,
+};
 use rex_parser::{
     error::ParseError,
     lexer::{LexicalError, Token, Tokens},
@@ -145,6 +149,88 @@ fn url_from_file_path(path: &std::path::Path) -> Option<Url> {
 #[cfg(target_arch = "wasm32")]
 fn url_from_file_path(_path: &std::path::Path) -> Option<Url> {
     None
+}
+
+#[derive(Clone, Default)]
+struct LspFilesystemImporter;
+
+impl Importer for LspFilesystemImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            if req.module_name.starts_with("https://") {
+                return Ok(None);
+            }
+
+            let (module_name, expected_sha) = match req.module_name.split_once('#') {
+                Some((base, sha)) if !sha.is_empty() => (base.to_string(), Some(sha.to_string())),
+                _ => (req.module_name, None),
+            };
+
+            if module_name.ends_with(".rex") || Path::new(&module_name).components().count() > 1 {
+                return resolve_lsp_module_file(PathBuf::from(module_name), expected_sha, "local");
+            }
+
+            let base_dir = match req.importer {
+                Some(ModuleId::Local { path }) => path.parent().map(|p| p.to_path_buf()),
+                _ => None,
+            };
+            let Some(base_dir) = base_dir else {
+                return Ok(None);
+            };
+
+            let segments = module_name.split('.').collect::<Vec<_>>();
+            let path = match resolve_local_import_path(base_dir.as_path(), &segments) {
+                Ok(Some(path)) => path,
+                Ok(None) => return Ok(None),
+                Err(err) => {
+                    return Err(match err {
+                        rex_util::ImportPathError::EscapesRoot => ModuleError::ImportEscapesRoot,
+                    }
+                    .into());
+                }
+            };
+            resolve_lsp_module_file(path, expected_sha, "local")
+        })
+    }
+}
+
+fn resolve_lsp_module_file(
+    path: PathBuf,
+    expected_sha: Option<String>,
+    kind: &'static str,
+) -> Result<Option<ResolvedModule>, EngineError> {
+    let Ok(canon) = path.canonicalize() else {
+        return Ok(None);
+    };
+    let bytes = match fs::read(&canon) {
+        Ok(bytes) => bytes,
+        Err(_) => return Ok(None),
+    };
+    let hash = sha256_hex(&bytes);
+    if let Some(expected) = expected_sha {
+        let expected = expected.to_ascii_lowercase();
+        if !hash.starts_with(&expected) {
+            return Err(ModuleError::ShaMismatchPath {
+                kind,
+                path: canon,
+                expected,
+                actual: hash,
+            }
+            .into());
+        }
+    }
+    let source = String::from_utf8(bytes).map_err(|source| ModuleError::NotUtf8 {
+        kind,
+        path: canon.clone(),
+        source,
+    })?;
+    Ok(Some(ResolvedModule {
+        id: ModuleId::Local { path: canon },
+        content: ResolvedModuleContent::Source(source),
+    }))
 }
 
 fn tokenize_and_parse(
@@ -4939,12 +5025,12 @@ fn push_type_diagnostics(
             return;
         }
     };
-    engine.add_default_resolvers();
 
     let result = if let Some(path) = uri_to_file_path(uri) {
-        engine.infer_snippet_at(text, path)
+        engine.add_importer("lsp-filesystem", LspFilesystemImporter);
+        futures::executor::block_on(engine.infer_snippet_at(text, path))
     } else {
-        engine.infer_snippet(text)
+        futures::executor::block_on(engine.infer_snippet(text))
     };
 
     if let Err(err) = result {

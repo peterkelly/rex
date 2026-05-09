@@ -28,8 +28,8 @@ pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleErro
 pub use evaluator::{Context, Evaluator};
 pub use modules::virtual_export_name;
 pub use modules::{
-    CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleInstance, ModuleKey, ResolveRequest,
-    ResolvedModule, ResolvedModuleContent, SymbolKind,
+    CanonicalSymbol, DenyImporter, ImportRequest, Importer, Module, ModuleExports, ModuleId,
+    ModuleInstance, ModuleKey, ResolvedModule, ResolvedModuleContent, StdlibImporter, SymbolKind,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
 pub use value::{FromRex, Handle, Heap, IntoRex, Value, ValueDisplayOptions};

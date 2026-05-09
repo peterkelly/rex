@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use futures::future::BoxFuture;
 use rex_ast::{CompilationUnit, Expr, Symbol};
 use rex_typesystem::types::{TypedExpr, TypedExprKind};
 use uuid::Uuid;
@@ -11,8 +12,8 @@ use crate::engine::{
     RUNTIME_LINK_ABI_VERSION, RuntimeLinkContract, collect_pattern_bindings, type_check_engine,
 };
 use crate::modules::{
-    ModuleExports, ModuleId, ResolvedModule, exports_from_program, parse_program_from_source,
-    prefix_for_module,
+    ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, ResolvedModule,
+    exports_from_program, parse_program_from_source, prefix_for_module,
 };
 use crate::{CompileError, EngineError, Environment, Evaluator, RuntimeEnv};
 
@@ -319,107 +320,125 @@ where
         }
     }
 
-    fn rewrite_and_inject_program(
-        &mut self,
-        compilation_unit: &CompilationUnit,
+    fn rewrite_and_inject_program<'a>(
+        &'a mut self,
+        compilation_unit: &'a CompilationUnit,
         importer: Option<ModuleId>,
-        prefix: &str,
-        loaded: &mut BTreeMap<ModuleId, ModuleExports>,
-        loading: &mut BTreeSet<ModuleId>,
-    ) -> Result<CompilationUnit, EngineError> {
-        let rewritten = self.engine.rewrite_program_with_imports(
-            compilation_unit,
-            importer,
-            prefix,
-            loaded,
-            loading,
-        )?;
-        self.engine.inject_decls(&rewritten.decls)?;
-        Ok(rewritten)
+        prefix: &'a str,
+        chain: &'a ImportChain,
+        loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
+        loading: &'a mut BTreeSet<ModuleId>,
+    ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>> {
+        Box::pin(async move {
+            let rewritten = self
+                .engine
+                .rewrite_program_with_imports(
+                    compilation_unit,
+                    importer,
+                    prefix,
+                    chain,
+                    loaded,
+                    loading,
+                )
+                .await?;
+            self.engine.inject_decls(&rewritten.decls)?;
+            Ok(rewritten)
+        })
     }
 
-    pub fn compile_snippet(&mut self, source: &str) -> Result<CompiledProgram, CompileError> {
+    pub async fn compile_snippet(&mut self, source: &str) -> Result<CompiledProgram, CompileError> {
         self.compile_snippet_with_importer(source, None)
+            .await
             .map_err(CompileError::from)
     }
 
-    pub fn compile_snippet_at(
+    pub async fn compile_snippet_at(
         &mut self,
         source: &str,
         importer_path: impl AsRef<Path>,
     ) -> Result<CompiledProgram, CompileError> {
         let path = importer_path.as_ref().to_path_buf();
         self.compile_snippet_with_importer(source, Some(path))
+            .await
             .map_err(CompileError::from)
     }
 
-    pub fn compile_module_file(
+    pub async fn compile_module_with_importer(
         &mut self,
-        path: impl AsRef<Path>,
+        request: ImportRequest,
+        importer: Arc<dyn Importer>,
     ) -> Result<CompiledProgram, CompileError> {
-        let (id, bytes) = self
+        let chain = self
             .engine
-            .read_local_module_bytes(path.as_ref())
-            .map_err(CompileError::from)?;
-        let source = self
-            .engine
-            .decode_local_module_source(&id, bytes)
-            .map_err(CompileError::from)?;
-        self.compile_module_source(ResolvedModule {
-            id,
-            content: crate::modules::ResolvedModuleContent::Source(source),
-        })
-        .map_err(CompileError::from)
+            .modules
+            .import_chain()
+            .with_importer("with-importer", importer);
+        let resolved = chain.import(request).await.map_err(CompileError::from)?;
+        self.compile_module_source(resolved, &chain)
+            .await
+            .map_err(CompileError::from)
     }
 
-    fn compile_module_source(
-        &mut self,
+    pub(crate) fn compile_module_source<'a>(
+        &'a mut self,
         resolved: ResolvedModule,
-    ) -> Result<CompiledProgram, EngineError> {
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+        chain: &'a ImportChain,
+    ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
+        Box::pin(async move {
+            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
 
-        loading.insert(resolved.id.clone());
+            loading.insert(resolved.id.clone());
 
-        let prefix = prefix_for_module(&resolved.id);
-        let program = crate::modules::program_from_resolved(&resolved)?;
-        let rewritten = self.rewrite_and_inject_program(
-            &program,
-            Some(resolved.id.clone()),
-            &prefix,
-            &mut loaded,
-            &mut loading,
-        )?;
+            let prefix = prefix_for_module(&resolved.id);
+            let program = crate::modules::program_from_resolved(&resolved)?;
+            let rewritten = self
+                .rewrite_and_inject_program(
+                    &program,
+                    Some(resolved.id.clone()),
+                    &prefix,
+                    chain,
+                    &mut loaded,
+                    &mut loading,
+                )
+                .await?;
 
-        let exports = exports_from_program(&program, &prefix, &resolved.id);
-        loaded.insert(resolved.id.clone(), exports);
-        loading.remove(&resolved.id);
+            let exports = exports_from_program(&program, &prefix, &resolved.id);
+            loaded.insert(resolved.id.clone(), exports);
+            loading.remove(&resolved.id);
 
-        let body = rewritten.body.unwrap_or_else(unit_expr);
-        self.compile_expr_internal(body.as_ref())
+            let body = rewritten.body.unwrap_or_else(unit_expr);
+            self.compile_expr_internal(body.as_ref())
+        })
     }
 
-    fn compile_snippet_with_importer(
-        &mut self,
-        source: &str,
+    fn compile_snippet_with_importer<'a>(
+        &'a mut self,
+        source: &'a str,
         importer_path: Option<PathBuf>,
-    ) -> Result<CompiledProgram, EngineError> {
-        let program = parse_program_from_source(source, None)?;
+    ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
+        Box::pin(async move {
+            let program = parse_program_from_source(source, None)?;
 
-        let importer = importer_path.map(|p| ModuleId::Local { path: p });
-        let prefix = format!("@snippet{}", Uuid::new_v4());
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-        let rewritten = self.rewrite_and_inject_program(
-            &program,
-            importer,
-            &prefix,
-            &mut loaded,
-            &mut loading,
-        )?;
-        let body = rewritten
-            .body
-            .ok_or(EngineError::MissingBody { context: "snippet" })?;
-        self.compile_expr_internal(body.as_ref())
+            let importer = importer_path.map(|p| ModuleId::Local { path: p });
+            let prefix = format!("@snippet{}", Uuid::new_v4());
+            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+            let chain = self.engine.modules.import_chain();
+            let rewritten = self
+                .rewrite_and_inject_program(
+                    &program,
+                    importer,
+                    &prefix,
+                    &chain,
+                    &mut loaded,
+                    &mut loading,
+                )
+                .await?;
+            let body = rewritten
+                .body
+                .ok_or(EngineError::MissingBody { context: "snippet" })?;
+            self.compile_expr_internal(body.as_ref())
+        })
     }
 }

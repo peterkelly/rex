@@ -1,17 +1,81 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+use futures::future::BoxFuture;
+
 use crate::{EngineError, ModuleError};
 
-use super::types::{ModuleId, ModuleInstance, ResolveRequest, ResolvedModule};
+use super::types::{ImportRequest, ModuleId, ModuleInstance, ResolvedModule};
 
-pub type ResolverFn =
-    Arc<dyn Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError> + Send + Sync>;
+pub trait Importer: Send + Sync {
+    fn import<'a>(
+        &'a self,
+        request: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>>;
+}
+
+#[derive(Clone, Default)]
+pub struct DenyImporter;
+
+impl Importer for DenyImporter {
+    fn import<'a>(
+        &'a self,
+        request: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            Err(ModuleError::ImportsDisabled {
+                module_name: request.module_name,
+            }
+            .into())
+        })
+    }
+}
 
 #[derive(Clone)]
-struct ResolverEntry {
+struct ImporterEntry {
     name: String,
-    resolver: ResolverFn,
+    importer: Arc<dyn Importer>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ImportChain {
+    entries: Vec<ImporterEntry>,
+}
+
+impl ImportChain {
+    pub(crate) fn with_importer(
+        &self,
+        name: impl Into<String>,
+        importer: Arc<dyn Importer>,
+    ) -> Self {
+        let mut entries = self.entries.clone();
+        entries.push(ImporterEntry {
+            name: name.into(),
+            importer,
+        });
+        Self { entries }
+    }
+
+    pub(crate) async fn import(&self, req: ImportRequest) -> Result<ResolvedModule, EngineError> {
+        for entry in &self.entries {
+            tracing::trace!(importer = %entry.name, module = %req.module_name, "trying module importer");
+            let resolved = entry
+                .importer
+                .import(ImportRequest {
+                    module_name: req.module_name.clone(),
+                    importer: req.importer.clone(),
+                })
+                .await?;
+            match resolved {
+                Some(resolved) => return Ok(resolved),
+                None => continue,
+            }
+        }
+        Err(ModuleError::NotFound {
+            module_name: req.module_name,
+        }
+        .into())
+    }
 }
 
 #[derive(Default)]
@@ -22,34 +86,34 @@ struct ModuleState {
 
 #[derive(Clone, Default)]
 pub(crate) struct ModuleSystem {
-    resolvers: Vec<ResolverEntry>,
+    import_chain: ImportChain,
     state: Arc<Mutex<ModuleState>>,
 }
 
 impl ModuleSystem {
-    pub(crate) fn add_resolver(&mut self, name: impl Into<String>, resolver: ResolverFn) {
-        self.resolvers.push(ResolverEntry {
+    pub(crate) fn add_importer(&mut self, name: impl Into<String>, importer: Arc<dyn Importer>) {
+        self.import_chain.entries.push(ImporterEntry {
             name: name.into(),
-            resolver,
+            importer,
         });
     }
 
-    pub(crate) fn resolve(&self, req: ResolveRequest) -> Result<ResolvedModule, EngineError> {
-        for entry in &self.resolvers {
-            tracing::trace!(resolver = %entry.name, module = %req.module_name, "trying module resolver");
-            let resolved = (entry.resolver)(ResolveRequest {
-                module_name: req.module_name.clone(),
-                importer: req.importer.clone(),
-            });
-            match resolved? {
-                Some(resolved) => return Ok(resolved),
-                None => continue,
-            }
-        }
-        Err(ModuleError::NotFound {
-            module_name: req.module_name,
-        }
-        .into())
+    pub(crate) fn add_importer_front(
+        &mut self,
+        name: impl Into<String>,
+        importer: Arc<dyn Importer>,
+    ) {
+        self.import_chain.entries.insert(
+            0,
+            ImporterEntry {
+                name: name.into(),
+                importer,
+            },
+        );
+    }
+
+    pub(crate) fn import_chain(&self) -> ImportChain {
+        self.import_chain.clone()
     }
 
     pub(crate) fn cached(&self, id: &ModuleId) -> Result<Option<ModuleInstance>, EngineError> {
@@ -82,11 +146,4 @@ impl ModuleSystem {
         state.loaded.remove(id);
         Ok(())
     }
-}
-
-pub(crate) fn wrap_resolver<F>(f: F) -> ResolverFn
-where
-    F: Fn(ResolveRequest) -> Result<Option<ResolvedModule>, EngineError> + Send + Sync + 'static,
-{
-    Arc::new(f)
 }

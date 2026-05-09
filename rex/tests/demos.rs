@@ -40,6 +40,7 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                     let mut engine = Engine::with_prelude(()).unwrap();
                     engine
                         .infer_snippet(&source)
+                        .await
                         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
                     let heap = engine.heap.clone();
                     let (value, ty) = engine

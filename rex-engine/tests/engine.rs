@@ -54,10 +54,10 @@ fn registry_markdown_lists_core_sections() {
     assert!(doc.contains("`Option`"));
 }
 
-#[test]
-fn compile_snippet_rejects_declaration_only_input() {
+#[tokio::test]
+async fn compile_snippet_rejects_declaration_only_input() {
     let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let err = match compiler.compile_snippet("fn id x: a -> a = x;") {
+    let err = match compiler.compile_snippet("fn id x: a -> a = x;").await {
         Ok(_) => panic!("declaration-only snippet unexpectedly compiled"),
         Err(err) => err.into_engine_error(),
     };
@@ -132,7 +132,6 @@ fn inject_adt_family_rejects_cycles() {
 #[tokio::test]
 async fn injected_module_can_define_pub_adt_declarations() {
     let mut engine = Engine::with_prelude(()).unwrap();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("acme.status");
     module

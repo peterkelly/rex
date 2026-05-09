@@ -11,7 +11,9 @@ pub enum ModuleError {
     NotFound {
         module_name: String,
     },
-    NoBaseDirectory,
+    ImportsDisabled {
+        module_name: String,
+    },
     ImportEscapesRoot,
     EmptyModulePath,
     StatePoisoned,
@@ -22,21 +24,9 @@ pub enum ModuleError {
         path: PathBuf,
         source: std::io::Error,
     },
-    InvalidModulePath {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    ReadFailed {
-        path: PathBuf,
-        source: std::io::Error,
-    },
     NotUtf8 {
         kind: &'static str,
         path: PathBuf,
-        source: std::string::FromUtf8Error,
-    },
-    NotUtf8Remote {
-        url: String,
         source: std::string::FromUtf8Error,
     },
     ShaMismatchStdlib {
@@ -82,8 +72,8 @@ impl std::fmt::Display for ModuleError {
             ModuleError::NotFound { module_name } => {
                 write!(f, "module not found: {module_name}")
             }
-            ModuleError::NoBaseDirectory => {
-                write!(f, "cannot resolve local import without a base directory")
+            ModuleError::ImportsDisabled { module_name } => {
+                write!(f, "module imports are disabled: {module_name}")
             }
             ModuleError::ImportEscapesRoot => write!(f, "import path escapes filesystem root"),
             ModuleError::EmptyModulePath => write!(f, "empty module path"),
@@ -92,21 +82,12 @@ impl std::fmt::Display for ModuleError {
             ModuleError::InvalidIncludeRoot { path, source } => {
                 write!(f, "invalid include root `{}`: {source}", path.display())
             }
-            ModuleError::InvalidModulePath { path, source } => {
-                write!(f, "invalid module path `{}`: {source}", path.display())
-            }
-            ModuleError::ReadFailed { path, source } => {
-                write!(f, "failed to read module `{}`: {source}", path.display())
-            }
             ModuleError::NotUtf8 { kind, path, source } => {
                 write!(
                     f,
                     "{kind} module `{}` was not utf-8: {source}",
                     path.display()
                 )
-            }
-            ModuleError::NotUtf8Remote { url, source } => {
-                write!(f, "remote module `{url}` was not utf-8: {source}")
             }
             ModuleError::ShaMismatchStdlib {
                 module,
@@ -167,10 +148,7 @@ impl std::error::Error for ModuleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             ModuleError::InvalidIncludeRoot { source, .. } => Some(source),
-            ModuleError::InvalidModulePath { source, .. } => Some(source),
-            ModuleError::ReadFailed { source, .. } => Some(source),
             ModuleError::NotUtf8 { source, .. } => Some(source),
-            ModuleError::NotUtf8Remote { source, .. } => Some(source),
             ModuleError::Lex { source } => Some(source),
             _ => None,
         }

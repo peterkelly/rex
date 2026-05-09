@@ -771,7 +771,9 @@ name = "rex-cli"
 version = "3.9.13"
 dependencies = [
  "clap",
+ "futures",
  "rex",
+ "rex-util",
  "serde",
  "serde_json",
  "tokio",
@@ -815,6 +817,7 @@ dependencies = [
 name = "rex-lsp"
 version = "3.9.13"
 dependencies = [
+ "futures",
  "lsp-types",
  "rex",
  "rex-ast",

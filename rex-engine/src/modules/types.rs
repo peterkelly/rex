@@ -25,9 +25,25 @@ impl fmt::Display for ModuleId {
 }
 
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub struct ResolveRequest {
+pub struct ImportRequest {
     pub module_name: String,
     pub importer: Option<ModuleId>,
+}
+
+impl ImportRequest {
+    pub fn new(module_name: impl Into<String>) -> Self {
+        Self {
+            module_name: module_name.into(),
+            importer: None,
+        }
+    }
+
+    pub fn with_importer(module_name: impl Into<String>, importer: ModuleId) -> Self {
+        Self {
+            module_name: module_name.into(),
+            importer: Some(importer),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

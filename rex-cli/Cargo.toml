@@ -10,7 +10,9 @@ publish = false
 
 [dependencies]
 clap = { workspace = true }
+futures = { workspace = true }
 rex = { path = "../rex", version = "3.9.13" }
+rex-util = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 uuid = { workspace = true }

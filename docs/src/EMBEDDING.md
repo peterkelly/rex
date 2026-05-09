@@ -40,7 +40,7 @@ use rex::engine::Engine;
 let engine = Engine::with_prelude(())?;
 let mut compiler = engine.into_compiler();
 
-let program = compiler.compile_snippet("let x = 1 + 2 in x * 3")?;
+let program = compiler.compile_snippet("let x = 1 + 2 in x * 3").await?;
 assert_eq!(program.result_type().to_string(), "i32");
 let evaluator = compiler.into_evaluator();
 evaluator.validate(&program)?;
@@ -84,7 +84,7 @@ If you want an explicit preflight before running:
 
 ```rust
 let mut compiler = engine.into_compiler();
-let program = compiler.compile_snippet("let x = 1 + 2 in x * 3")?;
+let program = compiler.compile_snippet("let x = 1 + 2 in x * 3").await?;
 let runtime = compiler.runtime_env();
 runtime.validate(&program)?;
 
@@ -126,7 +126,7 @@ let value = evaluator.run(program).await?;
 println!("{value}");
 ```
 
-Module sources loaded via resolvers (and module files on disk) must be declaration-only. To run an
+Module sources loaded via importers must be declaration-only. To run an
 expression, use snippet or program entry points.
 Qualified alias members used in type/class positions (annotations, `where` constraints, instance
 headers, superclass clauses) are validated against module exports during module processing; missing
@@ -159,30 +159,23 @@ let mut engine = Engine::with_options(
 
 This is fully supported in `rex-engine`. You can compose module loading from:
 
-- default resolvers (`std.*`, local filesystem)
-- include roots
-- custom resolvers (for DB/object-store/in-memory modules)
+- bundled stdlib imports (`std.*`)
+- modules injected with `Engine::inject_module`
+- custom async importers (for DB/object-store/in-memory modules)
 
-### 1) Use Built-In Resolvers
+### 1) Use an Explicit Importer
 
-```rust
-use rex::engine::Engine;
-
-let mut engine = Engine::with_prelude(())?;
-engine.add_default_resolvers();
-engine.add_include_resolver("/opt/my-app/rex-modules")?;
-let mut compiler = engine.into_compiler();
-let program = compiler.compile_module_file("workflows/main.rex")?;
-let value = compiler.into_evaluator().run(program).await?;
-println!("{value}");
-```
+`rex-engine` does not read module files from disk by default. File-backed loading is a host
+policy decision; the CLI installs its own filesystem importer, while embedded applications should
+provide an importer that matches their trust boundary.
+Use `DenyImporter` when you need an explicit importer implementation that rejects every module
+request.
 
 Notes:
 
-- local imports are resolved relative to the importing module path.
-- include roots are searched after local-relative imports.
-- type-only workflows can use `infer_module_file` with the same resolver setup.
-- compile-only workflows can use `Compiler::compile_module_file` with the same resolver setup.
+- importers receive an `ImportRequest` with the requested module name and the importing module id.
+- module entrypoint workflows use `compile_module_with_importer`,
+  `infer_module_with_importer`, or `eval_module_with_importer`.
 - import clauses (`(*)` / item lists) import exported names into unqualified scope.
 - unqualified imports are context-sensitive: expression positions use values, type positions use
   types, and class/constraint positions use classes.
@@ -191,16 +184,16 @@ Notes:
 
 ### 2) Inject In-Memory Rex Modules
 
-For host-managed modules, add a resolver that maps `module_name` to source text.
+For host-managed modules, either call `Engine::inject_module` or add an importer that maps
+`module_name` to source text.
 
 ```rust
-use rex_engine::{ModuleId, ResolveRequest, ResolvedModule};
-use rex::engine::Engine;
+use futures::future::BoxFuture;
+use rex::engine::{Engine, ImportRequest, Importer, ModuleId, ResolvedModule, ResolvedModuleContent};
 use std::collections::HashMap;
 use std::sync::Arc;
 
 let mut engine = Engine::with_prelude(())?;
-engine.add_default_resolvers();
 
 let modules = Arc::new(HashMap::from([
     (
@@ -213,18 +206,28 @@ let modules = Arc::new(HashMap::from([
     ),
 ]));
 
-engine.add_resolver("host-map", {
-    let modules = modules.clone();
-    move |req: ResolveRequest| {
-        let Some(source) = modules.get(&req.module_name) else {
-            return Ok(None);
-        };
-        Ok(Some(ResolvedModule {
-            id: ModuleId::Virtual(format!("host:{}", req.module_name)),
-            content: rex::ResolvedModuleContent::Source(source.clone()),
-        }))
+struct MapImporter {
+    modules: Arc<HashMap<String, String>>,
+}
+
+impl Importer for MapImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, rex::engine::EngineError>> {
+        Box::pin(async move {
+            let Some(source) = self.modules.get(&req.module_name) else {
+                return Ok(None);
+            };
+            Ok(Some(ResolvedModule {
+                id: ModuleId::Virtual(format!("host:{}", req.module_name)),
+                content: ResolvedModuleContent::Source(source.clone()),
+            }))
+        })
     }
-});
+}
+
+engine.add_importer("host-map", MapImporter { modules });
 let value = engine
     .into_evaluator()
     .eval_snippet("import acme.main (main);\nmain")
@@ -265,7 +268,6 @@ passes before calling `Engine::inject_module`.
 use rex_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
-engine.add_default_resolvers();
 
 let mut math = Module::new("acme.math");
 math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
@@ -284,7 +286,6 @@ You can declare ADTs directly inside an injected host module:
 use rex_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
-engine.add_default_resolvers();
 
 let mut m = Module::new("acme.status");
 m.add_raw_declaration("pub type Status = Ready | Failed string;")?;
@@ -350,7 +351,6 @@ fn render_label(label: Label) -> String {
 }
 
 let mut engine = Engine::with_prelude(())?;
-engine.add_default_resolvers();
 
 let mut m = Module::new("sample");
 m.add_rex_adt::<Label>()?;
@@ -402,7 +402,6 @@ use rex_engine::{Engine, Context, Handle, Module};
 use rex::typesystem::{BuiltinTypeId, Scheme, Type};
 
 let mut engine = Engine::with_prelude(())?;
-engine.add_default_resolvers();
 
 let mut m = Module::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
@@ -421,14 +420,14 @@ engine.inject_module(m)?;
 `Scheme` and arity must agree. Registration returns an error if the type does not accept the
 provided number of arguments.
 
-### 4) Custom Resolver Contract (Advanced)
+### 4) Custom Importer Contract (Advanced)
 
-If you need dynamic/nonstandard module loading behavior, you can still use raw resolvers.
+If you need dynamic/nonstandard module loading behavior, implement `Importer`.
 
-Resolver contract:
+Importer contract:
 
 - return `Ok(Some(ResolvedModule { ... }))` when you can satisfy the module.
-- return `Ok(None)` to let the next resolver try.
+- return `Ok(None)` to let the next importer try.
 - return `Err(...)` for hard failures (invalid module payload, policy violations, etc.).
 
 `ResolvedModule` can carry either `ResolvedModuleContent::Source(...)` for real Rex source or

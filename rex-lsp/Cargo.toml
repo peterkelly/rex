@@ -9,6 +9,7 @@ version.workspace = true
 
 [dependencies]
 lsp-types = "0.94"
+futures = { workspace = true }
 serde_json = "1"
 rex-ast = { path = "../rex-ast", version = "3.9.13" }
 rex-parser = { path = "../rex-parser", version = "3.9.13" }

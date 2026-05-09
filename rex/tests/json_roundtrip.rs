@@ -39,7 +39,6 @@ struct EchoRecord {
 #[tokio::test]
 async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     let mut engine = engine_with_prelude();
-    engine.add_default_resolvers();
 
     let mut module = Module::new("echo");
     module.add_rex_adt::<EchoEnum>().unwrap();

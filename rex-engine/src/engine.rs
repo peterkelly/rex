@@ -30,10 +30,10 @@ use rex_typesystem::{
 };
 
 use crate::modules::{
-    CanonicalSymbol, Module, ModuleExports, ModuleId, ModuleSystem, ResolveRequest, ResolvedModule,
-    ResolvedModuleContent, SymbolKind, VirtualModule, interface_decls_from_program,
+    CanonicalSymbol, ImportRequest, Importer, Module, ModuleExports, ModuleId, ModuleSystem,
+    ResolvedModule, ResolvedModuleContent, SymbolKind, VirtualModule, interface_decls_from_program,
     module_key_for_module, parse_program_from_source, prefix_for_module, qualify_program,
-    virtual_export_name,
+    stdlib_importer, virtual_export_name,
 };
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
@@ -103,6 +103,31 @@ impl Default for EngineOptions {
             prelude: PreludeMode::Enabled,
             default_imports: vec![PRELUDE_MODULE_NAME.to_string()],
         }
+    }
+}
+
+#[derive(Clone)]
+struct StaticModuleImporter {
+    module_name: String,
+    resolved: ResolvedModule,
+}
+
+impl Importer for StaticModuleImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            let requested = req
+                .module_name
+                .split_once('#')
+                .map(|(base, _)| base)
+                .unwrap_or(req.module_name.as_str());
+            if requested != self.module_name {
+                return Ok(None);
+            }
+            Ok(Some(self.resolved.clone()))
+        })
     }
 }
 
@@ -2301,6 +2326,7 @@ where
             heap: Heap::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {
+            engine.modules.add_importer("stdlib", stdlib_importer());
             engine.inject_prelude()?;
             engine.inject_prelude_virtual_module()?;
         }
@@ -2731,23 +2757,15 @@ where
             }
 
             self.inject_decls(&qualified.decls)?;
-            let resolver_module_name = module_name.clone();
-            self.add_resolver(
+            self.modules.add_importer_front(
                 format!("injected:{module_name}"),
-                move |req: ResolveRequest| {
-                    let requested = req
-                        .module_name
-                        .split_once('#')
-                        .map(|(base, _)| base)
-                        .unwrap_or(req.module_name.as_str());
-                    if requested != resolver_module_name {
-                        return Ok(None);
-                    }
-                    Ok(Some(ResolvedModule {
-                        id: ModuleId::Virtual(resolver_module_name.clone()),
+                Arc::new(StaticModuleImporter {
+                    module_name: module_name.clone(),
+                    resolved: ResolvedModule {
+                        id: ModuleId::Virtual(module_name.clone()),
                         content: ResolvedModuleContent::CompilationUnit(compilation_unit.clone()),
-                    }))
-                },
+                    },
+                }),
             );
         } else {
             let full_source =
@@ -2762,24 +2780,16 @@ where
             for export in module.exports {
                 self.inject_module_export(&module_name, export)?;
             }
-            let resolver_module_name = module_name.clone();
-            let resolver_source = full_source;
-            self.add_resolver(
+            let importer_source = full_source;
+            self.modules.add_importer_front(
                 format!("injected:{module_name}"),
-                move |req: ResolveRequest| {
-                    let requested = req
-                        .module_name
-                        .split_once('#')
-                        .map(|(base, _)| base)
-                        .unwrap_or(req.module_name.as_str());
-                    if requested != resolver_module_name {
-                        return Ok(None);
-                    }
-                    Ok(Some(ResolvedModule {
-                        id: ModuleId::Virtual(resolver_module_name.clone()),
-                        content: ResolvedModuleContent::Source(resolver_source.clone()),
-                    }))
-                },
+                Arc::new(StaticModuleImporter {
+                    module_name: module_name.clone(),
+                    resolved: ResolvedModule {
+                        id: ModuleId::Virtual(module_name.clone()),
+                        content: ResolvedModuleContent::Source(importer_source.clone()),
+                    },
+                }),
             );
         }
 
@@ -3303,21 +3313,34 @@ where
             }
         }
 
+        let module_id = ModuleId::Virtual(PRELUDE_MODULE_NAME.to_string());
+        let compilation_unit = CompilationUnit {
+            decls: Vec::new(),
+            body: None,
+        };
+        self.module_exports_cache
+            .insert(module_id.clone(), exports.clone());
+        self.module_interface_cache
+            .insert(module_id.clone(), Vec::new());
         self.virtual_modules.insert(
             PRELUDE_MODULE_NAME.to_string(),
             VirtualModule {
                 exports,
-                decls: Vec::new(),
+                decls: compilation_unit.decls.clone(),
                 source: None,
             },
         );
+        self.modules.add_importer_front(
+            format!("injected:{PRELUDE_MODULE_NAME}"),
+            Arc::new(StaticModuleImporter {
+                module_name: PRELUDE_MODULE_NAME.to_string(),
+                resolved: ResolvedModule {
+                    id: module_id,
+                    content: ResolvedModuleContent::CompilationUnit(compilation_unit),
+                },
+            }),
+        );
         Ok(())
-    }
-
-    pub(crate) fn virtual_module_exports(&self, module_name: &str) -> Option<ModuleExports> {
-        self.virtual_modules
-            .get(module_name)
-            .map(|module| module.exports.clone())
     }
 
     fn register_prelude_typeclass_instances(&mut self) -> Result<(), EngineError> {

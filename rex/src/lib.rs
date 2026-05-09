@@ -25,7 +25,6 @@
 //! use rex::engine::{Engine, EngineError, Module};
 //!
 //! let mut engine = Engine::with_prelude(())?;
-//! engine.add_default_resolvers();
 //!
 //! let mut math = Module::new("host.math");
 //! math.export("inc", |_state: &(), x: i32| {
@@ -84,7 +83,7 @@ pub use rex_proc_macro::Rex;
 ///
 /// This is a convenience helper for small integrations, examples, and tests. It
 /// creates an [`Engine`](engine::Engine) with the prelude enabled, installs the
-/// default resolvers, compiles `source` as a snippet, evaluates it once, and
+/// bundled stdlib importer, compiles `source` as a snippet, evaluates it once, and
 /// converts the result to JSON [`Value`](serde_json::Value) using the inferred
 /// result type.
 ///
@@ -96,14 +95,13 @@ pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionEr
         engine::CompileError::from(engine::EngineError::from(format!("parse error: {errs:?}")))
     })?;
 
-    let mut engine = engine::Engine::with_prelude(()).map_err(|e| {
+    let engine = engine::Engine::with_prelude(()).map_err(|e| {
         engine::CompileError::from(engine::EngineError::from(format!(
             "failed to initialize engine: {e}"
         )))
     })?;
-    engine.add_default_resolvers();
     let mut compiler = engine.into_compiler();
-    let program = compiler.compile_snippet(source)?;
+    let program = compiler.compile_snippet(source).await?;
     let result_type = program.result_type().clone();
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
