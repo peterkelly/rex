@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::ExitStatus;
 
 use rex_ast::Symbol;
 use rex_parser::{error::ParseError, lexer::LexicalError};
@@ -74,19 +73,6 @@ pub enum ModuleError {
     },
     TopLevelExprInModule {
         module: ModuleId,
-    },
-    InvalidGithubImport {
-        url: String,
-    },
-    UnpinnedGithubImport {
-        url: String,
-    },
-    CurlFailed {
-        source: std::io::Error,
-    },
-    CurlNonZeroExit {
-        url: String,
-        status: ExitStatus,
     },
 }
 
@@ -173,17 +159,6 @@ impl std::fmt::Display for ModuleError {
                     "module {module} cannot contain a top-level expression; module files must be declaration-only"
                 )
             }
-            ModuleError::InvalidGithubImport { url } => write!(
-                f,
-                "github import must be `https://github.com/<owner>/<repo>/<path>.rex#<sha>` (got {url})"
-            ),
-            ModuleError::UnpinnedGithubImport { url } => {
-                write!(f, "github import must be pinned: add `#<sha>` (got {url})")
-            }
-            ModuleError::CurlFailed { source } => write!(f, "failed to run curl: {source}"),
-            ModuleError::CurlNonZeroExit { url, status } => {
-                write!(f, "failed to fetch {url} (curl exit {status})")
-            }
         }
     }
 }
@@ -197,7 +172,6 @@ impl std::error::Error for ModuleError {
             ModuleError::NotUtf8 { source, .. } => Some(source),
             ModuleError::NotUtf8Remote { source, .. } => Some(source),
             ModuleError::Lex { source } => Some(source),
-            ModuleError::CurlFailed { source } => Some(source),
             _ => None,
         }
     }

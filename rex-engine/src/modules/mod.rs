@@ -28,8 +28,6 @@ mod types;
 #[cfg(not(target_arch = "wasm32"))]
 pub use filesystem::{default_local_resolver, include_resolver};
 pub use module::Module;
-#[cfg(all(not(target_arch = "wasm32"), feature = "github-imports"))]
-pub use resolvers::default_github_resolver;
 pub use resolvers::default_stdlib_resolver;
 pub use system::ResolverFn;
 pub use types::virtual_export_name;
@@ -2487,12 +2485,6 @@ where
 
         #[cfg(not(target_arch = "wasm32"))]
         self.modules.add_resolver("local", default_local_resolver());
-
-        #[cfg(all(not(target_arch = "wasm32"), feature = "github-imports"))]
-        {
-            self.modules
-                .add_resolver("remote", default_github_resolver());
-        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]

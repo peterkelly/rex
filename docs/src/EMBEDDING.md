@@ -159,7 +159,7 @@ let mut engine = Engine::with_options(
 
 This is fully supported in `rex-engine`. You can compose module loading from:
 
-- default resolvers (`std.*`, local filesystem, optional remote feature)
+- default resolvers (`std.*`, local filesystem)
 - include roots
 - custom resolvers (for DB/object-store/in-memory modules)
 

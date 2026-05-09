@@ -7,11 +7,6 @@ license.workspace = true
 repository.workspace = true
 version.workspace = true
 
-[features]
-# Enables importing `.rex` modules from GitHub via `curl`.
-# This is intentionally off by default for production builds.
-github-imports = []
-
 [dependencies]
 rex-ast = { path = "../rex-ast", version = "3.9.13" }
 thiserror = { workspace = true }
