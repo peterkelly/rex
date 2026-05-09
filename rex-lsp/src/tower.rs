@@ -30,7 +30,8 @@ use crate::server::{
     execute_query_command_for_document_without_position,
     execute_semantic_loop_apply_best_quick_fixes, execute_semantic_loop_apply_quick_fix,
     execute_semantic_loop_step, format_edits_for_source, goto_definition_response, hover_contents,
-    hover_type_contents, references_for_source, rename_for_source, word_at_position,
+    hover_type_contents, references_for_source, rename_for_source, with_open_documents,
+    word_at_position,
 };
 
 struct RexServer {
@@ -46,11 +47,20 @@ impl RexServer {
         }
     }
 
+    async fn document_with_snapshot(&self, uri: &Url) -> Option<(String, HashMap<Url, String>)> {
+        let documents = self.documents.read().await;
+        let text = documents.get(uri)?.clone();
+        Some((text, documents.clone()))
+    }
+
     async fn publish_diagnostics(&self, uri: Url, text: &str) {
         let uri_for_job = uri.clone();
         let text_for_job = text.to_string();
+        let documents = self.documents.read().await.clone();
         let diagnostics = match tokio::task::spawn_blocking(move || {
-            diagnostics_from_text(&uri_for_job, &text_for_job)
+            with_open_documents(documents, || {
+                diagnostics_from_text(&uri_for_job, &text_for_job)
+            })
         })
         .await
         {
@@ -168,16 +178,16 @@ impl LanguageServer for RexServer {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let text = { self.documents.read().await.get(&uri).cloned() };
-
-        let Some(text) = text else {
+        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text.clone();
         let type_contents = match tokio::task::spawn_blocking(move || {
-            hover_type_contents(&uri_for_job, &text_for_job, position)
+            with_open_documents(documents, || {
+                hover_type_contents(&uri_for_job, &text_for_job, position)
+            })
         })
         .await
         {
@@ -204,16 +214,16 @@ impl LanguageServer for RexServer {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        let text = { self.documents.read().await.get(&uri).cloned() };
-
-        let Some(text) = text else {
+        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let items = match tokio::task::spawn_blocking(move || {
-            completion_items(&uri_for_job, &text_for_job, position)
+            with_open_documents(documents, || {
+                completion_items(&uri_for_job, &text_for_job, position)
+            })
         })
         .await
         {
@@ -230,8 +240,7 @@ impl LanguageServer for RexServer {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
-        let text = { self.documents.read().await.get(&uri).cloned() };
-        let Some(text) = text else {
+        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
             return Ok(None);
         };
 
@@ -240,7 +249,9 @@ impl LanguageServer for RexServer {
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let actions = match tokio::task::spawn_blocking(move || {
-            code_actions_for_source(&uri_for_job, &text_for_job, range, &diagnostics)
+            with_open_documents(documents, || {
+                code_actions_for_source(&uri_for_job, &text_for_job, range, &diagnostics)
+            })
         })
         .await
         {
@@ -263,39 +274,35 @@ impl LanguageServer for RexServer {
             let Some(uri) = command_uri(&arguments) else {
                 return Ok(None);
             };
-            let text = { self.documents.read().await.get(&uri).cloned() };
-            let Some(text) = text else {
+            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
                 return Ok(None);
             };
-            return Ok(execute_query_command_for_document_without_position(
-                &command, &uri, &text,
-            ));
+            return Ok(with_open_documents(documents, || {
+                execute_query_command_for_document_without_position(&command, &uri, &text)
+            }));
         }
         if command == CMD_SEMANTIC_LOOP_STEP {
             let Some((uri, position)) = command_uri_and_position(&arguments) else {
                 return Ok(None);
             };
-            let text = { self.documents.read().await.get(&uri).cloned() };
-            let Some(text) = text else {
+            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
                 return Ok(None);
             };
-            return Ok(execute_semantic_loop_step(&uri, &text, position));
+            return Ok(with_open_documents(documents, || {
+                execute_semantic_loop_step(&uri, &text, position)
+            }));
         }
         if command == CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT {
             let Some((uri, position, quick_fix_id)) = command_uri_position_and_id(&arguments)
             else {
                 return Ok(None);
             };
-            let text = { self.documents.read().await.get(&uri).cloned() };
-            let Some(text) = text else {
+            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
                 return Ok(None);
             };
-            return Ok(execute_semantic_loop_apply_quick_fix(
-                &uri,
-                &text,
-                position,
-                &quick_fix_id,
-            ));
+            return Ok(with_open_documents(documents, || {
+                execute_semantic_loop_apply_quick_fix(&uri, &text, position, &quick_fix_id)
+            }));
         }
         if command == CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT {
             let Some((uri, position, max_steps, strategy, dry_run)) =
@@ -303,25 +310,25 @@ impl LanguageServer for RexServer {
             else {
                 return Ok(None);
             };
-            let text = { self.documents.read().await.get(&uri).cloned() };
-            let Some(text) = text else {
+            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
                 return Ok(None);
             };
-            return Ok(execute_semantic_loop_apply_best_quick_fixes(
-                &uri, &text, position, max_steps, strategy, dry_run,
-            ));
+            return Ok(with_open_documents(documents, || {
+                execute_semantic_loop_apply_best_quick_fixes(
+                    &uri, &text, position, max_steps, strategy, dry_run,
+                )
+            }));
         }
 
         let Some((uri, position)) = command_uri_and_position(&arguments) else {
             return Ok(None);
         };
-        let text = { self.documents.read().await.get(&uri).cloned() };
-        let Some(text) = text else {
+        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
             return Ok(None);
         };
-        Ok(execute_query_command_for_document(
-            &command, &uri, &text, position,
-        ))
+        Ok(with_open_documents(documents, || {
+            execute_query_command_for_document(&command, &uri, &text, position)
+        }))
     }
 
     async fn goto_definition(
@@ -330,16 +337,16 @@ impl LanguageServer for RexServer {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let text = { self.documents.read().await.get(&uri).cloned() };
-
-        let Some(text) = text else {
+        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let response = match tokio::task::spawn_blocking(move || {
-            goto_definition_response(&uri_for_job, &text_for_job, position)
+            with_open_documents(documents, || {
+                goto_definition_response(&uri_for_job, &text_for_job, position)
+            })
         })
         .await
         {
@@ -358,16 +365,16 @@ impl LanguageServer for RexServer {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
-        let text = { self.documents.read().await.get(&uri).cloned() };
-
-        let Some(text) = text else {
+        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let refs = match tokio::task::spawn_blocking(move || {
-            references_for_source(&uri_for_job, &text_for_job, position, include_declaration)
+            with_open_documents(documents, || {
+                references_for_source(&uri_for_job, &text_for_job, position, include_declaration)
+            })
         })
         .await
         {
@@ -386,16 +393,16 @@ impl LanguageServer for RexServer {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-        let text = { self.documents.read().await.get(&uri).cloned() };
-
-        let Some(text) = text else {
+        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let edit = match tokio::task::spawn_blocking(move || {
-            rename_for_source(&uri_for_job, &text_for_job, position, &new_name)
+            with_open_documents(documents, || {
+                rename_for_source(&uri_for_job, &text_for_job, position, &new_name)
+            })
         })
         .await
         {

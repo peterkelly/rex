@@ -10,6 +10,7 @@ use rex_ast::{Decl, Expr, NameRef, TypeExpr};
 use rex_engine::ValueDisplayOptions;
 use rex_lsp::server::*;
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -88,6 +89,52 @@ process.wait p
 
     let diags = diagnostics_from_text(&uri, text);
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+}
+
+#[test]
+fn diagnostics_resolve_imports_from_open_document_snapshot() {
+    let dir = temp_dir("diagnostics_resolve_imports_from_open_document_snapshot");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(&main, "()").expect("write main");
+    fs::write(
+        &dep,
+        r#"
+pub fn stale x: i32 -> i32 = x;
+"#,
+    )
+    .expect("write stale dep");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let dep_uri = Url::from_file_path(&dep).expect("dep file uri");
+    let source = r#"
+import dep as D;
+
+D.fresh 1
+"#;
+
+    let disk_diags = diagnostics_from_text(&uri, source);
+    assert!(
+        disk_diags
+            .iter()
+            .any(|diag| diag.message.contains("does not export `fresh`")),
+        "expected stale disk module to miss fresh export, got {disk_diags:?}"
+    );
+
+    let mut documents = HashMap::new();
+    documents.insert(uri.clone(), source.to_string());
+    documents.insert(
+        dep_uri,
+        r#"
+pub fn fresh x: i32 -> i32 = x + 1;
+"#
+        .to_string(),
+    );
+    let open_diags = with_open_documents(documents, || diagnostics_from_text(&uri, source));
+    assert!(
+        open_diags.is_empty(),
+        "expected open dependency buffer to typecheck, got {open_diags:?}"
+    );
 }
 
 #[test]

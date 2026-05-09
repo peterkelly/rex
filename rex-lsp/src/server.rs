@@ -1,8 +1,9 @@
+use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use futures::future::BoxFuture;
 use lsp_types::{
@@ -151,86 +152,287 @@ fn url_from_file_path(_path: &std::path::Path) -> Option<Url> {
     None
 }
 
-#[derive(Clone, Default)]
-struct LspFilesystemImporter;
+thread_local! {
+    static OPEN_DOCUMENTS: RefCell<Option<Arc<HashMap<Url, String>>>> = const { RefCell::new(None) };
+}
 
-impl Importer for LspFilesystemImporter {
+struct OpenDocumentsReset(Option<Arc<HashMap<Url, String>>>);
+
+impl Drop for OpenDocumentsReset {
+    fn drop(&mut self) {
+        OPEN_DOCUMENTS.with(|slot| {
+            slot.replace(self.0.take());
+        });
+    }
+}
+
+pub fn with_open_documents<R>(documents: HashMap<Url, String>, f: impl FnOnce() -> R) -> R {
+    let documents = Arc::new(documents);
+    OPEN_DOCUMENTS.with(|slot| {
+        let previous = slot.replace(Some(documents));
+        let _reset = OpenDocumentsReset(previous);
+        f()
+    })
+}
+
+fn current_open_documents() -> Arc<HashMap<Url, String>> {
+    OPEN_DOCUMENTS.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| Arc::new(HashMap::new()))
+    })
+}
+
+#[derive(Clone, Default)]
+struct LspModuleService {
+    open_documents: Arc<HashMap<Url, String>>,
+}
+
+#[derive(Clone)]
+struct LspLoadedModule {
+    id: ModuleId,
+    path: Option<PathBuf>,
+    hash: String,
+    source: String,
+    label: String,
+    keep_constraints: bool,
+}
+
+impl LspModuleService {
+    fn current() -> Self {
+        Self {
+            open_documents: current_open_documents(),
+        }
+    }
+
+    fn import_specifier(path: &ImportPath) -> Option<String> {
+        match path {
+            ImportPath::Local { segments, sha } => {
+                let base = segments
+                    .iter()
+                    .map(|s| s.as_ref())
+                    .collect::<Vec<_>>()
+                    .join(".");
+                Some(if let Some(sha) = sha {
+                    format!("{base}#{sha}")
+                } else {
+                    base
+                })
+            }
+            ImportPath::Remote { .. } => None,
+        }
+    }
+
+    fn split_name_and_sha(module_name: String) -> (String, Option<String>) {
+        match module_name.split_once('#') {
+            Some((base, sha)) if !sha.is_empty() => (base.to_string(), Some(sha.to_string())),
+            _ => (module_name, None),
+        }
+    }
+
+    fn load_import_path(
+        &self,
+        uri: &Url,
+        path: &ImportPath,
+    ) -> Result<Option<LspLoadedModule>, EngineError> {
+        let Some(module_name) = Self::import_specifier(path) else {
+            return Ok(None);
+        };
+        self.load_request(ImportRequest {
+            module_name,
+            importer: uri_to_file_path(uri).map(|path| ModuleId::Local { path }),
+        })
+    }
+
+    fn load_request(&self, req: ImportRequest) -> Result<Option<LspLoadedModule>, EngineError> {
+        if req.module_name.starts_with("https://") {
+            return Ok(None);
+        }
+
+        let (module_name, expected_sha) = Self::split_name_and_sha(req.module_name);
+
+        if let Some(module) = self.load_stdlib(&module_name, expected_sha.clone())? {
+            return Ok(Some(module));
+        }
+
+        if module_name.ends_with(".rex") || Path::new(&module_name).components().count() > 1 {
+            return self.load_path(PathBuf::from(module_name), expected_sha, "local");
+        }
+
+        let base_dir = match req.importer {
+            Some(ModuleId::Local { path }) => path.parent().map(|p| p.to_path_buf()),
+            _ => None,
+        };
+        let Some(base_dir) = base_dir else {
+            return Ok(None);
+        };
+
+        let segments = module_name.split('.').collect::<Vec<_>>();
+        let path = match resolve_local_import_path(base_dir.as_path(), &segments) {
+            Ok(Some(path)) => path,
+            Ok(None) => return Ok(None),
+            Err(err) => {
+                return Err(match err {
+                    rex_util::ImportPathError::EscapesRoot => ModuleError::ImportEscapesRoot,
+                }
+                .into());
+            }
+        };
+        self.load_path(path, expected_sha, "local")
+    }
+
+    fn load_stdlib(
+        &self,
+        module_name: &str,
+        expected_sha: Option<String>,
+    ) -> Result<Option<LspLoadedModule>, EngineError> {
+        let Some(source) = stdlib_source(module_name) else {
+            return Ok(None);
+        };
+        let hash = sha256_hex(source.as_bytes());
+        if let Some(expected) = expected_sha {
+            let expected = expected.to_ascii_lowercase();
+            if !hash.starts_with(&expected) {
+                return Err(ModuleError::ShaMismatchStdlib {
+                    module: module_name.to_string(),
+                    expected,
+                    actual: hash,
+                }
+                .into());
+            }
+        }
+        Ok(Some(LspLoadedModule {
+            id: ModuleId::Virtual(module_name.to_string()),
+            path: None,
+            hash,
+            source: source.to_string(),
+            label: module_name.to_string(),
+            keep_constraints: true,
+        }))
+    }
+
+    fn load_path(
+        &self,
+        path: PathBuf,
+        expected_sha: Option<String>,
+        kind: &'static str,
+    ) -> Result<Option<LspLoadedModule>, EngineError> {
+        if let Some(module) = self.load_open_document(&path, expected_sha.as_deref(), kind)? {
+            return Ok(Some(module));
+        }
+
+        let Ok(canon) = path.canonicalize() else {
+            return Ok(None);
+        };
+
+        if let Some(module) = self.load_open_document(&canon, expected_sha.as_deref(), kind)? {
+            return Ok(Some(module));
+        }
+
+        let bytes = match fs::read(&canon) {
+            Ok(bytes) => bytes,
+            Err(_) => return Ok(None),
+        };
+        self.loaded_from_bytes(canon, bytes, expected_sha.as_deref(), kind)
+            .map(Some)
+    }
+
+    fn load_open_document(
+        &self,
+        path: &Path,
+        expected_sha: Option<&str>,
+        kind: &'static str,
+    ) -> Result<Option<LspLoadedModule>, EngineError> {
+        let Some(url) = url_from_file_path(path) else {
+            return Ok(None);
+        };
+        let Some(source) = self.open_documents.get(&url).cloned() else {
+            return Ok(None);
+        };
+        self.loaded_from_source(path.to_path_buf(), source, expected_sha, kind)
+            .map(Some)
+    }
+
+    fn loaded_from_bytes(
+        &self,
+        path: PathBuf,
+        bytes: Vec<u8>,
+        expected_sha: Option<&str>,
+        kind: &'static str,
+    ) -> Result<LspLoadedModule, EngineError> {
+        let hash = sha256_hex(&bytes);
+        self.check_path_hash(&path, &hash, expected_sha, kind)?;
+        let source = String::from_utf8(bytes).map_err(|source| ModuleError::NotUtf8 {
+            kind,
+            path: path.clone(),
+            source,
+        })?;
+        Ok(LspLoadedModule {
+            id: ModuleId::Local { path: path.clone() },
+            path: Some(path.clone()),
+            hash,
+            source,
+            label: path.display().to_string(),
+            keep_constraints: false,
+        })
+    }
+
+    fn loaded_from_source(
+        &self,
+        path: PathBuf,
+        source: String,
+        expected_sha: Option<&str>,
+        kind: &'static str,
+    ) -> Result<LspLoadedModule, EngineError> {
+        let hash = sha256_hex(source.as_bytes());
+        self.check_path_hash(&path, &hash, expected_sha, kind)?;
+        Ok(LspLoadedModule {
+            id: ModuleId::Local { path: path.clone() },
+            path: Some(path.clone()),
+            hash,
+            source,
+            label: path.display().to_string(),
+            keep_constraints: false,
+        })
+    }
+
+    fn check_path_hash(
+        &self,
+        path: &Path,
+        hash: &str,
+        expected_sha: Option<&str>,
+        kind: &'static str,
+    ) -> Result<(), EngineError> {
+        let Some(expected) = expected_sha else {
+            return Ok(());
+        };
+        let expected = expected.to_ascii_lowercase();
+        if hash.starts_with(&expected) {
+            return Ok(());
+        }
+        Err(ModuleError::ShaMismatchPath {
+            kind,
+            path: path.to_path_buf(),
+            expected,
+            actual: hash.to_string(),
+        }
+        .into())
+    }
+}
+
+impl Importer for LspModuleService {
     fn import<'a>(
         &'a self,
         req: ImportRequest,
     ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
         Box::pin(async move {
-            if req.module_name.starts_with("https://") {
-                return Ok(None);
-            }
-
-            let (module_name, expected_sha) = match req.module_name.split_once('#') {
-                Some((base, sha)) if !sha.is_empty() => (base.to_string(), Some(sha.to_string())),
-                _ => (req.module_name, None),
-            };
-
-            if module_name.ends_with(".rex") || Path::new(&module_name).components().count() > 1 {
-                return resolve_lsp_module_file(PathBuf::from(module_name), expected_sha, "local");
-            }
-
-            let base_dir = match req.importer {
-                Some(ModuleId::Local { path }) => path.parent().map(|p| p.to_path_buf()),
-                _ => None,
-            };
-            let Some(base_dir) = base_dir else {
-                return Ok(None);
-            };
-
-            let segments = module_name.split('.').collect::<Vec<_>>();
-            let path = match resolve_local_import_path(base_dir.as_path(), &segments) {
-                Ok(Some(path)) => path,
-                Ok(None) => return Ok(None),
-                Err(err) => {
-                    return Err(match err {
-                        rex_util::ImportPathError::EscapesRoot => ModuleError::ImportEscapesRoot,
-                    }
-                    .into());
-                }
-            };
-            resolve_lsp_module_file(path, expected_sha, "local")
+            Ok(self.load_request(req)?.map(|module| ResolvedModule {
+                id: module.id,
+                content: ResolvedModuleContent::Source(module.source),
+            }))
         })
     }
-}
-
-fn resolve_lsp_module_file(
-    path: PathBuf,
-    expected_sha: Option<String>,
-    kind: &'static str,
-) -> Result<Option<ResolvedModule>, EngineError> {
-    let Ok(canon) = path.canonicalize() else {
-        return Ok(None);
-    };
-    let bytes = match fs::read(&canon) {
-        Ok(bytes) => bytes,
-        Err(_) => return Ok(None),
-    };
-    let hash = sha256_hex(&bytes);
-    if let Some(expected) = expected_sha {
-        let expected = expected.to_ascii_lowercase();
-        if !hash.starts_with(&expected) {
-            return Err(ModuleError::ShaMismatchPath {
-                kind,
-                path: canon,
-                expected,
-                actual: hash,
-            }
-            .into());
-        }
-    }
-    let source = String::from_utf8(bytes).map_err(|source| ModuleError::NotUtf8 {
-        kind,
-        path: canon.clone(),
-        source,
-    })?;
-    Ok(Some(ResolvedModule {
-        id: ModuleId::Local { path: canon },
-        content: ResolvedModuleContent::Source(source),
-    }))
 }
 
 fn tokenize_and_parse(
@@ -1275,7 +1477,7 @@ pub fn prepare_program_with_imports(
         TypeSystem::new_with_prelude().map_err(|e| format!("failed to build prelude: {e}"))?;
     let mut diagnostics = Vec::new();
 
-    let importer = uri_to_file_path(uri);
+    let module_service = LspModuleService::current();
 
     let mut imports: HashMap<Symbol, ImportModuleInfo> = HashMap::new();
 
@@ -1288,8 +1490,8 @@ pub fn prepare_program_with_imports(
         };
         let import_span = *span;
 
-        let (segments, expected_sha) = match path {
-            ImportPath::Local { segments, sha } => (segments.as_slice(), sha.as_deref()),
+        let segments = match path {
+            ImportPath::Local { segments, .. } => segments.as_slice(),
             ImportPath::Remote { .. } => {
                 // LSP does not attempt network fetches; leave it unresolved.
                 continue;
@@ -1302,98 +1504,27 @@ pub fn prepare_program_with_imports(
             .collect::<Vec<_>>()
             .join(".");
 
-        let (module_path, hash, source, module_label, keep_constraints) =
-            if let Some(source) = stdlib_source(&module_name) {
-                let hash = sha256_hex(source.as_bytes());
-                if let Some(expected) = expected_sha {
-                    let expected = expected.to_ascii_lowercase();
-                    if !hash.starts_with(&expected) {
-                        diagnostics.push(diagnostic_for_span(
-                        import_span,
-                        format!(
-                            "sha mismatch for `{module_name}`: expected #{expected}, got #{hash}",
-                        ),
-                    ));
-                    }
-                }
-                (None, hash, source.to_string(), module_name, true)
-            } else {
-                let Some(importer) = importer.as_ref() else {
-                    // Without a stable file location we cannot resolve local imports.
-                    // (Stdlib imports are handled above.)
-                    continue;
-                };
-                let Some(base_dir) = importer.parent() else {
-                    diagnostics.push(diagnostic_for_span(
-                        import_span,
-                        "cannot resolve local import without a base directory".to_string(),
-                    ));
-                    continue;
-                };
-                let module_path = match resolve_local_import_path(base_dir, segments) {
-                    Ok(Some(p)) => p,
-                    Ok(None) => {
-                        diagnostics.push(diagnostic_for_span(
-                            import_span,
-                            format!("module not found for import `{module_name}`"),
-                        ));
-                        continue;
-                    }
-                    Err(err) => {
-                        diagnostics.push(diagnostic_for_span(import_span, err.to_string()));
-                        continue;
-                    }
-                };
-                let Ok(module_path) = module_path.canonicalize() else {
+        let module = match module_service.load_import_path(uri, path) {
+            Ok(Some(module)) => module,
+            Ok(None) => {
+                if uri_to_file_path(uri).is_some() {
                     diagnostics.push(diagnostic_for_span(
                         import_span,
                         format!("module not found for import `{module_name}`"),
                     ));
-                    continue;
-                };
-
-                let bytes = match fs::read(&module_path) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        diagnostics.push(diagnostic_for_span(
-                            import_span,
-                            format!("failed to read module `{}`: {e}", module_path.display()),
-                        ));
-                        continue;
-                    }
-                };
-                let hash = sha256_hex(&bytes);
-                if let Some(expected) = expected_sha {
-                    let expected = expected.to_ascii_lowercase();
-                    if !hash.starts_with(&expected) {
-                        diagnostics.push(diagnostic_for_span(
-                            import_span,
-                            format!(
-                                "sha mismatch for `{}`: expected #{expected}, got #{hash}",
-                                module_path.display()
-                            ),
-                        ));
-                    }
                 }
-
-                let source = match String::from_utf8(bytes) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        diagnostics.push(diagnostic_for_span(
-                            import_span,
-                            format!("module `{}` is not utf-8: {e}", module_path.display()),
-                        ));
-                        continue;
-                    }
-                };
-                (
-                    Some(module_path.clone()),
-                    hash,
-                    source,
-                    module_path.display().to_string(),
-                    false,
-                )
-            };
+                continue;
+            }
+            Err(err) => {
+                diagnostics.push(diagnostic_for_span(import_span, err.to_string()));
+                continue;
+            }
+        };
+        let module_path = module.path.clone();
+        let hash = module.hash;
+        let source = module.source;
+        let module_label = module.label;
+        let keep_constraints = module.keep_constraints;
 
         let (tokens, module_program) = match tokenize_and_parse(&source) {
             Ok(v) => v,
@@ -1610,32 +1741,13 @@ fn completion_exports_for_module_alias(
         return Ok(Vec::new());
     };
 
-    let ImportPath::Local { segments, sha: _ } = &import_decl.path else {
+    let Some(module) = LspModuleService::current()
+        .load_import_path(uri, &import_decl.path)
+        .map_err(|err| err.to_string())?
+    else {
         return Ok(Vec::new());
     };
-
-    let module_name = segments
-        .iter()
-        .map(|s| s.as_ref())
-        .collect::<Vec<_>>()
-        .join(".");
-
-    let source = if let Some(source) = stdlib_source(&module_name) {
-        source.to_string()
-    } else {
-        let importer = uri_to_file_path(uri).ok_or_else(|| "not a file uri".to_string())?;
-        let Some(base_dir) = importer.parent() else {
-            return Ok(Vec::new());
-        };
-        let Some(module_path) = resolve_local_import_path(base_dir, segments)
-            .ok()
-            .flatten()
-            .and_then(|p| p.canonicalize().ok())
-        else {
-            return Ok(Vec::new());
-        };
-        fs::read_to_string(&module_path).map_err(|e| e.to_string())?
-    };
+    let source = module.source;
     let (_tokens, module_program) =
         tokenize_and_parse(&source).map_err(|_| "parse error".to_string())?;
 
@@ -5027,7 +5139,7 @@ fn push_type_diagnostics(
     };
 
     let result = if let Some(path) = uri_to_file_path(uri) {
-        engine.add_importer("lsp-filesystem", LspFilesystemImporter);
+        engine.add_importer("lsp-modules", LspModuleService::current());
         futures::executor::block_on(engine.infer_snippet_at(text, path))
     } else {
         futures::executor::block_on(engine.infer_snippet(text))
