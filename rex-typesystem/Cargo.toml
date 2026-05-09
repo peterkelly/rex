@@ -15,9 +15,11 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 rpds = { workspace = true }
 rex-util = { path = "../rex-util", version = "3.9.13" }
+serde = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 rex-parser = { path = "../rex-parser", version = "3.9.13" }
+serde_json = { workspace = true }

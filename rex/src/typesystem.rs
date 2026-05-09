@@ -74,3 +74,30 @@ pub use rex_typesystem::typesystem::TypeSystem;
 
 /// Generator for fresh type variables during inference.
 pub use rex_typesystem::typesystem::TypeVarSupply;
+
+/// Current schema version for JSON-facing type bundles.
+pub use rex_typesystem::wire::TYPE_BUNDLE_SCHEMA_VERSION;
+
+/// Self-contained JSON-facing set of Rex types plus referenced ADT declarations.
+pub use rex_typesystem::wire::TypeBundle;
+
+/// JSON-facing ADT declaration.
+pub use rex_typesystem::wire::WireAdtDecl;
+
+/// JSON-facing ADT variant declaration.
+pub use rex_typesystem::wire::WireAdtVariant;
+
+/// JSON-facing record field type.
+pub use rex_typesystem::wire::WireField;
+
+/// JSON-facing typeclass predicate.
+pub use rex_typesystem::wire::WirePredicate;
+
+/// JSON-facing polymorphic type scheme.
+pub use rex_typesystem::wire::WireScheme;
+
+/// JSON-facing Rex type.
+pub use rex_typesystem::wire::WireType;
+
+/// JSON-facing type variable.
+pub use rex_typesystem::wire::WireTypeVar;

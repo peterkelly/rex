@@ -16,3 +16,4 @@ pub mod prelude;
 pub mod types;
 pub mod typesystem;
 pub mod unification;
+pub mod wire;

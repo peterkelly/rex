@@ -863,6 +863,8 @@ dependencies = [
  "rex-parser",
  "rex-util",
  "rpds",
+ "serde",
+ "serde_json",
  "thiserror",
  "uuid",
 ]
