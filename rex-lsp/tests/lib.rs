@@ -8,7 +8,10 @@ use rex::{
 };
 use rex_ast::{Decl, Expr, NameRef, TypeExpr};
 use rex_engine::ValueDisplayOptions;
-use rex_lsp::server::*;
+use rex_lsp::*;
+use rex_lsp::{
+    code_actions::*, diagnostics::*, document::*, imports::*, public::*, queries::*, shared::*,
+};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;

@@ -18,20 +18,25 @@ use tower_lsp::lsp_types::{
 };
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
-use crate::server::{
+use crate::{
     CMD_ADAPTERS_FROM_INFERRED_TO_EXPECTED_AT, CMD_EXPECTED_TYPE_AT,
     CMD_FUNCTIONS_ACCEPTING_INFERRED_TYPE_AT, CMD_FUNCTIONS_COMPATIBLE_WITH_IN_SCOPE_VALUES_AT,
     CMD_FUNCTIONS_PRODUCING_EXPECTED_TYPE_AT, CMD_HOLES_EXPECTED_TYPES,
     CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT, CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT,
-    CMD_SEMANTIC_LOOP_STEP, clear_parse_cache, code_actions_for_source, command_uri,
-    command_uri_and_position, command_uri_position_and_id,
-    command_uri_position_max_steps_strategy_and_dry_run, completion_items, diagnostics_from_text,
-    document_symbols_for_source, execute_query_command_for_document,
-    execute_query_command_for_document_without_position,
-    execute_semantic_loop_apply_best_quick_fixes, execute_semantic_loop_apply_quick_fix,
-    execute_semantic_loop_step, format_edits_for_source, goto_definition_response, hover_contents,
-    hover_type_contents, references_for_source, rename_for_source, with_open_documents,
-    word_at_position,
+    CMD_SEMANTIC_LOOP_STEP,
+    code_actions::code_actions_for_source,
+    completion::{completion_items, hover_contents, word_at_position},
+    diagnostics::diagnostics_from_text,
+    document::{document_symbols_for_source, format_edits_for_source},
+    navigation::{goto_definition_response, references_for_source, rename_for_source},
+    queries::{
+        command_uri, command_uri_and_position, command_uri_position_and_id,
+        command_uri_position_max_steps_strategy_and_dry_run, execute_query_command_for_document,
+        execute_query_command_for_document_without_position,
+        execute_semantic_loop_apply_best_quick_fixes, execute_semantic_loop_apply_quick_fix,
+        execute_semantic_loop_step, hover_type_contents,
+    },
+    shared::{clear_parse_cache, with_open_documents},
 };
 
 struct RexServer {

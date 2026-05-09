@@ -4,7 +4,7 @@
 use futures::executor::block_on;
 use rex_ast::CompilationUnit;
 use rex_engine::{Engine, ValueDisplayOptions};
-use rex_lsp::server::{
+use rex_lsp::public::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,
     document_symbols_for_source_public, format_for_source_public, goto_definition_for_source,
     hover_for_source, references_for_source_public, rename_for_source_public,
