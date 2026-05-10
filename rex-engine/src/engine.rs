@@ -462,6 +462,28 @@ fn alloc_int_literal_as<State: Clone + Send + Sync + 'static>(
     }
 }
 
+fn alloc_float_literal_as<State: Clone + Send + Sync + 'static>(
+    engine: &RuntimeCore<State>,
+    value: f64,
+    typ: &Type,
+) -> Result<Pointer, EngineError> {
+    match typ.as_ref() {
+        TypeKind::Var(_) => engine.heap.alloc_ptr_f32(value as f32),
+        TypeKind::Con(tc) => match tc.builtin_id() {
+            Some(BuiltinTypeId::F32) => engine.heap.alloc_ptr_f32(value as f32),
+            Some(BuiltinTypeId::F64) => engine.heap.alloc_ptr_f64(value),
+            _ => Err(EngineError::NativeType {
+                expected: "f32 or f64".into(),
+                got: typ.to_string(),
+            }),
+        },
+        _ => Err(EngineError::NativeType {
+            expected: "f32 or f64".into(),
+            got: typ.to_string(),
+        }),
+    }
+}
+
 pub(crate) fn type_head_is_var(typ: &Type) -> bool {
     let mut cur = typ;
     while let TypeKind::App(head, _) = cur.as_ref() {
@@ -3667,10 +3689,6 @@ fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
             let mut simple = true;
             for pred in &preds {
                 if pred.typ.ftv().contains(&tv) {
-                    if !defaultable_class(&pred.class) {
-                        simple = false;
-                        break;
-                    }
                     match pred.typ.as_ref() {
                         TypeKind::Var(v) if v.id == tv => relevant.push(pred.clone()),
                         _ => {
@@ -3680,7 +3698,7 @@ fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
                     }
                 }
             }
-            if !simple || relevant.is_empty() {
+            if !simple || !predicates_are_defaultable(&relevant) {
                 continue;
             }
             if let Some(choice) = choose_default_type(engine, &relevant, &candidates)? {
@@ -3698,7 +3716,17 @@ fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
     Ok((typed.apply(&subst), preds))
 }
 
-fn defaultable_class(class: &Symbol) -> bool {
+fn predicates_are_defaultable(preds: &[Predicate]) -> bool {
+    let has_numeric_predicate = preds
+        .iter()
+        .any(|pred| numeric_defaultable_class(&pred.class));
+    has_numeric_predicate
+        && preds.iter().all(|pred| {
+            numeric_defaultable_class(&pred.class) || defaultable_companion_class(&pred.class)
+        })
+}
+
+fn numeric_defaultable_class(class: &Symbol) -> bool {
     matches!(
         class.as_ref(),
         "AdditiveMonoid"
@@ -3710,6 +3738,10 @@ fn defaultable_class(class: &Symbol) -> bool {
             | "Field"
             | "Integral"
     )
+}
+
+fn defaultable_companion_class(class: &Symbol) -> bool {
+    matches!(class.as_ref(), "Eq" | "Ord")
 }
 
 fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {
@@ -4979,9 +5011,11 @@ where
             _ => frame_kind_error("int"),
         },
         Frame::Float(frame) => match frame.expr.kind.as_ref() {
-            TypedExprKind::Float(value) => Ok(EvalControl::Return(
-                runtime.heap.alloc_ptr_f32(*value as f32)?,
-            )),
+            TypedExprKind::Float(value) => Ok(EvalControl::Return(alloc_float_literal_as(
+                runtime,
+                *value,
+                &frame.expr.typ,
+            )?)),
             _ => frame_kind_error("float"),
         },
         Frame::String(frame) => match frame.expr.kind.as_ref() {

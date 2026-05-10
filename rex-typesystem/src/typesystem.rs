@@ -218,6 +218,10 @@ pub(crate) fn is_integral_literal_expr(expr: &Expr) -> bool {
     matches!(expr, Expr::Int(..) | Expr::Uint(..))
 }
 
+pub(crate) fn is_overloaded_numeric_literal_expr(expr: &Expr) -> bool {
+    is_integral_literal_expr(expr) || matches!(expr, Expr::Float(..))
+}
+
 /// Turn a monotype `typ` (plus constraints `preds`) into a polymorphic `Scheme`
 /// by quantifying over the type variables not free in `env`.
 pub fn generalize(env: &TypeEnv, preds: Vec<Predicate>, typ: Type) -> Scheme {

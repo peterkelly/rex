@@ -157,6 +157,19 @@ async fn primitive_float_operators_cover_all_widths() {
     assert_value::<f32>("7.0 / 2.0", 3.5f32, BuiltinTypeId::F32).await;
 
     assert_value::<f64>(
+        r#"
+let
+  add_float: f64 -> f64 -> f64 = \x y -> x + y
+in
+  add_float 6.0 3.0
+"#,
+        9.0f64,
+        BuiltinTypeId::F64,
+    )
+    .await;
+    assert_value::<f64>("(7.0 is f64) / (2.0 is f64)", 3.5f64, BuiltinTypeId::F64).await;
+
+    assert_value::<f64>(
         "(prim_to_f64 6.0) + (prim_to_f64 3.0)",
         9.0f64,
         BuiltinTypeId::F64,

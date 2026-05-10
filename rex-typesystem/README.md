@@ -39,7 +39,7 @@ The inference entry points are `infer(&mut ts, expr)` (predicates + type) and `i
 The inference engine and its tests live in `src/inference.rs`; `src/typesystem.rs` contains the shared type-system data structures, unification machinery, and declaration/typeclass registration code that inference builds on.
 
 - Integer literals are `Integral`-constrained and can specialize from context; ambiguous cases default later to `i32`
-- Float literals default to `f32`
+- Float literals are `Field`-constrained and can specialize from context to `f32` or `f64`; ambiguous cases default later to `f32`
 
 Example (from tests):
 

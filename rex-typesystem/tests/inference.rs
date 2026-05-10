@@ -364,6 +364,43 @@ fn infer_type_annotation_ok() {
 }
 
 #[test]
+fn infer_float_literal_specializes_to_f64_annotation() {
+    let expr = parse_expr("let x: f64 = 3.14 in x");
+    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::F64));
+}
+
+#[test]
+fn infer_float_literals_specialize_to_annotated_function_args() {
+    for (source, expected) in [
+        (
+            r#"
+            let
+              add_float: f32 -> f32 -> f32 = \x y -> x + y
+            in
+              add_float 3.0 4.0
+            "#,
+            BuiltinTypeId::F32,
+        ),
+        (
+            r#"
+            let
+              add_float: f64 -> f64 -> f64 = \x y -> x + y
+            in
+              add_float 3.0 4.0
+            "#,
+            BuiltinTypeId::F64,
+        ),
+    ] {
+        let expr = parse_expr(source);
+        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
+        assert_eq!(ty, Type::builtin(expected), "{source}");
+    }
+}
+
+#[test]
 fn infer_type_annotation_lambda_param() {
     let expr = parse_expr("\\ (a : f32) -> a");
     let mut ts = TypeSystem::new_with_prelude().unwrap();
@@ -847,10 +884,17 @@ fn infer_division_defaults() {
     let mut ts = TypeSystem::new_with_prelude().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
-    assert_eq!(preds.len(), 1);
-    assert_eq!(preds[0].class.as_ref(), "Divisive");
-    assert_eq!(preds[0].typ, Type::builtin(BuiltinTypeId::F32));
-    assert!(entails(&ts.classes, &[], &preds[0]).unwrap());
+    assert_eq!(preds.len(), 2);
+    assert!(preds.iter().any(|p| p.class.as_ref() == "Divisive"));
+    assert!(preds.iter().any(|p| p.class.as_ref() == "Field"));
+    assert!(
+        preds
+            .iter()
+            .all(|p| p.typ == Type::builtin(BuiltinTypeId::F32))
+    );
+    for pred in preds {
+        assert!(entails(&ts.classes, &[], &pred).unwrap());
+    }
 }
 
 #[test]

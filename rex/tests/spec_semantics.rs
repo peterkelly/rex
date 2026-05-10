@@ -130,6 +130,26 @@ async fn spec_integer_literals_unify_with_integral_context() {
 }
 
 #[tokio::test]
+async fn spec_float_literals_unify_with_float_context() {
+    let (_heap, handle, ty) = eval(
+        r#"
+        let
+          add_float: f64 -> f64 -> f64 = \x y -> x + y
+        in
+          add_float 3.0 4.0
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::F64));
+    match handle.value().unwrap() {
+        Value::F64(n) => assert!((n - 7.0).abs() < f64::EPSILON),
+        _ => panic!("expected f64, got {}", handle.type_name().unwrap()),
+    }
+}
+
+#[tokio::test]
 async fn test_let_tuple_destructuring() {
     let (_heap, handle, ty) = eval("let t = (1, \"Hello\", true), (x, y, z) = t in x")
         .await

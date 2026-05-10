@@ -710,6 +710,10 @@ for code in [
 Negative literals specialize only to signed numeric types. For example, `num_i32 (-3)` is valid,
 while `num_u32 (-3)` is a type error.
 
+Float literals are similarly context-sensitive for primitive float widths. A literal such as `3.0`
+defaults to `f32` when unconstrained, but specializes to `f64` when passed to a native or Rex
+function whose argument type is `f64`.
+
 ### Async Natives
 
 If your host functions are async, stage them in a module with `export_async` and evaluate with

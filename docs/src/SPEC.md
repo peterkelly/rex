@@ -356,6 +356,27 @@ let x: i16 = -3 in x
 Attempting to use a negative literal at an unsigned type is a type error (for example
 `let x: u8 = -3 in x`).
 
+## Float Literals
+
+Float literals are overloaded over primitive floating-point types.
+
+- A literal like `3.0` introduces a fresh type variable `α` with predicate `Field α`.
+- Context can specialize `α` to `f32` or `f64` (for example,
+  `let x: f64 = 3.0 in x`).
+- If `α` remains ambiguous, normal defaulting rules choose `f32`.
+- Unannotated `let` bindings whose definition is a float literal are kept monomorphic, matching
+  integer literal bindings.
+- Float literals do not imply integer-to-float coercions. A mixed expression such as `1 + 2.0`
+  is still a type error unless the values are explicitly converted by user code.
+
+Examples:
+
+```rex
+let x: f64 = 3.0 in x
+let f: f64 -> f64 = \x -> x in f 3.0
+let x = 3.0 in (x is f32)
+```
+
 ## Defaulting
 
 Defaulting runs after type inference and before evaluation.
@@ -365,9 +386,14 @@ Defaulting runs after type inference and before evaluation.
 A type variable `α` is eligible for defaulting iff:
 
 - `α` appears only in *simple* predicates of the form `C α` (not in compound types), and
-- every such `C` is in the defaultable set:
+- at least one such `C` is in the numeric defaultable set:
   `AdditiveMonoid`, `MultiplicativeMonoid`, `Subtractive`, `AdditiveGroup`, `Ring`, `Divisive`,
   `Field`, `Integral`.
+
+`Eq` and `Ord` are allowed as companion predicates when a numeric defaultable predicate is also
+present. They do not make a type variable defaultable on their own. This lets expressions like
+`if x == 0.0 then ...` default through the float literal's `Field` predicate without making
+unconstrained equality default to an arbitrary numeric type.
 
 If `α` appears in any non-simple predicate or any non-defaultable class predicate, it is not
 defaulted.

@@ -5,7 +5,7 @@ use crate::{
         TypeVarId, TypedExpr, TypedExprKind, Types,
     },
     typesystem::{
-        TypeSystem, TypeVarSupply, instantiate, is_integral_literal_expr,
+        TypeSystem, TypeVarSupply, instantiate, is_overloaded_numeric_literal_expr,
         predicates_from_constraints, reject_ambiguous_scheme, type_from_annotation_expr,
         type_from_annotation_expr_vars,
     },
@@ -48,16 +48,75 @@ fn is_integral_primitive(typ: &Type) -> bool {
     )
 }
 
+fn is_float_primitive(typ: &Type) -> bool {
+    matches!(
+        typ.as_ref(),
+        TypeKind::Con(tc)
+            if matches!(
+                tc.builtin_id(),
+                Some(BuiltinTypeId::F32 | BuiltinTypeId::F64)
+            )
+    )
+}
+
+fn is_additive_group_primitive(typ: &Type) -> bool {
+    matches!(
+        typ.as_ref(),
+        TypeKind::Con(tc)
+            if matches!(
+                tc.builtin_id(),
+                Some(
+                    BuiltinTypeId::I8
+                        | BuiltinTypeId::I16
+                        | BuiltinTypeId::I32
+                        | BuiltinTypeId::I64
+                        | BuiltinTypeId::F32
+                        | BuiltinTypeId::F64
+                )
+            )
+    )
+}
+
+fn insert_default_type(subst: Subst, tv: TypeVarId, typ: Type) -> Result<Subst, TypeError> {
+    if let Some(existing) = subst.get(&tv)
+        && existing != &typ
+    {
+        return Err(TypeError::Unification(
+            existing.to_string(),
+            typ.to_string(),
+        ));
+    }
+    Ok(subst.insert(tv, typ))
+}
+
+fn validate_literal_predicates(preds: &[Predicate]) -> Result<(), TypeError> {
+    for pred in preds {
+        if pred.class.as_ref() == "Field" {
+            if matches!(pred.typ.as_ref(), TypeKind::Var(_)) || is_float_primitive(&pred.typ) {
+                continue;
+            }
+            return Err(TypeError::Unification("f32".into(), pred.typ.to_string()));
+        }
+    }
+    Ok(())
+}
+
 fn finalize_infer_for_public_api(
     mut preds: Vec<Predicate>,
     mut typ: Type,
 ) -> Result<(Vec<Predicate>, Type), TypeError> {
     let mut subst = Subst::new_sync();
     for pred in &preds {
-        if pred.class.as_ref() == "Integral"
-            && let TypeKind::Var(tv) = pred.typ.as_ref()
-        {
-            subst = subst.insert(tv.id, Type::builtin(BuiltinTypeId::I32));
+        if let TypeKind::Var(tv) = pred.typ.as_ref() {
+            match pred.class.as_ref() {
+                "Field" => {
+                    subst = insert_default_type(subst, tv.id, Type::builtin(BuiltinTypeId::F32))?;
+                }
+                "Integral" => {
+                    subst = insert_default_type(subst, tv.id, Type::builtin(BuiltinTypeId::I32))?;
+                }
+                _ => {}
+            }
         }
     }
 
@@ -66,14 +125,14 @@ fn finalize_infer_for_public_api(
         typ = typ.apply(&subst);
     }
 
+    validate_literal_predicates(&preds)?;
     for pred in &preds {
-        if pred.class.as_ref() != "Integral" {
-            continue;
+        if pred.class.as_ref() == "Integral" {
+            if matches!(pred.typ.as_ref(), TypeKind::Var(_)) || is_integral_primitive(&pred.typ) {
+                continue;
+            }
+            return Err(TypeError::Unification("i32".into(), pred.typ.to_string()));
         }
-        if matches!(pred.typ.as_ref(), TypeKind::Var(_)) || is_integral_primitive(&pred.typ) {
-            continue;
-        }
-        return Err(TypeError::Unification("i32".into(), pred.typ.to_string()));
     }
 
     Ok((preds, typ))
@@ -157,6 +216,58 @@ fn monomorphic_scheme_with_unifier(
     Scheme::new(vec![], preds, typ)
 }
 
+fn default_literal_constraints_outside_type(
+    preds: Vec<Predicate>,
+    typ: Type,
+    unifier: &mut Unifier,
+) -> Result<(Vec<Predicate>, Type), TypeError> {
+    let typ = unifier.apply_type(&typ);
+    let preds = dedup_preds(
+        preds
+            .into_iter()
+            .map(|pred| Predicate::new(pred.class, unifier.apply_type(&pred.typ)))
+            .collect(),
+    );
+    let typ_ftv = typ.ftv();
+    let mut defaults: BTreeMap<TypeVarId, Type> = BTreeMap::new();
+
+    for pred in &preds {
+        let TypeKind::Var(tv) = pred.typ.as_ref() else {
+            continue;
+        };
+        if typ_ftv.contains(&tv.id) {
+            continue;
+        }
+        let default_ty = match pred.class.as_ref() {
+            "Field" => Type::builtin(BuiltinTypeId::F32),
+            "Integral" => Type::builtin(BuiltinTypeId::I32),
+            _ => continue,
+        };
+        if let Some(existing) = defaults.get(&tv.id)
+            && existing != &default_ty
+        {
+            return Err(TypeError::Unification(
+                existing.to_string(),
+                default_ty.to_string(),
+            ));
+        }
+        defaults.insert(tv.id, default_ty);
+    }
+
+    for (tv, default_ty) in defaults {
+        unifier.unify(&Type::var(TypeVar::new(tv, None)), &default_ty)?;
+    }
+
+    let typ = unifier.apply_type(&typ);
+    let preds = dedup_preds(
+        preds
+            .into_iter()
+            .map(|pred| Predicate::new(pred.class, unifier.apply_type(&pred.typ)))
+            .collect(),
+    );
+    Ok((preds, typ))
+}
+
 pub fn infer_typed(
     type_system: &mut TypeSystem,
     expr: &Expr,
@@ -190,6 +301,7 @@ fn infer_typed_inner(
         t = t.apply(&improve);
     }
     type_system.check_predicate_kinds(&preds)?;
+    validate_literal_predicates(&preds)?;
     Ok((typed, preds, t))
 }
 
@@ -325,7 +437,31 @@ fn collect_app_chain(expr: &Expr) -> (&Expr, Vec<&Expr>) {
     (cur, args)
 }
 
-fn narrow_overload_candidates(candidates: &[Type], arg_ty: &Type) -> Vec<Type> {
+fn predicate_can_hold_for_overload_arg(pred: &Predicate) -> bool {
+    match pred.class.as_ref() {
+        "Integral" => {
+            matches!(pred.typ.as_ref(), TypeKind::Var(_)) || is_integral_primitive(&pred.typ)
+        }
+        "Field" => matches!(pred.typ.as_ref(), TypeKind::Var(_)) || is_float_primitive(&pred.typ),
+        "AdditiveGroup" => {
+            matches!(pred.typ.as_ref(), TypeKind::Var(_)) || is_additive_group_primitive(&pred.typ)
+        }
+        _ => true,
+    }
+}
+
+fn candidate_satisfies_arg_preds(preds: &[Predicate], subst: &Subst) -> bool {
+    preds.iter().all(|pred| {
+        let pred = pred.apply(subst);
+        predicate_can_hold_for_overload_arg(&pred)
+    })
+}
+
+fn narrow_overload_candidates(
+    candidates: &[Type],
+    arg_ty: &Type,
+    arg_preds: &[Predicate],
+) -> Vec<Type> {
     let mut out = Vec::new();
     for candidate in candidates {
         let Some((params, ret)) = decompose_fun(candidate, 1) else {
@@ -333,7 +469,13 @@ fn narrow_overload_candidates(candidates: &[Type], arg_ty: &Type) -> Vec<Type> {
         };
         let param = &params[0];
         if let Ok(s) = unify(param, arg_ty) {
-            out.push(ret.apply(&s));
+            if !candidate_satisfies_arg_preds(arg_preds, &s) {
+                continue;
+            }
+            let narrowed = ret.apply(&s);
+            if !out.iter().any(|typ| typ == &narrowed) {
+                out.push(narrowed);
+            }
         }
     }
     out
@@ -569,7 +711,7 @@ fn apply_typed_app_arg(
             .into_iter()
             .map(|t| unifier.apply_type(&t))
             .collect::<Vec<_>>();
-        let narrowed = narrow_overload_candidates(&candidates, &arg_ty);
+        let narrowed = narrow_overload_candidates(&candidates, &arg_ty, &p_arg);
         if narrowed.is_empty()
             && let Some(name) = &state.overload_name
         {
@@ -802,7 +944,10 @@ fn infer_expr_type_inner(
                 lit_ty,
             ))
         }
-        Expr::Float(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::F32))),
+        Expr::Float(_, _) => {
+            let lit_ty = Type::var(supply.fresh(Some(Symbol::intern("n"))));
+            Ok((vec![Predicate::new("Field", lit_ty.clone())], lit_ty))
+        }
         Expr::String(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::String))),
         Expr::Uuid(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::Uuid))),
         Expr::DateTime(_, _) => Ok((vec![], Type::builtin(BuiltinTypeId::DateTime))),
@@ -903,7 +1048,7 @@ fn infer_expr_type_inner(
                         .into_iter()
                         .map(|t| unifier.apply_type(&t))
                         .collect::<Vec<_>>();
-                    let narrowed = narrow_overload_candidates(&candidates, &arg_ty);
+                    let narrowed = narrow_overload_candidates(&candidates, &arg_ty, &p_arg);
                     if narrowed.is_empty()
                         && let Some(name) = &overload_name
                     {
@@ -996,7 +1141,8 @@ fn infer_expr_type_inner(
                     infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?
                 };
                 let def_ty = unifier.apply_type(&t1);
-                let scheme = if ann.is_none() && is_integral_literal_expr(&d) {
+                let (p1, def_ty) = default_literal_constraints_outside_type(p1, def_ty, unifier)?;
+                let scheme = if ann.is_none() && is_overloaded_numeric_literal_expr(&d) {
                     monomorphic_scheme_with_unifier(p1, def_ty.clone(), unifier)
                 } else {
                     let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
@@ -1049,6 +1195,8 @@ fn infer_expr_type_inner(
                     .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
                 unifier.unify(&binding_ty, &def_ty)?;
                 let resolved_ty = unifier.apply_type(&binding_ty);
+                let (preds, resolved_ty) =
+                    default_literal_constraints_outside_type(preds, resolved_ty, unifier)?;
 
                 if let Some(known_variant) =
                     known_variant_from_expr_with_known(def, &resolved_ty, adts, &known_seed)
@@ -1243,9 +1391,9 @@ fn infer_expr(
                 ))
             }
             Expr::Float(_, v) => {
-                let t = Type::builtin(BuiltinTypeId::F32);
+                let t = Type::var(supply.fresh(Some(Symbol::intern("n"))));
                 Ok((
-                    vec![],
+                    vec![Predicate::new("Field", t.clone())],
                     t.clone(),
                     TypedExpr::new(t, TypedExprKind::Float(*v)),
                 ))
@@ -1466,7 +1614,9 @@ fn infer_expr(
                         infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?
                     };
                     let def_ty = unifier.apply_type(&t1);
-                    let scheme = if ann.is_none() && is_integral_literal_expr(&d) {
+                    let (p1, def_ty) =
+                        default_literal_constraints_outside_type(p1, def_ty, unifier)?;
+                    let scheme = if ann.is_none() && is_overloaded_numeric_literal_expr(&d) {
                         monomorphic_scheme_with_unifier(p1, def_ty.clone(), unifier)
                     } else {
                         let scheme = generalize_with_unifier(&env_cur, p1, def_ty.clone(), unifier);
@@ -1533,6 +1683,8 @@ fn infer_expr(
                         .ok_or_else(|| TypeError::UnknownVar(var.name.clone()))?;
                     unifier.unify(&binding_ty, &def_ty)?;
                     let resolved_ty = unifier.apply_type(&binding_ty);
+                    let (preds, resolved_ty) =
+                        default_literal_constraints_outside_type(preds, resolved_ty, unifier)?;
 
                     if let Some(known_variant) =
                         known_variant_from_expr_with_known(def, &resolved_ty, adts, &known_seed)
