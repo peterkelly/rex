@@ -26,6 +26,8 @@ Run inline code:
 cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 
+Program results are printed as JSON.
+
 Inspect compiler output:
 
 - `--emit-ast`: print the parsed AST as JSON and exit

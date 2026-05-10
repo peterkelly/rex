@@ -9,7 +9,8 @@ use std::sync::Arc;
 use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
-    engine::{Engine, ImportRequest, Importer, ValueDisplayOptions},
+    engine::{Engine, ImportRequest, Importer},
+    json::rex_to_json,
     parser::{ParseError, parse as parse_rex},
 };
 use serde_json::json;
@@ -189,33 +190,52 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         return Ok(());
     }
 
-    let (engine, importer) = init_engine(&include)?;
+    let result_json = eval_result_json(source, file.as_deref(), snippet, &include).await?;
+    let rendered = render_result_json(&result_json)?;
+    println!("{rendered}");
+    Ok(())
+}
 
-    let evaluator = engine.into_evaluator();
+async fn eval_result_json(
+    source: &str,
+    file: Option<&str>,
+    snippet: bool,
+    include: &[String],
+) -> Result<serde_json::Value, String> {
+    let (engine, importer) = init_engine(include)?;
+    let mut compiler = engine.into_compiler();
 
-    let (value, _) = if let Some(path) = file {
+    let program = if let Some(path) = file {
         if snippet {
-            evaluator
-                .eval_snippet_at(source, &path)
+            compiler
+                .compile_snippet_at(source, path)
                 .await
                 .map_err(|e| format!("{e}"))?
         } else {
-            evaluator
-                .eval_module_with_importer(ImportRequest::new(path), importer)
+            compiler
+                .compile_module_with_importer(ImportRequest::new(path), importer)
                 .await
                 .map_err(|e| format!("{e}"))?
         }
     } else {
-        evaluator
-            .eval_snippet(source)
+        compiler
+            .compile_snippet(source)
             .await
             .map_err(|e| format!("{e}"))?
     };
-    let rendered = value
-        .display_with(ValueDisplayOptions::unsanitized())
-        .unwrap_or_else(|e| format!("<display error: {e}>"));
-    println!("{rendered}");
-    Ok(())
+
+    let result_type = program.result_type().clone();
+    let evaluator = compiler.into_evaluator();
+    let type_system = evaluator.type_system();
+    let value = evaluator.run(program).await.map_err(|e| format!("{e}"))?;
+
+    rex_to_json(&value, &result_type, type_system.as_ref())
+        .map_err(|e| format!("failed to convert result to JSON: {e}"))
+}
+
+fn render_result_json(value: &serde_json::Value) -> Result<String, String> {
+    serde_json::to_string_pretty(value)
+        .map_err(|e| format!("failed to serialize result to JSON: {e}"))
 }
 
 fn emit_json(
@@ -313,6 +333,23 @@ mod tests {
         serde_json::from_str::<serde_json::Value>(&ast_out).expect("ast json");
         serde_json::from_str::<serde_json::Value>(&type_out).expect("type json");
         serde_json::from_str::<serde_json::Value>(&both_out).expect("both json");
+    }
+
+    #[tokio::test]
+    async fn result_output_is_pretty_json() {
+        let source = r#"
+            type Shape = Circle i32 | Rect i32 i32;
+
+            Rect 2 3
+        "#;
+
+        let value = eval_result_json(source, None, false, &[])
+            .await
+            .expect("eval result json");
+        assert_eq!(value, serde_json::json!({ "Rect": [2, 3] }));
+
+        let rendered = render_result_json(&value).expect("render result json");
+        assert_eq!(rendered, "{\n  \"Rect\": [\n    2,\n    3\n  ]\n}");
     }
 
     #[tokio::test]

@@ -24,8 +24,8 @@ cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
 
 ### What you should see
 
-The CLI prints the evaluated value of the final expression in your program. If something fails,
-you’ll get a parse/type/eval error (often with a span).
+The CLI prints the evaluated value of the final expression in your program in JSON format. If
+something fails, you’ll get a parse/type/eval error (often with a span).
 
 ## What “one expression” means
 
