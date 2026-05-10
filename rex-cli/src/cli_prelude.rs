@@ -1,91 +1,15 @@
-use std::collections::{BTreeMap, HashMap};
-use std::io::{self, Read, Write};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::HashMap;
+use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::thread::{self, JoinHandle};
 
 use rex::{
-    ast::Symbol,
-    engine::{Engine, EngineError, Handle, Heap, Module, Value, virtual_export_name},
-    typesystem::{BuiltinTypeId, Scheme, Type},
+    Rex,
+    engine::{Engine, EngineError, Module},
 };
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
+use tokio::sync::OnceCell;
 use uuid::Uuid;
-
-fn lock_mutex<'a, T>(
-    m: &'a Mutex<T>,
-    context: &str,
-) -> Result<std::sync::MutexGuard<'a, T>, EngineError> {
-    m.lock()
-        .map_err(|_| EngineError::Internal(format!("{context}: mutex poisoned (this is a bug)")))
-}
-
-fn lock_arc_mutex<'a, T>(
-    m: &'a Arc<Mutex<T>>,
-    context: &str,
-) -> Result<std::sync::MutexGuard<'a, T>, EngineError> {
-    m.lock()
-        .map_err(|_| EngineError::Internal(format!("{context}: mutex poisoned (this is a bug)")))
-}
-
-fn unit_handle(heap: &Heap) -> Result<Handle, EngineError> {
-    heap.alloc_tuple(vec![])
-}
-
-fn unit_type() -> Type {
-    Type::tuple(vec![])
-}
-
-fn array_type(elem: Type) -> Type {
-    Type::app(Type::builtin(BuiltinTypeId::Array), elem)
-}
-
-fn list_to_vec(_heap: &Heap, handle: &Handle) -> Result<Vec<Handle>, EngineError> {
-    let mut out = Vec::new();
-    let mut cursor = handle.clone();
-    loop {
-        match cursor.value()? {
-            Value::Adt(tag, args) if tag.as_ref() == "Empty" && args.is_empty() => {
-                return Ok(out);
-            }
-            Value::Adt(tag, args) if tag.as_ref() == "Cons" && args.len() == 2 => {
-                out.push(args[0].clone());
-                cursor = args[1].clone();
-            }
-            _ => {
-                return Err(EngineError::NativeType {
-                    expected: "List".into(),
-                    got: cursor.type_name()?.into(),
-                });
-            }
-        }
-    }
-}
-
-fn array_u8_to_bytes(_heap: &Heap, handle: &Handle) -> Result<Vec<u8>, EngineError> {
-    let elems = match handle.value()? {
-        Value::Array(elems) => elems,
-        _ => {
-            return Err(EngineError::NativeType {
-                expected: "array".into(),
-                got: handle.type_name()?.into(),
-            });
-        }
-    };
-    let mut out = Vec::with_capacity(elems.len());
-    for elem in &elems {
-        out.push(elem.to_rust::<u8>()?);
-    }
-    Ok(out)
-}
-
-fn bytes_to_array_u8(heap: &Heap, bytes: Vec<u8>) -> Result<Handle, EngineError> {
-    let out = bytes
-        .into_iter()
-        .map(|b| heap.alloc_u8(b))
-        .collect::<Result<Vec<_>, _>>()?;
-    heap.alloc_array(out)
-}
 
 #[derive(Default)]
 struct SubprocessRegistry {
@@ -93,27 +17,21 @@ struct SubprocessRegistry {
 }
 
 struct SubprocessEntry {
-    exit_code: Mutex<Option<i32>>,
-    child: Mutex<Option<std::process::Child>>,
-    stdout: Arc<Mutex<Vec<u8>>>,
-    stderr: Arc<Mutex<Vec<u8>>>,
-    stdout_done: AtomicBool,
-    stderr_done: AtomicBool,
-    stdout_thread: Mutex<Option<JoinHandle<io::Result<()>>>>,
-    stderr_thread: Mutex<Option<JoinHandle<io::Result<()>>>>,
+    child: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    output: OnceCell<Arc<SubprocessOutput>>,
+}
+
+struct SubprocessOutput {
+    exit_code: i32,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 impl SubprocessEntry {
-    fn new(child: std::process::Child) -> Self {
+    fn new(child: tokio::process::Child) -> Self {
         Self {
-            exit_code: Mutex::new(None),
-            child: Mutex::new(Some(child)),
-            stdout: Arc::new(Mutex::new(Vec::new())),
-            stderr: Arc::new(Mutex::new(Vec::new())),
-            stdout_done: AtomicBool::new(false),
-            stderr_done: AtomicBool::new(false),
-            stdout_thread: Mutex::new(None),
-            stderr_thread: Mutex::new(None),
+            child: tokio::sync::Mutex::new(Some(child)),
+            output: OnceCell::new(),
         }
     }
 }
@@ -124,6 +42,18 @@ fn subprocess_registry() -> &'static SubprocessRegistry {
     SUBPROCESSES.get_or_init(SubprocessRegistry::default)
 }
 
+#[derive(Rex)]
+struct SpawnOptions {
+    cmd: String,
+    args: Vec<String>,
+}
+
+#[derive(Clone, Copy, Rex)]
+#[rex(name = "Subprocess")]
+struct CliSubprocess {
+    id: Uuid,
+}
+
 pub fn inject_cli_prelude_engine(engine: &mut Engine) -> Result<(), EngineError> {
     inject_cli_io_natives(engine)?;
     inject_cli_process_natives(engine)?;
@@ -131,9 +61,6 @@ pub fn inject_cli_prelude_engine(engine: &mut Engine) -> Result<(), EngineError>
 }
 
 fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
-    let i32_ty = Type::builtin(BuiltinTypeId::I32);
-    let u8_ty = Type::builtin(BuiltinTypeId::U8);
-    let array_u8 = array_type(u8_ty);
     let mut module = Module::new("std.io");
     module.export("debug", |_state: &(), message: String| {
         tracing::debug!("{message}");
@@ -152,82 +79,51 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         Ok::<String, EngineError>(message)
     })?;
 
-    let read_all_sym = Symbol::intern("read_all");
-    module.export_native_async(
-        "read_all",
-        Scheme::new(vec![], vec![], Type::fun(i32_ty.clone(), array_u8.clone())),
-        1,
-        move |engine, _, args| {
-            let read_all_sym = read_all_sym.clone();
-            Box::pin(async move {
-                if args.len() != 1 {
-                    return Err(EngineError::NativeArity {
-                        name: read_all_sym,
-                        expected: 1,
-                        got: args.len(),
-                    });
-                }
-                let fd = args[0].to_rust::<i32>()?;
+    module.export_async("read_all", |_state: &(), fd: i32| async move {
+        if fd != 0 {
+            return Err(EngineError::Internal(format!(
+                "read_all only supports fd 0 (stdin), got {fd}"
+            )));
+        }
 
-                if fd != 0 {
+        let mut buf = Vec::new();
+        io::stdin()
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
+        Ok::<Vec<u8>, EngineError>(buf)
+    })?;
+
+    module.export_async(
+        "write_all",
+        |_state: &(), fd: i32, bytes: Vec<u8>| async move {
+            match fd {
+                1 => {
+                    let mut out = io::stdout();
+                    out.write_all(&bytes)
+                        .await
+                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
+                    out.flush()
+                        .await
+                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
+                }
+                2 => {
+                    let mut out = io::stderr();
+                    out.write_all(&bytes)
+                        .await
+                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
+                    out.flush()
+                        .await
+                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
+                }
+                _ => {
                     return Err(EngineError::Internal(format!(
-                        "read_all only supports fd 0 (stdin), got {fd}"
+                        "write_all only supports fd 1 (stdout) and 2 (stderr), got {fd}"
                     )));
                 }
+            }
 
-                let mut buf = Vec::new();
-                io::stdin()
-                    .read_to_end(&mut buf)
-                    .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
-                bytes_to_array_u8(engine.heap(), buf)
-            })
-        },
-    )?;
-
-    let write_all_sym = Symbol::intern("write_all");
-    module.export_native_async(
-        "write_all",
-        Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(i32_ty, Type::fun(array_u8, unit_type())),
-        ),
-        2,
-        move |engine, _, args| {
-            let write_all_sym = write_all_sym.clone();
-            Box::pin(async move {
-                if args.len() != 2 {
-                    return Err(EngineError::NativeArity {
-                        name: write_all_sym,
-                        expected: 2,
-                        got: args.len(),
-                    });
-                }
-                let fd = args[0].to_rust::<i32>()?;
-                let bytes = array_u8_to_bytes(engine.heap(), &args[1])?;
-
-                match fd {
-                    1 => {
-                        let mut out = io::stdout().lock();
-                        out.write_all(&bytes)
-                            .and_then(|()| out.flush())
-                            .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
-                    }
-                    2 => {
-                        let mut out = io::stderr().lock();
-                        out.write_all(&bytes)
-                            .and_then(|()| out.flush())
-                            .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
-                    }
-                    _ => {
-                        return Err(EngineError::Internal(format!(
-                            "write_all only supports fd 1 (stdout) and 2 (stderr), got {fd}"
-                        )));
-                    }
-                }
-
-                unit_handle(engine.heap())
-            })
+            Ok::<(), EngineError>(())
         },
     )?;
 
@@ -235,302 +131,63 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
 }
 
 fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
-    let subprocess_name = virtual_export_name("std.process", "Subprocess");
-    let subprocess_ctor = Symbol::intern(&subprocess_name);
-    let subprocess = Type::con(&subprocess_name, 0);
-    let string = Type::builtin(BuiltinTypeId::String);
-    let i32_ty = Type::builtin(BuiltinTypeId::I32);
-    let list_string = Type::app(Type::builtin(BuiltinTypeId::List), string.clone());
     let mut module = Module::new("std.process");
-    let opts = Type::record(vec![
-        (Symbol::intern("cmd"), string.clone()),
-        (Symbol::intern("args"), list_string),
-    ]);
+    module.add_rex_adt::<SpawnOptions>()?;
+    module.add_rex_adt::<CliSubprocess>()?;
 
-    let spawn_sym = Symbol::intern("spawn");
-    let subprocess_ctor_for_spawn = subprocess_ctor.clone();
-    module.export_native_async(
-        "spawn",
-        Scheme::new(vec![], vec![], Type::fun(opts, subprocess.clone())),
-        1,
-        move |engine, _, args| {
-            let spawn_sym = spawn_sym.clone();
-            let subprocess_ctor = subprocess_ctor_for_spawn.clone();
-            Box::pin(async move {
-                if args.len() != 1 {
-                    return Err(EngineError::NativeArity {
-                        name: spawn_sym.clone(),
-                        expected: 1,
-                        got: args.len(),
-                    });
-                }
-                let map = match args[0].value()? {
-                    Value::Dict(map) => map,
-                    _ => {
-                        return Err(EngineError::NativeType {
-                            expected: "record".into(),
-                            got: args[0].type_name()?.into(),
-                        });
-                    }
-                };
+    module.export_async("spawn", |_state: &(), opts: SpawnOptions| async move {
+        let child = Command::new(opts.cmd)
+            .args(opts.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| EngineError::Internal(format!("spawn failed: {e}")))?;
 
-                let cmd_handle = map
-                    .get(&Symbol::intern("cmd"))
-                    .cloned()
-                    .ok_or_else(|| EngineError::Internal("spawn missing `cmd`".into()))?;
-                let cmd = cmd_handle.to_rust::<String>()?;
+        let id = Uuid::new_v4();
+        let entry = Arc::new(SubprocessEntry::new(child));
 
-                let args_handle = map
-                    .get(&Symbol::intern("args"))
-                    .cloned()
-                    .ok_or_else(|| EngineError::Internal("spawn missing `args`".into()))?;
-                let args_list = list_to_vec(engine.heap(), &args_handle)?;
-                let mut args_vec = Vec::with_capacity(args_list.len());
-                for arg in args_list {
-                    args_vec.push(arg.to_rust::<String>()?);
-                }
+        subprocess_registry()
+            .procs
+            .lock()
+            .map_err(|_| {
+                EngineError::Internal(
+                    "std.process.spawn: subprocess registry mutex poisoned (this is a bug)".into(),
+                )
+            })?
+            .insert(id, entry);
 
-                let mut child = Command::new(cmd)
-                    .args(args_vec)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-                    .map_err(|e| EngineError::Internal(format!("spawn failed: {e}")))?;
+        Ok::<CliSubprocess, EngineError>(CliSubprocess { id })
+    })?;
 
-                let mut stdout = child.stdout.take().ok_or_else(|| {
-                    EngineError::Internal("spawn failed to capture stdout".into())
-                })?;
-                let mut stderr = child.stderr.take().ok_or_else(|| {
-                    EngineError::Internal("spawn failed to capture stderr".into())
-                })?;
-
-                let id = Uuid::new_v4();
-                let entry = Arc::new(SubprocessEntry::new(child));
-
-                {
-                    let stdout_buf = entry.stdout.clone();
-                    let entry_for_done = entry.clone();
-                    let handle = thread::spawn(move || {
-                        let mut tmp = [0u8; 8192];
-                        loop {
-                            let n = stdout.read(&mut tmp)?;
-                            if n == 0 {
-                                break;
-                            }
-                            if let Ok(mut buf) = stdout_buf.lock() {
-                                buf.extend_from_slice(&tmp[..n]);
-                            }
-                        }
-                        entry_for_done.stdout_done.store(true, Ordering::Release);
-                        Ok(())
-                    });
-                    *lock_mutex(&entry.stdout_thread, "std.process.spawn stdout_thread")? =
-                        Some(handle);
-                }
-
-                {
-                    let stderr_buf = entry.stderr.clone();
-                    let entry_for_done = entry.clone();
-                    let handle = thread::spawn(move || {
-                        let mut tmp = [0u8; 8192];
-                        loop {
-                            let n = stderr.read(&mut tmp)?;
-                            if n == 0 {
-                                break;
-                            }
-                            if let Ok(mut buf) = stderr_buf.lock() {
-                                buf.extend_from_slice(&tmp[..n]);
-                            }
-                        }
-                        entry_for_done.stderr_done.store(true, Ordering::Release);
-                        Ok(())
-                    });
-                    *lock_mutex(&entry.stderr_thread, "std.process.spawn stderr_thread")? =
-                        Some(handle);
-                }
-
-                subprocess_registry()
-                    .procs
-                    .lock()
-                    .map_err(|_| {
-                        EngineError::Internal(
-                            "std.process.spawn: subprocess registry mutex poisoned (this is a bug)"
-                                .into(),
-                        )
-                    })?
-                    .insert(id, entry);
-
-                let mut payload = BTreeMap::new();
-                payload.insert(Symbol::intern("id"), engine.heap().alloc_uuid(id)?);
-                let payload = engine.heap().alloc_dict(payload)?;
-                engine.heap().alloc_adt(subprocess_ctor, vec![payload])
-            })
-        },
-    )?;
-
-    let wait_sym = Symbol::intern("wait");
-    let subprocess_ctor_for_wait = subprocess_ctor.clone();
-    module.export_native_async(
+    module.export_async(
         "wait",
-        Scheme::new(vec![], vec![], Type::fun(subprocess.clone(), i32_ty)),
-        1,
-        move |engine, _, args| {
-            let wait_sym = wait_sym.clone();
-            let subprocess_ctor = subprocess_ctor_for_wait.clone();
-            Box::pin(async move {
-                if args.len() != 1 {
-                    return Err(EngineError::NativeArity {
-                        name: wait_sym.clone(),
-                        expected: 1,
-                        got: args.len(),
-                    });
-                }
-                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
-                let entry = subprocess_get(&id, wait_sym.as_ref())?;
-
-                if let Some(code) = *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? {
-                    return engine.heap().alloc_i32(code);
-                }
-
-                let status = {
-                    let mut child_guard = lock_mutex(&entry.child, "std.process.wait child")?;
-                    let Some(child) = child_guard.as_mut() else {
-                        return Err(EngineError::Internal("subprocess already reaped".into()));
-                    };
-                    child
-                        .wait()
-                        .map_err(|e| EngineError::Internal(format!("wait failed: {e}")))?
-                };
-
-                let code = status.code().unwrap_or(-1);
-                *lock_mutex(&entry.exit_code, "std.process.wait exit_code")? = Some(code);
-
-                // Ensure pipes are drained.
-                if let Some(handle) = entry
-                    .stdout_thread
-                    .lock()
-                    .map_err(|_| {
-                        EngineError::Internal(
-                            "std.process.wait: stdout_thread mutex poisoned (this is a bug)".into(),
-                        )
-                    })?
-                    .take()
-                {
-                    let _ = handle.join();
-                }
-                if let Some(handle) = entry
-                    .stderr_thread
-                    .lock()
-                    .map_err(|_| {
-                        EngineError::Internal(
-                            "std.process.wait: stderr_thread mutex poisoned (this is a bug)".into(),
-                        )
-                    })?
-                    .take()
-                {
-                    let _ = handle.join();
-                }
-
-                engine.heap().alloc_i32(code)
-            })
+        |_state: &(), subprocess: CliSubprocess| async move {
+            let entry = subprocess_get(&subprocess.id, "std.process.wait")?;
+            let output = subprocess_output(&entry, "std.process.wait").await?;
+            Ok::<i32, EngineError>(output.exit_code)
         },
     )?;
 
-    let stdout_sym = Symbol::intern("stdout");
-    let subprocess_ctor_for_stdout = subprocess_ctor.clone();
-    module.export_native_async(
+    module.export_async(
         "stdout",
-        Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(
-                subprocess.clone(),
-                array_type(Type::builtin(BuiltinTypeId::U8)),
-            ),
-        ),
-        1,
-        move |engine, _, args| {
-            let stdout_sym = stdout_sym.clone();
-            let subprocess_ctor = subprocess_ctor_for_stdout.clone();
-            Box::pin(async move {
-                if args.len() != 1 {
-                    return Err(EngineError::NativeArity {
-                        name: stdout_sym.clone(),
-                        expected: 1,
-                        got: args.len(),
-                    });
-                }
-                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
-                let entry = subprocess_get(&id, stdout_sym.as_ref())?;
-                let bytes = lock_arc_mutex(&entry.stdout, "std.process.stdout buffer")?.clone();
-                bytes_to_array_u8(engine.heap(), bytes)
-            })
+        |_state: &(), subprocess: CliSubprocess| async move {
+            let entry = subprocess_get(&subprocess.id, "std.process.stdout")?;
+            let output = subprocess_output(&entry, "std.process.stdout").await?;
+            Ok::<Vec<u8>, EngineError>(output.stdout.clone())
         },
     )?;
 
-    let stderr_sym = Symbol::intern("stderr");
-    let subprocess_ctor_for_stderr = subprocess_ctor.clone();
-    module.export_native_async(
+    module.export_async(
         "stderr",
-        Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(subprocess, array_type(Type::builtin(BuiltinTypeId::U8))),
-        ),
-        1,
-        move |engine, _, args| {
-            let stderr_sym = stderr_sym.clone();
-            let subprocess_ctor = subprocess_ctor_for_stderr.clone();
-            Box::pin(async move {
-                if args.len() != 1 {
-                    return Err(EngineError::NativeArity {
-                        name: stderr_sym.clone(),
-                        expected: 1,
-                        got: args.len(),
-                    });
-                }
-                let id = subprocess_id(engine.heap(), &args[0], &subprocess_ctor)?;
-                let entry = subprocess_get(&id, stderr_sym.as_ref())?;
-                let bytes = lock_arc_mutex(&entry.stderr, "std.process.stderr buffer")?.clone();
-                bytes_to_array_u8(engine.heap(), bytes)
-            })
+        |_state: &(), subprocess: CliSubprocess| async move {
+            let entry = subprocess_get(&subprocess.id, "std.process.stderr")?;
+            let output = subprocess_output(&entry, "std.process.stderr").await?;
+            Ok::<Vec<u8>, EngineError>(output.stderr.clone())
         },
     )?;
 
     engine.inject_module(module)
-}
-
-fn subprocess_id(_heap: &Heap, handle: &Handle, tag: &Symbol) -> Result<Uuid, EngineError> {
-    let (got_tag, args) = match handle.value()? {
-        Value::Adt(got_tag, args) => (got_tag, args),
-        _ => {
-            return Err(EngineError::NativeType {
-                expected: "Subprocess".into(),
-                got: handle.type_name()?.into(),
-            });
-        }
-    };
-    if &got_tag != tag || args.len() != 1 {
-        return Err(EngineError::NativeType {
-            expected: "Subprocess".into(),
-            got: handle.type_name()?.into(),
-        });
-    }
-    let map = match args[0].value()? {
-        Value::Dict(map) => map,
-        _ => {
-            return Err(EngineError::NativeType {
-                expected: "Subprocess".into(),
-                got: args[0].type_name()?.into(),
-            });
-        }
-    };
-    let id_handle = map
-        .get(&Symbol::intern("id"))
-        .cloned()
-        .ok_or_else(|| EngineError::Internal("Subprocess missing id".into()))?;
-    id_handle.to_rust::<Uuid>()
 }
 
 fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineError> {
@@ -547,9 +204,39 @@ fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineE
         .ok_or_else(|| EngineError::Internal(format!("{name}: unknown subprocess id {id}")))
 }
 
+async fn subprocess_output(
+    entry: &Arc<SubprocessEntry>,
+    name: &'static str,
+) -> Result<Arc<SubprocessOutput>, EngineError> {
+    entry
+        .output
+        .get_or_try_init(|| async move {
+            let child = {
+                let mut child_guard = entry.child.lock().await;
+                child_guard.take().ok_or_else(|| {
+                    EngineError::Internal(format!("{name}: subprocess collection already started"))
+                })?
+            };
+            let output = child
+                .wait_with_output()
+                .await
+                .map_err(|e| EngineError::Internal(format!("{name}: wait failed: {e}")))?;
+            Ok::<Arc<SubprocessOutput>, EngineError>(Arc::new(SubprocessOutput {
+                exit_code: output.status.code().unwrap_or(-1),
+                stdout: output.stdout,
+                stderr: output.stderr,
+            }))
+        })
+        .await
+        .cloned()
+}
+
 #[cfg(test)]
 mod tests {
-    use rex::engine::Engine;
+    use rex::{
+        engine::{Engine, Value},
+        typesystem::{BuiltinTypeId, Type},
+    };
 
     use super::*;
     #[tokio::test]
@@ -558,7 +245,10 @@ mod tests {
             import std.process;
             import std.io;
 
-            let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in
+            let p = process.spawn (process.SpawnOptions {
+                cmd = "sh",
+                args = to_array ["-c", "printf hi"]
+            }) in
               io.write_all 1 (process.stdout p)
         "#;
 
@@ -589,7 +279,10 @@ mod tests {
         let code = r#"
             import std.process;
 
-            let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in
+            let p = process.spawn (process.SpawnOptions {
+                cmd = "sh",
+                args = to_array ["-c", "printf hi"]
+            }) in
               (process.wait p, process.stdout p, process.stderr p)
         "#;
 
@@ -601,8 +294,8 @@ mod tests {
             ty,
             Type::tuple(vec![
                 Type::builtin(BuiltinTypeId::I32),
-                array_type(Type::builtin(BuiltinTypeId::U8)),
-                array_type(Type::builtin(BuiltinTypeId::U8)),
+                Type::array(Type::builtin(BuiltinTypeId::U8)),
+                Type::array(Type::builtin(BuiltinTypeId::U8)),
             ])
         );
         let Value::Tuple(xs) = value.value().unwrap() else {

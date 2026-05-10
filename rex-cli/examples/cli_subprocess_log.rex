@@ -13,7 +13,10 @@ import std.io;
 import std.process;
 
 let _ = io.debug "spawning..." in
-let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in
+let p = process.spawn (process.SpawnOptions {
+  cmd = "sh",
+  args = to_array ["-c", "printf hi"]
+}) in
 let _ = process.wait p in
 let out = process.stdout p in
 let msg = io.info (show out) in

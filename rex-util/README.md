@@ -5,4 +5,4 @@ Small helpers shared across crates in this workspace.
 Currently includes:
 
 - `sha256_hex`: content hashing used by the module system
-- `stdlib_source`: embedded Rex `std.*` module sources (stored as `.rex` files and included at build time)
+- `stdlib_source`: embedded pure Rex `std.*` module sources (stored as `.rex` files and included at build time)

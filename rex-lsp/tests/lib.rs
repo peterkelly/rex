@@ -79,15 +79,12 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
 }
 
 #[test]
-fn stdlib_imports_typecheck_for_non_file_uri() {
+fn stdlib_json_imports_typecheck_for_non_file_uri() {
     let uri = Url::parse("untitled:Test.rex").expect("uri");
     let text = r#"
-import std.io;
-import std.process;
+import std.json as Json;
 
-let _ = io.read_all 0 in
-let p = process.spawn { cmd = "sh", args = ["-c"] } in
-process.wait p
+Json.stringify Json.Null
 "#;
 
     let diags = diagnostics_from_text(&uri, text);
