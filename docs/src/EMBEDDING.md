@@ -245,7 +245,6 @@ Use `Module` + `Engine::inject_module(...)`:
 2. Add exports:
    - typed exports with `export` / `export_async`
    - runtime/native exports with `export_native` / `export_native_async`
-   - optional raw Rex declarations with `add_raw_declaration` (for example `pub type ...`)
    - optional structured declarations with `add_rex_adt` / `add_adt_decl`
 3. Inject it into the engine.
 
@@ -255,9 +254,9 @@ while leaf Rex types inherit a no-op default. For example, if `Label` contains a
 `Label` is enough; you do not need to stage `Side` separately. Cyclic ADT families are still
 rejected.
 
-`Module` also exposes its staged `raw_declarations`, `structured_decls`, and `exports` vectors
-directly. That is useful if you want to inspect, transform, or assemble a module in multiple
-passes before calling `Engine::inject_module`.
+`Module` also exposes its staged `decls`, `adts`, and `exports` vectors directly. That is useful
+if you want to inspect, transform, or assemble a module in multiple passes before calling
+`Engine::inject_module`.
 
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
 `Err(...)`, evaluation fails with that engine error.
@@ -283,12 +282,20 @@ println!("{value}");
 You can declare ADTs directly inside an injected host module:
 
 ```rust
+use rex_ast::Symbol;
 use rex_engine::{Engine, Module};
+use rex_typesystem::types::{BuiltinTypeId, Type};
 
 let mut engine = Engine::with_prelude(())?;
 
 let mut m = Module::new("acme.status");
-m.add_raw_declaration("pub type Status = Ready | Failed string;")?;
+let mut status = engine.adt_decl("Status", &[]);
+status.add_variant(Symbol::intern("Ready"), vec![]);
+status.add_variant(
+    Symbol::intern("Failed"),
+    vec![Type::builtin(BuiltinTypeId::String)],
+);
+m.add_adt_decl(status)?;
 engine.inject_module(m)?;
 ```
 

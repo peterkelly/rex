@@ -18,7 +18,7 @@ use crate::{
 ///
 /// `Module` is the host-side representation of a Rex module. It lets embedders collect:
 ///
-/// - Rex declarations such as `pub type ...`
+/// - structured Rex declarations such as ADTs
 /// - typed Rust handlers via [`Module::export`] / [`Module::export_async`]
 /// - handle-based dynamic native handlers via [`Module::export_native`] /
 ///   [`Module::export_native_async`]
@@ -27,8 +27,8 @@ use crate::{
 /// from Rex code.
 ///
 /// This type is intentionally mutable and staged: you can build it incrementally, inspect its
-/// raw and structured declarations plus [`Module::exports`], transform them, and only inject it
-/// once you are satisfied with the final module shape.
+/// structured declarations plus [`Module::exports`], transform them, and only inject it once you
+/// are satisfied with the final module shape.
 ///
 /// # Examples
 ///
@@ -39,7 +39,6 @@ use crate::{
 ///
 /// let mut math = Module::new("acme.math");
 /// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
-/// math.add_raw_declaration("pub type Sign = Positive | Negative;").unwrap();
 ///
 /// engine.inject_module(math).unwrap();
 /// ```
@@ -61,36 +60,20 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// ```
     pub name: String,
 
-    /// Raw Rex declarations supplied directly by the embedder.
+    /// Structured declarations registered by the embedder.
     ///
-    /// This is most commonly used for `pub type ...` declarations, but it can hold any raw Rex
-    /// declaration text you want included in the virtual module source.
-    ///
-    /// The usual way to append to this field is [`Module::add_raw_declaration`], which validates that
-    /// the added text is non-empty. The field itself is public so callers can inspect or construct
-    /// a module in multiple passes.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use rex_engine::Module;
-    ///
-    /// let mut module = Module::<()>::new("acme.status");
-    /// module
-    ///     .add_raw_declaration("pub type Status = Ready | Failed string;")
-    ///     .unwrap();
-    ///
-    /// assert_eq!(module.raw_declarations.len(), 1);
-    /// ```
-    pub raw_declarations: Vec<String>,
+    /// APIs such as [`Module::add_adt_decl`] and [`Module::add_rex_adt`] append here. The field
+    /// is public so advanced embedders can inspect, transform, or assemble module declarations
+    /// programmatically before injection.
+    pub decls: Vec<Decl>,
 
-    /// Structured declarations registered from Rust metadata rather than Rex source.
+    /// ADT declarations staged for runtime constructor injection.
     ///
-    /// APIs such as [`Module::add_adt_decl`] and [`Module::add_rex_adt`] append here instead
-    /// of synthesizing Rex source text.
-    pub structured_decls: Vec<Decl>,
-
-    pub(crate) staged_adts: Vec<AdtDecl>,
+    /// APIs such as [`Module::add_adt_decl`], [`Module::add_adt_family`], and
+    /// [`Module::add_rex_adt`] append here. The engine uses this list to register
+    /// constructor schemes for global modules and to avoid duplicate global type
+    /// declaration injection.
+    pub adts: Vec<AdtDecl>,
 
     /// Staged host exports that will become callable Rex values when the module is injected.
     ///
@@ -150,65 +133,29 @@ where
     ///
     /// let module = Module::<()>::new("acme.math");
     /// assert_eq!(module.name, "acme.math");
-    /// assert!(module.raw_declarations.is_empty());
+    /// assert!(module.decls.is_empty());
     /// assert!(module.exports.is_empty());
     /// ```
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            raw_declarations: Vec::new(),
-            structured_decls: Vec::new(),
-            staged_adts: Vec::new(),
+            decls: Vec::new(),
+            adts: Vec::new(),
             exports: Vec::new(),
         }
     }
 
-    /// Append a raw Rex declaration to this staged module.
-    ///
-    /// Use this when you already have declaration text in Rex syntax, for example `pub type ...`.
-    /// The text is stored exactly as provided and later concatenated into the virtual module source
-    /// that [`Engine::inject_module`] exposes to Rex imports.
-    ///
-    /// This rejects empty or whitespace-only strings.
-    ///
-    /// # Examples
-    ///
-    /// ```rust,ignore
-    /// use rex_engine::Module;
-    ///
-    /// let mut module = Module::<()>::new("acme.status");
-    /// module
-    ///     .add_raw_declaration("pub type Status = Ready | Failed string;")
-    ///     .unwrap();
-    /// ```
-    pub fn add_raw_declaration(
-        &mut self,
-        declaration: impl Into<String>,
-    ) -> Result<(), EngineError> {
-        let declaration = declaration.into();
-        if declaration.trim().is_empty() {
-            return Err(EngineError::Internal(
-                "module declaration cannot be empty".into(),
-            ));
-        }
-        self.raw_declarations.push(declaration);
-        Ok(())
-    }
-
     /// Append a structured Rex declaration to this staged module.
     pub fn add_decl(&mut self, decl: Decl) {
-        self.structured_decls.push(decl);
+        self.decls.push(decl);
     }
 
     /// Append multiple structured Rex declarations to this staged module.
     pub fn add_decls(&mut self, decls: impl IntoIterator<Item = Decl>) {
-        self.structured_decls.extend(decls);
+        self.decls.extend(decls);
     }
 
     /// Convert an [`AdtDecl`] into a structured type declaration and append it to this module.
-    ///
-    /// This is a structured alternative to [`Module::add_raw_declaration`] when you already have
-    /// an ADT declaration in typed form.
     ///
     /// # Examples
     ///
@@ -232,7 +179,7 @@ where
     pub fn add_adt_family(&mut self, adts: Vec<AdtDecl>) -> Result<(), EngineError> {
         for adt in order_adt_family(adts).map_err(adt_family_error_to_engine)? {
             let candidate = type_decl_from_adt(&adt);
-            let already_staged = self.structured_decls.iter().find_map(|decl| match decl {
+            let already_staged = self.decls.iter().find_map(|decl| match decl {
                 Decl::Type(type_decl) if type_decl.name == adt.name => Some(type_decl),
                 _ => None,
             });
@@ -245,8 +192,8 @@ where
                 }
                 continue;
             }
-            self.staged_adts.push(adt);
-            self.structured_decls.push(Decl::Type(candidate));
+            self.adts.push(adt);
+            self.decls.push(Decl::Type(candidate));
         }
         Ok(())
     }

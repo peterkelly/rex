@@ -7,10 +7,17 @@ use rex_typesystem::types::Type;
 
 use crate::Handle;
 
+/// Stable identity for a Rex module as seen by the runtime module system.
+///
+/// Module IDs are used as cache keys, cycle-detection keys, and the source of
+/// deterministic prefixes for canonical internal symbols.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum ModuleId {
+    /// A module loaded from a local filesystem path.
     Local { path: PathBuf },
+    /// A module loaded from a remote locator such as a URL.
     Remote(String),
+    /// A host-provided or built-in module that has no source file identity.
     Virtual(String),
 }
 
@@ -24,6 +31,10 @@ impl fmt::Display for ModuleId {
     }
 }
 
+/// Request passed from the module system to importers when Rex code imports a module.
+///
+/// It carries the requested module name plus the optional identity of the
+/// importing module so importers can resolve relative names or enforce policy.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ImportRequest {
     pub module_name: String,
@@ -46,18 +57,32 @@ impl ImportRequest {
     }
 }
 
+/// Imported module payload returned by an [`Importer`](super::Importer).
+///
+/// Importers may return raw Rex source for the engine to parse or a prebuilt
+/// compilation unit when the caller has already parsed or synthesized the AST.
 #[derive(Clone, Debug)]
 pub enum ResolvedModuleContent {
+    /// Raw Rex source text.
     Source(String),
+    /// Parsed or synthesized module declarations.
     CompilationUnit(CompilationUnit),
 }
 
+/// Fully resolved module identity and contents produced by an importer.
+///
+/// The ID is the canonical identity used for caching and symbol qualification;
+/// the content is the source or AST that will be compiled and evaluated.
 #[derive(Clone, Debug)]
 pub struct ResolvedModule {
     pub id: ModuleId,
     pub content: ResolvedModuleContent,
 }
 
+/// Deterministic compact key derived from a [`ModuleId`].
+///
+/// The engine uses module keys to build stable internal symbol prefixes without
+/// embedding full paths, URLs, or virtual module names in every canonical symbol.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ModuleKey(u64);
 
@@ -67,13 +92,24 @@ impl ModuleKey {
     }
 }
 
+/// Namespace category for a symbol exported from a module.
+///
+/// Rex keeps values, type constructors, and type classes distinct, so one local
+/// name can have separate canonical bindings in different symbol namespaces.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum SymbolKind {
+    /// A term-level value or function.
     Value,
+    /// A type constructor or type alias namespace entry.
     Type,
+    /// A type class namespace entry.
     Class,
 }
 
+/// Canonical runtime identity for an exported Rex symbol.
+///
+/// It records the defining module, namespace, original local export name, and
+/// globally unique interned symbol used after imports are rewritten.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct CanonicalSymbol {
     pub module: ModuleKey,
@@ -111,6 +147,10 @@ impl CanonicalSymbol {
     }
 }
 
+/// Export slots for a single public name in a module.
+///
+/// A Rex name can simultaneously refer to distinct namespaces, so each entry
+/// may contain a value, type, and/or class canonical symbol.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ExportEntry {
     pub value: Option<CanonicalSymbol>,
@@ -134,6 +174,10 @@ impl Default for ExportEntry {
     }
 }
 
+/// Public export table for a module.
+///
+/// The table maps each user-facing export name to the canonical value, type,
+/// and class symbols that should be introduced when another module imports it.
 #[derive(Clone, Default, Debug, Eq, PartialEq)]
 pub struct ModuleExports {
     pub entries: BTreeMap<Symbol, ExportEntry>,
@@ -199,6 +243,11 @@ impl ModuleExports {
     }
 }
 
+/// Host-provided module staged in memory before the module system imports it.
+///
+/// Virtual modules are used for injected modules and built-ins. They carry the
+/// public export table, the declarations that define those exports, and optional
+/// source text for diagnostics or documentation rendering.
 #[derive(Clone)]
 pub struct VirtualModule {
     pub exports: ModuleExports,
@@ -206,6 +255,11 @@ pub struct VirtualModule {
     pub source: Option<String>,
 }
 
+/// Loaded module cached by the module system after compilation and evaluation.
+///
+/// A module instance stores its canonical identity, export table, runtime
+/// initialization handle, inferred initialization type, and optional source
+/// fingerprint so later imports can reuse the completed module safely.
 #[derive(Clone)]
 pub struct ModuleInstance {
     pub id: ModuleId,

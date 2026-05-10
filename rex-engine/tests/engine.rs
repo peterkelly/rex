@@ -83,16 +83,16 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
 
     module.add_adt_decls_from_types(&mut engine, types).unwrap();
 
-    assert_eq!(module.structured_decls.len(), 2);
+    assert_eq!(module.decls.len(), 2);
     assert!(
         module
-            .structured_decls
+            .decls
             .iter()
             .any(|d| matches!(d, Decl::Type(td) if td.name == Symbol::intern("Foo")))
     );
     assert!(
         module
-            .structured_decls
+            .decls
             .iter()
             .any(|d| matches!(d, Decl::Type(td) if td.name == Symbol::intern("Bar")))
     );
@@ -134,9 +134,13 @@ async fn injected_module_can_define_pub_adt_declarations() {
     let mut engine = Engine::with_prelude(()).unwrap();
 
     let mut module = Module::new("acme.status");
-    module
-        .add_raw_declaration("pub type Status = Ready | Failed string;")
-        .unwrap();
+    let mut status = engine.adt_decl("Status", &[]);
+    status.add_variant(Symbol::intern("Ready"), vec![]);
+    status.add_variant(
+        Symbol::intern("Failed"),
+        vec![Type::builtin(BuiltinTypeId::String)],
+    );
+    module.add_adt_decl(status).unwrap();
     engine.inject_module(module).unwrap();
 
     let (value, _ty) = engine

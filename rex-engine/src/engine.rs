@@ -32,8 +32,8 @@ use rex_typesystem::{
 use crate::modules::{
     CanonicalSymbol, ImportRequest, Importer, Module, ModuleExports, ModuleId, ModuleSystem,
     ResolvedModule, ResolvedModuleContent, SymbolKind, VirtualModule, interface_decls_from_program,
-    module_key_for_module, parse_program_from_source, prefix_for_module, qualify_program,
-    stdlib_importer, virtual_export_name,
+    module_key_for_module, prefix_for_module, qualify_program, stdlib_importer,
+    virtual_export_name,
 };
 use crate::prelude::{
     inject_boolean_ops, inject_equality_ops, inject_json_primops, inject_list_builtins,
@@ -911,27 +911,6 @@ fn type_expr_from_type(typ: &Type) -> TypeExpr {
     }
 }
 
-fn module_local_type_names_from_declarations(declarations: &[String]) -> BTreeSet<Symbol> {
-    let mut out = BTreeSet::new();
-    for declaration in declarations {
-        let mut s = declaration.trim_start();
-        if let Some(rest) = s.strip_prefix("pub ") {
-            s = rest.trim_start();
-        }
-        let Some(rest) = s.strip_prefix("type ") else {
-            continue;
-        };
-        let name: String = rest
-            .chars()
-            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
-            .collect();
-        if !name.is_empty() {
-            out.insert(Symbol::intern(&name));
-        }
-    }
-    out
-}
-
 fn module_local_type_names_from_decls(decls: &[Decl]) -> BTreeSet<Symbol> {
     let mut out = BTreeSet::new();
     for decl in decls {
@@ -949,19 +928,6 @@ fn render_virtual_module_source(decls: &[Decl]) -> Option<String> {
         .collect::<Vec<_>>()
         .join("\n");
     (!rendered.is_empty()).then_some(rendered)
-}
-
-fn build_virtual_module_source<State: Clone + Send + Sync + 'static>(
-    declarations: &[String],
-    exports: &[Export<State>],
-) -> String {
-    let mut lines = declarations.to_vec();
-    lines.extend(
-        exports
-            .iter()
-            .map(|export| render_declare_fn_decl(&export.interface)),
-    );
-    lines.join("\n")
 }
 
 fn qualify_module_type_refs(
@@ -2687,30 +2653,21 @@ where
         }
 
         if is_global {
-            for adt in &module.staged_adts {
+            for adt in &module.adts {
                 self.inject_adt(adt.clone())?;
             }
 
-            let staged_adt_names: BTreeSet<Symbol> = module
-                .staged_adts
+            let staged_adt_names: BTreeSet<Symbol> =
+                module.adts.iter().map(|adt| adt.name.clone()).collect();
+            let decls = module
+                .decls
                 .iter()
-                .map(|adt| adt.name.clone())
-                .collect();
-            let decls = if module.raw_declarations.is_empty() {
-                module
-                    .structured_decls
-                    .iter()
-                    .filter(|decl| match decl {
-                        Decl::Type(ty) => !staged_adt_names.contains(&ty.name),
-                        _ => true,
-                    })
-                    .cloned()
-                    .collect()
-            } else {
-                let source = module.raw_declarations.join("\n");
-                let context = ModuleId::Virtual(ROOT_MODULE_NAME.to_string());
-                parse_program_from_source(&source, Some(&context))?.decls
-            };
+                .filter(|decl| match decl {
+                    Decl::Type(ty) => !staged_adt_names.contains(&ty.name),
+                    _ => true,
+                })
+                .cloned()
+                .collect::<Vec<_>>();
 
             for export in module.exports {
                 self.inject_module_export(ROOT_MODULE_NAME, export)?;
@@ -2721,77 +2678,50 @@ where
 
         let module_id = ModuleId::Virtual(module_name.clone());
 
-        if module.raw_declarations.is_empty() {
-            let mut decls = module.structured_decls.clone();
-            decls.extend(
-                module
-                    .exports
-                    .iter()
-                    .map(|export| Decl::DeclareFn(export.interface.clone())),
-            );
-            let local_type_names = module_local_type_names_from_decls(&decls);
-            self.module_local_type_names
-                .insert(module_name.clone(), local_type_names);
+        let mut decls = module.decls.clone();
+        decls.extend(
+            module
+                .exports
+                .iter()
+                .map(|export| Decl::DeclareFn(export.interface.clone())),
+        );
+        let local_type_names = module_local_type_names_from_decls(&decls);
+        self.module_local_type_names
+            .insert(module_name.clone(), local_type_names);
 
-            let compilation_unit = CompilationUnit { decls, body: None };
-            let prefix = prefix_for_module(&module_id);
-            let exports =
-                crate::modules::exports_from_program(&compilation_unit, &prefix, &module_id);
-            let qualified = qualify_program(&compilation_unit, &prefix);
-            let interfaces = interface_decls_from_program(&qualified);
-            self.module_exports_cache
-                .insert(module_id.clone(), exports.clone());
-            self.module_interface_cache
-                .insert(module_id.clone(), interfaces.clone());
-            self.virtual_modules.insert(
-                module_name.clone(),
-                VirtualModule {
-                    exports,
-                    decls: compilation_unit.decls.clone(),
-                    source: None,
-                },
-            );
+        let compilation_unit = CompilationUnit { decls, body: None };
+        let prefix = prefix_for_module(&module_id);
+        let exports = crate::modules::exports_from_program(&compilation_unit, &prefix, &module_id);
+        let qualified = qualify_program(&compilation_unit, &prefix);
+        let interfaces = interface_decls_from_program(&qualified);
+        self.module_exports_cache
+            .insert(module_id.clone(), exports.clone());
+        self.module_interface_cache
+            .insert(module_id.clone(), interfaces.clone());
+        self.virtual_modules.insert(
+            module_name.clone(),
+            VirtualModule {
+                exports,
+                decls: compilation_unit.decls.clone(),
+                source: None,
+            },
+        );
 
-            for export in module.exports {
-                self.inject_module_export(&module_name, export)?;
-            }
-
-            self.inject_decls(&qualified.decls)?;
-            self.modules.add_importer_front(
-                format!("injected:{module_name}"),
-                Arc::new(StaticModuleImporter {
-                    module_name: module_name.clone(),
-                    resolved: ResolvedModule {
-                        id: ModuleId::Virtual(module_name.clone()),
-                        content: ResolvedModuleContent::CompilationUnit(compilation_unit.clone()),
-                    },
-                }),
-            );
-        } else {
-            let full_source =
-                build_virtual_module_source(&module.raw_declarations, &module.exports);
-            let local_type_names =
-                module_local_type_names_from_declarations(&module.raw_declarations);
-            self.module_local_type_names
-                .insert(module_name.clone(), local_type_names);
-            self.module_sources
-                .insert(module_id.clone(), full_source.clone());
-
-            for export in module.exports {
-                self.inject_module_export(&module_name, export)?;
-            }
-            let importer_source = full_source;
-            self.modules.add_importer_front(
-                format!("injected:{module_name}"),
-                Arc::new(StaticModuleImporter {
-                    module_name: module_name.clone(),
-                    resolved: ResolvedModule {
-                        id: ModuleId::Virtual(module_name.clone()),
-                        content: ResolvedModuleContent::Source(importer_source.clone()),
-                    },
-                }),
-            );
+        for export in module.exports {
+            self.inject_module_export(&module_name, export)?;
         }
+
+        self.inject_decls(&qualified.decls)?;
+        self.modules.add_importer_front(
+            format!("injected:{module_name}"),
+            Arc::new(StaticModuleImporter {
+                module_name: module_name.clone(),
+                resolved: ResolvedModule {
+                    id: ModuleId::Virtual(module_name.clone()),
+                    content: ResolvedModuleContent::CompilationUnit(compilation_unit.clone()),
+                },
+            }),
+        );
 
         self.injected_modules.insert(module_name);
         Ok(())
