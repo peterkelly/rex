@@ -457,7 +457,6 @@ pub enum NativeTask {
     ArrayEq(NativeArrayEq),
     Sum(NativeSum),
     Mean(NativeMean),
-    LogShow(NativeLogShow),
 }
 
 impl NativeTask {
@@ -536,7 +535,6 @@ impl NativeTask {
                 trace_option(task.step, out);
                 trace_option(task.len_value, out);
             }
-            NativeTask::LogShow(task) => out.push(task.arg),
         }
     }
 
@@ -618,7 +616,6 @@ impl NativeTask {
                 rewrite_option(&mut task.step, rewrite)?;
                 rewrite_option(&mut task.len_value, rewrite)
             }
-            NativeTask::LogShow(task) => rewrite_pointer(&mut task.arg, rewrite),
         }
     }
 }
@@ -785,22 +782,6 @@ pub struct NativeMean {
     pub next_index: usize,
     pub step: Option<Pointer>,
     pub len_value: Option<Pointer>,
-}
-
-#[derive(Clone, Debug)]
-pub struct NativeLogShow {
-    pub show_type: Type,
-    pub arg_type: Type,
-    pub arg: Pointer,
-    pub log: fn(&str),
-}
-
-impl PartialEq for NativeLogShow {
-    fn eq(&self, other: &Self) -> bool {
-        self.show_type == other.show_type
-            && self.arg_type == other.arg_type
-            && self.arg == other.arg
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

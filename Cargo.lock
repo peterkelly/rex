@@ -746,8 +746,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
@@ -796,7 +794,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
- "tracing",
  "uuid",
 ]
 

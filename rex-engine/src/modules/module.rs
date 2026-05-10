@@ -1,17 +1,13 @@
 use rex_ast::Span;
 use rex_ast::{Decl, NameRef, Symbol, TypeDecl, TypeExpr, TypeVariant};
 use rex_typesystem::{
-    types::{AdtDecl, BuiltinTypeId, Predicate, RexType, Scheme, Type, TypeKind, TypeVar},
+    types::{AdtDecl, BuiltinTypeId, RexType, Scheme, Type, TypeKind},
     types::{collect_adts_in_types, order_adt_family},
 };
 
 use crate::{
     Context, Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME,
-    engine::{
-        Export, HostFnAsync, HostFnSync, NativeFuture, SchedulerNativeResult,
-        adt_family_error_to_engine,
-    },
-    stack::{NativeLogShow, NativeTask},
+    engine::{Export, HostFnAsync, HostFnSync, NativeFuture, adt_family_error_to_engine},
 };
 
 /// A staged host module that you build up in Rust and later inject into an [`Engine`].
@@ -103,16 +99,6 @@ impl<State> Module<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn tracing_log_scheme() -> Scheme {
-        let a_tv = TypeVar::new(0, Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        Scheme::new(
-            vec![a_tv],
-            vec![Predicate::new("Show", a.clone())],
-            Type::fun(a, Type::builtin(BuiltinTypeId::String)),
-        )
-    }
-
     /// Create an empty staged module that targets the engine root namespace.
     ///
     /// Injecting a global module installs its declarations and exports directly
@@ -339,57 +325,6 @@ where
     {
         self.exports
             .push(Export::from_async_handler(name, handler)?);
-        Ok(())
-    }
-
-    /// Stage a tracing-backed log export with type `a -> str where Show a`.
-    pub fn export_tracing_log_function(
-        &mut self,
-        name: impl Into<String>,
-        log: fn(&str),
-    ) -> Result<(), EngineError> {
-        let name = name.into();
-        let name_sym = Symbol::intern(&name);
-        let scheme = Self::tracing_log_scheme();
-        self.exports.push(Export::from_native_scheduler(
-            name,
-            scheme,
-            1,
-            move |engine, call_type, args| {
-                let name_sym = name_sym.clone();
-                if args.len() != 1 {
-                    return Err(EngineError::NativeArity {
-                        name: name_sym.clone(),
-                        expected: 1,
-                        got: args.len(),
-                    });
-                }
-
-                let (arg_ty, _ret_ty) = match call_type.as_ref() {
-                    TypeKind::Fun(arg, ret) => (arg.clone(), ret.clone()),
-                    _ => return Err(EngineError::NotCallable(call_type.to_string())),
-                };
-                let show_ty = Type::fun(arg_ty.clone(), Type::builtin(BuiltinTypeId::String));
-                let _ = engine;
-                Ok(SchedulerNativeResult::Task(NativeTask::LogShow(
-                    NativeLogShow {
-                        show_type: show_ty,
-                        arg_type: arg_ty,
-                        arg: args[0],
-                        log,
-                    },
-                )))
-            },
-        )?);
-        Ok(())
-    }
-
-    /// Stage the standard `debug`/`info`/`warn`/`error` tracing exports.
-    pub fn export_tracing_log_functions(&mut self) -> Result<(), EngineError> {
-        self.export_tracing_log_function("debug", |s| tracing::debug!("{s}"))?;
-        self.export_tracing_log_function("info", |s| tracing::info!("{s}"))?;
-        self.export_tracing_log_function("warn", |s| tracing::warn!("{s}"))?;
-        self.export_tracing_log_function("error", |s| tracing::error!("{s}"))?;
         Ok(())
     }
 

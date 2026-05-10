@@ -135,7 +135,22 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
     let u8_ty = Type::builtin(BuiltinTypeId::U8);
     let array_u8 = array_type(u8_ty);
     let mut module = Module::new("std.io");
-    module.export_tracing_log_functions()?;
+    module.export("debug", |_state: &(), message: String| {
+        tracing::debug!("{message}");
+        Ok::<String, EngineError>(message)
+    })?;
+    module.export("info", |_state: &(), message: String| {
+        tracing::info!("{message}");
+        Ok::<String, EngineError>(message)
+    })?;
+    module.export("warn", |_state: &(), message: String| {
+        tracing::warn!("{message}");
+        Ok::<String, EngineError>(message)
+    })?;
+    module.export("error", |_state: &(), message: String| {
+        tracing::error!("{message}");
+        Ok::<String, EngineError>(message)
+    })?;
 
     let read_all_sym = Symbol::intern("read_all");
     module.export_native_async(
@@ -551,6 +566,22 @@ mod tests {
 
         inject_cli_prelude_engine(&mut engine).unwrap();
         engine.into_evaluator().eval_snippet(code).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cli_log_exports_are_string_functions() {
+        let code = r#"
+            import std.io;
+
+            io.info "hello"
+        "#;
+
+        let mut engine = Engine::with_prelude(()).unwrap();
+
+        inject_cli_prelude_engine(&mut engine).unwrap();
+        let (value, ty) = engine.into_evaluator().eval_snippet(code).await.unwrap();
+        assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
+        assert_eq!(value.to_rust::<String>().unwrap(), "hello");
     }
 
     #[tokio::test]

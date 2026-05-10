@@ -2479,11 +2479,11 @@ where
     where
         I: Importer + 'static,
     {
-        self.modules.add_importer(name, Arc::new(importer));
+        self.modules.append_importer(name, Arc::new(importer));
     }
 
     pub fn add_importer_arc(&mut self, name: impl Into<String>, importer: Arc<dyn Importer>) {
-        self.modules.add_importer(name, importer);
+        self.modules.append_importer(name, importer);
     }
 
     pub(crate) fn import_bindings_for_decls<'a>(
@@ -2733,10 +2733,7 @@ where
         request: ImportRequest,
         importer: Arc<dyn Importer>,
     ) -> Result<(Vec<Predicate>, Type), CompileError> {
-        let chain = self
-            .modules
-            .import_chain()
-            .with_importer("with-importer", importer);
+        let chain = self.modules.import_chain().with_importer(importer);
         let resolved = chain.import(request).await.map_err(CompileError::from)?;
         self.infer_module_source(resolved, &chain)
             .await

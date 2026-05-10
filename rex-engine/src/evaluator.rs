@@ -129,10 +129,7 @@ where
     ) -> Result<(Handle, Type), ExecutionError> {
         let result: Result<(Handle, Type), ExecutionError> = {
             let engine = &mut self.compiler.engine;
-            let chain = engine
-                .modules
-                .import_chain()
-                .with_importer("with-importer", importer);
+            let chain = engine.modules.import_chain().with_importer(importer);
             let resolved = chain.import(request).await.map_err(CompileError::from)?;
             let inst = engine
                 .load_module_from_resolved(resolved, &chain)

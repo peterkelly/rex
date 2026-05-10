@@ -46,12 +46,10 @@ use crate::stack::{
     FrMatchState, FrNativeAsync, FrNativeCall, FrNativeCallState, FrProject, FrRecordUpdate,
     FrRecordUpdateState, FrSequenceState, FrString, FrTuple, FrUint, FrUuid, FrValueState, FrVar,
     Frame, NativeArrayEq, NativeArrayEqState, NativeDictMap, NativeDictTraverseResult, NativeFold,
-    NativeFoldOrder, NativeFoldState, NativeLogShow, NativeMean, NativeMeanState,
-    NativeSequenceFilter, NativeSequenceFilterMap, NativeSequenceFlatMap, NativeSequenceMap,
-    NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFlatMap,
-    NativeUnaryMap, NativeUnaryShape,
+    NativeFoldOrder, NativeFoldState, NativeMean, NativeMeanState, NativeSequenceFilter,
+    NativeSequenceFilterMap, NativeSequenceFlatMap, NativeSequenceMap, NativeSequenceShape,
+    NativeSum, NativeTask, NativeUnaryFilter, NativeUnaryFlatMap, NativeUnaryMap, NativeUnaryShape,
 };
-use crate::value::FromPointer;
 use crate::value::{Cell, Closure, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec};
 use crate::{
     Compiler, EngineError, Environment, Evaluator, FromRex, IntoRex, RootedEnvironment,
@@ -654,40 +652,6 @@ where
                     value.pointer_for_heap(engine.heap())
                 });
             let registration = NativeRegistration::sync(scheme.clone(), arity, func);
-            engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
-        });
-        Self::from_injector(name, interface, injector)
-    }
-
-    pub(crate) fn from_native_scheduler<F>(
-        name: impl Into<String>,
-        scheme: Scheme,
-        arity: usize,
-        handler: F,
-    ) -> Result<Self, EngineError>
-    where
-        F: for<'a> Fn(
-                Context<State>,
-                Type,
-                Vec<Pointer>,
-            ) -> Result<SchedulerNativeResult, EngineError>
-            + Send
-            + Sync
-            + 'static,
-    {
-        validate_native_export_scheme(&scheme, arity)?;
-        let name = name.into();
-        let normalized = normalize_name(&name).to_string();
-        let interface = declare_fn_decl_from_scheme(&normalized, &scheme);
-        let handler = Arc::new(handler);
-        let injector: ExportInjector<State> = Box::new(move |engine, qualified_name| {
-            let handler = Arc::clone(&handler);
-            let func: SchedulerNativeCallable<State> = Arc::new(move |engine, typ, args| {
-                let args = args.to_vec();
-                let handler = Arc::clone(&handler);
-                handler(engine, typ, args)
-            });
-            let registration = NativeRegistration::scheduler(scheme.clone(), arity, func);
             engine.register_native_registration(ROOT_MODULE_NAME, qualified_name, registration)
         });
         Self::from_injector(name, interface, injector)
@@ -2292,7 +2256,7 @@ where
             heap: Heap::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {
-            engine.modules.add_importer("stdlib", stdlib_importer());
+            engine.modules.append_importer("stdlib", stdlib_importer());
             engine.inject_prelude()?;
             engine.inject_prelude_virtual_module()?;
         }
@@ -2712,16 +2676,14 @@ where
         }
 
         self.inject_decls(&qualified.decls)?;
-        self.modules.add_importer_front(
-            format!("injected:{module_name}"),
-            Arc::new(StaticModuleImporter {
+        self.modules
+            .prepend_importer(Arc::new(StaticModuleImporter {
                 module_name: module_name.clone(),
                 resolved: ResolvedModule {
                     id: ModuleId::Virtual(module_name.clone()),
                     content: ResolvedModuleContent::CompilationUnit(compilation_unit.clone()),
                 },
-            }),
-        );
+            }));
 
         self.injected_modules.insert(module_name);
         Ok(())
@@ -3260,16 +3222,14 @@ where
                 source: None,
             },
         );
-        self.modules.add_importer_front(
-            format!("injected:{PRELUDE_MODULE_NAME}"),
-            Arc::new(StaticModuleImporter {
+        self.modules
+            .prepend_importer(Arc::new(StaticModuleImporter {
                 module_name: PRELUDE_MODULE_NAME.to_string(),
                 resolved: ResolvedModule {
                     id: module_id,
                     content: ResolvedModuleContent::CompilationUnit(compilation_unit),
                 },
-            }),
-        );
+            }));
         Ok(())
     }
 
@@ -6044,7 +6004,6 @@ where
         NativeTask::ArrayEq(task) => native_array_eq_enter(runtime, task),
         NativeTask::Sum(task) => native_sum_enter(runtime, task),
         NativeTask::Mean(task) => native_mean_enter(runtime, task),
-        NativeTask::LogShow(task) => native_log_show_enter(runtime, task),
     }
 }
 
@@ -6074,7 +6033,6 @@ where
         NativeTask::ArrayEq(task) => native_array_eq_receive(runtime, task, value),
         NativeTask::Sum(task) => native_sum_receive(runtime, task, value),
         NativeTask::Mean(task) => native_mean_receive(runtime, task, value),
-        NativeTask::LogShow(task) => native_log_show_receive(runtime, task, value),
     }
 }
 
@@ -6966,32 +6924,6 @@ fn native_mean_apply_div_second(task: &NativeMean) -> Result<NativeStep, EngineE
         .ok_or_else(|| EngineError::Internal("native mean missing length value".into()))?;
     let step_ty = Type::fun(task.elem_type.clone(), task.elem_type.clone());
     native_apply_step(step, step_ty, len_value, task.elem_type.clone())
-}
-
-fn native_log_show_enter<State>(
-    runtime: &RuntimeCore<State>,
-    task: &NativeLogShow,
-) -> Result<NativeStep, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let roots = runtime.heap.temp_roots(vec![task.arg])?;
-    let show = overloaded_pointer(runtime, "show", task.show_type.clone())?;
-    let arg = roots.get(0)?;
-    native_apply_step(show, task.show_type.clone(), arg, task.arg_type.clone())
-}
-
-fn native_log_show_receive<State>(
-    runtime: &RuntimeCore<State>,
-    task: &NativeLogShow,
-    value: Pointer,
-) -> Result<NativeStep, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let rendered = String::from_pointer(&runtime.heap, &value)?;
-    (task.log)(&rendered);
-    Ok(NativeStep::Return(runtime.heap.alloc_ptr_string(rendered)?))
 }
 
 fn eval_apply_overloaded_arg<State>(

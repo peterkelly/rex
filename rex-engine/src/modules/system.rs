@@ -33,7 +33,6 @@ impl Importer for DenyImporter {
 
 #[derive(Clone)]
 struct ImporterEntry {
-    name: String,
     importer: Arc<dyn Importer>,
 }
 
@@ -43,22 +42,14 @@ pub(crate) struct ImportChain {
 }
 
 impl ImportChain {
-    pub(crate) fn with_importer(
-        &self,
-        name: impl Into<String>,
-        importer: Arc<dyn Importer>,
-    ) -> Self {
+    pub(crate) fn with_importer(&self, importer: Arc<dyn Importer>) -> Self {
         let mut entries = self.entries.clone();
-        entries.push(ImporterEntry {
-            name: name.into(),
-            importer,
-        });
+        entries.push(ImporterEntry { importer });
         Self { entries }
     }
 
     pub(crate) async fn import(&self, req: ImportRequest) -> Result<ResolvedModule, EngineError> {
         for entry in &self.entries {
-            tracing::trace!(importer = %entry.name, module = %req.module_name, "trying module importer");
             let resolved = entry
                 .importer
                 .import(ImportRequest {
@@ -91,25 +82,18 @@ pub(crate) struct ModuleSystem {
 }
 
 impl ModuleSystem {
-    pub(crate) fn add_importer(&mut self, name: impl Into<String>, importer: Arc<dyn Importer>) {
-        self.import_chain.entries.push(ImporterEntry {
-            name: name.into(),
-            importer,
-        });
-    }
-
-    pub(crate) fn add_importer_front(
+    pub(crate) fn append_importer(
         &mut self,
-        name: impl Into<String>,
+        _name: impl Into<String>,
         importer: Arc<dyn Importer>,
     ) {
-        self.import_chain.entries.insert(
-            0,
-            ImporterEntry {
-                name: name.into(),
-                importer,
-            },
-        );
+        self.import_chain.entries.push(ImporterEntry { importer });
+    }
+
+    pub(crate) fn prepend_importer(&mut self, importer: Arc<dyn Importer>) {
+        self.import_chain
+            .entries
+            .insert(0, ImporterEntry { importer });
     }
 
     pub(crate) fn import_chain(&self) -> ImportChain {

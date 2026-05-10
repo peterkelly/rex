@@ -85,7 +85,7 @@ fn stdlib_imports_typecheck_for_non_file_uri() {
 import std.io;
 import std.process;
 
-let _ = io.debug "hi" in
+let _ = io.read_all 0 in
 let p = process.spawn { cmd = "sh", args = ["-c"] } in
 process.wait p
 "#;

@@ -368,11 +368,7 @@ where
         request: ImportRequest,
         importer: Arc<dyn Importer>,
     ) -> Result<CompiledProgram, CompileError> {
-        let chain = self
-            .engine
-            .modules
-            .import_chain()
-            .with_importer("with-importer", importer);
+        let chain = self.engine.modules.import_chain().with_importer(importer);
         let resolved = chain.import(request).await.map_err(CompileError::from)?;
         self.compile_module_source(resolved, &chain)
             .await

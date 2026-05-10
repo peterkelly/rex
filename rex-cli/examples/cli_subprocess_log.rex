@@ -2,11 +2,11 @@
 
 Run:
   cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_subprocess_log.rex
-  REX_LOG=rex_engine=debug cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_subprocess_log.rex
+  REX_LOG=debug cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_subprocess_log.rex
 
 Notes:
-  - info/debug/warn/error return a rendered string (via Show a)
-    and also emit a tracing log event at the corresponding level.
+  - info/debug/warn/error accept and return strings, and also emit a
+    tracing log event at the corresponding level.
 */
 
 import std.io;
@@ -16,5 +16,5 @@ let _ = io.debug "spawning..." in
 let p = process.spawn { cmd = "sh", args = ["-c", "printf hi"] } in
 let _ = process.wait p in
 let out = process.stdout p in
-let msg = io.info out in
+let msg = io.info (show out) in
 (msg, count out)
