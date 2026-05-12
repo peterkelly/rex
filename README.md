@@ -1,7 +1,7 @@
 # 🦖 Rex
 
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![docs](https://img.shields.io/badge/docs-online-blue)](https://docs.rs/rex)
+[![docs](https://img.shields.io/badge/docs-online-blue)](https://peterkelly.github.io/rex/)
 [![crates.io](https://img.shields.io/crates/v/rex.svg)](https://crates.io/crates/rex)
 
 <p align="center">
