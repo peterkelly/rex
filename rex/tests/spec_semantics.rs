@@ -178,6 +178,20 @@ async fn test_let_tuple_destructuring() {
 }
 
 #[tokio::test]
+async fn test_string_literal_escape_sequences() {
+    let (_heap, handle, ty) = eval(r#""a\nb\r\t\\\"\'\?\a\b\f\v\0\x41\101\u03BB\U0001F600""#)
+        .await
+        .unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
+    match handle.value().unwrap() {
+        Value::String(s) => {
+            assert_eq!(s, "a\nb\r\t\\\"'?\x07\x08\x0c\x0b\0AA\u{03BB}\u{1F600}")
+        }
+        _ => panic!("expected string, got {}", handle.type_name().unwrap()),
+    }
+}
+
+#[tokio::test]
 async fn test_match_tuple_destructuring() {
     let (_heap, handle, ty) =
         eval("let t = (1, \"Hello\", true) in match t with { case (x, y, z) -> x; }")

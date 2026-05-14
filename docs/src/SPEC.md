@@ -29,6 +29,20 @@ Rex comments are lexical trivia and are removed before parsing:
 - Nested block comments are not supported.
 - The legacy `{- ... -}` spelling is ordinary syntax, not a comment.
 
+## String Literals
+
+String literals are decoded during lexing.
+
+- Double-quoted (`"..."`) and single-quoted (`'...'`) literals both produce `string` values.
+- C-style simple escapes are supported: `\a`, `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\\`, `\"`,
+  `\'`, and `\?`.
+- Octal escapes use one to three octal digits (`\0` through `\777`).
+- Hex escapes use `\x` followed by one or more hexadecimal digits.
+- Unicode escapes use `\u` followed by exactly four hexadecimal digits, or `\U` followed by exactly
+  eight hexadecimal digits.
+- Backslash-newline is a line continuation and produces no character.
+- Unsupported or malformed escape sequences are lexical errors.
+
 ## Module Imports
 
 Rex distinguishes between:

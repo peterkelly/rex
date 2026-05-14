@@ -1,7 +1,8 @@
 //! Lexical analysis for Rex.
 
 use std::fmt::{self, Display, Formatter};
-use std::str::FromStr;
+use std::iter::Peekable;
+use std::str::{Chars, FromStr};
 use std::sync::OnceLock;
 
 use rex_ast::{Span, Spanned};
@@ -146,6 +147,170 @@ fn advance_position(lexeme: &str, line: &mut usize, column: &mut usize) {
             _ => *column += 1,
         }
     }
+}
+
+fn invalid_string_escape(raw: &str, span: Span, error: impl Into<String>) -> LexicalError {
+    LexicalError::InvalidLiteral {
+        kind: "string",
+        text: raw.to_string(),
+        error: error.into(),
+        span,
+    }
+}
+
+fn char_from_escape_value(raw: &str, span: Span, value: u32) -> Result<char, LexicalError> {
+    char::from_u32(value)
+        .ok_or_else(|| invalid_string_escape(raw, span, "escape sequence is not a valid character"))
+}
+
+fn hex_value(ch: char) -> Option<u32> {
+    match ch {
+        '0'..='9' => Some(ch as u32 - '0' as u32),
+        'a'..='f' => Some(ch as u32 - 'a' as u32 + 10),
+        'A'..='F' => Some(ch as u32 - 'A' as u32 + 10),
+        _ => None,
+    }
+}
+
+fn octal_value(ch: char) -> Option<u32> {
+    match ch {
+        '0'..='7' => Some(ch as u32 - '0' as u32),
+        _ => None,
+    }
+}
+
+fn parse_fixed_hex_escape(
+    raw: &str,
+    span: Span,
+    chars: &mut Peekable<Chars<'_>>,
+    digits: usize,
+) -> Result<char, LexicalError> {
+    let mut value = 0u32;
+    for _ in 0..digits {
+        let Some(ch) = chars.next() else {
+            return Err(invalid_string_escape(
+                raw,
+                span,
+                format!("expected {digits} hexadecimal digits in escape sequence"),
+            ));
+        };
+        let Some(digit) = hex_value(ch) else {
+            return Err(invalid_string_escape(
+                raw,
+                span,
+                format!("expected hexadecimal digit in escape sequence, got `{ch}`"),
+            ));
+        };
+        value = value * 16 + digit;
+    }
+    char_from_escape_value(raw, span, value)
+}
+
+fn parse_variable_hex_escape(
+    raw: &str,
+    span: Span,
+    chars: &mut Peekable<Chars<'_>>,
+) -> Result<char, LexicalError> {
+    let mut value = 0u32;
+    let mut seen = false;
+    while let Some(&ch) = chars.peek() {
+        let Some(digit) = hex_value(ch) else {
+            break;
+        };
+        seen = true;
+        chars.next();
+        value = value
+            .checked_mul(16)
+            .and_then(|v| v.checked_add(digit))
+            .ok_or_else(|| invalid_string_escape(raw, span, "hex escape value is too large"))?;
+    }
+    if !seen {
+        return Err(invalid_string_escape(
+            raw,
+            span,
+            "expected hexadecimal digit after `\\x`",
+        ));
+    }
+    char_from_escape_value(raw, span, value)
+}
+
+fn parse_octal_escape(
+    raw: &str,
+    span: Span,
+    chars: &mut Peekable<Chars<'_>>,
+    first: char,
+) -> Result<char, LexicalError> {
+    let Some(mut value) = octal_value(first) else {
+        return Err(invalid_string_escape(
+            raw,
+            span,
+            format!("expected octal digit in escape sequence, got `{first}`"),
+        ));
+    };
+    for _ in 0..2 {
+        let Some(&ch) = chars.peek() else {
+            break;
+        };
+        let Some(digit) = octal_value(ch) else {
+            break;
+        };
+        chars.next();
+        value = value * 8 + digit;
+    }
+    char_from_escape_value(raw, span, value)
+}
+
+fn unescape_string_literal(raw: &str, span: Span) -> Result<String, LexicalError> {
+    let mut out = String::new();
+    let mut chars = raw.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+
+        let Some(escaped) = chars.next() else {
+            return Err(invalid_string_escape(
+                raw,
+                span,
+                "unterminated escape sequence",
+            ));
+        };
+
+        match escaped {
+            'a' => out.push('\x07'),
+            'b' => out.push('\x08'),
+            'f' => out.push('\x0c'),
+            'n' => out.push('\n'),
+            'r' => out.push('\r'),
+            't' => out.push('\t'),
+            'v' => out.push('\x0b'),
+            '\\' => out.push('\\'),
+            '\'' => out.push('\''),
+            '"' => out.push('"'),
+            '?' => out.push('?'),
+            '\n' => {}
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+            }
+            'x' => out.push(parse_variable_hex_escape(raw, span, &mut chars)?),
+            'u' => out.push(parse_fixed_hex_escape(raw, span, &mut chars, 4)?),
+            'U' => out.push(parse_fixed_hex_escape(raw, span, &mut chars, 8)?),
+            '0'..='7' => out.push(parse_octal_escape(raw, span, &mut chars, escaped)?),
+            _ => {
+                return Err(invalid_string_escape(
+                    raw,
+                    span,
+                    format!("unsupported escape sequence `\\{escaped}`"),
+                ));
+            }
+        }
+    }
+
+    Ok(out)
 }
 
 impl Token {
@@ -335,9 +500,9 @@ impl Token {
                 } else if capture.name("Null").is_some() {
                     Token::Null(span)
                 } else if let Some(m) = capture.name("DoubleString") {
-                    Token::String(m.as_str().to_string(), span)
+                    Token::String(unescape_string_literal(m.as_str(), span)?, span)
                 } else if let Some(m) = capture.name("SingleString") {
-                    Token::String(m.as_str().to_string(), span)
+                    Token::String(unescape_string_literal(m.as_str(), span)?, span)
                 }
 
                 // Idents

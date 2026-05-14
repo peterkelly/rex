@@ -136,6 +136,16 @@ fn test_parse_comment() {
 }
 
 #[test]
+fn test_parse_string_escape_sequences() {
+    let expr = parse(r#""a\nb\r\t\\\"\'\?\a\b\f\v\0\x41\101\u03BB\U0001F600""#);
+    assert_expr_eq!(
+        expr,
+        s!("a\nb\r\t\\\"'?\x07\x08\x0c\x0b\0AA\u{03BB}\u{1F600}");
+        ignore span
+    );
+}
+
+#[test]
 fn test_legacy_comment_syntax_is_not_supported() {
     // Rex used to use Haskell-style block comments (`{- ... -}`); those were
     // replaced by C-style comments (`/* ... */` and `// ...`).

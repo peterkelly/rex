@@ -2132,10 +2132,7 @@ async fn std_json_show_renders_valid_json() {
     let obj = parsed.as_object().expect("expected object");
 
     assert_eq!(obj.get("a").and_then(|v| v.as_f64()), Some(1.0));
-    assert_eq!(
-        obj.get("b").and_then(|v| v.as_str()),
-        Some("a\\\"b\\\\c\\n")
-    );
+    assert_eq!(obj.get("b").and_then(|v| v.as_str()), Some("a\"b\\c\n"));
     let arr = obj
         .get("c")
         .and_then(|v| v.as_array())
