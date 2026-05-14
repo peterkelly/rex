@@ -121,6 +121,7 @@ Other useful flags:
 
 - `--emit-ast`: print parsed AST as JSON and exit
 - `--emit-type` (alias: `--type`): print inferred type as JSON and exit
+- `--raw-output`: print string results directly instead of as JSON strings
 - `--stdin`: read a program from stdin
 - `--stack-size-mb`: control the runner thread stack size
 

@@ -64,6 +64,10 @@ struct RunArgs {
     #[arg(long = "emit-type", alias = "type")]
     emit_type: bool,
 
+    /// Print string results directly instead of as JSON string literals.
+    #[arg(long = "raw-output")]
+    raw_output: bool,
+
     /// Additional module include roots (searched after local-relative imports).
     #[arg(long = "include", value_name = "DIR")]
     include: Vec<String>,
@@ -114,6 +118,7 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
         snippet,
         emit_ast,
         emit_type,
+        raw_output,
         include,
         stack_size_mb: _stack_size_mb,
     } = args;
@@ -140,6 +145,7 @@ async fn run_cmd(args: RunArgs) -> Result<(), String> {
             include,
             emit_ast,
             emit_type,
+            raw_output,
         },
     )
     .await
@@ -151,6 +157,7 @@ struct RunSourceOpts {
     include: Vec<String>,
     emit_ast: bool,
     emit_type: bool,
+    raw_output: bool,
 }
 
 fn init_engine(include: &[String]) -> Result<(Engine, Arc<dyn Importer>), String> {
@@ -175,6 +182,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         include,
         emit_ast,
         emit_type,
+        raw_output,
     } = opts;
 
     let program = parse_rex(source).map_err(|errs| format_parse_errors(&errs))?;
@@ -191,7 +199,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     }
 
     let result_json = eval_result_json(source, file.as_deref(), snippet, &include).await?;
-    let rendered = render_result_json(&result_json)?;
+    let rendered = render_result_json(&result_json, raw_output)?;
     println!("{rendered}");
     Ok(())
 }
@@ -233,7 +241,11 @@ async fn eval_result_json(
         .map_err(|e| format!("failed to convert result to JSON: {e}"))
 }
 
-fn render_result_json(value: &serde_json::Value) -> Result<String, String> {
+fn render_result_json(value: &serde_json::Value, raw_output: bool) -> Result<String, String> {
+    if raw_output && let Some(value) = value.as_str() {
+        return Ok(value.to_string());
+    }
+
     serde_json::to_string_pretty(value)
         .map_err(|e| format!("failed to serialize result to JSON: {e}"))
 }
@@ -318,6 +330,12 @@ mod tests {
         Cli::command().debug_assert();
     }
 
+    #[test]
+    fn raw_output_flag_parses() {
+        let cli = Cli::try_parse_from(["rex", "--raw-output", "-c", "\"hello\""]).expect("parse");
+        assert!(cli.args.raw_output);
+    }
+
     #[tokio::test]
     async fn emit_ast_and_type_are_json() {
         let source = "1 + 2";
@@ -348,8 +366,23 @@ mod tests {
             .expect("eval result json");
         assert_eq!(value, serde_json::json!({ "Rect": [2, 3] }));
 
-        let rendered = render_result_json(&value).expect("render result json");
+        let rendered = render_result_json(&value, false).expect("render result json");
         assert_eq!(rendered, "{\n  \"Rect\": [\n    2,\n    3\n  ]\n}");
+    }
+
+    #[test]
+    fn raw_output_unwraps_string_results_only() {
+        let string_value = serde_json::json!("hello\nworld");
+        let non_string_value = serde_json::json!(["hello"]);
+
+        let json_rendered = render_result_json(&string_value, false).expect("render json string");
+        let raw_rendered = render_result_json(&string_value, true).expect("render raw string");
+        let non_string_rendered =
+            render_result_json(&non_string_value, true).expect("render non-string");
+
+        assert_eq!(json_rendered, "\"hello\\nworld\"");
+        assert_eq!(raw_rendered, "hello\nworld");
+        assert_eq!(non_string_rendered, "[\n  \"hello\"\n]");
     }
 
     #[tokio::test]

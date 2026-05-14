@@ -28,6 +28,12 @@ cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
 
 Program results are printed as JSON.
 
+For string results, pass `--raw-output` to print the string contents directly:
+
+```sh
+cargo run -p rex-cli --bin rex -- --raw-output -c '"hello"'
+```
+
 Inspect compiler output:
 
 - `--emit-ast`: print the parsed AST as JSON and exit

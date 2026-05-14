@@ -36,6 +36,12 @@ Show the inferred type and exit:
 cargo run -p rex-cli --bin rex -- --emit-type -c 'map ((*) 2) [1, 2, 3]'
 ```
 
+Print a string result without JSON quotes:
+
+```sh
+cargo run -p rex-cli --bin rex -- --raw-output -c '"hello"'
+```
+
 ## “Parse error”: start small
 
 If you hit a parse error:
