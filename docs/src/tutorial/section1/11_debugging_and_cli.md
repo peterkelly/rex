@@ -1,10 +1,11 @@
 # Debugging: CLI Tips and Common Errors
 
-Rex is compiled and evaluated in stages:
+Rex is prepared and evaluated in stages:
 
 1. Parsing
-2. Type inference / checking
-3. Evaluation
+2. Import/declaration preparation
+3. Type inference / checking
+4. Evaluation
 
 Most debugging is about figuring out *which stage* is failing and adding just enough information
 to make the problem obvious.

@@ -1,12 +1,13 @@
 # Rex Engine (`rex-engine`)
 
-This crate evaluates Rex ASTs and supports host-native injection of functions and values. The API
-now exposes an explicit preparation boundary: `Engine` builds the host environment, `Compiler`
-prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator` runs one prepared program.
-The current
-implementation still keeps engine-backed state internally, but the compile/runtime split is now a
-first-class part of the public API. The runtime operates on `Value` and supports closures,
-application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
+This crate prepares and evaluates Rex programs and supports host-native injection of functions and
+values. The API now exposes an explicit preparation boundary: `Engine` builds the host
+environment, `Compiler` prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator`
+runs one prepared program. The evaluator still owns the compiler/engine state it needs for
+convenience entry points, but the compile/runtime split is now a first-class part of the public
+API. The runtime stores values in the heap and returns rooted `Handle`s; `Handle::value()` exposes
+safe public `Value` views for inspection. It supports closures, application, let-in, if-then-else,
+tuples/lists/dicts, and `match` expressions.
 
 ## Quickstart
 
@@ -18,11 +19,11 @@ use rex_parser::parse;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut engine = Engine::with_prelude(())?;
     let mut globals = Module::global();
-    globals.export("(+)", |_state, x: i32, y: i32| { Ok(x + y) })?;
+    globals.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
     globals.export_value("answer", 42i32)?;
     engine.inject_module(globals)?;
 
-    let program = parse("answer + 1").map_err(|errs| {
+    let program = parse("inc answer").map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
     let body = program.body.as_ref().ok_or_else(|| {
@@ -45,6 +46,19 @@ Phase-specific errors:
 - `Evaluator::run` returns `EvalError`
 - convenience helpers like `eval_snippet` return `ExecutionError`
 
+## Internal Layout
+
+The engine implementation is split by phase:
+
+- `builder/`: host environment construction, module injection, import rewriting, export
+  registration, and registry reporting.
+- `compiler/`: typechecking plus `CompiledProgram` and runtime link-contract construction.
+- `evaluator/`: scheduler-driven execution, native dispatch, runtime context, and runtime core
+  state.
+
+Shared runtime pieces such as heap values, engine options, module identities, native handlers, and
+runtime preflight data live beside those phase directories.
+
 ## Injection API
 
 - Build staged host APIs with `Module`.
@@ -62,7 +76,7 @@ no-op implementation, so they participate in Rex type mapping without pretending
 
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 
-`Engine` is generic over host state (`Engine<State>`, where `State: Clone + Sync + 'static`).
+`Engine` is generic over host state (`Engine<State>`, where `State: Clone + Send + Sync + 'static`).
 `export` callbacks receive `&State` as the first argument and must return `Result<T, EngineError>`;
 returning `Err(...)` fails evaluation.
 `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`;
@@ -89,7 +103,10 @@ For explicit control, use:
 - **Collection combinators** (List/Array/Option/Result): `map`, `fold`, `foldl`, `foldr`, `filter`, `filter_map`, `bind`, `ap`, `sum`, `mean`, `count`, `take`, `skip`, `zip`, `unzip`, `min`, `max`, `or_else`
 - **Option/Result helpers**: `is_some`, `is_none`, `is_ok`, `is_err`
 
-List literals are evaluated to the `Empty`/`Cons` ADT constructors (stored as `Value::Adt`). Arrays are host-native `Value::Array` values injected from Rust (e.g., by passing `Vec<T>` to `export_value`) and participate in the same collection combinators via type classes.
+List literals are evaluated to the `Empty`/`Cons` ADT constructors and inspect as `Value::Adt`.
+Arrays are host-native array values that inspect as `Value::Array` when injected from Rust (for
+example by passing `Vec<T>` to `export_value`) and participate in the same collection combinators
+via type classes.
 
 ## Type Defaults
 

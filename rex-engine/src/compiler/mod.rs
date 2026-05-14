@@ -30,6 +30,12 @@ fn unit_expr() -> Arc<Expr> {
     Arc::new(Expr::Tuple(Default::default(), Vec::new()))
 }
 
+/// Compile-time view of a prepared Rex engine.
+///
+/// A compiler owns the engine state needed for import rewriting, declaration
+/// injection, typechecking, and runtime link-contract construction. Convert it
+/// into an [`Evaluator`] once all programs you need from that preparation state
+/// have been compiled.
 pub struct Compiler<State = ()>
 where
     State: Clone + Send + Sync + 'static,
@@ -45,16 +51,19 @@ where
         Self { engine }
     }
 
+    /// Consume this compiler and build a single-shot evaluator.
     pub fn into_evaluator(self) -> Evaluator<State> {
         let runtime_env = RuntimeEnv::from_engine(&self.engine);
         let runtime = self.engine.runtime_core();
         Evaluator::new(runtime, runtime_env, self)
     }
 
+    /// Snapshot runtime link capabilities for preflight validation.
     pub fn runtime_env(&self) -> RuntimeEnv {
         RuntimeEnv::from_engine(&self.engine)
     }
 
+    /// Typecheck an expression and package it as a prepared program.
     pub fn compile_expr(&mut self, expr: &Expr) -> Result<CompiledProgram, CompileError> {
         self.compile_expr_internal(expr).map_err(CompileError::from)
     }
@@ -354,12 +363,14 @@ where
         })
     }
 
+    /// Parse, rewrite imports for, typecheck, and prepare a snippet.
     pub async fn compile_snippet(&mut self, source: &str) -> Result<CompiledProgram, CompileError> {
         self.compile_snippet_with_importer(source, None)
             .await
             .map_err(CompileError::from)
     }
 
+    /// Compile a snippet using a path anchor for resolving relative imports.
     pub async fn compile_snippet_at(
         &mut self,
         source: &str,
@@ -371,6 +382,7 @@ where
             .map_err(CompileError::from)
     }
 
+    /// Load a declaration-only module through an importer and prepare its module body.
     pub async fn compile_module_with_importer(
         &mut self,
         request: ImportRequest,

@@ -1,7 +1,11 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-//! Evaluation engine for Rex.
+//! Host environment, compiler, and runtime evaluator for Rex.
+//!
+//! Embedders build an [`Engine`] with host modules and runtime policy, convert
+//! it into a [`Compiler`] to prepare Rex source or ASTs into a
+//! [`CompiledProgram`], then run that program with a single-shot [`Evaluator`].
 
 mod builder;
 mod compiler;

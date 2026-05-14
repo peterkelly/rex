@@ -12,6 +12,11 @@ use rex_typesystem::{
     unification::unify,
 };
 
+/// Lightweight runtime link-capability snapshot for preflight validation.
+///
+/// `RuntimeEnv` deliberately does not contain evaluator runtime state or module
+/// loader state. It is a process-local API artifact used to compare a
+/// [`CompiledProgram`] against the runtime capabilities that would execute it.
 pub struct RuntimeEnv {
     capabilities: RuntimeCapabilities,
 }
@@ -67,18 +72,22 @@ impl RuntimeEnv {
         Self { capabilities }
     }
 
+    /// Runtime capabilities captured by this preflight snapshot.
     pub fn capabilities(&self) -> &RuntimeCapabilities {
         &self.capabilities
     }
 
+    /// Fingerprint the name-level capability summary.
     pub fn fingerprint(&self) -> u64 {
         self.capabilities.fingerprint()
     }
 
+    /// Compare this runtime snapshot with a prepared program's link contract.
     pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
         runtime_compatibility(program.link_contract(), &self.capabilities)
     }
 
+    /// Validate that this runtime snapshot can satisfy a prepared program.
     pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
         self.validate_internal(program).map_err(EvalError::from)
     }
@@ -99,6 +108,7 @@ impl RuntimeEnv {
         }
     }
 
+    /// Describe the storage boundary for this process-local API artifact.
     pub fn storage_boundary(&self) -> RuntimeEnvBoundary {
         RuntimeEnvBoundary {
             contains_runtime_core: false,
@@ -108,10 +118,14 @@ impl RuntimeEnv {
     }
 }
 
+/// Storage-boundary metadata for a [`RuntimeEnv`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RuntimeEnvBoundary {
+    /// Whether this value contains evaluator runtime state.
     pub contains_runtime_core: bool,
+    /// Whether this value contains module loader/cache state.
     pub contains_loader_state: bool,
+    /// Whether this value is currently safe to serialize and reload elsewhere.
     pub serializable: bool,
 }
 

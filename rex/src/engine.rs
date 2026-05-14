@@ -146,7 +146,7 @@ pub use rex_engine::RuntimeEnvBoundary;
 /// Runtime ABI and callable requirements captured by a [`CompiledProgram`].
 pub use rex_engine::RuntimeLinkContract;
 
-/// Raw Rex runtime value stored in the heap.
+/// Safe public view of a Rex runtime value stored in the heap.
 pub use rex_engine::Value;
 
 /// Formatting options for displaying Rex runtime values.

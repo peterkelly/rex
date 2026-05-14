@@ -27,6 +27,11 @@ pub(crate) mod native_functions;
 pub(crate) mod runtime_core;
 pub(crate) mod scheduler;
 
+/// Single-shot runtime for validating and running prepared Rex code.
+///
+/// `run` consumes both the evaluator and the [`CompiledProgram`]. Convenience
+/// helpers such as [`Evaluator::eval_snippet`] compile and run in one step, but
+/// still consume the evaluator.
 pub struct Evaluator<State = ()>
 where
     State: Clone + Send + Sync + 'static,
@@ -66,30 +71,37 @@ where
         }
     }
 
+    /// Runtime link-capability snapshot associated with this evaluator.
     pub fn runtime_env(&self) -> &RuntimeEnv {
         &self.runtime_env
     }
 
+    /// Type system captured by the evaluator runtime.
     pub fn type_system(&self) -> Arc<TypeSystem> {
         Arc::clone(&self.runtime.type_system)
     }
 
+    /// Heap used by this evaluator runtime.
     pub fn heap(&self) -> &Heap {
         &self.runtime.heap
     }
 
+    /// Runtime capabilities available for satisfying compiled link contracts.
     pub fn capabilities(&self) -> &RuntimeCapabilities {
         self.runtime_env.capabilities()
     }
 
+    /// Compare this runtime with a prepared program's link contract.
     pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
         self.runtime_env.compatibility_with(program)
     }
 
+    /// Preflight a prepared program without consuming either value.
     pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
         self.runtime_env.validate(program)
     }
 
+    /// Validate and run one prepared program, consuming the evaluator.
     pub async fn run(self, program: CompiledProgram) -> Result<Handle, EvalError> {
         self.runtime_env.validate_internal(&program)?;
         let runtime = self.runtime;
@@ -100,6 +112,7 @@ where
         heap.handle(pointer).map_err(EvalError::from)
     }
 
+    /// Compile and run a single expression, returning its value and inferred type.
     pub async fn eval(self, expr: &Expr) -> Result<(Handle, Type), ExecutionError> {
         let mut this = self;
         let program = this.compiler.compile_expr(expr)?;
@@ -117,6 +130,7 @@ where
         Ok((value, typ))
     }
 
+    /// Load a declaration-only module through an importer.
     pub async fn eval_module_with_importer(
         mut self,
         request: ImportRequest,
@@ -135,6 +149,7 @@ where
         result
     }
 
+    /// Load declaration-only module source directly.
     pub async fn eval_module_source(
         mut self,
         source: &str,
@@ -164,12 +179,14 @@ where
         result
     }
 
+    /// Compile and run a snippet, returning its value and inferred type.
     pub async fn eval_snippet(self, source: &str) -> Result<(Handle, Type), ExecutionError> {
         let mut this = self;
         let program = this.compiler.compile_snippet(source).await?;
         this.run_prepared(program).await
     }
 
+    /// Compile and run a snippet using a path anchor for resolving relative imports.
     pub async fn eval_snippet_at(
         self,
         source: &str,

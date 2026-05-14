@@ -7,7 +7,7 @@ Rex is a Cargo workspace. The most important crates are:
 - `rex-parser`: source parsing into a `CompilationUnit { decls, body }`
 - `rex-ast`: AST nodes, symbols, and spans
 - `rex-typesystem`: Hindley–Milner inference + type classes + ADTs
-- `rex-engine`: typed evaluation + native injection
+- `rex-engine`: host environment building, compilation, evaluation, and native injection
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex types/values
 - `rex`: CLI binary
 

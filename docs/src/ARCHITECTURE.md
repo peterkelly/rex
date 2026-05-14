@@ -4,7 +4,8 @@ Rex is implemented as a small set of focused crates that form a pipeline:
 
 1. **Parsing** (`rex-parser`): converts source text into a `rex_ast::CompilationUnit { decls, body }`.
 2. **Typing** (`rex-typesystem`): Hindley–Milner inference + ADTs + type classes; produces a `rex_typesystem::TypedExpr`.
-3. **Evaluation** (`rex-engine`): evaluates `TypedExpr` to a runtime `rex_engine::Handle`.
+3. **Execution** (`rex-engine`): builds the host environment, prepares typed code into a
+   `CompiledProgram`, and evaluates it to a runtime `rex_engine::Handle`.
 
 The crates are designed so you can use them independently (e.g. parser-only tooling, typechecking-only checks, or embedding the full evaluator).
 
@@ -18,7 +19,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `infer_typed(&mut ts, expr)` / `infer(&mut ts, expr)` for type inference.
   - The inference implementation itself lives in `rex-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
   - For untrusted code, set `rex_typesystem::TypeSystemLimits::safe_defaults()` before inference.
-- `rex-engine`: runtime evaluator. Entry points:
+- `rex-engine`: host environment builder, compiler, and runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
   - `Compiler::runtime_env()` to create explicit runtime preflight data.
@@ -27,12 +28,26 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `RuntimeEnv::validate(&compiled)` to preflight runtime linkage before execution.
   - `Evaluator::validate(&compiled)` / `Evaluator::run(compiled).await` to validate and execute one prepared program. `run` consumes both the evaluator and the compiled program.
   - convenience helpers like `Evaluator::eval_snippet` still exist, but they are single-shot compile-then-run wrappers.
-  - `Engine` carries host state as `Engine<State>` (`State: Clone + Sync + 'static`); typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`, while handle-based native APIs (`export_native*`) receive `Context<State>`.
+  - `Engine` carries host state as `Engine<State>` (`State: Clone + Send + Sync + 'static`);
+    typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed
+    `export_async` callbacks receive `&State` and return
+    `Future<Output = Result<T, EngineError>>`, while handle-based native APIs
+    (`export_native*`) receive `Context<State>`.
   - public phase errors are split as `CompileError`, `EvalError`, and `ExecutionError` (for convenience entry points that do both phases).
   - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
+
+`rex-engine` is organized internally around the same phases:
+
+- `builder/` owns engine construction, module injection, import qualification/rewrite, host export
+  registration, and registry markdown.
+- `compiler/` owns typechecking, `CompiledProgram`, extern collection, and runtime link-contract
+  construction.
+- `evaluator/` owns execution, scheduling, native dispatch, `Context`, and the runtime core.
+- `modules/`, `value.rs`, `config.rs`, and `runtime_env.rs` hold shared module identities, heap
+  values/GC roots, runtime options, and preflight compatibility data.
 
 ## Design Notes
 

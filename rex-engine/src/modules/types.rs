@@ -73,7 +73,8 @@ pub enum ResolvedModuleContent {
 /// Fully resolved module identity and contents produced by an importer.
 ///
 /// The ID is the canonical identity used for caching and symbol qualification;
-/// the content is the source or AST that will be compiled and evaluated.
+/// the content is the source or AST that will be parsed, qualified, and loaded
+/// into the module system.
 #[derive(Clone, Debug)]
 pub struct ResolvedModule {
     pub id: ModuleId,

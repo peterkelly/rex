@@ -4,7 +4,8 @@ Rex is designed as a small pipeline you can embed at whatever stage you need:
 
 1. `rex-parser`: source → `CompilationUnit { decls, body }`
 2. `rex-typesystem`: HM inference + type classes → `TypedExpr` (plus predicates/type)
-3. `rex-engine`: evaluate a `TypedExpr` → `rex_engine::Handle`
+3. `rex-engine`: build host modules, compile typed code into `CompiledProgram`, then run it →
+   `rex_engine::Handle`
 
 This document focuses on common embedding patterns.
 
@@ -34,7 +35,7 @@ Evaluation API:
 `Evaluator` is single-shot: preflight validation borrows the compiled program, and
 `Evaluator::run` consumes both the evaluator and the compiled program.
 
-```rust
+```rust,ignore
 use rex::engine::Engine;
 
 let engine = Engine::with_prelude(())?;
@@ -82,7 +83,7 @@ Phase-specific errors:
 
 If you want an explicit preflight before running:
 
-```rust
+```rust,ignore
 let mut compiler = engine.into_compiler();
 let program = compiler.compile_snippet("let x = 1 + 2 in x * 3").await?;
 let runtime = compiler.runtime_env();
@@ -103,7 +104,7 @@ consumes the evaluator.
 
 ## Evaluate Rex Code Directly
 
-```rust
+```rust,ignore
 use rex::{
     engine::{Engine, Module},
     parser::parse,
@@ -143,7 +144,7 @@ exports fail early with module errors.
 
 If you want full control:
 
-```rust
+```rust,ignore
 use rex::engine::{Engine, EngineOptions, PreludeMode};
 
 let mut engine = Engine::with_options(
@@ -174,8 +175,8 @@ request.
 Notes:
 
 - importers receive an `ImportRequest` with the requested module name and the importing module id.
-- module entrypoint workflows use `compile_module_with_importer`,
-  `infer_module_with_importer`, or `eval_module_with_importer`.
+- module-loading workflows use `compile_module_with_importer`, `infer_module_with_importer`,
+  or `eval_module_with_importer`; module source itself remains declaration-only.
 - import clauses (`(*)` / item lists) import exported names into unqualified scope.
 - unqualified imports are context-sensitive: expression positions use values, type positions use
   types, and class/constraint positions use classes.
@@ -187,7 +188,7 @@ Notes:
 For host-managed modules, either call `Engine::inject_module` or add an importer that maps
 `module_name` to source text.
 
-```rust
+```rust,ignore
 use futures::future::BoxFuture;
 use rex::engine::{Engine, ImportRequest, Importer, ModuleId, ResolvedModule, ResolvedModuleContent};
 use std::collections::HashMap;
@@ -227,7 +228,7 @@ impl Importer for MapImporter {
     }
 }
 
-engine.add_importer("host-map", MapImporter { modules });
+engine.add_importer("host-map", Arc::new(MapImporter { modules }));
 let value = engine
     .into_evaluator()
     .eval_snippet("import acme.main (main);\nmain")
@@ -263,7 +264,7 @@ if you want to inspect, transform, or assemble a module in multiple passes befor
 `export_async` handlers follow the same rule, but return
 `Future<Output = Result<T, EngineError>>`.
 
-```rust
+```rust,ignore
 use rex_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
@@ -281,7 +282,7 @@ println!("{value}");
 
 You can declare ADTs directly inside an injected host module:
 
-```rust
+```rust,ignore
 use rex_ast::Symbol;
 use rex_engine::{Engine, Module};
 use rex_typesystem::types::{BuiltinTypeId, Type};
@@ -332,7 +333,7 @@ Rex code calls it through `sample.render_label`.
 
 Example:
 
-```rust
+```rust,ignore
 use rex::{
     Rex,
     engine::{Engine, EngineError, Module},
@@ -403,7 +404,7 @@ These callbacks receive `Context<State>` (not just `&State`), so they can:
 Async native callbacks receive owned argument vectors and return `Send + 'static` futures so the
 runtime can suspend them as explicit pending evaluation frames.
 
-```rust
+```rust,ignore
 use futures::FutureExt;
 use rex_engine::{Engine, Context, Handle, Module};
 use rex::typesystem::{BuiltinTypeId, Scheme, Type};
@@ -445,7 +446,7 @@ Importer contract:
 If you evaluate ad-hoc Rex snippets that contain imports, use `eval_snippet_at` (or
 `infer_snippet_at`) to provide an importer path anchor:
 
-```rust
+```rust,ignore
 let value = engine
     .into_evaluator()
     .eval_snippet_at("import foo.bar as Bar;\nBar.add 1 2", "/tmp/workflow/_snippet.rex")
@@ -454,7 +455,8 @@ let value = engine
 
 ## Engine State
 
-`Engine` is generic over host state: `Engine<State>`, where `State: Clone + Sync + 'static`.
+`Engine` is generic over host state: `Engine<State>`, where
+`State: Clone + Send + Sync + 'static`.
 The state is stored as `engine.state: Arc<State>` and is shared across all injected functions.
 
 - Use `Engine::with_prelude(())?` if you do not need host state.
@@ -464,7 +466,7 @@ The state is stored as `engine.state: Arc<State>` and is shared across all injec
   `Context<State>` so
   they can allocate public handles through the heap and read `engine.state()`.
 
-```rust
+```rust,ignore
 use rex_engine::Engine;
 
 #[derive(Clone)]
@@ -534,7 +536,7 @@ match (to_list bytes) with {
 
 ## Typecheck Without Evaluating
 
-```rust
+```rust,ignore
 use rex::{
     parser::parse,
     typesystem::{TypeSystem, infer},
@@ -581,7 +583,7 @@ Users can declare new type classes and instances directly in Rex source. As the 
 
 ### Typecheck: Inject Class/Instance Decls into `TypeSystem`
 
-```rust
+```rust,ignore
 use rex::{
     parser::parse,
     typesystem::{TypeSystem, infer},
@@ -625,7 +627,7 @@ assert_eq!(ty.to_string(), "i32");
 
 ### Evaluate: Inject Decls into `Engine`
 
-```rust
+```rust,ignore
 use rex_engine::{Engine, EngineError, Module};
 use rex::parser::parse;
 
@@ -667,7 +669,7 @@ println!("{value}");
 For host-provided *modules*, prefer `Module` + `inject_module` (above). For root-scope values
 or functions, use `Module::global()` and inject that staged module into the engine.
 
-```rust
+```rust,ignore
 use rex_engine::{Engine, Module};
 
 let mut engine = Engine::with_prelude(())?;
@@ -682,7 +684,7 @@ engine.inject_module(globals)?;
 Integer literals are overloaded (`Integral a`) and can specialize at call sites. This works for
 direct calls, `let` bindings, and lambda wrappers:
 
-```rust
+```rust,ignore
 use rex::parser::parse;
 use rex_engine::{Engine, Module};
 
@@ -719,7 +721,7 @@ function whose argument type is `f64`.
 If your host functions are async, stage them in a module with `export_async` and evaluate with
 `Evaluator::eval`.
 
-```rust
+```rust,ignore
 use rex::parser::parse;
 use rex_engine::{Engine, Module};
 
@@ -746,7 +748,7 @@ Use `set_async_call_policy` to wrap admitted host futures. The scheduler applies
 `ExecutionBounds::max_pending_async_calls` before this policy is called, so the bound limits how
 many host callbacks can be invoked or submitted to the executor at once.
 
-```rust
+```rust,ignore
 use futures::FutureExt;
 use rex_engine::{AsyncCallPolicy, Engine, EngineError, Module};
 
@@ -773,7 +775,7 @@ task primitives in the host crate.
 
 Parsing enforces a fixed AST-depth cap:
 
-```rust
+```rust,ignore
 use rex::parser::parse;
 
 let program = parse("(((1)))")
@@ -808,7 +810,7 @@ If a field uses a Rust type that participates in Rex value conversion but is not
 field annotation is required. Such leaf types inherit the default no-op family collection from
 `RexType`, so derived ADTs can contain them without trying to register them as ADTs.
 
-```rust
+```rust,ignore
 use rex::{
     Rex,
     engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex},
@@ -843,7 +845,7 @@ let mut engine = Engine::with_prelude(())?;
 Fragment::inject_rex(&mut engine)?;
 ```
 
-```rust
+```rust,ignore
 use rex::{
     Rex,
     engine::{Engine, FromRex},
@@ -879,7 +881,7 @@ without `#[derive(Rex)]`.
 `Module::add_adt_decl(...)` is the low-level single-ADT staging primitive. If you are building
 several ADTs manually, prefer batching them in one module with `add_adt_family(...)`.
 
-```rust
+```rust,ignore
 use rex::{
     ast::Symbol,
     engine::{Engine, Module},
@@ -903,7 +905,7 @@ types the same registration workflow that `#[derive(Rex)]` exposes as `T::inject
 If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(...)` and add its
 `AdtDecl` there. Leaf types can inherit the default no-op implementation.
 
-```rust
+```rust,ignore
 use rex::{
     ast::Symbol,
     engine::Engine,

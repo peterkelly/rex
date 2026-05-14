@@ -13,10 +13,10 @@
 //!
 //! Most embedders start with
 //! [`Engine::with_prelude`](engine::Engine::with_prelude), register one or more
-//! host modules, then evaluate a snippet or module through an
-//! [`Evaluator`](engine::Evaluator). The parser, type system, runtime value, and
-//! JSON conversion APIs are also re-exported here so an application can choose
-//! how much of the Rex pipeline it wants to control.
+//! host modules, then compile and run a snippet or module workflow through
+//! [`Compiler`](engine::Compiler) and [`Evaluator`](engine::Evaluator). The parser,
+//! type system, runtime value, and JSON conversion APIs are also re-exported here so
+//! an application can choose how much of the Rex pipeline it wants to control.
 //!
 //! # Minimal embedding example
 //!

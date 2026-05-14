@@ -1,8 +1,12 @@
 # Memory Management
 
-`rex-engine` uses a heap-based runtime: evaluated values live in a central heap, and the internal evaluator passes lightweight pointers to those heap entries.
+`rex-engine` uses a heap-based runtime: evaluated values live in a central heap, and the internal
+evaluator passes lightweight pointers to those heap entries. The heap now includes a copying
+collector, so internal pointers can move during allocation.
 
-This gives the engine a clear separation between identity and storage without exposing raw heap pointers to embedders. Public API code works with rooted `Handle` values, while `Pointer` remains an internal representation detail.
+This gives the engine a clear separation between identity and storage without exposing raw heap
+pointers to embedders. Public API code works with rooted `Handle` values, while `Pointer` remains
+an internal representation detail.
 
 ## Design goals and rationale
 
@@ -11,6 +15,7 @@ This gives the engine a clear separation between identity and storage without ex
 - Make host integration predictable by using stable handles rather than implicit deep copies.
 - Preserve strong runtime safety checks for pointer validity and heap ownership.
 - Keep diagnostics (type names, debug/display output, equality) correct for heap graphs.
+- Allow unreachable runtime objects to be reclaimed without exposing raw moving pointers to embedders.
 
 ## Core runtime model
 
@@ -28,7 +33,10 @@ Conceptually:
 - `generation` distinguishes different occupants of the same slot over time.
 - `heap_id` prevents accidental cross-heap usage.
 
-`Pointer` is intentionally crate-private. The engine validates it on access, so stale pointers and cross-heap usage fail deterministically inside the runtime.
+`Pointer` is intentionally crate-private. The engine validates it on access, so stale pointers and
+cross-heap usage fail deterministically inside the runtime. Because collection is copying, any raw
+pointer from before a collection is stale unless it has been rewritten through a traced runtime
+structure.
 
 ### `Handle` is the public rooted value reference
 
@@ -45,37 +53,58 @@ Host code cannot extract or store a raw runtime pointer.
 
 ### `Heap` stores all runtime values
 
-`Heap` owns an internal `HeapState`:
+`Heap` owns an internal `HeapState` with object slots, external root slots, root-slot reuse state,
+and GC scheduling metadata.
 
-- `slots: Vec<HeapSlot>`
-- `free_list: Vec<u32>`
+- object slots store runtime cells
+- root slots store public `Handle` roots and temporary roots
+- GC metadata tracks the next collection threshold and collection count
 
 Each `HeapSlot` stores:
 
-- `generation: u32`
-- `cell: Option<Arc<Cell>>`
+- `generation: u64`
+- `cell: Option<Cell>`
 
 Internal runtime reads/writes go through heap methods. Public construction uses
-`Heap::make_*` / `Heap::alloc_*`, which return `Handle` values rather than raw
-pointers.
+`Heap::alloc_*`, which returns `Handle` values rather than raw pointers.
 
 ### Runtime heap lifecycle
 
 `Engine` constructs the initial `Heap` during preparation (`Engine::new`, `Engine::with_prelude`).
-That heap then moves with the prepared runtime state into `Compiler` and `Evaluator`.
+When an engine is converted into a `Compiler` and then an `Evaluator`, the evaluator runtime core
+and compiler state share the same heap handle.
 
 - Evaluation returns `Handle`, not `Value`.
 - Callers can inspect via the returned handle or allocate more values from native callbacks through
   `Context::heap()`.
 
-This keeps allocation authority clear: the preparation phase creates the heap, and the evaluator's
-runtime core is the single store used during execution.
+This keeps allocation authority clear: the preparation phase creates the heap, and execution uses
+the evaluator runtime core's shared heap store.
+
+### Copying collection and roots
+
+Every public `Heap::alloc_*` call may run collection before allocating the requested object.
+Collection starts from registered roots, copies reachable objects into a new slot vector, rewrites
+roots and traced child pointers, and increments each moved object's generation. Old raw pointers
+are intentionally invalid after collection.
+
+Roots come from:
+
+- public `Handle` values returned to host code
+- temporary roots used while constructing composite heap cells
+- evaluator frames and scheduler tasks that trace and rewrite their internal pointers
+- runtime environments, closures, native functions, and overloaded-function records stored in live heap cells
+
+This is why public APIs return handles. A `Handle` owns an external heap root, remains valid across
+later allocations and `await` points, and resolves to the current post-GC pointer when the runtime
+needs to dereference it.
 
 ## Read/write semantics
 
 ### Public reads return `Value`
 
-`Handle::value()` returns `Value`, a safe public value of the runtime value. Composite values contain child `Handle` values rather than raw pointers.
+`Handle::value()` returns `Value`, a safe public value of the runtime value. Composite values
+contain child `Handle` values rather than raw pointers.
 
 Why:
 
@@ -85,9 +114,11 @@ Why:
 
 ### Writes are controlled
 
-Public values are created through `Heap::make_*` / `Heap::alloc_*` methods, which return `Handle`.
+Public values are created through `Heap::alloc_*` methods, which return `Handle`.
 
-There is also an internal `overwrite` operation used for recursive initialization patterns (placeholder first, then finalized value).
+There is also an internal `overwrite` operation used for recursive initialization patterns
+(placeholder first, then finalized value). Runtime code that holds crate-private pointers across
+allocation must protect them with handles, temporary roots, or traced frame/task state.
 
 ## Equality, debug, and display are heap-aware
 
@@ -97,7 +128,9 @@ Structural operations are provided as heap-aware helpers:
 - `Handle::display()` / `Handle::display_with(...)`
 - `Handle::value_eq(...)`
 
-These functions dereference through the heap and are cycle-safe (visited-set based), so recursive graphs can be inspected and compared without infinite recursion.
+These functions dereference through the heap and are cycle-safe (visited-set based), so recursive
+graphs can be inspected and compared without infinite recursion. They operate through handles, so
+they stay valid even if allocation has moved the underlying objects since the handle was created.
 
 ## Handle-first host/native boundary
 
@@ -122,13 +155,19 @@ At runtime, the heap enforces:
 - Wrong-heap pointer rejection (`heap_id` mismatch).
 - Invalid/stale pointer rejection (`index`/`generation` mismatch).
 - Type-aware errors via heap-driven `type_name`.
+- Root validation for public handles and temporary roots.
+- Debug-build verification that copied objects are rooted and all traced child pointers are valid
+  after collection.
 
 No `unsafe` code is used for this memory model.
 
 ## Scope and limitations
 
-- This is a pointer-based heap model, not a full garbage-collected runtime.
-- There is no public reclamation/GC API yet.
-- The pointer format includes `generation` and the heap tracks a `free_list` in state, but active slot-reuse/reclamation policy is intentionally not exposed as public behavior yet.
+- This is a moving, copying heap with automatic collection; embedders should treat object location
+  as completely opaque.
+- There is no public manual GC or heap-tuning API. Test-only hooks can force collection, but
+  production callers only observe stable `Handle` behavior.
+- `Pointer`, `Cell`, temporary roots, and trace/rewrite plumbing remain crate-private runtime machinery.
 
-In short, memory management is centered on explicit heap ownership, validated pointers, and cycle-safe graph traversal, with reclamation strategy treated as a separate concern.
+In short, memory management is centered on explicit heap ownership, rooted public handles,
+validated moving pointers, and cycle-safe graph traversal.

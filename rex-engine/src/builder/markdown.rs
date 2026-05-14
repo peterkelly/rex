@@ -17,10 +17,10 @@ use std::{collections::BTreeMap, fmt::Write as _};
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rex_engine::Engine;
+/// use rex_engine::{Engine, registry_markdown};
 ///
 /// let engine = Engine::with_prelude(()).unwrap();
-/// let md = engine.registry_markdown();
+/// let md = registry_markdown(&engine);
 ///
 /// assert!(md.contains("# Engine Registry"));
 /// assert!(md.contains("## ADTs"));
