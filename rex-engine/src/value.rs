@@ -1,6 +1,6 @@
 //! Core value representation for Rex.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1302,9 +1302,8 @@ impl Heap {
     }
 
     fn collect_locked(&self, state: &mut HeapState) -> Result<(), EngineError> {
-        let mut forwarding = HashMap::new();
-        let mut new_slots = Vec::new();
-        let mut work = VecDeque::new();
+        let mut forwarding = vec![None; state.slots.len()];
+        let mut new_slots = Vec::with_capacity(state.slots.len());
 
         let root_indices = state
             .root_slots
@@ -1314,23 +1313,21 @@ impl Heap {
             .collect::<Vec<_>>();
 
         for (index, pointer) in root_indices {
-            let relocated =
-                self.copy_for_gc(state, pointer, &mut new_slots, &mut forwarding, &mut work)?;
+            let relocated = self.copy_for_gc(state, pointer, &mut new_slots, &mut forwarding)?;
             state.root_slots[index].pointer = Some(relocated);
         }
 
-        while let Some(old_pointer) = work.pop_front() {
-            let new_pointer = *forwarding.get(&pointer_key(&old_pointer)).ok_or_else(|| {
-                EngineError::Internal("copying GC forwarding table missing object".into())
-            })?;
+        let mut scan_index = 0;
+        while scan_index < new_slots.len() {
             let mut cell = new_slots
-                .get_mut(new_pointer.index as usize)
+                .get_mut(scan_index)
                 .and_then(|slot| slot.cell.take())
                 .ok_or_else(|| EngineError::Internal("copying GC copied slot missing".into()))?;
             rewrite_cell_pointers(&mut cell, &mut |child| {
-                self.copy_for_gc(state, child, &mut new_slots, &mut forwarding, &mut work)
+                self.copy_for_gc(state, child, &mut new_slots, &mut forwarding)
             })?;
-            new_slots[new_pointer.index as usize].cell = Some(cell);
+            new_slots[scan_index].cell = Some(cell);
+            scan_index += 1;
         }
 
         state.finish_collection(new_slots)?;
@@ -1344,15 +1341,16 @@ impl Heap {
         state: &HeapState,
         pointer: Pointer,
         new_slots: &mut Vec<HeapSlot>,
-        forwarding: &mut HashMap<PointerKey, Pointer>,
-        work: &mut VecDeque<Pointer>,
+        forwarding: &mut [Option<Pointer>],
     ) -> Result<Pointer, EngineError> {
-        let key = pointer_key(&pointer);
-        if let Some(relocated) = forwarding.get(&key) {
+        let slot = Self::get_slot_checked(self.id, state, &pointer)?;
+        let forwarding_index = pointer.index as usize;
+        if let Some(relocated) = forwarding.get(forwarding_index).ok_or_else(|| {
+            EngineError::Internal("copying GC forwarding table missing slot".into())
+        })? {
             return Ok(*relocated);
         }
 
-        let slot = Self::get_slot_checked(self.id, state, &pointer)?;
         let cell = slot
             .cell
             .as_ref()
@@ -1369,12 +1367,11 @@ impl Heap {
             index,
             generation,
         };
-        forwarding.insert(key, relocated);
+        forwarding[forwarding_index] = Some(relocated);
         new_slots.push(HeapSlot {
             generation,
             cell: Some(cell),
         });
-        work.push_back(pointer);
         Ok(relocated)
     }
 
