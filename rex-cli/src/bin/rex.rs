@@ -164,7 +164,7 @@ fn init_engine(include: &[String]) -> Result<(Engine, Arc<dyn Importer>), String
             .map_err(|e| e.to_string())?;
     }
     let importer: Arc<dyn Importer> = Arc::new(filesystem_importer);
-    engine.add_importer_arc("filesystem", Arc::clone(&importer));
+    engine.add_importer("filesystem", Arc::clone(&importer));
     Ok((engine, importer))
 }
 

@@ -10,10 +10,9 @@ use rex_ast::Symbol;
 use rex_typesystem::types::{Type, TypedExpr};
 use uuid::Uuid;
 
-use crate::EngineError;
-use crate::Environment;
-use crate::engine::{NativeFn, OverloadedFn};
-use crate::stack::Frame;
+use crate::{
+    EngineError, Environment, native_fn::NativeFn, overloaded_fn::OverloadedFn, stack::Frame,
+};
 
 // GC invariants:
 //
@@ -2272,6 +2271,15 @@ pub(crate) fn list_to_vec(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Vec<Poin
             }
         }
     }
+}
+
+pub(crate) trait Collection {
+    fn trace_pointers(&self, out: &mut Vec<Pointer>);
+
+    fn rewrite_pointers(
+        &mut self,
+        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+    ) -> Result<(), EngineError>;
 }
 
 pub(crate) trait IntoPointer {

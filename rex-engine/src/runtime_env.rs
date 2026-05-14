@@ -1,8 +1,16 @@
-use crate::engine::{
-    CompiledProgram, Engine, RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract,
-    class_method_capability_matches_requirement, native_capability_matches_requirement,
+use crate::{
+    EngineError, EvalError,
+    builder::engine::Engine,
+    compiler::program::{
+        ClassMethodCapability, ClassMethodRequirement, CompiledProgram, NativeCapability,
+        NativeRequirement, RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract,
+    },
+    util::type_arity,
 };
-use crate::{EngineError, EvalError};
+use rex_typesystem::{
+    typesystem::{TypeVarSupply, instantiate},
+    unification::unify,
+};
 
 pub struct RuntimeEnv {
     capabilities: RuntimeCapabilities,
@@ -105,4 +113,24 @@ pub struct RuntimeEnvBoundary {
     pub contains_runtime_core: bool,
     pub contains_loader_state: bool,
     pub serializable: bool,
+}
+
+fn native_capability_matches_requirement(
+    capability: &NativeCapability,
+    requirement: &NativeRequirement,
+) -> bool {
+    let mut supply = TypeVarSupply::new();
+    let (_preds, scheme_ty) = instantiate(&capability.scheme, &mut supply);
+    capability.name == requirement.name
+        && capability.arity == type_arity(&requirement.typ)
+        && unify(&scheme_ty, &requirement.typ).is_ok()
+}
+
+fn class_method_capability_matches_requirement(
+    capability: &ClassMethodCapability,
+    requirement: &ClassMethodRequirement,
+) -> bool {
+    let mut supply = TypeVarSupply::new();
+    let (_preds, scheme_ty) = instantiate(&capability.scheme, &mut supply);
+    capability.name == requirement.name && unify(&scheme_ty, &requirement.typ).is_ok()
 }

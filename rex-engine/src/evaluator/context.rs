@@ -1,34 +1,22 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::path::Path;
 use std::sync::Arc;
 
-use rex_ast::{Expr, Symbol};
+use rex_ast::Symbol;
 use rex_typesystem::{
     error::TypeError,
-    types::{Type, TypedExpr, Types},
+    types::{Type, TypeKind, TypedExpr, Types},
     typesystem::TypeSystem,
     unification::{Subst, unify},
 };
 
-use crate::engine::{
-    CompiledProgram, NativeImpl, OverloadedFn, RuntimeCapabilities, RuntimeCompatibility,
-    RuntimeCore, eval_typed_expr, impl_matches_type, is_function_type, type_head_is_var,
-};
-use crate::modules::{ImportRequest, Importer, ModuleId, ResolvedModule, ResolvedModuleContent};
-use crate::value::{Handle, Heap, Pointer};
 use crate::{
-    CompileError, Compiler, EngineError, Environment, EvalError, ExecutionError, RuntimeEnv,
+    builder::registry::NativeImpl,
+    env::Environment,
+    error::EngineError,
+    evaluator::{CallSite, runtime_core::RuntimeCore},
+    overloaded_fn::OverloadedFn,
+    util::{impl_matches_type, is_function_type},
+    value::{Handle, Heap, Pointer},
 };
-
-pub struct Evaluator<State = ()>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) runtime: RuntimeCore<State>,
-    pub(crate) runtime_env: RuntimeEnv,
-    pub(crate) compiler: Compiler<State>,
-}
 
 #[derive(Clone)]
 pub struct Context<State = ()>
@@ -39,154 +27,6 @@ where
     #[allow(dead_code)]
     #[doc(hidden)]
     pub(crate) call_site: CallSite,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[doc(hidden)]
-pub(crate) struct CallSite {
-    pub parent: Option<Pointer>,
-}
-
-impl CallSite {
-    pub(crate) fn child(parent: Pointer) -> Self {
-        Self {
-            parent: Some(parent),
-        }
-    }
-}
-
-impl<State> Evaluator<State>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    pub(crate) fn new(
-        runtime: RuntimeCore<State>,
-        runtime_env: RuntimeEnv,
-        compiler: Compiler<State>,
-    ) -> Self {
-        Self {
-            runtime,
-            runtime_env,
-            compiler,
-        }
-    }
-
-    pub fn runtime_env(&self) -> &RuntimeEnv {
-        &self.runtime_env
-    }
-
-    pub fn type_system(&self) -> Arc<TypeSystem> {
-        Arc::clone(&self.runtime.type_system)
-    }
-
-    pub fn heap(&self) -> &Heap {
-        &self.runtime.heap
-    }
-
-    pub fn capabilities(&self) -> &RuntimeCapabilities {
-        self.runtime_env.capabilities()
-    }
-
-    pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
-        self.runtime_env.compatibility_with(program)
-    }
-
-    pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
-        self.runtime_env.validate(program)
-    }
-
-    pub async fn run(self, program: CompiledProgram) -> Result<Handle, EvalError> {
-        self.runtime_env.validate_internal(&program)?;
-        let runtime = self.runtime;
-        let heap = runtime.heap.clone();
-        let pointer = eval_typed_expr(runtime, program.env, program.expr)
-            .await
-            .map_err(EvalError::from)?;
-        heap.handle(pointer).map_err(EvalError::from)
-    }
-
-    pub async fn eval(self, expr: &Expr) -> Result<(Handle, Type), ExecutionError> {
-        let mut this = self;
-        let program = this.compiler.compile_expr(expr)?;
-        this.run_prepared(program).await
-    }
-
-    async fn run_prepared(
-        mut self,
-        program: CompiledProgram,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        self.runtime_env = RuntimeEnv::from_engine(&self.compiler.engine);
-        self.runtime = self.compiler.engine.runtime_core();
-        let typ = program.result_type().clone();
-        let value = self.run(program).await?;
-        Ok((value, typ))
-    }
-
-    pub async fn eval_module_with_importer(
-        mut self,
-        request: ImportRequest,
-        importer: Arc<dyn Importer>,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        let result: Result<(Handle, Type), ExecutionError> = {
-            let engine = &mut self.compiler.engine;
-            let chain = engine.modules.import_chain().with_importer(importer);
-            let resolved = chain.import(request).await.map_err(CompileError::from)?;
-            let inst = engine
-                .load_module_from_resolved(resolved, &chain)
-                .await
-                .map_err(CompileError::from)?;
-            Ok((inst.init_value, inst.init_type))
-        };
-        result
-    }
-
-    pub async fn eval_module_source(
-        mut self,
-        source: &str,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        let result: Result<(Handle, Type), ExecutionError> = {
-            let engine = &mut self.compiler.engine;
-            let mut hasher = DefaultHasher::new();
-            source.hash(&mut hasher);
-            let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-            if let Some(inst) = engine.modules.cached(&id).map_err(EvalError::from)? {
-                Ok((inst.init_value, inst.init_type))
-            } else {
-                let chain = engine.modules.import_chain();
-                let inst = engine
-                    .load_module_from_resolved(
-                        ResolvedModule {
-                            id,
-                            content: ResolvedModuleContent::Source(source.to_string()),
-                        },
-                        &chain,
-                    )
-                    .await
-                    .map_err(CompileError::from)?;
-                Ok((inst.init_value, inst.init_type))
-            }
-        };
-        result
-    }
-
-    pub async fn eval_snippet(self, source: &str) -> Result<(Handle, Type), ExecutionError> {
-        let mut this = self;
-        let program = this.compiler.compile_snippet(source).await?;
-        this.run_prepared(program).await
-    }
-
-    pub async fn eval_snippet_at(
-        self,
-        source: &str,
-        importer_path: impl AsRef<Path>,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        let mut this = self;
-        let program = this
-            .compiler
-            .compile_snippet_at(source, importer_path.as_ref())
-            .await?;
-        this.run_prepared(program).await
-    }
 }
 
 impl<State> Context<State>
@@ -364,4 +204,12 @@ where
             }
         }
     }
+}
+
+fn type_head_is_var(typ: &Type) -> bool {
+    let mut cur = typ;
+    while let TypeKind::App(head, _) = cur.as_ref() {
+        cur = head;
+    }
+    matches!(cur.as_ref(), TypeKind::Var(..))
 }

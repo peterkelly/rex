@@ -233,7 +233,7 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
         EngineError::Internal(format!("failed to read {}: {err}", path.display()))
     })?;
     let mut engine = engine;
-    engine.add_importer_arc("test-fs", importer);
+    engine.add_importer("test-fs", importer);
     engine
         .into_evaluator()
         .eval_snippet_at(&source, path)
@@ -258,7 +258,7 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     importer_path: impl AsRef<Path>,
 ) -> Result<(Handle, Type), EngineError> {
     let mut engine = engine;
-    engine.add_importer("test-fs", TestFilesystemImporter::default());
+    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter::default()));
     engine
         .into_evaluator()
         .eval_snippet_at(source, importer_path)
@@ -342,7 +342,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut engine = engine_with_prelude();
-    engine.add_importer("test-fs", TestFilesystemImporter::default());
+    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter::default()));
 
     let mut compiler = engine.into_compiler();
 

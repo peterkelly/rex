@@ -1,13 +1,18 @@
 use rex_ast::Span;
-use rex_ast::{Decl, NameRef, Symbol, TypeDecl, TypeExpr, TypeVariant};
+use rex_ast::{Decl, TypeDecl, TypeVariant};
 use rex_typesystem::{
-    types::{AdtDecl, BuiltinTypeId, RexType, Scheme, Type, TypeKind},
+    types::{AdtDecl, RexType, Scheme, Type},
     types::{collect_adts_in_types, order_adt_family},
 };
 
 use crate::{
-    Context, Engine, EngineError, Handle, IntoRex, ROOT_MODULE_NAME,
-    engine::{Export, HostFnAsync, HostFnSync, NativeFuture, adt_family_error_to_engine},
+    Context, EngineError, Handle, IntoRex,
+    builder::{
+        engine::Engine,
+        export::{Export, HostFnAsync, HostFnSync, NativeFuture},
+    },
+    modules::ROOT_MODULE_NAME,
+    util::{adt_family_error_to_engine, type_expr_from_type},
 };
 
 /// A staged host module that you build up in Rust and later inject into an [`Engine`].
@@ -438,52 +443,5 @@ fn type_decl_from_adt(adt: &AdtDecl) -> TypeDecl {
                 args: variant.args.iter().map(type_expr_from_type).collect(),
             })
             .collect(),
-    }
-}
-
-fn type_expr_from_type(typ: &Type) -> TypeExpr {
-    match typ.as_ref() {
-        TypeKind::Var(tv) => {
-            let name = tv
-                .name
-                .clone()
-                .unwrap_or_else(|| Symbol::intern(&format!("t{}", tv.id)));
-            TypeExpr::Name(Span::default(), NameRef::Unqualified(name))
-        }
-        TypeKind::Con(con) => TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name())),
-        TypeKind::App(fun, arg) => {
-            if let TypeKind::App(head, err) = fun.as_ref()
-                && let TypeKind::Con(con) = head.as_ref()
-                && con.is_builtin(BuiltinTypeId::Result)
-                && con.arity() == 2
-            {
-                let result = TypeExpr::Name(Span::default(), NameRef::Unqualified(con.name()));
-                let ok_expr = type_expr_from_type(arg);
-                let err_expr = type_expr_from_type(err);
-                let app1 = TypeExpr::App(Span::default(), Box::new(result), Box::new(ok_expr));
-                return TypeExpr::App(Span::default(), Box::new(app1), Box::new(err_expr));
-            }
-            TypeExpr::App(
-                Span::default(),
-                Box::new(type_expr_from_type(fun)),
-                Box::new(type_expr_from_type(arg)),
-            )
-        }
-        TypeKind::Fun(arg, ret) => TypeExpr::Fun(
-            Span::default(),
-            Box::new(type_expr_from_type(arg)),
-            Box::new(type_expr_from_type(ret)),
-        ),
-        TypeKind::Tuple(elems) => TypeExpr::Tuple(
-            Span::default(),
-            elems.iter().map(type_expr_from_type).collect(),
-        ),
-        TypeKind::Record(fields) => TypeExpr::Record(
-            Span::default(),
-            fields
-                .iter()
-                .map(|(name, ty)| (name.clone(), type_expr_from_type(ty)))
-                .collect(),
-        ),
     }
 }

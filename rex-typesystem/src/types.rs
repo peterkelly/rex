@@ -1419,7 +1419,7 @@ fn type_head_for_adt_family(typ: &Type) -> Result<Type, TypeError> {
     Ok(Type::con(name.as_ref(), arity))
 }
 
-fn adt_shape(adt: &AdtDecl) -> String {
+pub fn adt_shape(adt: &AdtDecl) -> String {
     let param_names: BTreeMap<_, _> = adt
         .params
         .iter()
@@ -1482,7 +1482,7 @@ fn normalize_type_for_shape(typ: &Type, param_names: &BTreeMap<usize, String>) -
     }
 }
 
-fn adt_shape_eq(left: &AdtDecl, right: &AdtDecl) -> bool {
+pub fn adt_shape_eq(left: &AdtDecl, right: &AdtDecl) -> bool {
     adt_shape(left) == adt_shape(right)
 }
 

@@ -1,27 +1,165 @@
 //! Prelude injection helpers for Rex.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use chrono::{DateTime, Utc};
-use rex_ast::Symbol;
+use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_typesystem::{
+    prelude::prelude_typeclasses_program,
     types::{BuiltinTypeId, Scheme, Type, TypeKind, Types},
     unification::unify,
 };
 use uuid::Uuid;
 
 use crate::{
-    Context, Engine, EngineError,
-    engine::{SchedulerNativeResult, binary_arg_types},
-    stack::{
-        NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictMap,
-        NativeDictTraverseResult, NativeFold, NativeFoldOrder, NativeFoldState, NativeMean,
-        NativeMeanState, NativeSequenceFilter, NativeSequenceFilterMap, NativeSequenceFlatMap,
-        NativeSequenceMap, NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter,
-        NativeUnaryFilterMap, NativeUnaryFlatMap, NativeUnaryMap, NativeUnaryShape,
+    Context, EngineError,
+    builder::engine::{Engine, StaticModuleImporter},
+    evaluator::{
+        native_callable::SchedulerNativeResult,
+        native_functions::{
+            NativeApplyUnary, NativeArrayEq, NativeArrayEqState, NativeDictMap, NativeDictTraverse,
+            NativeFold, NativeFoldOrder, NativeFoldState, NativeMean, NativeMeanState,
+            NativeSequenceFilter, NativeSequenceFilterMap, NativeSequenceFlatMap,
+            NativeSequenceMap, NativeSequenceShape, NativeSum, NativeTask, NativeUnaryFilter,
+            NativeUnaryFilterMap, NativeUnaryFlatMap, NativeUnaryMap,
+        },
     },
+    modules::{
+        CanonicalSymbol, ModuleExports, ModuleId, PRELUDE_MODULE_NAME, ResolvedModule,
+        ResolvedModuleContent, SymbolKind, VirtualModule, module_key_for_module,
+    },
+    stack::NativeUnaryShape,
+    util::split_fun,
     value::{Cell, Handle, Heap, HeapAccess, Pointer},
 };
+
+pub(crate) fn inject_prelude<State>(engine: &mut Engine<State>) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    inject_prelude_adts(engine)?;
+    inject_equality_ops(engine)?;
+    inject_order_ops(engine)?;
+    inject_show_ops(engine)?;
+    inject_boolean_ops(engine)?;
+    inject_numeric_ops(engine)?;
+    inject_list_builtins(engine)?;
+    inject_option_result_builtins(engine)?;
+    inject_json_primops(engine)?;
+    register_prelude_typeclass_instances(engine)?;
+    Ok(())
+}
+
+fn register_prelude_typeclass_instances<State>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    // The type system prelude injects the *heads* of the standard instances.
+    // The evaluator also needs the *method bodies* so class method lookup can
+    // produce actual values at runtime.
+    let program = prelude_typeclasses_program().map_err(EngineError::Type)?;
+    for decl in program.decls.iter() {
+        let Decl::Instance(inst_decl) = decl else {
+            continue;
+        };
+        if inst_decl.methods.is_empty() {
+            continue;
+        }
+        let prepared = engine
+            .type_system
+            .prepare_instance_decl(inst_decl)
+            .map_err(EngineError::Type)?;
+        engine.register_typeclass_instance(inst_decl, &prepared)?;
+    }
+    Ok(())
+}
+
+pub(crate) fn inject_prelude_virtual_module<State>(
+    engine: &mut Engine<State>,
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    if engine.virtual_modules.contains_key(PRELUDE_MODULE_NAME) {
+        return Ok(());
+    }
+
+    let module_key = module_key_for_module(&ModuleId::Virtual(PRELUDE_MODULE_NAME.to_string()));
+    let mut exports = ModuleExports::default();
+    for (name, _) in engine.type_system.env.values.iter() {
+        if !name.as_ref().starts_with("@m") {
+            exports.insert_value(
+                name.clone(),
+                CanonicalSymbol::from_symbol(
+                    module_key,
+                    SymbolKind::Value,
+                    name.clone(),
+                    name.clone(),
+                ),
+            );
+        }
+    }
+
+    for name in engine.type_system.adts.keys() {
+        if !name.as_ref().starts_with("@m") {
+            exports.insert_type(
+                name.clone(),
+                CanonicalSymbol::from_symbol(
+                    module_key,
+                    SymbolKind::Type,
+                    name.clone(),
+                    name.clone(),
+                ),
+            );
+        }
+    }
+
+    for name in engine.type_system.class_info.keys() {
+        if !name.as_ref().starts_with("@m") {
+            exports.insert_class(
+                name.clone(),
+                CanonicalSymbol::from_symbol(
+                    module_key,
+                    SymbolKind::Class,
+                    name.clone(),
+                    name.clone(),
+                ),
+            );
+        }
+    }
+
+    let module_id = ModuleId::Virtual(PRELUDE_MODULE_NAME.to_string());
+    let compilation_unit = CompilationUnit {
+        decls: Vec::new(),
+        body: None,
+    };
+    engine
+        .module_exports_cache
+        .insert(module_id.clone(), exports.clone());
+    engine
+        .module_interface_cache
+        .insert(module_id.clone(), Vec::new());
+    engine.virtual_modules.insert(
+        PRELUDE_MODULE_NAME.to_string(),
+        VirtualModule {
+            exports,
+            decls: compilation_unit.decls.clone(),
+            source: None,
+        },
+    );
+    engine
+        .modules
+        .prepend_importer(Arc::new(StaticModuleImporter {
+            module_name: PRELUDE_MODULE_NAME.to_string(),
+            resolved: ResolvedModule {
+                id: module_id,
+                content: ResolvedModuleContent::CompilationUnit(compilation_unit),
+            },
+        }));
+    Ok(())
+}
 
 fn expect_list(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     heap.pointer_as_list(pointer)
@@ -83,7 +221,7 @@ fn result_handle(value: &Handle) -> Result<Result<Handle, Handle>, EngineError> 
     }
 }
 
-pub(crate) fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
+fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::List)) => {
             Ok(elem.clone())
@@ -95,7 +233,7 @@ pub(crate) fn list_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
+fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Array)) => {
             Ok(elem.clone())
@@ -107,7 +245,7 @@ pub(crate) fn array_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
+fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Dict)) => {
             Ok(elem.clone())
@@ -119,7 +257,7 @@ pub(crate) fn dict_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) fn option_elem_type(typ: &Type) -> Result<Type, EngineError> {
+fn option_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, elem) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Option)) => {
             Ok(elem.clone())
@@ -131,7 +269,7 @@ pub(crate) fn option_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
+fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     match typ.as_ref() {
         TypeKind::App(head, ok) => match head.as_ref() {
             TypeKind::App(head, err) if matches!(head.as_ref(), TypeKind::Con(c) if c.is_builtin(BuiltinTypeId::Result)) => {
@@ -149,21 +287,18 @@ pub(crate) fn result_types(typ: &Type) -> Result<(Type, Type), EngineError> {
     }
 }
 
-pub(crate) fn expect_array(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
+fn expect_array(heap: &Heap, pointer: &Pointer) -> Result<Vec<Pointer>, EngineError> {
     heap.pointer_as_array(pointer)
 }
 
-pub(crate) fn option_from_pointer(
-    heap: &Heap,
-    value: Option<Pointer>,
-) -> Result<Pointer, EngineError> {
+fn option_from_pointer(heap: &Heap, value: Option<Pointer>) -> Result<Pointer, EngineError> {
     match value {
         Some(v) => heap.alloc_ptr_adt(Symbol::intern("Some"), vec![v]),
         None => heap.alloc_ptr_adt(Symbol::intern("None"), vec![]),
     }
 }
 
-pub(crate) fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Pointer>, EngineError> {
+fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
     if tag.as_ref() == "Some" && args.len() == 1 {
         Ok(Some(args[0]))
@@ -177,10 +312,7 @@ pub(crate) fn option_value(heap: &Heap, pointer: &Pointer) -> Result<Option<Poin
     }
 }
 
-pub(crate) fn result_value(
-    heap: &Heap,
-    pointer: &Pointer,
-) -> Result<Result<Pointer, Pointer>, EngineError> {
+fn result_value(heap: &Heap, pointer: &Pointer) -> Result<Result<Pointer, Pointer>, EngineError> {
     let (tag, args) = heap.pointer_as_adt(pointer)?;
     if tag.as_ref() == "Ok" && args.len() == 1 {
         Ok(Ok(args[0]))
@@ -194,7 +326,7 @@ pub(crate) fn result_value(
     }
 }
 
-pub(crate) fn result_from_pointer(
+fn result_from_pointer(
     heap: &Heap,
     value: Result<Pointer, Pointer>,
 ) -> Result<Pointer, EngineError> {
@@ -204,7 +336,7 @@ pub(crate) fn result_from_pointer(
     }
 }
 
-pub(crate) fn split_fun_chain(typ: &Type, count: usize) -> Result<(Vec<Type>, Type), EngineError> {
+fn split_fun_chain(typ: &Type, count: usize) -> Result<(Vec<Type>, Type), EngineError> {
     let mut args = Vec::with_capacity(count);
     let mut cur = typ.clone();
     for _ in 0..count {
@@ -223,7 +355,7 @@ pub(crate) fn split_fun_chain(typ: &Type, count: usize) -> Result<(Vec<Type>, Ty
     Ok((args, cur))
 }
 
-pub(crate) fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
+fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
     match typ.as_ref() {
         TypeKind::Tuple(elems) if !elems.is_empty() => {
             let first = elems[0].clone();
@@ -244,7 +376,7 @@ pub(crate) fn tuple_elem_type(typ: &Type) -> Result<Type, EngineError> {
     }
 }
 
-pub(crate) fn extremum_handle_by_type(
+fn extremum_handle_by_type(
     heap: &Heap,
     name: &'static str,
     elem_ty: &Type,
@@ -269,7 +401,7 @@ pub(crate) fn extremum_handle_by_type(
     Ok(best)
 }
 
-pub(crate) fn checked_index(name: Symbol, index: i32, len: usize) -> Result<usize, EngineError> {
+fn checked_index(name: Symbol, index: i32, len: usize) -> Result<usize, EngineError> {
     if index < 0 {
         return Err(EngineError::IndexOutOfBounds { name, index, len });
     }
@@ -280,7 +412,7 @@ pub(crate) fn checked_index(name: Symbol, index: i32, len: usize) -> Result<usiz
     Ok(index_usize)
 }
 
-pub(crate) fn zip_tuple2_handles(
+fn zip_tuple2_handles(
     heap: &Heap,
     xs: Vec<Handle>,
     ys: Vec<Handle>,
@@ -291,9 +423,7 @@ pub(crate) fn zip_tuple2_handles(
         .collect()
 }
 
-pub(crate) fn unzip_tuple2_handles(
-    pairs: Vec<Handle>,
-) -> Result<(Vec<Handle>, Vec<Handle>), EngineError> {
+fn unzip_tuple2_handles(pairs: Vec<Handle>) -> Result<(Vec<Handle>, Vec<Handle>), EngineError> {
     let mut left = Vec::new();
     let mut right = Vec::new();
     for pair in pairs {
@@ -311,7 +441,7 @@ pub(crate) fn unzip_tuple2_handles(
     Ok((left, right))
 }
 
-pub(crate) fn as_nonneg_usize(n: i32) -> usize {
+fn as_nonneg_usize(n: i32) -> usize {
     if n <= 0 { 0 } else { n as usize }
 }
 
@@ -460,7 +590,7 @@ fn cmp_cell_by_type(
     }
 }
 
-pub(crate) fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
+fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     let mut list_adt = engine.adt_decl("List", &["a"]);
@@ -497,7 +627,7 @@ pub(crate) fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
+fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     // Equality primitives are monomorphic overloads (same name, different
@@ -614,7 +744,7 @@ pub(crate) fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
+fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     fn cmp_to_i32(ord: std::cmp::Ordering) -> i32 {
@@ -814,7 +944,7 @@ pub(crate) fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_show_ops<State: Clone + Send + Sync + 'static>(
+fn inject_show_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     engine.export("prim_show", |_: &State, x: bool| Ok(x.to_string()))?;
@@ -834,7 +964,7 @@ pub(crate) fn inject_show_ops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
+fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     engine.export("(&&)", |_: &State, a: bool, b: bool| Ok(a && b))?;
@@ -842,7 +972,7 @@ pub(crate) fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
+fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     macro_rules! export_checked_unsigned_add {
@@ -1159,7 +1289,7 @@ pub(crate) fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
+fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     // List/Array conversion helpers.
@@ -1266,8 +1396,8 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                 let dict_ty = arg_tys[1].clone();
                 let elem_ty = dict_elem_type(&dict_ty)?;
                 let map = engine.heap().pointer_as_dict(&args[1])?;
-                Ok(SchedulerNativeResult::Task(NativeTask::DictTraverseResult(
-                    NativeDictTraverseResult {
+                Ok(SchedulerNativeResult::Task(NativeTask::DictTraverse(
+                    NativeDictTraverse {
                         func: args[0],
                         func_type: func_ty,
                         elem_type: elem_ty,
@@ -1523,7 +1653,7 @@ pub(crate) fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
+fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     {
@@ -3144,7 +3274,7 @@ pub(crate) fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     Ok(())
 }
 
-pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
+fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     let unwrap = Symbol::intern("unwrap");
@@ -3221,4 +3351,16 @@ pub(crate) fn inject_option_result_builtins<State: Clone + Send + Sync + 'static
         engine.heap().alloc_bool(result_handle(&args[0])?.is_err())
     })?;
     Ok(())
+}
+
+fn binary_arg_types(typ: &Type) -> Result<(Type, Type), EngineError> {
+    let (lhs, rest) = split_fun(typ).ok_or_else(|| EngineError::NativeType {
+        expected: "binary function".into(),
+        got: typ.to_string(),
+    })?;
+    let (rhs, _res) = split_fun(&rest).ok_or_else(|| EngineError::NativeType {
+        expected: "binary function".into(),
+        got: typ.to_string(),
+    })?;
+    Ok((lhs, rhs))
 }

@@ -4,9 +4,12 @@ use std::sync::Arc;
 use rex_ast::{Pattern, Symbol};
 use rex_typesystem::types::{Type, TypedExpr};
 
-use crate::EngineError;
-use crate::env::Environment;
-use crate::value::Pointer;
+use crate::{
+    EngineError,
+    env::Environment,
+    evaluator::native_functions::NativeTask,
+    value::{Collection, Pointer},
+};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Frame {
@@ -62,7 +65,69 @@ impl Frame {
         }
     }
 
-    pub(crate) fn trace_pointers(&self, out: &mut Vec<Pointer>) {
+    pub(crate) fn mark_complete(&mut self, value: Pointer) {
+        match self {
+            Frame::Bool(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Uint(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Int(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Float(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::String(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Uuid(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::DateTime(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Hole(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Tuple(frame) => frame.state = FrSequenceState::Complete,
+            Frame::List(frame) => frame.state = FrSequenceState::Complete,
+            Frame::Dict(frame) => frame.state = FrSequenceState::Complete,
+            Frame::RecordUpdate(frame) => frame.state = FrRecordUpdateState::Complete,
+            Frame::Var(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::App(frame) => frame.state = FrAppState::Complete,
+            Frame::Project(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Lam(frame) => {
+                frame.state = FrValueState::Complete;
+                frame.value = Some(value);
+            }
+            Frame::Let(frame) => frame.state = FrLetState::Complete,
+            Frame::LetRec(frame) => frame.state = FrLetRecState::Complete,
+            Frame::Ite(frame) => frame.state = FrBranchState::Complete,
+            Frame::Match(frame) => frame.state = FrMatchState::Complete,
+            Frame::NativeCall(frame) => frame.state = FrNativeCallState::Complete,
+            Frame::NativeAsync(_) => {}
+        }
+    }
+}
+
+impl Collection for Frame {
+    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         match self {
             Frame::Bool(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
             Frame::Uint(frame) => trace_value_frame(&frame.parent, &frame.env, frame.value, out),
@@ -146,7 +211,7 @@ impl Frame {
         }
     }
 
-    pub(crate) fn rewrite_pointers(
+    fn rewrite_pointers(
         &mut self,
         rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
     ) -> Result<(), EngineError> {
@@ -255,7 +320,7 @@ impl Frame {
     }
 }
 
-fn trace_option(pointer: Option<Pointer>, out: &mut Vec<Pointer>) {
+pub(crate) fn trace_option(pointer: Option<Pointer>, out: &mut Vec<Pointer>) {
     if let Some(pointer) = pointer {
         out.push(pointer);
     }
@@ -272,7 +337,7 @@ fn trace_value_frame(
     trace_option(value, out);
 }
 
-fn rewrite_pointer(
+pub(crate) fn rewrite_pointer(
     pointer: &mut Pointer,
     rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
 ) -> Result<(), EngineError> {
@@ -280,7 +345,7 @@ fn rewrite_pointer(
     Ok(())
 }
 
-fn rewrite_option(
+pub(crate) fn rewrite_option(
     pointer: &mut Option<Pointer>,
     rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
 ) -> Result<(), EngineError> {
@@ -290,7 +355,7 @@ fn rewrite_option(
     Ok(())
 }
 
-fn rewrite_slice(
+pub(crate) fn rewrite_slice(
     pointers: &mut [Pointer],
     rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
 ) -> Result<(), EngineError> {
@@ -310,7 +375,7 @@ fn rewrite_option_slice(
     Ok(())
 }
 
-fn rewrite_map_values(
+pub(crate) fn rewrite_map_values(
     values: &mut BTreeMap<Symbol, Pointer>,
     rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
 ) -> Result<(), EngineError> {
@@ -400,227 +465,12 @@ pub enum FrNativeCallState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum NativeSequenceShape {
-    List,
-    Array,
-}
-
-#[derive(Clone, Debug, PartialEq)]
 pub enum NativeUnaryShape {
     Option,
     Result,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum NativeFoldOrder {
-    Left,
-    Right,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum NativeFoldState {
-    Enter,
-    ApplyFirst,
-    ApplySecond,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum NativeMeanState {
-    Enter,
-    ApplyPlusFirst,
-    ApplyPlusSecond,
-    ApplyDivFirst,
-    ApplyDivSecond,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum NativeArrayEqState {
-    Enter,
-    ApplyFirst,
-    ApplySecond,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum NativeTask {
-    ApplyUnary(NativeApplyUnary),
-    SequenceMap(NativeSequenceMap),
-    SequenceFilter(NativeSequenceFilter),
-    SequenceFilterMap(NativeSequenceFilterMap),
-    SequenceFlatMap(NativeSequenceFlatMap),
-    UnaryMap(NativeUnaryMap),
-    UnaryFilter(NativeUnaryFilter),
-    UnaryFilterMap(NativeUnaryFilterMap),
-    UnaryFlatMap(NativeUnaryFlatMap),
-    Fold(NativeFold),
-    DictMap(NativeDictMap),
-    DictTraverseResult(NativeDictTraverseResult),
-    ArrayEq(NativeArrayEq),
-    Sum(NativeSum),
-    Mean(NativeMean),
-}
-
-impl NativeTask {
-    fn trace_pointers(&self, out: &mut Vec<Pointer>) {
-        match self {
-            NativeTask::ApplyUnary(task) => {
-                out.push(task.func);
-                out.push(task.arg);
-            }
-            NativeTask::SequenceMap(task) => {
-                out.push(task.func);
-                out.extend(task.values.iter().copied());
-                out.extend(task.output.iter().copied());
-            }
-            NativeTask::SequenceFilter(task) => {
-                out.push(task.func);
-                out.extend(task.values.iter().copied());
-                out.extend(task.output.iter().copied());
-            }
-            NativeTask::SequenceFilterMap(task) => {
-                out.push(task.func);
-                out.extend(task.values.iter().copied());
-                out.extend(task.output.iter().copied());
-            }
-            NativeTask::SequenceFlatMap(task) => {
-                out.push(task.func);
-                out.extend(task.values.iter().copied());
-                out.extend(task.output.iter().copied());
-            }
-            NativeTask::UnaryMap(task) => {
-                out.push(task.func);
-                out.push(task.value);
-            }
-            NativeTask::UnaryFilter(task) => {
-                out.push(task.func);
-                out.push(task.value);
-                out.push(task.original);
-            }
-            NativeTask::UnaryFilterMap(task) => {
-                out.push(task.func);
-                out.push(task.value);
-            }
-            NativeTask::UnaryFlatMap(task) => {
-                out.push(task.func);
-                out.push(task.value);
-            }
-            NativeTask::Fold(task) => {
-                out.push(task.func);
-                out.extend(task.values.iter().copied());
-                out.push(task.acc);
-                trace_option(task.step, out);
-            }
-            NativeTask::DictMap(task) => {
-                out.push(task.func);
-                out.extend(task.entries.iter().map(|(_, pointer)| *pointer));
-                out.extend(task.output.values().copied());
-            }
-            NativeTask::DictTraverseResult(task) => {
-                out.push(task.func);
-                out.extend(task.entries.iter().map(|(_, pointer)| *pointer));
-                out.extend(task.output.values().copied());
-            }
-            NativeTask::ArrayEq(task) => {
-                out.extend(task.xs.iter().copied());
-                out.extend(task.ys.iter().copied());
-                trace_option(task.step, out);
-            }
-            NativeTask::Sum(task) => {
-                out.extend(task.values.iter().copied());
-                trace_option(task.acc, out);
-                trace_option(task.step, out);
-            }
-            NativeTask::Mean(task) => {
-                out.extend(task.values.iter().copied());
-                trace_option(task.acc, out);
-                trace_option(task.step, out);
-                trace_option(task.len_value, out);
-            }
-        }
-    }
-
-    fn rewrite_pointers(
-        &mut self,
-        rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
-    ) -> Result<(), EngineError> {
-        match self {
-            NativeTask::ApplyUnary(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_pointer(&mut task.arg, rewrite)
-            }
-            NativeTask::SequenceMap(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_slice(&mut task.values, rewrite)?;
-                rewrite_slice(&mut task.output, rewrite)
-            }
-            NativeTask::SequenceFilter(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_slice(&mut task.values, rewrite)?;
-                rewrite_slice(&mut task.output, rewrite)
-            }
-            NativeTask::SequenceFilterMap(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_slice(&mut task.values, rewrite)?;
-                rewrite_slice(&mut task.output, rewrite)
-            }
-            NativeTask::SequenceFlatMap(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_slice(&mut task.values, rewrite)?;
-                rewrite_slice(&mut task.output, rewrite)
-            }
-            NativeTask::UnaryMap(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_pointer(&mut task.value, rewrite)
-            }
-            NativeTask::UnaryFilter(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_pointer(&mut task.value, rewrite)?;
-                rewrite_pointer(&mut task.original, rewrite)
-            }
-            NativeTask::UnaryFilterMap(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_pointer(&mut task.value, rewrite)
-            }
-            NativeTask::UnaryFlatMap(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_pointer(&mut task.value, rewrite)
-            }
-            NativeTask::Fold(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_slice(&mut task.values, rewrite)?;
-                rewrite_pointer(&mut task.acc, rewrite)?;
-                rewrite_option(&mut task.step, rewrite)
-            }
-            NativeTask::DictMap(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_entries(&mut task.entries, rewrite)?;
-                rewrite_map_values(&mut task.output, rewrite)
-            }
-            NativeTask::DictTraverseResult(task) => {
-                rewrite_pointer(&mut task.func, rewrite)?;
-                rewrite_entries(&mut task.entries, rewrite)?;
-                rewrite_map_values(&mut task.output, rewrite)
-            }
-            NativeTask::ArrayEq(task) => {
-                rewrite_slice(&mut task.xs, rewrite)?;
-                rewrite_slice(&mut task.ys, rewrite)?;
-                rewrite_option(&mut task.step, rewrite)
-            }
-            NativeTask::Sum(task) => {
-                rewrite_slice(&mut task.values, rewrite)?;
-                rewrite_option(&mut task.acc, rewrite)?;
-                rewrite_option(&mut task.step, rewrite)
-            }
-            NativeTask::Mean(task) => {
-                rewrite_slice(&mut task.values, rewrite)?;
-                rewrite_option(&mut task.acc, rewrite)?;
-                rewrite_option(&mut task.step, rewrite)?;
-                rewrite_option(&mut task.len_value, rewrite)
-            }
-        }
-    }
-}
-
-fn rewrite_entries(
+pub(crate) fn rewrite_entries(
     entries: &mut [(Symbol, Pointer)],
     rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
 ) -> Result<(), EngineError> {
@@ -628,160 +478,6 @@ fn rewrite_entries(
         rewrite_pointer(pointer, rewrite)?;
     }
     Ok(())
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeApplyUnary {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub arg: Pointer,
-    pub arg_type: Type,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeSequenceMap {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub values: Vec<Pointer>,
-    pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeSequenceFilter {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub values: Vec<Pointer>,
-    pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeSequenceFilterMap {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub values: Vec<Pointer>,
-    pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeSequenceFlatMap {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub values: Vec<Pointer>,
-    pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeUnaryMap {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub value: Pointer,
-    pub shape: NativeUnaryShape,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeUnaryFilter {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub value: Pointer,
-    pub original: Pointer,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeUnaryFilterMap {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub value: Pointer,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeUnaryFlatMap {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub value: Pointer,
-    pub shape: NativeUnaryShape,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeFold {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub acc_type: Type,
-    pub elem_type: Type,
-    pub values: Vec<Pointer>,
-    pub acc: Pointer,
-    pub order: NativeFoldOrder,
-    pub state: NativeFoldState,
-    pub next_index: usize,
-    pub step: Option<Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeDictMap {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub entries: Vec<(Symbol, Pointer)>,
-    pub next_index: usize,
-    pub output: BTreeMap<Symbol, Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeDictTraverseResult {
-    pub func: Pointer,
-    pub func_type: Type,
-    pub elem_type: Type,
-    pub entries: Vec<(Symbol, Pointer)>,
-    pub next_index: usize,
-    pub output: BTreeMap<Symbol, Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeArrayEq {
-    pub elem_type: Type,
-    pub xs: Vec<Pointer>,
-    pub ys: Vec<Pointer>,
-    pub state: NativeArrayEqState,
-    pub next_index: usize,
-    pub step: Option<Pointer>,
-    pub negate: bool,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeSum {
-    pub elem_type: Type,
-    pub values: Vec<Pointer>,
-    pub acc: Option<Pointer>,
-    pub state: NativeFoldState,
-    pub next_index: usize,
-    pub step: Option<Pointer>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct NativeMean {
-    pub elem_type: Type,
-    pub values: Vec<Pointer>,
-    pub len: usize,
-    pub acc: Option<Pointer>,
-    pub state: NativeMeanState,
-    pub next_index: usize,
-    pub step: Option<Pointer>,
-    pub len_value: Option<Pointer>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_typesystem::types::Type;
+use rex_util::sha256_hex;
 
 use crate::Handle;
 
@@ -77,6 +78,19 @@ pub enum ResolvedModuleContent {
 pub struct ResolvedModule {
     pub id: ModuleId,
     pub content: ResolvedModuleContent,
+}
+
+impl ResolvedModule {
+    fn source_fingerprint(source: &str) -> String {
+        sha256_hex(source.as_bytes())
+    }
+
+    pub(crate) fn content_fingerprint(&self) -> Option<String> {
+        match &self.content {
+            ResolvedModuleContent::Source(source) => Some(Self::source_fingerprint(source)),
+            ResolvedModuleContent::CompilationUnit(_) => None,
+        }
+    }
 }
 
 /// Deterministic compact key derived from a [`ModuleId`].

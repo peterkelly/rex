@@ -1370,6 +1370,72 @@ async fn eval_option_result_helpers() {
 }
 
 #[tokio::test]
+async fn eval_option_filter() {
+    let expr = parse(
+        r#"
+        let
+            keep = filter (\x -> x > 1) (Some (2 is i32)),
+            drop = filter (\x -> x > 1) (Some (1 is i32)),
+            empty = filter (\x -> x > 1) (None is Option i32)
+        in
+            (keep, drop, empty)
+        "#,
+    );
+    let engine = Engine::with_prelude(()).unwrap();
+    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
+    let value = pval!(engine, value);
+    match value {
+        Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
+            assert_eq!(xs.len(), 3);
+            match &xs[0] {
+                Value::Adt(tag, args) if tag.as_ref() == "Some" => {
+                    assert_eq!(args.len(), 1);
+                    assert!(matches!(pval!(engine, args[0].clone()), Value::I32(2)));
+                }
+                _ => panic!("expected Some 2"),
+            }
+            assert!(matches!(xs[1], Value::Adt(ref tag, _) if tag.as_ref() == "None"));
+            assert!(matches!(xs[2], Value::Adt(ref tag, _) if tag.as_ref() == "None"));
+        }
+        _ => panic!("expected tuple result"),
+    }
+}
+
+#[tokio::test]
+async fn eval_option_filter_map() {
+    let expr = parse(
+        r#"
+        let
+            keep = filter_map (\x -> if x > 1 then Some (x + 1) else None) (Some (2 is i32)),
+            drop = filter_map (\x -> if x > 1 then Some (x + 1) else None) (Some (1 is i32)),
+            empty = filter_map (\x -> if x > 1 then Some (x + 1) else None) (None is Option i32)
+        in
+            (keep, drop, empty)
+        "#,
+    );
+    let engine = Engine::with_prelude(()).unwrap();
+    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
+    let value = pval!(engine, value);
+    match value {
+        Value::Tuple(xs) => {
+            let xs = pvals!(engine, xs);
+            assert_eq!(xs.len(), 3);
+            match &xs[0] {
+                Value::Adt(tag, args) if tag.as_ref() == "Some" => {
+                    assert_eq!(args.len(), 1);
+                    assert!(matches!(pval!(engine, args[0].clone()), Value::I32(3)));
+                }
+                _ => panic!("expected Some 3"),
+            }
+            assert!(matches!(xs[1], Value::Adt(ref tag, _) if tag.as_ref() == "None"));
+            assert!(matches!(xs[2], Value::Adt(ref tag, _) if tag.as_ref() == "None"));
+        }
+        _ => panic!("expected tuple result"),
+    }
+}
+
+#[tokio::test]
 async fn eval_unwrap_errors_for_empty_option_and_err_result() {
     let none_expr = parse("(unwrap ((None is Option i32)))");
     match eval_expr(Engine::with_prelude(()).unwrap(), none_expr.as_ref()).await {

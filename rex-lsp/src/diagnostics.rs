@@ -148,7 +148,7 @@ pub(crate) fn push_type_diagnostics(
     };
 
     let result = if let Some(path) = uri_to_file_path(uri) {
-        engine.add_importer("lsp-modules", LspModuleService::current());
+        engine.add_importer("lsp-modules", Arc::new(LspModuleService::current()));
         futures::executor::block_on(engine.infer_snippet_at(text, path))
     } else {
         futures::executor::block_on(engine.infer_snippet(text))

@@ -7,15 +7,24 @@ use rex_ast::{CompilationUnit, Expr, Symbol};
 use rex_typesystem::types::{TypedExpr, TypedExprKind};
 use uuid::Uuid;
 
-use crate::engine::{
-    ClassMethodRequirement, CompiledExterns, CompiledProgram, Engine, NativeRequirement,
-    RUNTIME_LINK_ABI_VERSION, RuntimeLinkContract, collect_pattern_bindings, type_check_engine,
+use crate::{
+    CompileError, EngineError, Environment, Evaluator, RuntimeEnv,
+    builder::{engine::Engine, rewrite::rewrite_program_with_imports},
+    compiler::{
+        program::{
+            ClassMethodRequirement, CompiledExterns, CompiledProgram, NativeRequirement,
+            RUNTIME_LINK_ABI_VERSION, RuntimeLinkContract,
+        },
+        type_check::{collect_pattern_bindings, type_check_engine},
+    },
+    modules::{
+        ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, ResolvedModule,
+        exports_from_program, parse_program_from_source, prefix_for_module,
+    },
 };
-use crate::modules::{
-    ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, ResolvedModule,
-    exports_from_program, parse_program_from_source, prefix_for_module,
-};
-use crate::{CompileError, EngineError, Environment, Evaluator, RuntimeEnv};
+
+pub(crate) mod program;
+pub(crate) mod type_check;
 
 fn unit_expr() -> Arc<Expr> {
     Arc::new(Expr::Tuple(Default::default(), Vec::new()))
@@ -330,17 +339,16 @@ where
         loading: &'a mut BTreeSet<ModuleId>,
     ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>> {
         Box::pin(async move {
-            let rewritten = self
-                .engine
-                .rewrite_program_with_imports(
-                    compilation_unit,
-                    importer,
-                    prefix,
-                    chain,
-                    loaded,
-                    loading,
-                )
-                .await?;
+            let rewritten = rewrite_program_with_imports(
+                &mut self.engine,
+                compilation_unit,
+                importer,
+                prefix,
+                chain,
+                loaded,
+                loading,
+            )
+            .await?;
             self.engine.inject_decls(&rewritten.decls)?;
             Ok(rewritten)
         })

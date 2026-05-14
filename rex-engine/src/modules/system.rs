@@ -14,23 +14,6 @@ pub trait Importer: Send + Sync {
     ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>>;
 }
 
-#[derive(Clone, Default)]
-pub struct DenyImporter;
-
-impl Importer for DenyImporter {
-    fn import<'a>(
-        &'a self,
-        request: ImportRequest,
-    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
-        Box::pin(async move {
-            Err(ModuleError::ImportsDisabled {
-                module_name: request.module_name,
-            }
-            .into())
-        })
-    }
-}
-
 #[derive(Clone)]
 struct ImporterEntry {
     importer: Arc<dyn Importer>,

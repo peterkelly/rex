@@ -1,9 +1,7 @@
-use std::sync::Arc;
-
 use futures::future::BoxFuture;
 use rex_util::{sha256_hex, stdlib_source};
 
-use crate::ModuleError;
+use crate::error::{EngineError, ModuleError};
 
 use super::{ImportRequest, Importer, ModuleId, ResolvedModule, ResolvedModuleContent};
 
@@ -47,6 +45,19 @@ impl Importer for StdlibImporter {
     }
 }
 
-pub fn stdlib_importer() -> Arc<dyn Importer> {
-    Arc::new(StdlibImporter)
+#[derive(Clone, Default)]
+pub struct DenyImporter;
+
+impl Importer for DenyImporter {
+    fn import<'a>(
+        &'a self,
+        request: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            Err(ModuleError::ImportsDisabled {
+                module_name: request.module_name,
+            }
+            .into())
+        })
+    }
 }

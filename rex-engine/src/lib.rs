@@ -3,33 +3,45 @@
 
 //! Evaluation engine for Rex.
 
+mod builder;
 mod compiler;
-mod engine;
+mod config;
 mod env;
 mod error;
 mod evaluator;
+mod handlers;
 mod modules;
+mod native_fn;
+mod overloaded_fn;
 mod prelude;
 mod runtime_env;
 mod stack;
+mod util;
 mod value;
 
-pub use compiler::Compiler;
-pub use engine::{
-    AsyncCallExecutor, AsyncCallPolicy, ClassMethodCapability, ClassMethodRequirement,
-    CompiledExterns, CompiledProgram, CompiledProgramBoundary, Engine, EngineOptions,
-    ExecutionBounds, Export, HostFnAsync, HostFnSync, NativeCapability, NativeFuture,
-    NativeRequirement, PRELUDE_MODULE_NAME, PreludeMode, ROOT_MODULE_NAME, RexDefault,
-    RuntimeCapabilities, RuntimeCompatibility, RuntimeLinkContract, collect_adts_error_to_engine,
+pub use builder::{
+    engine::Engine,
+    export::{Export, HostFnAsync, HostFnSync, NativeFuture},
+    markdown::registry_markdown,
 };
+pub use compiler::{
+    Compiler,
+    program::{
+        ClassMethodCapability, ClassMethodRequirement, CompiledExterns, CompiledProgram,
+        CompiledProgramBoundary, NativeCapability, NativeRequirement, RuntimeCapabilities,
+        RuntimeCompatibility, RuntimeLinkContract,
+    },
+};
+pub use config::{AsyncCallExecutor, AsyncCallPolicy, EngineOptions, ExecutionBounds, PreludeMode};
 pub use env::Environment;
-pub(crate) use env::RootedEnvironment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
-pub use evaluator::{Context, Evaluator};
-pub use modules::virtual_export_name;
+pub use evaluator::{Evaluator, context::Context};
+pub use handlers::RexDefault;
 pub use modules::{
     CanonicalSymbol, DenyImporter, ImportRequest, Importer, Module, ModuleExports, ModuleId,
-    ModuleInstance, ModuleKey, ResolvedModule, ResolvedModuleContent, StdlibImporter, SymbolKind,
+    ModuleInstance, ModuleKey, PRELUDE_MODULE_NAME, ROOT_MODULE_NAME, ResolvedModule,
+    ResolvedModuleContent, StdlibImporter, SymbolKind, virtual_export_name,
 };
 pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
+pub use util::collect_adts_error_to_engine;
 pub use value::{FromRex, Handle, Heap, IntoRex, Value, ValueDisplayOptions};
