@@ -53,6 +53,59 @@ impl Default for HeapState {
     }
 }
 
+impl HeapState {
+    fn collect_needed(&self) -> bool {
+        self.collect_on_every_alloc || self.slots.len() >= self.next_gc_slot_count
+    }
+
+    fn push_cell(&mut self, heap_id: u64, cell: Cell) -> Result<Pointer, EngineError> {
+        let index = u32::try_from(self.slots.len())
+            .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
+        self.slots.push(HeapSlot {
+            generation: 0,
+            cell: Some(cell),
+        });
+        Ok(Pointer {
+            heap_id,
+            index,
+            generation: 0,
+        })
+    }
+
+    fn set_collect_on_every_alloc(&mut self, enabled: bool) {
+        self.collect_on_every_alloc = enabled;
+    }
+
+    fn collection_count(&self) -> u64 {
+        self.collections
+    }
+
+    fn finish_collection(&mut self, slots: Vec<HeapSlot>) -> Result<(), EngineError> {
+        self.slots = slots;
+        self.collections = self
+            .collections
+            .checked_add(1)
+            .ok_or_else(|| EngineError::Internal("heap collection count exhausted".into()))?;
+        self.update_next_gc_slot_count();
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn set_gc_slot_threshold(&mut self, threshold: usize) {
+        self.next_gc_slot_count = threshold.max(1);
+    }
+
+    fn update_next_gc_slot_count(&mut self) {
+        let live = self.slots.len();
+        let grown = live.saturating_add(
+            live.saturating_mul(GC_SLOT_GROWTH_NUMERATOR - GC_SLOT_GROWTH_DENOMINATOR)
+                / GC_SLOT_GROWTH_DENOMINATOR,
+        );
+        let with_slack = live.saturating_add(DEFAULT_GC_SLOT_THRESHOLD);
+        self.next_gc_slot_count = grown.max(with_slack).max(DEFAULT_GC_SLOT_THRESHOLD);
+    }
+}
+
 #[derive(Clone)]
 struct HeapSlot {
     generation: u64,
@@ -194,7 +247,7 @@ impl TempRoots {
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        Ok(state.collections != self.collection_count)
+        Ok(state.collection_count() != self.collection_count)
     }
 
     pub(crate) fn get(&self, index: usize) -> Result<Pointer, EngineError> {
@@ -729,7 +782,7 @@ impl Heap {
         for pointer in pointers {
             root_ids.push(Self::register_root_locked(self.id, &mut state, pointer)?);
         }
-        let collection_count = state.collections;
+        let collection_count = state.collection_count();
         Ok(TempRoots {
             heap: self.clone(),
             root_ids,
@@ -755,7 +808,7 @@ impl Heap {
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        state.collect_on_every_alloc = enabled;
+        state.set_collect_on_every_alloc(enabled);
         Ok(())
     }
 
@@ -1226,7 +1279,7 @@ impl Heap {
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        state.next_gc_slot_count = threshold.max(1);
+        state.set_gc_slot_threshold(threshold);
         Ok(())
     }
 
@@ -1236,7 +1289,7 @@ impl Heap {
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
-        Ok(state.collections)
+        Ok(state.collection_count())
     }
 
     #[cfg(test)]
@@ -1246,13 +1299,6 @@ impl Heap {
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
         self.collect_locked(&mut state)
-    }
-
-    fn collect_if_needed_locked(&self, state: &mut HeapState) -> Result<(), EngineError> {
-        if state.collect_on_every_alloc || state.slots.len() >= state.next_gc_slot_count {
-            self.collect_locked(state)?;
-        }
-        Ok(())
     }
 
     fn collect_locked(&self, state: &mut HeapState) -> Result<(), EngineError> {
@@ -1287,12 +1333,7 @@ impl Heap {
             new_slots[new_pointer.index as usize].cell = Some(cell);
         }
 
-        state.slots = new_slots;
-        state.collections = state
-            .collections
-            .checked_add(1)
-            .ok_or_else(|| EngineError::Internal("heap collection count exhausted".into()))?;
-        Self::update_next_gc_slot_count(state);
+        state.finish_collection(new_slots)?;
         #[cfg(debug_assertions)]
         self.verify_after_collection_locked(state)?;
         Ok(())
@@ -1335,16 +1376,6 @@ impl Heap {
         });
         work.push_back(pointer);
         Ok(relocated)
-    }
-
-    fn update_next_gc_slot_count(state: &mut HeapState) {
-        let live = state.slots.len();
-        let grown = live.saturating_add(
-            live.saturating_mul(GC_SLOT_GROWTH_NUMERATOR - GC_SLOT_GROWTH_DENOMINATOR)
-                / GC_SLOT_GROWTH_DENOMINATOR,
-        );
-        let with_slack = live.saturating_add(DEFAULT_GC_SLOT_THRESHOLD);
-        state.next_gc_slot_count = grown.max(with_slack).max(DEFAULT_GC_SLOT_THRESHOLD);
     }
 
     #[cfg(debug_assertions)]
@@ -1414,17 +1445,21 @@ impl Heap {
         Ok(())
     }
 
-    // The single ordinary heap-object allocation path. It roots pointers already
-    // stored in the new cell before checking whether this allocation should
-    // collect, then rewrites them to their post-collection locations.
+    // The single ordinary heap-object allocation path. When allocation will
+    // collect, it roots pointers already stored in the new cell, then rewrites
+    // them to their post-collection locations.
     fn alloc_cell(&self, mut cell: Cell) -> Result<Pointer, EngineError> {
-        let mut protected = Vec::new();
-        trace_cell_pointers(&cell, &mut protected);
-
         let mut state = self
             .state
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+
+        if !state.collect_needed() {
+            return state.push_cell(self.id, cell);
+        }
+
+        let mut protected = Vec::new();
+        trace_cell_pointers(&cell, &mut protected);
 
         let mut root_ids = Vec::with_capacity(protected.len());
         for pointer in protected {
@@ -1439,7 +1474,7 @@ impl Heap {
             }
         }
 
-        self.collect_if_needed_locked(&mut state)?;
+        self.collect_locked(&mut state)?;
 
         let mut relocated = Vec::with_capacity(root_ids.len());
         for root_id in &root_ids {
@@ -1460,17 +1495,7 @@ impl Heap {
             ));
         }
 
-        let index = u32::try_from(state.slots.len())
-            .map_err(|_| EngineError::Internal("heap exhausted: too many slots".into()))?;
-        state.slots.push(HeapSlot {
-            generation: 0,
-            cell: Some(cell),
-        });
-        Ok(Pointer {
-            heap_id: self.id,
-            index,
-            generation: 0,
-        })
+        state.push_cell(self.id, cell)
     }
 }
 
