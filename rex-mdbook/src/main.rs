@@ -725,11 +725,13 @@ async function initRepls() {
     setRunState(root, false);
     const runKeybinding = monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter;
     const runNumpadKeybinding = monaco.KeyMod.CtrlCmd | monaco.KeyCode.NumpadEnter;
-    editor.addCommand(runKeybinding, () => {
-      toggleReplRun(root);
-    });
-    editor.addCommand(runNumpadKeybinding, () => {
-      toggleReplRun(root);
+    editor.addAction({
+      id: "rex.runSnippet",
+      label: "Run Rex Snippet",
+      keybindings: [runKeybinding, runNumpadKeybinding],
+      run: () => {
+        toggleReplRun(root);
+      }
     });
     const fallback = root.previousElementSibling;
     if (fallback && fallback.tagName === "PRE" && fallback.querySelector("code.language-rex")) {
