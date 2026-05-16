@@ -1347,6 +1347,7 @@ pub struct NativeSum {
     pub elem_type: Type,
     pub values: Vec<Pointer>,
     pub acc: Option<Pointer>,
+    pub plus: Option<Pointer>,
     pub state: NativeFoldState,
     pub next_index: usize,
     pub step: Option<Pointer>,
@@ -1356,6 +1357,7 @@ impl Collection for NativeSum {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.extend(self.values.iter().copied());
         trace_option(self.acc, out);
+        trace_option(self.plus, out);
         trace_option(self.step, out);
     }
 
@@ -1365,6 +1367,7 @@ impl Collection for NativeSum {
     ) -> Result<(), EngineError> {
         rewrite_slice(&mut self.values, rewrite)?;
         rewrite_option(&mut self.acc, rewrite)?;
+        rewrite_option(&mut self.plus, rewrite)?;
         rewrite_option(&mut self.step, rewrite)
     }
 }
@@ -1389,12 +1392,12 @@ where
             return Ok(NativeStep::Return(self.values[0]));
         }
         self.state = NativeFoldState::ApplyFirst;
-        self.apply_first(runtime)
+        self.apply_first_may_allocate(runtime)
     }
 
     fn receive(
         &mut self,
-        runtime: &RuntimeCore<State>,
+        _runtime: &RuntimeCore<State>,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1415,7 +1418,7 @@ where
                     return Ok(NativeStep::Return(value));
                 }
                 self.state = NativeFoldState::ApplyFirst;
-                self.apply_first(runtime)
+                self.apply_first()
             }
         }
     }
@@ -1424,14 +1427,18 @@ where
         match self.state {
             NativeFoldState::Enter | NativeFoldState::ApplyFirst => false,
             NativeFoldState::ApplySecond => {
-                receive_continues_sequence(self.next_index, self.values.len())
+                self.plus.is_none()
+                    && receive_continues_sequence(self.next_index, self.values.len())
             }
         }
     }
 }
 
 impl NativeSum {
-    fn apply_first<State>(&self, runtime: &RuntimeCore<State>) -> Result<NativeStep, EngineError>
+    fn apply_first_may_allocate<State>(
+        &mut self,
+        runtime: &RuntimeCore<State>,
+    ) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
@@ -1439,9 +1446,23 @@ impl NativeSum {
         let acc = self
             .acc
             .ok_or_else(|| EngineError::Internal("native sum missing accumulator".into()))?;
-        let roots = runtime.heap.temp_roots(vec![acc])?;
-        let plus = overloaded_pointer(runtime, "+", plus_ty.clone())?;
-        let acc = roots.get(0)?;
+        let acc_root = runtime.heap.temp_roots(vec![acc])?;
+        if self.plus.is_none() {
+            self.plus = Some(overloaded_pointer(runtime, "+", plus_ty.clone())?);
+        }
+        let acc = acc_root.get(0)?;
+        self.acc = Some(acc);
+        self.apply_first()
+    }
+
+    fn apply_first(&self) -> Result<NativeStep, EngineError> {
+        let plus_ty = binary_same_type(&self.elem_type);
+        let plus = self
+            .plus
+            .ok_or_else(|| EngineError::Internal("native sum missing plus function".into()))?;
+        let acc = self
+            .acc
+            .ok_or_else(|| EngineError::Internal("native sum missing accumulator".into()))?;
         native_apply_step(plus, plus_ty, acc, self.elem_type.clone())
     }
 
