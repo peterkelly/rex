@@ -1288,7 +1288,11 @@ pub(crate) fn refresh_frame_from_roots(
     roots: &TempRoots,
     start: usize,
 ) -> Result<(), EngineError> {
-    let mut rewrites = HashMap::new();
+    if !roots.has_collected_since_creation()? {
+        return Ok(());
+    }
+
+    let mut rewrites = HashMap::with_capacity(originals.len().saturating_sub(start));
     for (idx, original) in originals.iter().enumerate().skip(start) {
         rewrites.insert(*original, roots.get(idx)?);
     }
