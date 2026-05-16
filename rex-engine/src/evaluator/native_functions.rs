@@ -78,6 +78,11 @@ where
     if frame.state != FrNativeCallState::Waiting {
         return unexpected_child_result("native call");
     }
+    if !<NativeTask as Coroutine<State>>::receive_may_allocate(&frame.task) {
+        let step = frame.task.receive(runtime, value)?;
+        return native_step_to_control(runtime, frame_ptr, frame, step);
+    }
+
     let mut protected = vec![frame_ptr, value];
     Frame::NativeCall(frame.clone()).trace_pointers(&mut protected);
     let roots = runtime.heap.temp_roots(protected.clone())?;
@@ -204,6 +209,50 @@ where
             NativeTask::Mean(task) => task.receive(runtime, value),
         }
     }
+
+    fn receive_may_allocate(&self) -> bool {
+        match self {
+            NativeTask::ApplyUnary(task) => {
+                <NativeApplyUnary as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::SequenceMap(task) => {
+                <NativeSequenceMap as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::SequenceFilter(task) => {
+                <NativeSequenceFilter as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::SequenceFilterMap(task) => {
+                <NativeSequenceFilterMap as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::SequenceFlatMap(task) => {
+                <NativeSequenceFlatMap as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::UnaryMap(task) => {
+                <NativeUnaryMap as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::UnaryFilter(task) => {
+                <NativeUnaryFilter as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::UnaryFilterMap(task) => {
+                <NativeUnaryFilterMap as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::UnaryFlatMap(task) => {
+                <NativeUnaryFlatMap as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::Fold(task) => <NativeFold as Coroutine<State>>::receive_may_allocate(task),
+            NativeTask::DictMap(task) => {
+                <NativeDictMap as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::DictTraverse(task) => {
+                <NativeDictTraverse as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::ArrayEq(task) => {
+                <NativeArrayEq as Coroutine<State>>::receive_may_allocate(task)
+            }
+            NativeTask::Sum(task) => <NativeSum as Coroutine<State>>::receive_may_allocate(task),
+            NativeTask::Mean(task) => <NativeMean as Coroutine<State>>::receive_may_allocate(task),
+        }
+    }
 }
 
 fn native_apply_step(
@@ -219,6 +268,20 @@ fn native_apply_step(
     })
 }
 
+fn receive_finishes_sequence(next_index: usize, len: usize) -> bool {
+    match next_index.checked_add(1) {
+        Some(next_index) => next_index >= len,
+        None => true,
+    }
+}
+
+fn receive_continues_sequence(next_index: usize, len: usize) -> bool {
+    match next_index.checked_add(1) {
+        Some(next_index) => next_index < len,
+        None => true,
+    }
+}
+
 pub(crate) trait Coroutine<State>
 where
     State: Clone + Send + Sync + 'static,
@@ -230,6 +293,8 @@ where
         runtime: &RuntimeCore<State>,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>;
+
+    fn receive_may_allocate(&self) -> bool;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -274,6 +339,10 @@ where
         value: Pointer,
     ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        false
     }
 }
 
@@ -351,6 +420,10 @@ where
             self.values[self.next_index],
             self.elem_type.clone(),
         )
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        receive_finishes_sequence(self.next_index, self.values.len())
     }
 }
 
@@ -432,6 +505,10 @@ where
             self.elem_type.clone(),
         )
     }
+
+    fn receive_may_allocate(&self) -> bool {
+        receive_finishes_sequence(self.next_index, self.values.len())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -512,6 +589,10 @@ where
             self.elem_type.clone(),
         )
     }
+
+    fn receive_may_allocate(&self) -> bool {
+        receive_finishes_sequence(self.next_index, self.values.len())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -591,6 +672,10 @@ where
             self.elem_type.clone(),
         )
     }
+
+    fn receive_may_allocate(&self) -> bool {
+        receive_finishes_sequence(self.next_index, self.values.len())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -643,6 +728,10 @@ where
             NativeUnaryShape::Result => result_from_native_pointer(runtime, Ok(value))?,
         };
         Ok(NativeStep::Return(value))
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        true
     }
 }
 
@@ -700,6 +789,10 @@ where
         };
         Ok(NativeStep::Return(value))
     }
+
+    fn receive_may_allocate(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -744,6 +837,10 @@ where
         value: Pointer,
     ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        false
     }
 }
 
@@ -796,6 +893,10 @@ where
             let _ = result_value_ptr(runtime, value)?;
         }
         Ok(NativeStep::Return(value))
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        false
     }
 }
 
@@ -887,6 +988,10 @@ where
             }
             _ => unexpected_child_result("native fold"),
         }
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        false
     }
 }
 
@@ -1000,6 +1105,10 @@ where
             self.elem_type.clone(),
         )
     }
+
+    fn receive_may_allocate(&self) -> bool {
+        receive_finishes_sequence(self.next_index, self.entries.len())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1090,6 +1199,10 @@ where
             self.elem_type.clone(),
         )
     }
+
+    fn receive_may_allocate(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1173,6 +1286,13 @@ where
                 self.apply_first(runtime)
             }
             _ => unexpected_child_result("native array equality"),
+        }
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        match self.state {
+            NativeArrayEqState::Enter | NativeArrayEqState::ApplyFirst => false,
+            NativeArrayEqState::ApplySecond => true,
         }
     }
 }
@@ -1296,6 +1416,15 @@ where
                 }
                 self.state = NativeFoldState::ApplyFirst;
                 self.apply_first(runtime)
+            }
+        }
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        match self.state {
+            NativeFoldState::Enter | NativeFoldState::ApplyFirst => false,
+            NativeFoldState::ApplySecond => {
+                receive_continues_sequence(self.next_index, self.values.len())
             }
         }
     }
@@ -1423,6 +1552,16 @@ where
             }
             NativeMeanState::ApplyDivSecond => Ok(NativeStep::Return(value)),
             NativeMeanState::Enter => unexpected_child_result("native mean"),
+        }
+    }
+
+    fn receive_may_allocate(&self) -> bool {
+        match self.state {
+            NativeMeanState::Enter
+            | NativeMeanState::ApplyPlusFirst
+            | NativeMeanState::ApplyDivFirst
+            | NativeMeanState::ApplyDivSecond => false,
+            NativeMeanState::ApplyPlusSecond => true,
         }
     }
 }

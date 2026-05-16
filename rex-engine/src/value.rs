@@ -230,9 +230,9 @@ struct HandleRoot {
 
 impl Drop for TempRoots {
     fn drop(&mut self) {
-        for root_id in self.root_ids.drain(..) {
-            let _ = self.heap.unregister_external_root(root_id);
-        }
+        let _ = self
+            .heap
+            .unregister_external_roots(std::mem::take(&mut self.root_ids));
     }
 }
 
@@ -1250,6 +1250,26 @@ impl Heap {
             .lock()
             .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
         Self::unregister_root_locked(self.id, &mut state, root_id)
+    }
+
+    fn unregister_external_roots(&self, root_ids: Vec<RootId>) -> Result<(), EngineError> {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| EngineError::Internal("heap state poisoned".into()))?;
+        let mut first_error = None;
+        for root_id in root_ids {
+            if let Err(err) = Self::unregister_root_locked(self.id, &mut state, root_id)
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+        }
+        if let Some(err) = first_error {
+            Err(err)
+        } else {
+            Ok(())
+        }
     }
 
     fn resolve_external_root(&self, root_id: RootId) -> Result<Pointer, EngineError> {
