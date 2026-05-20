@@ -1,6 +1,5 @@
 import base (*);
 
-pub fn double : i32 -> i32 = \x -> times 2 x;
-pub fn triple : i32 -> i32 = \x -> times 3 x;
-pub fn bump : i32 -> i32 = \x -> inc x;
-
+pub fn double x: i32 -> i32 = times 2 x;
+pub fn triple x: i32 -> i32 = times 3 x;
+pub fn bump x: i32 -> i32 = inc x;

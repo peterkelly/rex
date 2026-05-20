@@ -1,4 +1,4 @@
-pub fn add : i32 -> i32 -> i32 = \x y -> x + y;
-pub fn triple : i32 -> i32 = \x -> x * 3;
+pub fn add x: i32 -> y: i32 -> i32 = x + y;
+pub fn triple x: i32 -> i32 = x * 3;
 
-fn secret : i32 -> i32 = \x -> x + 999;
+fn secret x: i32 -> i32 = x + 999;

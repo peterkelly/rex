@@ -5,7 +5,7 @@
 // many deep environment owners live at once, which is useful when profiling
 // environment lookup and GC behavior.
 
-fn range : i32 -> i32 -> List i32 = \lo hi ->
+fn range lo: i32 -> hi: i32 -> List i32 =
     if lo > hi then Empty else Cons lo (range (lo + 1) hi);
 
 let seed: i32 = 0 in

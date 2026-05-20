@@ -57,10 +57,11 @@ let add1 = (+) 1 in add1 41
 
 ## Top-level functions (`fn`)
 
-Top-level functions require an explicit type signature and a semicolon terminator:
+Top-level functions require parameter types, a return type, and a semicolon terminator. The
+recommended form puts each parameter name next to its type in the `fn` header:
 
 ```rex,interactive
-fn add : i32 -> i32 -> i32 = \x y -> x + y;
+fn add x: i32 -> y: i32 -> i32 = x + y;
 ```
 
 This declares a function that takes an `i32` and returns another function `i32 -> i32`. The
@@ -69,39 +70,38 @@ semicolon terminates the top-level declaration, so multi-line bodies do not depe
 Top-level `fn` declarations are mutually recursive, so they can reference each other:
 
 ```rex,interactive
-fn even : i32 -> bool = \n ->
+fn even n: i32 -> bool =
   if n == 0 then true else odd (n - 1);
 
-fn odd : i32 -> bool = \n ->
+fn odd n: i32 -> bool =
   if n == 0 then false else even (n - 1);
 
 even 10
 ```
 
-### Legacy `fn` header forms
+### Alternative `fn` forms
 
-The parser still accepts older forms that put parameter names/types in the header:
+Rex also accepts a parenthesized parameter in the header:
 
 ```rex,interactive
 fn inc (x: i32) -> i32 = x + 1;
 ```
 
-```rex,interactive
-fn inc x: i32 -> i32 = x + 1;
-```
-
-For multiple parameters, the “named arrows” form looks like:
+You can also write the full function type after the function name and provide a lambda body:
 
 ```rex,interactive
-fn add x: i32 -> y: i32 -> i32 = x + y;
+fn add : i32 -> i32 -> i32 = \x y -> x + y;
 ```
+
+These are equivalent alternatives. The named-parameter header form is recommended because it keeps
+parameter names and types adjacent to each other.
 
 ### `fn` constraints with `where`
 
 Top-level functions can also have type-class constraints:
 
 ```rex,interactive
-fn sum_list : List i32 -> i32 where Foldable List = \xs -> foldl (+) 0 xs;
+fn sum_list xs: List i32 -> i32 where Foldable List = foldl (+) 0 xs;
 ```
 
 If you haven’t seen `where` constraints before, Section 2 covers them in detail.

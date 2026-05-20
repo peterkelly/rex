@@ -1,4 +1,4 @@
-fn inc : i32 -> i32 = \x -> x + 1;
+fn inc x: i32 -> i32 = x + 1;
 
 class Bump a where {
     bump : a -> a;
