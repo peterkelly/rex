@@ -66,12 +66,12 @@ class Default a where {
 
 // collection combinators
 class Functor f where {
-    map : (a -> b) -> f a -> f b;
+    map<a,b> : (a -> b) -> f a -> f b;
 }
 
 class Applicative f <= Functor f where {
-    pure : a -> f a;
-    ap : f (a -> b) -> f a -> f b;
+    pure<a> : a -> f a;
+    ap<a,b> : f (a -> b) -> f a -> f b;
 }
 
 class Monad m <= Applicative m where {
@@ -81,29 +81,29 @@ class Monad m <= Applicative m where {
     // the rest of Rex's collection API (map f xs, filter p xs, ...) and to
     // map directly to the host intrinsic prim_flat_map without extra
     // wrappers/allocations.
-    bind : (a -> m b) -> m a -> m b;
+    bind<a,b> : (a -> m b) -> m a -> m b;
 }
 
 class Foldable t where {
-    foldl : (b -> a -> b) -> b -> t a -> b;
-    foldr : (a -> b -> b) -> b -> t a -> b;
-    fold : (b -> a -> b) -> b -> t a -> b;
+    foldl<a,b> : (b -> a -> b) -> b -> t a -> b;
+    foldr<a,b> : (a -> b -> b) -> b -> t a -> b;
+    fold<a,b> : (b -> a -> b) -> b -> t a -> b;
 }
 
 class Filterable f <= Functor f where {
-    filter : (a -> bool) -> f a -> f a;
-    filter_map : (a -> Option b) -> f a -> f b;
+    filter<a> : (a -> bool) -> f a -> f a;
+    filter_map<a,b> : (a -> Option b) -> f a -> f b;
 }
 
 class Sequence f <= Functor f, Foldable f where {
-    take : i32 -> f a -> f a;
-    skip : i32 -> f a -> f a;
-    zip : f a -> f b -> f (a, b);
-    unzip : f (a, b) -> (f a, f b);
+    take<a> : i32 -> f a -> f a;
+    skip<a> : i32 -> f a -> f a;
+    zip<a,b> : f a -> f b -> f (a, b);
+    unzip<a,b> : f (a, b) -> (f a, f b);
 }
 
 class Alternative f <= Applicative f where {
-    or_else : (f a -> f a) -> f a -> f a;
+    or_else<a> : (f a -> f a) -> f a -> f a;
 }
 
 // Indexable needs two parameters: the container type and the element type.
@@ -466,7 +466,7 @@ instance Eq datetime where {
     != = prim_ne;
 }
 
-instance Eq (List a) <= Eq a where {
+instance<a> Eq (List a) <= Eq a where {
     == = \xs ys ->
         match xs with {
             case [] ->
@@ -483,7 +483,7 @@ instance Eq (List a) <= Eq a where {
     != = \xs ys -> if xs == ys then false else true;
 }
 
-instance Eq (Option a) <= Eq a where {
+instance<a> Eq (Option a) <= Eq a where {
     == = \x y ->
         match x with {
             case Some a0 ->
@@ -500,12 +500,12 @@ instance Eq (Option a) <= Eq a where {
     != = \x y -> if x == y then false else true;
 }
 
-instance Eq (Array a) <= Eq a where {
+instance<a> Eq (Array a) <= Eq a where {
     == = prim_array_eq;
     != = prim_array_ne;
 }
 
-instance Eq (Result a e) <= Eq a, Eq e where {
+instance<a,e> Eq (Result a e) <= Eq a, Eq e where {
     == = \x y ->
         match x with {
             case Ok a0 ->
@@ -717,23 +717,23 @@ instance Default string where {
     default = prim_zero;
 }
 
-instance Default (List a) where {
+instance<a> Default (List a) where {
     default = [];
 }
 
-instance Default (Array a) where {
+instance<a> Default (Array a) where {
     default = prim_array_from_list [];
 }
 
-instance Default (Option a) where {
+instance<a> Default (Option a) where {
     default = None;
 }
 
-instance Default (Result a e) <= Default a where {
+instance<a,e> Default (Result a e) <= Default a where {
     default = Ok default;
 }
 
-instance Show (List a) <= Show a where {
+instance<a> Show (List a) <= Show a where {
     show = \xs ->
         match xs with {
             case [] -> "[]";
@@ -745,7 +745,7 @@ instance Show (List a) <= Show a where {
         };
 }
 
-instance Show (Array a) <= Show a where {
+instance<a> Show (Array a) <= Show a where {
     show = \xs ->
         let
             step = \out x ->
@@ -757,7 +757,7 @@ instance Show (Array a) <= Show a where {
             out + ">";
 }
 
-instance Show (Option a) <= Show a where {
+instance<a> Show (Option a) <= Show a where {
     show = \x ->
         match x with {
             case Some a0 -> "Some(" + show a0 + ")";
@@ -765,7 +765,7 @@ instance Show (Option a) <= Show a where {
         };
 }
 
-instance Show (Result a e) <= Show a, Show e where {
+instance<a,e> Show (Result a e) <= Show a, Show e where {
     show = \x ->
         match x with {
             case Ok a0 -> "Ok(" + show a0 + ")";
@@ -786,7 +786,7 @@ instance Functor Array where {
     map = prim_map;
 }
 
-instance Functor (Result e) where {
+instance<e> Functor (Result e) where {
     map = prim_map;
 }
 
@@ -809,7 +809,7 @@ instance Applicative Array <= Functor Array where {
     ap = \ff xx -> prim_flat_map (\f -> prim_map f xx) ff;
 }
 
-instance Applicative (Result e) <= Functor (Result e) where {
+instance<e> Applicative (Result e) <= Functor (Result e) where {
     pure = \x -> Ok x;
     ap = \rf rx ->
         match rf with {
@@ -830,7 +830,7 @@ instance Monad Array <= Applicative Array where {
     bind = prim_flat_map;
 }
 
-instance Monad (Result e) <= Applicative (Result e) where {
+instance<e> Monad (Result e) <= Applicative (Result e) where {
     bind = prim_flat_map;
 }
 
@@ -893,16 +893,16 @@ instance Alternative Array <= Applicative Array where {
     or_else = prim_or_else;
 }
 
-instance Alternative (Result e) <= Applicative (Result e) where {
+instance<e> Alternative (Result e) <= Applicative (Result e) where {
     or_else = prim_or_else;
 }
 
 // Indexable instances
-instance Indexable (List a, a) where {
+instance<a> Indexable (List a, a) where {
     get = prim_get;
 }
 
-instance Indexable (Array a, a) where {
+instance<a> Indexable (Array a, a) where {
     get = prim_get;
 }
 

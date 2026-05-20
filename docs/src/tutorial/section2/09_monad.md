@@ -6,7 +6,7 @@ In Rex, the core monad operation is `bind`:
 
 ```rex
 class Monad m <= Applicative m where {
-  bind : (a -> m b) -> m a -> m b;
+  bind<a,b> : (a -> m b) -> m a -> m b;
 }
 ```
 

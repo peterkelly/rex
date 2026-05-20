@@ -13,6 +13,8 @@ pub enum TypeError {
     NoInstance(Symbol, String),
     #[error("unknown type {0}")]
     UnknownTypeName(Symbol),
+    #[error("duplicate type parameter `{0}`")]
+    DuplicateTypeParameter(Symbol),
     #[error("cannot redefine reserved builtin type `{0}`")]
     ReservedTypeName(Symbol),
     #[error("duplicate value definition `{0}`")]

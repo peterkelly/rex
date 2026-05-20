@@ -57,7 +57,7 @@ fn registry_markdown_lists_core_sections() {
 #[tokio::test]
 async fn compile_snippet_rejects_declaration_only_input() {
     let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let err = match compiler.compile_snippet("fn id x: a -> a = x;").await {
+    let err = match compiler.compile_snippet("fn id<a> x: a -> a = x;").await {
         Ok(_) => panic!("declaration-only snippet unexpectedly compiled"),
         Err(err) => err.into_engine_error(),
     };

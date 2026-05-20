@@ -245,6 +245,7 @@ macro_rules! let_in {
         ::std::sync::Arc::new($crate::Expr::Let(
             $crate::Span::default(),
             $crate::Var::new(stringify!($x)),
+            Vec::new(),
             None,
             ($e1).into(),
             ($e2).into(),
@@ -255,6 +256,7 @@ macro_rules! let_in {
         ::std::sync::Arc::new($crate::Expr::Let(
             ($span).into(),
             $crate::Var::new(stringify!($x)),
+            Vec::new(),
             None,
             ($e1).into(),
             ($e2).into(),
@@ -263,9 +265,9 @@ macro_rules! let_in {
 
     ($id:expr, $span:expr; let $x:ident = ($e1:expr) in $e2:expr) => {
         ::std::sync::Arc::new($crate::Expr::Let(
-            ($id).into(),
             ($span).into(),
             $crate::Var::new(stringify!($x)),
+            Vec::new(),
             None,
             ($e1).into(),
             ($e2).into(),

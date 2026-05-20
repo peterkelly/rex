@@ -47,6 +47,25 @@ async fn spec_c_style_comments_are_trivia() {
 }
 
 #[tokio::test]
+async fn spec_explicit_type_parameter_fixes_bad_rex() {
+    let (_heap, handle, ty) = eval(
+        r#"
+fn add<z32> : i32 -> z32 -> z32 = \x y -> x + y;
+
+add 3 4
+"#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match handle.value().unwrap() {
+        Value::I32(n) => assert_eq!(n, 7),
+        _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
+    }
+}
+
+#[tokio::test]
 async fn spec_record_update_requires_refinement_for_sum_types() {
     let code = r#"
 type Foo = Bar { x: i32 } | Baz { x: i32 };

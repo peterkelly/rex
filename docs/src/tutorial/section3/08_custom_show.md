@@ -45,7 +45,7 @@ class DemoShow a where {
 instance DemoShow i32 where {
   demo_show = \_ -> "<i32>";
 }
-instance DemoShow (List a) <= DemoShow a where {
+instance<a> DemoShow (List a) <= DemoShow a where {
   demo_show = \xs ->
     let
       step = \out x ->
@@ -75,7 +75,7 @@ class DemoShow a where {
 instance DemoShow i32 where {
   demo_show = \_ -> "<i32>";
 }
-instance DemoShow (List a) <= DemoShow a where {
+instance<a> DemoShow (List a) <= DemoShow a where {
   demo_show = \xs ->
     let
       step = \out x ->
@@ -118,7 +118,7 @@ class DemoShow a where {
 instance DemoShow i32 where {
   demo_show = \_ -> "<i32>";
 }
-instance DemoShow (Option a) <= DemoShow a where {
+instance<a> DemoShow (Option a) <= DemoShow a where {
   demo_show = \ox ->
     match ox with {
       case Some x -> "Some(" + demo_show x + ")";

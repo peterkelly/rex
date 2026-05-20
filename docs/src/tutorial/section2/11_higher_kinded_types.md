@@ -26,7 +26,7 @@ The class is defined as:
 
 ```rex
 class Functor f where {
-  map : (a -> b) -> f a -> f b;
+  map<a,b> : (a -> b) -> f a -> f b;
 }
 ```
 
@@ -37,7 +37,7 @@ class Functor f where {
 The prelude has an instance:
 
 ```rex
-instance Functor (Result e) where {
+instance<e> Functor (Result e) where {
   map = prim_map;
 }
 ```

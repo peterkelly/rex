@@ -297,7 +297,7 @@ pub(crate) fn values_in_scope_at_expr(
     }
 
     match expr {
-        Expr::Let(_span, var, _ann, def, body) => {
+        Expr::Let(_span, var, _, _ann, def, body) => {
             if position_in_span(position, *def.span()) {
                 return values_in_scope_at_expr(def, position, scope)
                     .or_else(|| Some(scope_to_map(scope)));
@@ -318,14 +318,14 @@ pub(crate) fn values_in_scope_at_expr(
         }
         Expr::LetRec(_span, bindings, body) => {
             let base_len = scope.len();
-            scope.extend(bindings.iter().map(|(var, _ann, def)| {
+            scope.extend(bindings.iter().map(|(var, _, _ann, def)| {
                 let kind = matches!(def.as_ref(), Expr::Lam(..))
                     .then_some(CompletionItemKind::FUNCTION)
                     .unwrap_or(CompletionItemKind::VARIABLE);
                 (var.name.to_string(), kind)
             }));
 
-            for (_, _, def) in bindings {
+            for (_, _, _, def) in bindings {
                 if position_in_span(position, *def.span()) {
                     let out = values_in_scope_at_expr(def, position, scope)
                         .or_else(|| Some(scope_to_map(scope)));
@@ -624,7 +624,7 @@ pub(crate) fn field_env_at_expr(
     }
 
     match expr {
-        Expr::Let(_, var, ann, def, body) => {
+        Expr::Let(_, var, _, ann, def, body) => {
             if position_in_span(position, *def.span()) {
                 return field_env_at_expr(def, position, env, type_fields)
                     .or_else(|| Some(env.clone()));
@@ -642,11 +642,11 @@ pub(crate) fn field_env_at_expr(
         }
         Expr::LetRec(_, bindings, body) => {
             let mut env_with = env.clone();
-            for (var, ann, def) in bindings {
+            for (var, _, ann, def) in bindings {
                 let fields = binding_fields(ann.as_ref(), def, type_fields).unwrap_or_default();
                 env_with.insert(var.name.to_string(), fields);
             }
-            for (_, _, def) in bindings {
+            for (_, _, _, def) in bindings {
                 if position_in_span(position, *def.span()) {
                     return field_env_at_expr(def, position, &env_with, type_fields)
                         .or_else(|| Some(env_with.clone()));
@@ -861,14 +861,14 @@ pub(crate) fn project_base_at_position(expr: &Expr, position: RexPosition) -> Op
             }
             Some(base.as_ref())
         }
-        Expr::Let(_, _var, _ann, def, body) => {
+        Expr::Let(_, _var, _, _ann, def, body) => {
             if let Some(found) = project_base_at_position(def, position) {
                 return Some(found);
             }
             project_base_at_position(body, position)
         }
         Expr::LetRec(_, bindings, body) => {
-            for (_, _, def) in bindings {
+            for (_, _, _, def) in bindings {
                 if let Some(found) = project_base_at_position(def, position) {
                     return Some(found);
                 }
@@ -1296,7 +1296,7 @@ pub(crate) fn definition_span_for_value_ident(
             }
             None
         }
-        Expr::Let(_span, var, _ann, def, body) => {
+        Expr::Let(_span, var, _, _ann, def, body) => {
             if position_in_span(position, var.span) && var.name.as_ref() == ident {
                 return Some(var.span);
             }
@@ -1313,18 +1313,18 @@ pub(crate) fn definition_span_for_value_ident(
             None
         }
         Expr::LetRec(_span, rec_bindings, body) => {
-            for (var, _ann, _def) in rec_bindings {
+            for (var, _, _ann, _def) in rec_bindings {
                 if position_in_span(position, var.span) && var.name.as_ref() == ident {
                     return Some(var.span);
                 }
             }
 
             let base_len = bindings.len();
-            for (var, _ann, _def) in rec_bindings {
+            for (var, _, _ann, _def) in rec_bindings {
                 bindings.push((var.name.to_string(), var.span));
             }
 
-            for (_var, _ann, def) in rec_bindings {
+            for (_var, _, _ann, def) in rec_bindings {
                 if position_in_span(position, *def.span()) {
                     let out =
                         definition_span_for_value_ident(def, position, ident, bindings, tokens);

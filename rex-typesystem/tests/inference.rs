@@ -210,7 +210,7 @@ fn infer_depth_limit_is_enforced() {
 fn declare_fn_injects_scheme_for_use_sites() {
     let program = parse_program(
         r#"
-            declare fn id x: a -> a;
+            declare fn id<a> x: a -> a;
             id 1
             "#,
     );
@@ -722,7 +722,7 @@ fn infer_fn_decl_signature_form() {
 fn infer_fn_decl_polymorphic_where_constraints() {
     let program = parse_program(
         r#"
-            fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y;
+            fn my_add<a> (x: a, y: a) -> a where AdditiveMonoid a = x + y;
             (my_add 1 2, my_add 1.0 2.0)
             "#,
     );

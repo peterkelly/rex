@@ -55,6 +55,19 @@ async fn expect_engine_err(code: &str, f: impl FnOnce(&EngineError) -> bool) {
 }
 
 #[tokio::test]
+async fn bad_rex_rejects_undeclared_type_parameter() {
+    expect_type_err(
+        r#"
+fn add : i32 -> z32 -> z32 = \x y -> x + y;
+
+add 3 4
+"#,
+        |e| matches!(e, TypeError::UnknownTypeName(name) if name.as_ref() == "z32"),
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn parse_rejects_invalid_programs() {
     let cases: &[(&str, &str)] = &[
         ("unterminated_paren", "("),
@@ -340,7 +353,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "constraint_kind_mismatch_rejected",
             r#"
-            fn my_fn (x: t i32) -> i32 where Foldable t, Default t =
+            fn my_fn<t> (x: t i32) -> i32 where Foldable t, Default t =
                 0;
 
             my_fn [1, 2, 3]
@@ -350,7 +363,7 @@ async fn compile_rejects_invalid_programs() {
         (
             "fn_decl_missing_required_constraint_is_error",
             r#"
-            fn my_fn (x: t a) -> a where Foldable t =
+            fn my_fn<t,a> (x: t a) -> a where Foldable t =
                 foldl (\_ acc -> acc) (default) x;
 
             my_fn [[1, 2], [3]]
@@ -391,7 +404,7 @@ async fn compile_rejects_invalid_programs_engine_errors() {
         (
             "ambiguous_type_variable_only_in_constraints",
             r#"
-            fn my_fn (x: i32) -> i32 where Default b =
+            fn my_fn<b> (x: i32) -> i32 where Default b =
                 let y: b = default in x;
 
             my_fn 1

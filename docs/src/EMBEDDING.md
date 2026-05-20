@@ -593,7 +593,7 @@ let code = r#"
 class Size a where {
     size : a -> i32;
 }
-instance Size (List t) where {
+instance<t> Size (List t) where {
     size = \xs ->
         match xs {
             case Empty -> 0;
@@ -635,7 +635,7 @@ let code = r#"
 class Size a where {
     size : a -> i32;
 }
-instance Size (List t) where {
+instance<t> Size (List t) where {
     size = \xs ->
         match xs {
             case Empty -> 0;

@@ -360,17 +360,17 @@ Top-level functions are declared with an explicit type signature and a value (ty
 Each top-level `fn` declaration is terminated by a semicolon:
 
 ```rex,interactive
-fn add : i32 -> i32 -> i32 = \x y -> x + y;
+fn add x: i32 -> y: i32 -> i32 = x + y;
 ```
 
 Top-level `fn` declarations are mutually recursive, so they can refer to each other in the same
 module:
 
 ```rex,interactive
-fn even : i32 -> bool = \n ->
+fn even n: i32 -> bool =
   if n == 0 then true else odd (n - 1);
 
-fn odd : i32 -> bool = \n ->
+fn odd n: i32 -> bool =
   if n == 0 then false else even (n - 1);
 
 even 10
@@ -416,7 +416,7 @@ Instances attach method implementations to a concrete head type, optionally with
 class Size a where {
   size : a -> i32;
 }
-instance Size (List t) where {
+instance<t> Size (List t) where {
   size = \xs ->
     match xs with {
       case Empty -> 0;
@@ -450,7 +450,7 @@ class Show a where {
 instance Show i32 where {
   show = \_ -> "<i32>";
 }
-instance Show (List a) <= Show a where {
+instance<a> Show (List a) <= Show a where {
   show = \xs ->
     let
       step = \out x ->

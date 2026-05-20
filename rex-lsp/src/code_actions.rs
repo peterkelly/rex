@@ -563,7 +563,7 @@ pub(crate) fn in_scope_value_types_at_position(
 
         match (expr, typed.kind.as_ref()) {
             (
-                Expr::Let(_span, var, _ann, def, body),
+                Expr::Let(_span, var, _, _ann, def, body),
                 TypedExprKind::Let {
                     def: tdef,
                     body: tbody,
@@ -588,12 +588,12 @@ pub(crate) fn in_scope_value_types_at_position(
                 },
             ) => {
                 let base = scope.len();
-                for ((name, _ann, _def), (_typed_name, typed_def)) in
+                for ((name, _, _ann, _def), (_typed_name, typed_def)) in
                     bindings.iter().zip(typed_bindings.iter())
                 {
                     scope.push((name.name.to_string(), typed_def.typ.clone()));
                 }
-                for ((_, _, def), (_, typed_def)) in bindings.iter().zip(typed_bindings.iter()) {
+                for ((_, _, _, def), (_, typed_def)) in bindings.iter().zip(typed_bindings.iter()) {
                     if position_in_span(pos, *def.span()) {
                         visit(def.as_ref(), typed_def, pos, scope, best);
                         scope.truncate(base);

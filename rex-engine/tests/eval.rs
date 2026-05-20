@@ -1167,7 +1167,7 @@ async fn eval_fn_decl_simple() {
 async fn eval_fn_decl_with_where_constraints() {
     let program = parse_program(
         r#"
-        fn my_add (x: a, y: a) -> a where AdditiveMonoid a = x + y;
+        fn my_add<a> (x: a, y: a) -> a where AdditiveMonoid a = x + y;
         my_add 1 2
         "#,
     );

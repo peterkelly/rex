@@ -12,6 +12,20 @@ Examples of primitive and constructed types:
 - `(a, b)` for tuples
 - `List a`, `Option a`, `Promise a`, `Result a e` (prelude/built-in constructors)
 
+Lowercase names in type positions are type parameters only after a surrounding form declares them:
+
+```rex,interactive
+fn id<a> x: a -> a = x;
+
+id 1
+```
+
+The same rule applies to `let`, `declare fn`, class methods, and instances:
+
+```rex,interactive
+let id<a>: a -> a = \x -> x in id "hello"
+```
+
 Function types are right-associative:
 
 ```rex

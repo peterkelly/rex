@@ -256,7 +256,7 @@ pub(crate) fn rewrite_import_projections_expr(
             bound.remove(&param.name);
             out
         }
-        Expr::Let(span, var, ann, val, body) => {
+        Expr::Let(span, var, type_params, ann, val, body) => {
             let val = std::sync::Arc::new(rewrite_import_projections_expr(
                 val,
                 bound,
@@ -274,6 +274,7 @@ pub(crate) fn rewrite_import_projections_expr(
             Expr::Let(
                 *span,
                 var.clone(),
+                type_params.clone(),
                 ann.as_ref()
                     .map(|t| rewrite_import_projections_type_expr(t, bound, imports)),
                 val,
@@ -283,14 +284,14 @@ pub(crate) fn rewrite_import_projections_expr(
         Expr::LetRec(span, bindings, body) => {
             let anns: Vec<Option<TypeExpr>> = bindings
                 .iter()
-                .map(|(_, ann, _)| {
+                .map(|(_, _, ann, _)| {
                     ann.as_ref()
                         .map(|t| rewrite_import_projections_type_expr(t, bound, imports))
                 })
                 .collect();
             let names: Vec<Symbol> = bindings
                 .iter()
-                .map(|(var, _, _)| var.name.clone())
+                .map(|(var, _, _, _)| var.name.clone())
                 .collect();
             for name in &names {
                 bound.insert(name.clone());
@@ -298,9 +299,10 @@ pub(crate) fn rewrite_import_projections_expr(
             let bindings = bindings
                 .iter()
                 .zip(anns)
-                .map(|((var, _ann, def), ann)| {
+                .map(|((var, type_params, _ann, def), ann)| {
                     (
                         var.clone(),
+                        type_params.clone(),
                         ann,
                         std::sync::Arc::new(rewrite_import_projections_expr(
                             def,
@@ -491,6 +493,7 @@ pub(crate) fn rewrite_program_import_projections(
                     span: fd.span,
                     is_pub: fd.is_pub,
                     name: fd.name.clone(),
+                    type_params: fd.type_params.clone(),
                     params: fd
                         .params
                         .iter()
@@ -521,6 +524,7 @@ pub(crate) fn rewrite_program_import_projections(
                 span: df.span,
                 is_pub: df.is_pub,
                 name: df.name.clone(),
+                type_params: df.type_params.clone(),
                 params: df
                     .params
                     .iter()
@@ -585,6 +589,7 @@ pub(crate) fn rewrite_program_import_projections(
                     .iter()
                     .map(|m| ClassMethodSig {
                         name: m.name.clone(),
+                        type_params: m.type_params.clone(),
                         typ: rewrite_import_projections_type_expr(&m.typ, &decl_bound, imports),
                     })
                     .collect(),
@@ -603,6 +608,10 @@ pub(crate) fn rewrite_program_import_projections(
                         ));
                         InstanceMethodImpl {
                             name: m.name.clone(),
+                            type_params: m.type_params.clone(),
+                            ann: m.ann.as_ref().map(|t| {
+                                rewrite_import_projections_type_expr(t, &decl_bound, imports)
+                            }),
                             body,
                         }
                     })
@@ -610,6 +619,7 @@ pub(crate) fn rewrite_program_import_projections(
                 Decl::Instance(InstanceDecl {
                     span: inst.span,
                     is_pub: inst.is_pub,
+                    type_params: inst.type_params.clone(),
                     class: rewrite_import_projections_class_name(
                         &NameRef::from_dotted(inst.class.as_ref()),
                         &decl_bound,
@@ -745,7 +755,7 @@ pub(crate) fn validate_import_projection_expr(
             validate_import_projection_expr(body, bound, imports, diagnostics);
             bound.remove(&param.name);
         }
-        Expr::Let(_, var, ann, val, body) => {
+        Expr::Let(_, var, _type_params, ann, val, body) => {
             if let Some(ann) = ann {
                 validate_import_projection_type_expr(ann, bound, imports, diagnostics);
             }
@@ -755,19 +765,19 @@ pub(crate) fn validate_import_projection_expr(
             bound.remove(&var.name);
         }
         Expr::LetRec(_, bindings, body) => {
-            for (_, ann, _) in bindings {
+            for (_, _, ann, _) in bindings {
                 if let Some(ann) = ann {
                     validate_import_projection_type_expr(ann, bound, imports, diagnostics);
                 }
             }
             let names: Vec<_> = bindings
                 .iter()
-                .map(|(var, _, _)| var.name.clone())
+                .map(|(var, _, _, _)| var.name.clone())
                 .collect();
             for name in &names {
                 bound.insert(name.clone());
             }
-            for (_, _ann, def) in bindings {
+            for (_, _, _ann, def) in bindings {
                 validate_import_projection_expr(def, bound, imports, diagnostics);
             }
             validate_import_projection_expr(body, bound, imports, diagnostics);
@@ -1125,6 +1135,7 @@ pub fn prepare_program_with_imports(
                             span: fd.name.span,
                             name: internal,
                         },
+                        type_params: fd.type_params.clone(),
                         params,
                         ret,
                         constraints: if keep_constraints {
@@ -1153,6 +1164,7 @@ pub fn prepare_program_with_imports(
                             span: df.name.span,
                             name: internal,
                         },
+                        type_params: df.type_params.clone(),
                         params,
                         ret,
                         constraints: if keep_constraints {

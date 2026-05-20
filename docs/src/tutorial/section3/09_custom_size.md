@@ -13,7 +13,7 @@ class Size a where {
 }
 type Blob = Blob { bytes: List i32 };
 
-instance Size (List t) where {
+instance<t> Size (List t) where {
   size = \xs ->
     match xs with {
       case Empty -> 0;
@@ -41,7 +41,7 @@ Once you have a class, you can write functions that work for *any* type that has
 class Size a where {
   size : a -> i32;
 }
-instance Size (List t) where {
+instance<t> Size (List t) where {
   size = \xs ->
     match xs with {
       case Empty -> 0;
@@ -49,7 +49,7 @@ instance Size (List t) where {
     };
 }
 let
-  bigger = \(x: a) where Size a -> size x + 1
+  bigger<a>: a -> i32 = \(x: a) where Size a -> size x + 1
 in
   bigger [1, 2, 3]
 ```
@@ -66,7 +66,7 @@ Problem: write a generic emptiness check from `size`.
 class Size a where {
   size : a -> i32;
 }
-instance Size (List t) where {
+instance<t> Size (List t) where {
   size = \xs ->
     match xs with {
       case Empty -> 0;
@@ -74,7 +74,7 @@ instance Size (List t) where {
     };
 }
 let
-  is_empty = \(x: a) where Size a -> size x == 0
+  is_empty<a>: a -> bool = \(x: a) where Size a -> size x == 0
 in
   (is_empty ([] is List i32), is_empty [1, 2, 3])
 ```
@@ -89,7 +89,7 @@ Problem: add a `name` field and keep size based on bytes only.
 class Size a where {
   size : a -> i32;
 }
-instance Size (List t) where {
+instance<t> Size (List t) where {
   size = \xs ->
     match xs with {
       case Empty -> 0;
@@ -114,7 +114,7 @@ Problem: sum sizes of a list of values.
 class Size a where {
   size : a -> i32;
 }
-instance Size (List t) where {
+instance<t> Size (List t) where {
   size = \xs ->
     match xs with {
       case Empty -> 0;

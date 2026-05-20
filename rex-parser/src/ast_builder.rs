@@ -5,8 +5,8 @@ use std::{
 
 use rex_ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
-    ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Scope,
-    Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
+    ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, LetRecBinding, NameRef,
+    Pattern, Scope, Symbol, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 use rex_ast::{Position, Span, Spanned};
 
@@ -304,6 +304,7 @@ impl AstBuilder {
     fn fn_decl(&mut self, node: &CstNode<RexRule>, is_pub: bool) -> Result<FnDecl, ParseError> {
         let name_token = expect_token(node, TokenKind::Ident)?;
         let name = Var::with_span(*name_token.span(), ident_text(name_token)?);
+        let type_params = self.generic_params_opt(node)?;
 
         if let Some(sig) = first_rule(node, RexRule::FnSignatureDecl) {
             let typ = self.type_expr(expect_rule(sig, RexRule::TypeExpr)?)?;
@@ -324,6 +325,7 @@ impl AstBuilder {
                 span: node.span,
                 is_pub,
                 name,
+                type_params,
                 params,
                 ret,
                 constraints,
@@ -343,6 +345,7 @@ impl AstBuilder {
             span: node.span,
             is_pub,
             name,
+            type_params,
             params,
             ret,
             constraints,
@@ -357,6 +360,7 @@ impl AstBuilder {
     ) -> Result<DeclareFnDecl, ParseError> {
         let name_token = expect_token(node, TokenKind::Ident)?;
         let name = Var::with_span(*name_token.span(), ident_text(name_token)?);
+        let type_params = self.generic_params_opt(node)?;
 
         let (params, ret, constraints) =
             if let Some(param_sig) = first_rule(node, RexRule::DeclareParamSig) {
@@ -383,6 +387,7 @@ impl AstBuilder {
             span: node.span,
             is_pub,
             name,
+            type_params,
             params,
             ret,
             constraints,
@@ -412,6 +417,7 @@ impl AstBuilder {
                     .map(|method| {
                         Ok(ClassMethodSig {
                             name: self.value_name(expect_rule(method, RexRule::ValueName)?)?,
+                            type_params: self.generic_params_opt(method)?,
                             typ: self.type_expr(expect_rule(method, RexRule::TypeExpr)?)?,
                         })
                     })
@@ -437,6 +443,7 @@ impl AstBuilder {
         let class = self
             .name_ref(expect_rule(node, RexRule::NameRef)?)?
             .to_dotted_symbol();
+        let type_params = self.generic_params_opt(node)?;
         let head = self.type_app(expect_rule(node, RexRule::TypeApp)?)?;
         let context = first_rule(node, RexRule::InstanceContext)
             .map(|node| self.type_constraints(expect_rule(node, RexRule::TypeConstraints)?))
@@ -448,6 +455,10 @@ impl AstBuilder {
                     .map(|method| {
                         Ok(InstanceMethodImpl {
                             name: self.value_name(expect_rule(method, RexRule::ValueName)?)?,
+                            type_params: self.generic_params_opt(method)?,
+                            ann: first_rule(method, RexRule::TypeExpr)
+                                .map(|ann| self.type_expr(ann))
+                                .transpose()?,
                             body: Arc::new(self.expr(expect_rule(method, RexRule::Expr)?)?),
                         })
                     })
@@ -458,11 +469,21 @@ impl AstBuilder {
         Ok(InstanceDecl {
             span: node.span,
             is_pub,
+            type_params,
             class,
             head,
             context,
             methods,
         })
+    }
+
+    fn generic_params_opt(&mut self, node: &CstNode<RexRule>) -> Result<Vec<Symbol>, ParseError> {
+        let Some(params) = first_rule(node, RexRule::GenericParams) else {
+            return Ok(Vec::new());
+        };
+        direct_tokens(params, TokenKind::Ident)
+            .map(|token| ident_text(token).map(|name| Symbol::intern(&name)))
+            .collect()
     }
 
     fn fn_params(&mut self, node: &CstNode<RexRule>) -> Result<Vec<(Var, TypeExpr)>, ParseError> {
@@ -931,18 +952,25 @@ impl AstBuilder {
 
         let mut body = body;
         let mut body_span_end = body.span().end;
-        while let Some((pat, ann, def)) = decls.pop_back() {
+        while let Some((pat, type_params, ann, def)) = decls.pop_back() {
             match pat {
                 Pattern::Var(var) => {
                     body = Expr::Let(
                         Span::from_begin_end(var.span.begin, body_span_end),
                         var,
+                        type_params,
                         ann,
                         Arc::new(def),
                         Arc::new(body),
                     );
                 }
                 pat => {
+                    if !type_params.is_empty() {
+                        return Err(ParseError::new(
+                            *pat.span(),
+                            "type parameters require a named let binding",
+                        ));
+                    }
                     let def_expr = match ann {
                         Some(ann) => {
                             let span = Span::from_begin_end(def.span().begin, ann.span().end);
@@ -965,8 +993,9 @@ impl AstBuilder {
     fn let_binding(
         &mut self,
         node: &CstNode<RexRule>,
-    ) -> Result<(Pattern, Option<TypeExpr>, Expr), ParseError> {
+    ) -> Result<(Pattern, Vec<Symbol>, Option<TypeExpr>, Expr), ParseError> {
         let mut pat = self.pattern(expect_rule(node, RexRule::Pattern)?)?;
+        let type_params = self.generic_params_opt(node)?;
         let ann = first_rule(node, RexRule::TypeExpr)
             .map(|node| self.type_expr(node))
             .transpose()?;
@@ -976,13 +1005,10 @@ impl AstBuilder {
             pat = Pattern::Var(var);
         }
         let expr = self.expr(expect_rule(node, RexRule::Expr)?)?;
-        Ok((pat, ann, expr))
+        Ok((pat, type_params, ann, expr))
     }
 
-    fn let_rec_binding(
-        &mut self,
-        node: &CstNode<RexRule>,
-    ) -> Result<(Var, Option<TypeExpr>, Arc<Expr>), ParseError> {
+    fn let_rec_binding(&mut self, node: &CstNode<RexRule>) -> Result<LetRecBinding, ParseError> {
         let pat = self.pattern(expect_rule(node, RexRule::Pattern)?)?;
         let Some(var) = pattern_binding_var(&pat) else {
             return Err(ParseError::new(
@@ -990,11 +1016,12 @@ impl AstBuilder {
                 "let rec only supports variable bindings",
             ));
         };
+        let type_params = self.generic_params_opt(node)?;
         let ann = first_rule(node, RexRule::TypeExpr)
             .map(|node| self.type_expr(node))
             .transpose()?;
         let expr = Arc::new(self.expr(expect_rule(node, RexRule::Expr)?)?);
-        Ok((var, ann, expr))
+        Ok((var, type_params, ann, expr))
     }
 
     fn if_expr(&mut self, node: &CstNode<RexRule>) -> Result<Expr, ParseError> {

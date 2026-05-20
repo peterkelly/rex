@@ -5,8 +5,8 @@ use crate::{
         TypeVarId, TypedExpr, TypedExprKind, Types,
     },
     typesystem::{
-        TypeSystem, TypeVarSupply, instantiate, is_overloaded_numeric_literal_expr,
-        predicates_from_constraints, reject_ambiguous_scheme, type_from_annotation_expr,
+        TypeSystem, TypeVarSupply, extend_type_params, instantiate,
+        is_overloaded_numeric_literal_expr, predicates_from_constraints, reject_ambiguous_scheme,
         type_from_annotation_expr_vars,
     },
     unification::{Subst, Unifier, compose_subst, subst_is_empty, unify},
@@ -26,6 +26,10 @@ fn dedup_preds(preds: Vec<Predicate>) -> Vec<Predicate> {
         }
     }
     out
+}
+
+fn annotation_vars_from_env(env: &TypeEnv) -> BTreeMap<Symbol, TypeVar> {
+    env.type_vars.clone()
 }
 
 fn is_integral_primitive(typ: &Type) -> bool {
@@ -975,7 +979,7 @@ fn infer_expr_type_inner(
         }
         Expr::Lam(..) => {
             let (params, constraints, body) = collect_lambda_chain(expr);
-            let mut ann_vars = BTreeMap::new();
+            let mut ann_vars = annotation_vars_from_env(env);
             let mut param_tys = Vec::with_capacity(params.len());
             for (name, ann) in &params {
                 let param_ty = match ann {
@@ -1107,23 +1111,27 @@ fn infer_expr_type_inner(
         Expr::Let(..) => {
             let mut bindings = Vec::new();
             let mut cur = expr;
-            while let Expr::Let(_, v, ann, d, b) = cur {
-                bindings.push((v.clone(), ann.clone(), d.clone()));
+            while let Expr::Let(_, v, type_params, ann, d, b) = cur {
+                bindings.push((v.clone(), type_params.clone(), ann.clone(), d.clone()));
                 cur = b.as_ref();
             }
 
             let mut env_cur = env.clone();
             let mut known_cur = known.clone();
-            for (v, ann, d) in bindings {
+            for (v, type_params, ann, d) in bindings {
+                let mut env_def = env_cur.clone();
+                extend_type_params(&mut env_def.type_vars, &type_params, supply)?;
                 let (p1, t1) = if let Some(ref ann_expr) = ann {
-                    let mut ann_vars = BTreeMap::new();
+                    let mut ann_vars = annotation_vars_from_env(&env_cur);
+                    extend_type_params(&mut ann_vars, &type_params, supply)?;
+                    env_def.type_vars = ann_vars.clone();
                     let ann_ty =
                         type_from_annotation_expr_vars(adts, ann_expr, &mut ann_vars, supply)?;
                     match d.as_ref() {
                         Expr::RecordUpdate(_, base, updates) => infer_record_update_type_with_hint(
                             unifier,
                             supply,
-                            &env_cur,
+                            &env_def,
                             adts,
                             &known_cur,
                             base.as_ref(),
@@ -1132,13 +1140,13 @@ fn infer_expr_type_inner(
                         )?,
                         _ => {
                             let (p1, t1) =
-                                infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?;
+                                infer_expr_type(unifier, supply, &env_def, adts, &known_cur, &d)?;
                             unifier.unify(&t1, &ann_ty)?;
                             (p1, t1)
                         }
                     }
                 } else {
-                    infer_expr_type(unifier, supply, &env_cur, adts, &known_cur, &d)?
+                    infer_expr_type(unifier, supply, &env_def, adts, &known_cur, &d)?
                 };
                 let def_ty = unifier.apply_type(&t1);
                 let (p1, def_ty) = default_literal_constraints_outside_type(p1, def_ty, unifier)?;
@@ -1173,7 +1181,7 @@ fn infer_expr_type_inner(
             let mut env_seed = env.clone();
             let mut known_seed = known.clone();
             let mut binding_tys = BTreeMap::new();
-            for (var, _ann, _def) in bindings {
+            for (var, _type_params, _ann, _def) in bindings {
                 let tv = Type::var(supply.fresh(Some(var.name.clone())));
                 env_seed.extend(var.name.clone(), Scheme::new(vec![], vec![], tv.clone()));
                 known_seed.remove(&var.name);
@@ -1181,11 +1189,14 @@ fn infer_expr_type_inner(
             }
 
             let mut inferred = Vec::with_capacity(bindings.len());
-            for (var, ann, def) in bindings {
+            for (var, type_params, ann, def) in bindings {
+                let mut env_def = env_seed.clone();
+                extend_type_params(&mut env_def.type_vars, type_params, supply)?;
                 let (preds, def_ty) =
-                    infer_expr_type(unifier, supply, &env_seed, adts, &known_seed, def)?;
+                    infer_expr_type(unifier, supply, &env_def, adts, &known_seed, def)?;
                 if let Some(ann) = ann {
-                    let mut ann_vars = BTreeMap::new();
+                    let mut ann_vars = annotation_vars_from_env(&env_seed);
+                    extend_type_params(&mut ann_vars, type_params, supply)?;
                     let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
                     unifier.unify(&def_ty, &ann_ty)?;
                 }
@@ -1325,7 +1336,8 @@ fn infer_expr_type_inner(
             Ok((preds, out_ty))
         }
         Expr::Ann(_, expr, ann) => {
-            let ann_ty = type_from_annotation_expr(adts, ann)?;
+            let mut ann_vars = annotation_vars_from_env(env);
+            let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
             match expr.as_ref() {
                 Expr::RecordUpdate(_, base, updates) => {
                     let (preds, out_ty) = infer_record_update_type_with_hint(
@@ -1468,7 +1480,7 @@ fn infer_expr(
             }
             Expr::Lam(..) => {
                 let (params, constraints, body) = collect_lambda_chain(expr);
-                let mut ann_vars = BTreeMap::new();
+                let mut ann_vars = annotation_vars_from_env(env);
                 let mut param_tys = Vec::with_capacity(params.len());
                 for (name, ann) in &params {
                     let param_ty = match ann {
@@ -1577,17 +1589,21 @@ fn infer_expr(
             Expr::Let(..) => {
                 let mut bindings = Vec::new();
                 let mut cur = expr;
-                while let Expr::Let(_, v, ann, d, b) = cur {
-                    bindings.push((v.clone(), ann.clone(), d.clone()));
+                while let Expr::Let(_, v, type_params, ann, d, b) = cur {
+                    bindings.push((v.clone(), type_params.clone(), ann.clone(), d.clone()));
                     cur = b.as_ref();
                 }
 
                 let mut env_cur = env.clone();
                 let mut known_cur = known.clone();
                 let mut typed_defs = Vec::new();
-                for (v, ann, d) in bindings {
+                for (v, type_params, ann, d) in bindings {
+                    let mut env_def = env_cur.clone();
+                    extend_type_params(&mut env_def.type_vars, &type_params, supply)?;
                     let (p1, t1, typed_def) = if let Some(ref ann_expr) = ann {
-                        let mut ann_vars = BTreeMap::new();
+                        let mut ann_vars = annotation_vars_from_env(&env_cur);
+                        extend_type_params(&mut ann_vars, &type_params, supply)?;
+                        env_def.type_vars = ann_vars.clone();
                         let ann_ty =
                             type_from_annotation_expr_vars(adts, ann_expr, &mut ann_vars, supply)?;
                         match d.as_ref() {
@@ -1595,7 +1611,7 @@ fn infer_expr(
                                 infer_record_update_typed_with_hint(
                                     unifier,
                                     supply,
-                                    &env_cur,
+                                    &env_def,
                                     adts,
                                     &known_cur,
                                     base.as_ref(),
@@ -1605,13 +1621,13 @@ fn infer_expr(
                             }
                             _ => {
                                 let (p1, t1, typed_def) =
-                                    infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?;
+                                    infer_expr(unifier, supply, &env_def, adts, &known_cur, &d)?;
                                 unifier.unify(&t1, &ann_ty)?;
                                 (p1, t1, typed_def)
                             }
                         }
                     } else {
-                        infer_expr(unifier, supply, &env_cur, adts, &known_cur, &d)?
+                        infer_expr(unifier, supply, &env_def, adts, &known_cur, &d)?
                     };
                     let def_ty = unifier.apply_type(&t1);
                     let (p1, def_ty) =
@@ -1660,7 +1676,7 @@ fn infer_expr(
                 let mut env_seed = env.clone();
                 let mut known_seed = known.clone();
                 let mut binding_tys = BTreeMap::new();
-                for (var, _ann, _def) in bindings {
+                for (var, _type_params, _ann, _def) in bindings {
                     let tv = Type::var(supply.fresh(Some(var.name.clone())));
                     env_seed.extend(var.name.clone(), Scheme::new(vec![], vec![], tv.clone()));
                     known_seed.remove(&var.name);
@@ -1668,11 +1684,14 @@ fn infer_expr(
                 }
 
                 let mut inferred_defs = Vec::with_capacity(bindings.len());
-                for (var, ann, def) in bindings {
+                for (var, type_params, ann, def) in bindings {
+                    let mut env_def = env_seed.clone();
+                    extend_type_params(&mut env_def.type_vars, type_params, supply)?;
                     let (preds, def_ty, typed_def) =
-                        infer_expr(unifier, supply, &env_seed, adts, &known_seed, def)?;
+                        infer_expr(unifier, supply, &env_def, adts, &known_seed, def)?;
                     if let Some(ann) = ann {
-                        let mut ann_vars = BTreeMap::new();
+                        let mut ann_vars = annotation_vars_from_env(&env_seed);
+                        extend_type_params(&mut ann_vars, type_params, supply)?;
                         let ann_ty =
                             type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
                         unifier.unify(&def_ty, &ann_ty)?;
@@ -1851,7 +1870,8 @@ fn infer_expr(
                 Ok((preds, out_ty, typed))
             }
             Expr::Ann(_, expr, ann) => {
-                let ann_ty = type_from_annotation_expr(adts, ann)?;
+                let mut ann_vars = annotation_vars_from_env(env);
+                let ann_ty = type_from_annotation_expr_vars(adts, ann, &mut ann_vars, supply)?;
                 match expr.as_ref() {
                     Expr::RecordUpdate(_, base, updates) => infer_record_update_typed_with_hint(
                         unifier,

@@ -336,6 +336,7 @@ pub struct PreparedInstanceDecl {
     pub class: Symbol,
     pub head: Type,
     pub context: Vec<Predicate>,
+    pub type_vars: BTreeMap<Symbol, TypeVar>,
 }
 
 impl TypeSystem {
@@ -470,7 +471,12 @@ impl TypeSystem {
             self.classes.add_class(decl.name.clone(), supers.clone());
 
             let mut methods = BTreeMap::new();
-            for ClassMethodSig { name, typ } in &decl.methods {
+            for ClassMethodSig {
+                name,
+                type_params,
+                typ,
+            } in &decl.methods
+            {
                 if self.env.lookup(name).is_some() || self.class_methods.contains_key(name) {
                     return Err(TypeError::DuplicateClassMethod(name.clone()));
                 }
@@ -482,6 +488,7 @@ impl TypeSystem {
                     vars.insert(param.clone(), tv.clone());
                     param_tvs.push(tv);
                 }
+                extend_type_params(&mut vars, type_params, &mut self.supply)?;
 
                 let ty =
                     type_from_annotation_expr_vars(&self.adts, typ, &mut vars, &mut self.supply)?;
@@ -536,7 +543,7 @@ impl TypeSystem {
                 return Err(TypeError::UnknownClass(class));
             }
 
-            let mut vars: BTreeMap<Symbol, TypeVar> = BTreeMap::new();
+            let mut vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
             let head = type_from_annotation_expr_vars(
                 &self.adts,
                 &decl.head,
@@ -584,6 +591,7 @@ impl TypeSystem {
                 class: decl.class.clone(),
                 head,
                 context,
+                type_vars: vars,
             })
         })()
         .map_err(|err| err.with_span(&span))
@@ -600,7 +608,7 @@ impl TypeSystem {
                 return Err(TypeError::UnknownClass(class));
             }
 
-            let mut vars: BTreeMap<Symbol, TypeVar> = BTreeMap::new();
+            let mut vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
             let head = type_from_annotation_expr_vars(
                 &self.adts,
                 &decl.head,
@@ -639,6 +647,7 @@ impl TypeSystem {
                 class: decl.class.clone(),
                 head,
                 context,
+                type_vars: vars,
             })
         })()
         .map_err(|err| err.with_span(&span))
@@ -688,7 +697,7 @@ impl TypeSystem {
                         sig = TypeExpr::Fun(span, Box::new(ann.clone()), Box::new(sig));
                     }
 
-                    let mut ann_vars: BTreeMap<Symbol, TypeVar> = BTreeMap::new();
+                    let mut ann_vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
                     let expected = type_from_annotation_expr_vars(
                         &self.adts,
                         &sig,
@@ -793,8 +802,12 @@ impl TypeSystem {
                 // fallbacks can attach it to the lowered expression, which may span the whole
                 // snippet. Use the original declaration span as the fallback; `with_span`
                 // preserves any more-specific span already produced inside the body.
+                let saved_type_vars = self.env.type_vars.clone();
+                self.env.type_vars = info.ann_vars.clone();
+                let inferred_result = infer_typed(self, lam_body.as_ref());
+                self.env.type_vars = saved_type_vars;
                 let (typed, preds, inferred) =
-                    infer_typed(self, lam_body.as_ref()).map_err(|err| err.with_span(&span))?;
+                    inferred_result.map_err(|err| err.with_span(&span))?;
                 let s = unify(&inferred, &info.expected).map_err(|err| err.with_span(&span))?;
                 let preds = preds.apply(&s);
                 let inferred = inferred.apply(&s);
@@ -872,7 +885,7 @@ impl TypeSystem {
                 sig = TypeExpr::Fun(span, Box::new(ann.clone()), Box::new(sig));
             }
 
-            let mut ann_vars: BTreeMap<Symbol, TypeVar> = BTreeMap::new();
+            let mut ann_vars = type_vars_from_params(&decl.type_params, &mut self.supply)?;
             let expected =
                 type_from_annotation_expr_vars(&self.adts, &sig, &mut ann_vars, &mut self.supply)?;
             let declared_preds = predicates_from_constraints(
@@ -949,9 +962,27 @@ impl TypeSystem {
         prepared: &PreparedInstanceDecl,
         method: &InstanceMethodImpl,
     ) -> Result<TypedExpr, TypeError> {
+        let mut method_type_vars = prepared.type_vars.clone();
+        extend_type_params(&mut method_type_vars, &method.type_params, &mut self.supply)?;
         let expected =
             self.instantiate_class_method_for_head(&prepared.class, &method.name, &prepared.head)?;
-        let (typed, preds, actual) = infer_typed(self, method.body.as_ref())?;
+        let saved_type_vars = self.env.type_vars.clone();
+        self.env.type_vars = method_type_vars.clone();
+        let inferred_result = infer_typed(self, method.body.as_ref());
+        self.env.type_vars = saved_type_vars;
+        let (mut typed, mut preds, mut actual) = inferred_result?;
+        if let Some(ann) = &method.ann {
+            let ann_ty = type_from_annotation_expr_vars(
+                &self.adts,
+                ann,
+                &mut method_type_vars,
+                &mut self.supply,
+            )?;
+            let s = unify(&actual, &ann_ty)?;
+            typed = typed.apply(&s);
+            preds = preds.apply(&s);
+            actual = actual.apply(&s);
+        }
         let s = unify(&actual, &expected)?;
         let typed = typed.apply(&s);
         let preds = preds.apply(&s);
@@ -1167,52 +1198,11 @@ impl TypeSystem {
     }
 }
 
-pub(crate) fn type_from_annotation_expr(
-    adts: &BTreeMap<Symbol, AdtDecl>,
-    expr: &TypeExpr,
-) -> Result<Type, TypeError> {
-    let span = *expr.span();
-    let res = (|| match expr {
-        TypeExpr::Name(_, name) => {
-            let name = normalize_type_name(&name.to_dotted_symbol());
-            match annotation_type_arity(adts, &name) {
-                Some(arity) => Ok(Type::con(name, arity)),
-                None => Err(TypeError::UnknownTypeName(name)),
-            }
-        }
-        TypeExpr::App(_, fun, arg) => {
-            let fty = type_from_annotation_expr(adts, fun)?;
-            let aty = type_from_annotation_expr(adts, arg)?;
-            Ok(type_app_with_result_syntax(fty, aty))
-        }
-        TypeExpr::Fun(_, arg, ret) => {
-            let arg_ty = type_from_annotation_expr(adts, arg)?;
-            let ret_ty = type_from_annotation_expr(adts, ret)?;
-            Ok(Type::fun(arg_ty, ret_ty))
-        }
-        TypeExpr::Tuple(_, elems) => {
-            let mut out = Vec::new();
-            for elem in elems {
-                out.push(type_from_annotation_expr(adts, elem)?);
-            }
-            Ok(Type::tuple(out))
-        }
-        TypeExpr::Record(_, fields) => {
-            let mut out = Vec::new();
-            for (name, ty) in fields {
-                out.push((name.clone(), type_from_annotation_expr(adts, ty)?));
-            }
-            Ok(Type::record(out))
-        }
-    })();
-    res.map_err(|err| err.with_span(&span))
-}
-
 pub(crate) fn type_from_annotation_expr_vars(
     adts: &BTreeMap<Symbol, AdtDecl>,
     expr: &TypeExpr,
     vars: &mut BTreeMap<Symbol, TypeVar>,
-    supply: &mut TypeVarSupply,
+    _supply: &mut TypeVarSupply,
 ) -> Result<Type, TypeError> {
     let span = *expr.span();
     let res = (|| match expr {
@@ -1223,34 +1213,23 @@ pub(crate) fn type_from_annotation_expr_vars(
             } else if let Some(tv) = vars.get(&name) {
                 Ok(Type::var(tv.clone()))
             } else {
-                let is_upper = name
-                    .as_ref()
-                    .chars()
-                    .next()
-                    .map(|c| c.is_uppercase())
-                    .unwrap_or(false);
-                if is_upper {
-                    return Err(TypeError::UnknownTypeName(name));
-                }
-                let tv = supply.fresh(Some(name.clone()));
-                vars.insert(name.clone(), tv.clone());
-                Ok(Type::var(tv))
+                Err(TypeError::UnknownTypeName(name))
             }
         }
         TypeExpr::App(_, fun, arg) => {
-            let fty = type_from_annotation_expr_vars(adts, fun, vars, supply)?;
-            let aty = type_from_annotation_expr_vars(adts, arg, vars, supply)?;
+            let fty = type_from_annotation_expr_vars(adts, fun, vars, _supply)?;
+            let aty = type_from_annotation_expr_vars(adts, arg, vars, _supply)?;
             Ok(type_app_with_result_syntax(fty, aty))
         }
         TypeExpr::Fun(_, arg, ret) => {
-            let arg_ty = type_from_annotation_expr_vars(adts, arg, vars, supply)?;
-            let ret_ty = type_from_annotation_expr_vars(adts, ret, vars, supply)?;
+            let arg_ty = type_from_annotation_expr_vars(adts, arg, vars, _supply)?;
+            let ret_ty = type_from_annotation_expr_vars(adts, ret, vars, _supply)?;
             Ok(Type::fun(arg_ty, ret_ty))
         }
         TypeExpr::Tuple(_, elems) => {
             let mut out = Vec::new();
             for elem in elems {
-                out.push(type_from_annotation_expr_vars(adts, elem, vars, supply)?);
+                out.push(type_from_annotation_expr_vars(adts, elem, vars, _supply)?);
             }
             Ok(Type::tuple(out))
         }
@@ -1259,13 +1238,36 @@ pub(crate) fn type_from_annotation_expr_vars(
             for (name, ty) in fields {
                 out.push((
                     name.clone(),
-                    type_from_annotation_expr_vars(adts, ty, vars, supply)?,
+                    type_from_annotation_expr_vars(adts, ty, vars, _supply)?,
                 ));
             }
             Ok(Type::record(out))
         }
     })();
     res.map_err(|err| err.with_span(&span))
+}
+
+pub(crate) fn extend_type_params(
+    vars: &mut BTreeMap<Symbol, TypeVar>,
+    params: &[Symbol],
+    supply: &mut TypeVarSupply,
+) -> Result<(), TypeError> {
+    for param in params {
+        if vars.contains_key(param) {
+            return Err(TypeError::DuplicateTypeParameter(param.clone()));
+        }
+        vars.insert(param.clone(), supply.fresh(Some(param.clone())));
+    }
+    Ok(())
+}
+
+pub(crate) fn type_vars_from_params(
+    params: &[Symbol],
+    supply: &mut TypeVarSupply,
+) -> Result<BTreeMap<Symbol, TypeVar>, TypeError> {
+    let mut vars = BTreeMap::new();
+    extend_type_params(&mut vars, params, supply)?;
+    Ok(vars)
 }
 
 fn annotation_type_arity(adts: &BTreeMap<Symbol, AdtDecl>, name: &Symbol) -> Option<usize> {

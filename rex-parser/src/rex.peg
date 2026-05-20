@@ -27,12 +27,13 @@ ImportAlias        <- AS IDENT
 # Type declarations
 
 TypeDecl           <- TYPE cut(IDENT TypeParam* ASSIGN TypeVariant (PIPE TypeVariant)* label("expected `;` after type declaration", SEMI_COLON))
+GenericParams      <- LT IDENT (COMMA IDENT)* GT
 TypeParam          <- IDENT
 TypeVariant        <- IDENT TypeAtom*
 
 # Function declarations
 
-FnDecl             <- FN cut(IDENT (FnSignatureDecl / FnParamDecl))
+FnDecl             <- FN cut(IDENT GenericParams? (FnSignatureDecl / FnParamDecl))
 FnSignatureDecl    <- COLON TypeExpr WhereConstraints? ASSIGN Expr label("expected `;` after function body", SEMI_COLON)
 FnParamDecl        <- FnParams ARROW_R TypeExpr WhereConstraints? ASSIGN Expr label("expected `;` after function body", SEMI_COLON)
 FnParams           <- ArrowParam (ARROW_R ArrowParam)* / LegacyParamGroup
@@ -41,7 +42,7 @@ NamedParam         <- IDENT COLON TypeApp
 ParenParam         <- PAREN_L IDENT COLON TypeExpr PAREN_R
 LegacyParamGroup   <- PAREN_L (LegacyParam (COMMA LegacyParam)*)? PAREN_R
 LegacyParam        <- IDENT COLON TypeExpr
-DeclareFnDecl      <- DECLARE cut(FN IDENT COLON? (DeclareParamSig / BareFnSig) label("expected `;` after declare fn declaration", SEMI_COLON))
+DeclareFnDecl      <- DECLARE cut(FN IDENT GenericParams? COLON? (DeclareParamSig / BareFnSig) label("expected `;` after declare fn declaration", SEMI_COLON))
 DeclareParamSig    <- FnParams ARROW_R TypeExpr WhereConstraints?
 BareFnSig          <- TypeExpr WhereConstraints?
 
@@ -50,11 +51,11 @@ BareFnSig          <- TypeExpr WhereConstraints?
 ClassDecl          <- CLASS cut(IDENT TypeParam* SuperClause? label("expected `where { ... }` or `;` after class header", ClassBlock / SEMI_COLON))
 SuperClause        <- LE TypeConstraints
 ClassBlock         <- WHERE label("expected `{` after `where` in class declaration", BRACE_L) (ClassMethod (SEMI_COLON ClassMethod)* SEMI_COLON?)? BRACE_R
-ClassMethod        <- ValueName COLON TypeExpr
-InstanceDecl       <- INSTANCE cut(NameRef TypeApp InstanceContext? label("expected `where { ... }` or `;` after instance header", InstanceBlock / SEMI_COLON))
+ClassMethod        <- ValueName GenericParams? COLON TypeExpr
+InstanceDecl       <- INSTANCE cut(GenericParams? NameRef TypeApp InstanceContext? label("expected `where { ... }` or `;` after instance header", InstanceBlock / SEMI_COLON))
 InstanceContext    <- LE TypeConstraints
 InstanceBlock      <- WHERE label("expected `{` after `where` in instance declaration", BRACE_L) (InstanceMethod (SEMI_COLON InstanceMethod)* SEMI_COLON?)? BRACE_R
-InstanceMethod     <- ValueName ASSIGN Expr
+InstanceMethod     <- ValueName GenericParams? (COLON TypeExpr)? ASSIGN Expr
 WhereConstraints   <- WHERE TypeConstraints
 TypeConstraints    <- TypeConstraint (COMMA TypeConstraint)*
 TypeConstraint     <- NameRef TypeApp
@@ -98,8 +99,8 @@ NegExpr            <- SUB cut(Expr)
 LambdaExpr         <- BACK_SLASH cut(LambdaParam* WhereConstraints? ARROW_R Expr)
 LambdaParam        <- IDENT (COLON TypeExpr)? / PAREN_L IDENT COLON TypeExpr PAREN_R
 LetExpr            <- LET cut((REC LetRecBinding (COMMA LetRecBinding)* / LetBinding (COMMA LetBinding)*) IN Expr)
-LetBinding         <- Pattern (COLON TypeExpr)? ASSIGN Expr
-LetRecBinding      <- Pattern (COLON TypeExpr)? ASSIGN Expr
+LetBinding         <- Pattern GenericParams? (COLON TypeExpr)? ASSIGN Expr
+LetRecBinding      <- Pattern GenericParams? (COLON TypeExpr)? ASSIGN Expr
 IfExpr             <- IF cut(Expr THEN Expr ELSE Expr)
 MatchExpr          <- MATCH cut(label("expected `with {` after match scrutinee", Expr WITH) label("expected `{` after `with` in match expression", BRACE_L) MatchArm+ BRACE_R)
 MatchArm           <- CASE Pattern ARROW_R Expr label("expected `;` after match arm expression", SEMI_COLON)

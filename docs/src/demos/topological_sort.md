@@ -40,7 +40,7 @@ fn reverse_go : List Node -> List Node -> List Node = \rest acc ->
 fn reverse : List Node -> List Node = \xs ->
   reverse_go xs [];
 
-fn is_empty : List a -> bool = \xs ->
+fn is_empty<a> : List a -> bool = \xs ->
   match xs with {
     case [] -> true;
     case _::_ -> false;

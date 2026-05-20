@@ -22,10 +22,10 @@ pub class EncodeJson a where {
 pub class DecodeJson a where {
     decode_json : Value -> Result a DecodeError;
 }
-pub fn to_json : a -> Value where EncodeJson a
+pub fn to_json<a> : a -> Value where EncodeJson a
     = encode_json;
 
-pub fn from_json : Value -> Result a DecodeError where DecodeJson a
+pub fn from_json<a> : Value -> Result a DecodeError where DecodeJson a
     = decode_json;
 
 pub fn stringify : Value -> string
@@ -42,7 +42,7 @@ pub fn parse : string -> Result Value DecodeError
 instance Show Value where {
     show = stringify;
 }
-fn fail : string -> Result a DecodeError
+fn fail<a> : string -> Result a DecodeError
     = \msg -> Err (DecodeError { message = msg });
 
 fn kind : Value -> string
@@ -260,14 +260,14 @@ instance DecodeJson datetime where {
             case _ -> Err (expected "string" v);
         };
 	}
-instance EncodeJson (Option a) <= EncodeJson a where {
+instance<a> EncodeJson (Option a) <= EncodeJson a where {
     encode_json = \opt ->
         match opt with {
             case Some x -> to_json x;
             case None -> Null;
         };
 }
-instance DecodeJson (Option a) <= DecodeJson a where {
+instance<a> DecodeJson (Option a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v with {
 	            case Null -> Ok None;
@@ -278,14 +278,14 @@ instance DecodeJson (Option a) <= DecodeJson a where {
                     };
             };
 	}
-instance EncodeJson (Result a e) <= EncodeJson a, EncodeJson e where {
+instance<a,e> EncodeJson (Result a e) <= EncodeJson a, EncodeJson e where {
 	    encode_json = \r ->
 	        match r with {
 	            case Ok x -> Object { ok = to_json x };
 	            case Err e0 -> Object { err = to_json e0 };
             };
 	}
-instance DecodeJson (Result a e) <= DecodeJson a, DecodeJson e where {
+instance<a,e> DecodeJson (Result a e) <= DecodeJson a, DecodeJson e where {
 	    decode_json = \v ->
 	        match v with {
 	            case Object d -> (
@@ -309,11 +309,11 @@ instance DecodeJson (Result a e) <= DecodeJson a, DecodeJson e where {
 	            case _ -> Err (expected "object" v);
             };
 	}
-instance EncodeJson (List a) <= EncodeJson a where {
+instance<a> EncodeJson (List a) <= EncodeJson a where {
     encode_json = \xs ->
         Array (prim_array_from_list (map (\x -> to_json x) xs));
 }
-instance DecodeJson (List a) <= DecodeJson a where {
+instance<a> DecodeJson (List a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v with {
 	            case Array xs ->
@@ -330,10 +330,10 @@ instance DecodeJson (List a) <= DecodeJson a where {
 	            case _ -> Err (expected "array" v);
             };
 	}
-instance EncodeJson (Array a) <= EncodeJson a where {
+instance<a> EncodeJson (Array a) <= EncodeJson a where {
     encode_json = \xs -> Array (map (\x -> to_json x) xs);
 }
-instance DecodeJson (Array a) <= DecodeJson a where {
+instance<a> DecodeJson (Array a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v with {
 	            case Array xs ->
@@ -355,10 +355,10 @@ instance DecodeJson (Array a) <= DecodeJson a where {
             case _ -> Err (expected "array" v);
         };
 	}
-instance EncodeJson (Dict a) <= EncodeJson a where {
+instance<a> EncodeJson (Dict a) <= EncodeJson a where {
     encode_json = \d -> Object (prim_dict_map (\x -> to_json x) d);
 }
-instance DecodeJson (Dict a) <= DecodeJson a where {
+instance<a> DecodeJson (Dict a) <= DecodeJson a where {
 	    decode_json = \v ->
 	        match v with {
 	            case Object d -> prim_dict_traverse_result (\x -> from_json x) d;

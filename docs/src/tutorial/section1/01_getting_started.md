@@ -32,7 +32,7 @@ something fails, you’ll get a parse/type/eval error (often with a span).
 Even with declarations, the program result is the final expression:
 
 ```rex,interactive
-fn inc : i32 -> i32 = \x -> x + 1;
+fn inc x: i32 -> i32 = x + 1;
 
 let xs = [1, 2, 3] in
   map inc xs

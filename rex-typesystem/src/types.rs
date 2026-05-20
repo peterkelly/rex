@@ -911,12 +911,14 @@ pub enum TypedExprKind {
 #[derive(Default, Debug, Clone)]
 pub struct TypeEnv {
     pub values: HashTrieMapSync<Symbol, Vec<Scheme>>,
+    pub type_vars: BTreeMap<Symbol, TypeVar>,
 }
 
 impl TypeEnv {
     pub fn new() -> Self {
         Self {
             values: HashTrieMapSync::new_sync(),
+            type_vars: BTreeMap::new(),
         }
     }
 
@@ -957,7 +959,10 @@ impl Types for TypeEnv {
                 .collect();
             values = values.insert(k.clone(), updated);
         }
-        TypeEnv { values }
+        TypeEnv {
+            values,
+            type_vars: self.type_vars.clone(),
+        }
     }
 
     fn ftv(&self) -> BTreeSet<TypeVarId> {

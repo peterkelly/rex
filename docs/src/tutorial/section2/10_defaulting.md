@@ -70,7 +70,7 @@ Generic ADTs with constraints:
 ```rex
 type Box a = Box a | Missing;
 
-instance Default (Box a) <= Default a where {
+instance<a> Default (Box a) <= Default a where {
     default = Box default;
 }
 ```

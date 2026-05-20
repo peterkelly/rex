@@ -134,7 +134,7 @@ semicolons:
 ```rex
 import math.core as Math;
 type Box a = Box a;
-fn inc : i32 -> i32 = \x -> x + 1;
+fn inc x: i32 -> i32 = x + 1;
 declare fn host_value : i32;
 ```
 
@@ -144,6 +144,30 @@ Rules:
 - The terminating semicolon is found at top-level expression/type depth; semicolons nested inside
   parentheses, brackets, braces, or blocks do not terminate the declaration.
 - Indentation and newlines do not delimit declarations.
+
+## Explicit Type Parameters
+
+Type variables used in annotations, constraints, class heads, or instance heads must be declared by
+the syntactic form that binds them.
+
+Examples:
+
+```rex
+type Box a = Box a;
+fn id<a> x: a -> a = x;
+declare fn host_id<a> x: a -> a;
+let id<a>: a -> a = \x -> x in id 1
+class Size a where { size : a -> i32; }
+instance<a> Show (List a) <= Show a where { show = prim_show; }
+```
+
+Rules:
+
+- A bare unknown type name is an error, even when it starts with a lowercase letter.
+- Top-level `fn`, `declare fn`, named `let`, class methods, and instance methods bind type
+  parameters with `<...>` after the value name.
+- `type` and `class` declarations bind type parameters with whitespace after the declaration head.
+- `instance` declarations bind type parameters with `<...>` immediately after `instance`.
 
 ## Top-Level `fn` Recursion
 

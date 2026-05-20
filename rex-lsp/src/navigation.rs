@@ -144,7 +144,7 @@ pub(crate) fn collect_references_in_expr(
                 });
             }
         }
-        Expr::Let(_, var, _ann, def, body) => {
+        Expr::Let(_, var, _, _ann, def, body) => {
             collect_references_in_expr(def, ident, target_span, uri, top_level_defs, scope, out);
             scope.push((var.name.to_string(), var.span));
             collect_references_in_expr(body, ident, target_span, uri, top_level_defs, scope, out);
@@ -152,10 +152,10 @@ pub(crate) fn collect_references_in_expr(
         }
         Expr::LetRec(_, bindings, body) => {
             let base_len = scope.len();
-            for (var, _ann, _def) in bindings {
+            for (var, _, _ann, _def) in bindings {
                 scope.push((var.name.to_string(), var.span));
             }
-            for (_var, _ann, def) in bindings {
+            for (_var, _, _ann, def) in bindings {
                 collect_references_in_expr(
                     def,
                     ident,

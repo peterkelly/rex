@@ -4,7 +4,7 @@ The prelude defines:
 
 ```rex
 class Functor f where {
-  map : (a -> b) -> f a -> f b;
+  map<a,b> : (a -> b) -> f a -> f b;
 }
 ```
 

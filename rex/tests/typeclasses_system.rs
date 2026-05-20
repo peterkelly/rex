@@ -200,7 +200,7 @@ async fn default_custom_adt_generic_instance_uses_constraint() {
         r#"
         type Box a = Box a | Missing;
 
-        instance Default (Box a) <= Default a where {
+        instance<a> Default (Box a) <= Default a where {
             default = Box default;
         }
         let x: Box i32 = default in x
@@ -386,7 +386,7 @@ async fn hkt_functor_option_and_result() {
     assert_eval(
         r#"
         class MyFunctor f where {
-            fmap : (a -> b) -> f a -> f b;
+            fmap<a,b> : (a -> b) -> f a -> f b;
         }
         instance MyFunctor Option where {
             fmap = \f x ->
@@ -395,7 +395,7 @@ async fn hkt_functor_option_and_result() {
                     case None -> None;
                 };
         }
-        instance MyFunctor (Result e) where {
+        instance<e> MyFunctor (Result e) where {
             fmap = \f x ->
                 match x with {
                     case Ok v -> Ok (f v);
@@ -537,7 +537,7 @@ async fn missing_instance_constraint_is_error() {
         class NeedsCtx a where {
             make : a;
         }
-        instance NeedsCtx (List a) where {
+        instance<a> NeedsCtx (List a) where {
             make = [make];
         }
         0

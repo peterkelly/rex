@@ -34,7 +34,7 @@ instance D.Show i32 where {
 Instance contexts use `<=`:
 
 ```rex
-instance Show (List a) <= Show a where {
+instance<a> Show (List a) <= Show a where {
   show = \xs ->
     let
       step = \out x ->

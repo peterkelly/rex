@@ -211,13 +211,13 @@ fn first_hole_span(expr: &Expr) -> Option<Span> {
             }
             Expr::Project(_, base, _) | Expr::Ann(_, base, _) => stack.push(base),
             Expr::Lam(_, _scope, _param, _ann, _constraints, body) => stack.push(body),
-            Expr::Let(_, _var, _ann, def, body) => {
+            Expr::Let(_, _var, _type_params, _ann, def, body) => {
                 stack.push(body);
                 stack.push(def);
             }
             Expr::LetRec(_, bindings, body) => {
                 stack.push(body);
-                for (_var, _ann, def) in bindings.iter().rev() {
+                for (_var, _type_params, _ann, def) in bindings.iter().rev() {
                     stack.push(def);
                 }
             }

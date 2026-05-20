@@ -4,8 +4,8 @@ An `Applicative` is a `Functor` that can inject values and apply wrapped functio
 
 ```rex
 class Applicative f <= Functor f where {
-  pure : a -> f a;
-  ap : f (a -> b) -> f a -> f b;
+  pure<a> : a -> f a;
+  ap<a,b> : f (a -> b) -> f a -> f b;
 }
 ```
 

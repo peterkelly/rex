@@ -53,6 +53,7 @@ pub(crate) fn declare_fn_decl_from_scheme(export_name: &str, scheme: &Scheme) ->
             span: Span::default(),
             name: Symbol::intern(export_name),
         },
+        type_params: Vec::new(),
         params: params
             .into_iter()
             .enumerate()

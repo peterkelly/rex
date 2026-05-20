@@ -273,7 +273,7 @@ pub(crate) fn expected_type_in_expr(
 
         match (expr, typed.kind.as_ref()) {
             (
-                Expr::Let(_span, _name, _ann, def, body),
+                Expr::Let(_span, _name, _, _ann, def, body),
                 TypedExprKind::Let {
                     def: tdef,
                     body: tbody,
@@ -290,7 +290,7 @@ pub(crate) fn expected_type_in_expr(
                     body: typed_body,
                 },
             ) => {
-                for ((_name, _ann, def), (_typed_name, typed_def)) in
+                for ((_name, _, _ann, def), (_typed_name, typed_def)) in
                     bindings.iter().zip(typed_bindings.iter())
                 {
                     visit(def.as_ref(), typed_def, pos, Some(&typed_def.typ), best);
@@ -464,7 +464,7 @@ pub(crate) fn inferred_type_in_expr(
 
         match (expr, typed.kind.as_ref()) {
             (
-                Expr::Let(_, _, _, def, body),
+                Expr::Let(_, _, _, _, def, body),
                 TypedExprKind::Let {
                     def: tdef,
                     body: tbody,
@@ -481,7 +481,7 @@ pub(crate) fn inferred_type_in_expr(
                     body: typed_body,
                 },
             ) => {
-                for ((_, _, def), (_, typed_def)) in bindings.iter().zip(typed_bindings.iter()) {
+                for ((_, _, _, def), (_, typed_def)) in bindings.iter().zip(typed_bindings.iter()) {
                     visit(def.as_ref(), typed_def, pos, best);
                 }
                 visit(body.as_ref(), typed_body.as_ref(), pos, best);
@@ -1281,12 +1281,12 @@ pub(crate) fn collect_hole_spans(expr: &Expr, out: &mut Vec<Span>) {
         }
         Expr::Project(_, base, _) => collect_hole_spans(base, out),
         Expr::Lam(_, _scope, _param, _ann, _constraints, body) => collect_hole_spans(body, out),
-        Expr::Let(_, _var, _ann, def, body) => {
+        Expr::Let(_, _var, _, _ann, def, body) => {
             collect_hole_spans(def, out);
             collect_hole_spans(body, out);
         }
         Expr::LetRec(_, bindings, body) => {
-            for (_var, _ann, def) in bindings {
+            for (_var, _, _ann, def) in bindings {
                 collect_hole_spans(def, out);
             }
             collect_hole_spans(body, out);
@@ -1343,7 +1343,7 @@ pub(crate) fn expected_type_from_syntax_context(
             return None;
         }
         match expr {
-            Expr::Let(_span, _name, ann, def, body) => {
+            Expr::Let(_span, _name, _, ann, def, body) => {
                 if position_in_span(pos, *def.span())
                     && let Some(ann) = ann
                 {
@@ -1369,7 +1369,7 @@ pub(crate) fn expected_type_from_syntax_context(
             Expr::Project(_span, base, _field) => visit(base.as_ref(), pos),
             Expr::Lam(_span, _scope, _param, _ann, _constraints, body) => visit(body.as_ref(), pos),
             Expr::LetRec(_span, bindings, body) => {
-                for (_name, _ann, def) in bindings {
+                for (_name, _, _ann, def) in bindings {
                     if let Some(found) = visit(def.as_ref(), pos) {
                         return Some(found);
                     }
@@ -1717,7 +1717,7 @@ pub(crate) fn hover_type_in_expr(
         // 2) Binding sites: `let x = ...` and lambda params.
         match (expr, typed.kind.as_ref()) {
             (
-                Expr::Let(_span, binding, _ann, def, body),
+                Expr::Let(_span, binding, _, _ann, def, body),
                 TypedExprKind::Let {
                     def: tdef,
                     body: tbody,
@@ -1745,7 +1745,7 @@ pub(crate) fn hover_type_in_expr(
                     body: typed_body,
                 },
             ) => {
-                for ((binding, _ann, def), (_name, typed_def)) in
+                for ((binding, _, _ann, def), (_name, typed_def)) in
                     bindings.iter().zip(typed_bindings.iter())
                 {
                     if span_contains_pos(binding.span, ctx.pos) {

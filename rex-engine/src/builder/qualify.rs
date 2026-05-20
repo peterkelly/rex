@@ -83,6 +83,7 @@ pub(crate) fn qualify_program(compilation_unit: &CompilationUnit, prefix: &str) 
                     span: fd.span,
                     is_pub: fd.is_pub,
                     name,
+                    type_params: fd.type_params.clone(),
                     params,
                     ret,
                     constraints,
@@ -115,6 +116,7 @@ pub(crate) fn qualify_program(compilation_unit: &CompilationUnit, prefix: &str) 
                     span: df.span,
                     is_pub: df.is_pub,
                     name,
+                    type_params: df.type_params.clone(),
                     params,
                     ret,
                     constraints,
@@ -131,6 +133,7 @@ pub(crate) fn qualify_program(compilation_unit: &CompilationUnit, prefix: &str) 
                     .iter()
                     .map(|m| ClassMethodSig {
                         name: m.name.clone(),
+                        type_params: m.type_params.clone(),
                         typ: rename_type_expr(&m.typ, &type_renames, &class_renames),
                     })
                     .collect();
@@ -162,12 +165,18 @@ pub(crate) fn qualify_program(compilation_unit: &CompilationUnit, prefix: &str) 
                     ));
                     methods.push(InstanceMethodImpl {
                         name: m.name.clone(),
+                        type_params: m.type_params.clone(),
+                        ann: m
+                            .ann
+                            .as_ref()
+                            .map(|t| rename_type_expr(t, &type_renames, &class_renames)),
                         body,
                     });
                 }
                 Some(Decl::Instance(InstanceDecl {
                     span: id.span,
                     is_pub: id.is_pub,
+                    type_params: id.type_params.clone(),
                     class,
                     head,
                     context,
@@ -339,7 +348,7 @@ fn rename_expr(
             bound.remove(&param.name);
             out
         }
-        Expr::Let(span, var, ann, val, body) => {
+        Expr::Let(span, var, type_params, ann, val, body) => {
             let renamed_val = rename_expr(val, bound, value_renames, type_renames, class_renames);
             bound.insert(var.name.clone());
             let renamed_body = rename_expr(body, bound, value_renames, type_renames, class_renames);
@@ -347,6 +356,7 @@ fn rename_expr(
             Expr::Let(
                 *span,
                 var.clone(),
+                type_params.clone(),
                 ann.as_ref()
                     .map(|t| rename_type_expr(t, type_renames, class_renames)),
                 Arc::new(renamed_val),
@@ -356,16 +366,17 @@ fn rename_expr(
         Expr::LetRec(span, bindings, body) => {
             let names: Vec<Symbol> = bindings
                 .iter()
-                .map(|(var, _, _)| var.name.clone())
+                .map(|(var, _, _, _)| var.name.clone())
                 .collect();
             for name in &names {
                 bound.insert(name.clone());
             }
             let renamed_bindings = bindings
                 .iter()
-                .map(|(var, ann, def)| {
+                .map(|(var, type_params, ann, def)| {
                     (
                         var.clone(),
+                        type_params.clone(),
                         ann.as_ref()
                             .map(|t| rename_type_expr(t, type_renames, class_renames)),
                         Arc::new(rename_expr(

@@ -187,7 +187,8 @@ x is D.Boxed
         prepare_program_with_imports(&uri, &program).expect("prepare");
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
 
-    let Expr::Let(_, _, Some(let_ann), _, body) = rewritten.body.as_ref().unwrap().as_ref() else {
+    let Expr::Let(_, _, _, Some(let_ann), _, body) = rewritten.body.as_ref().unwrap().as_ref()
+    else {
         panic!("expected rewritten let expression");
     };
     if let TypeExpr::Name(_, name) = let_ann {
@@ -205,7 +206,7 @@ x is D.Boxed
         panic!("expected rewritten annotation type");
     }
 
-    if let Expr::Let(_, _, _, def, _) = rewritten.body.as_ref().unwrap().as_ref()
+    if let Expr::Let(_, _, _, _, def, _) = rewritten.body.as_ref().unwrap().as_ref()
         && let Expr::App(_, ctor, _) = def.as_ref()
         && let Expr::Var(v) = ctor.as_ref()
     {

@@ -48,7 +48,7 @@ use rex_ast::{
 use rex_typesystem::{
     inference::infer,
     types::{
-        AdtDecl, Instance, Predicate, RexAdt, RexType, Scheme, Type, TypeKind, TypedExpr,
+        AdtDecl, Instance, Predicate, RexAdt, RexType, Scheme, Type, TypeKind, TypeVar, TypedExpr,
         TypedExprKind, Types, adt_shape, adt_shape_eq, order_adt_family,
     },
     typesystem::{PreparedInstanceDecl, TypeSystem, TypeVarSupply, entails, instantiate},
@@ -734,7 +734,18 @@ where
                     ));
                 }
 
-                let typed = self.type_check_expr(lam_body.as_ref())?;
+                let saved_type_vars = self.type_system.env.type_vars.clone();
+                self.type_system.env.type_vars = decl
+                    .type_params
+                    .iter()
+                    .map(|param| {
+                        let tv: TypeVar = self.type_system.supply.fresh(Some(param.clone()));
+                        (param.clone(), tv)
+                    })
+                    .collect();
+                let typed_result = self.type_check_expr(lam_body.as_ref());
+                self.type_system.env.type_vars = saved_type_vars;
+                let typed = typed_result?;
                 let (param_ty, _ret_ty) = split_fun(&typed.typ)
                     .ok_or_else(|| EngineError::NotCallable(typed.typ.to_string()))?;
                 let TypedExprKind::Lam { param, body } = typed.kind.as_ref() else {

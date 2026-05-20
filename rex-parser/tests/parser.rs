@@ -26,12 +26,70 @@ fn lam(param: &str, body: Arc<Expr>) -> Arc<Expr> {
 fn test_parse_declaration_only_compilation_unit_has_no_body() {
     let code = r#"
         type Option a = None | Some a;
-        fn id x: a -> a = x;
+        fn id<a> x: a -> a = x;
     "#;
     let program = parse_rex(code).unwrap();
 
     assert_eq!(program.decls.len(), 2);
     assert!(program.body.is_none());
+}
+
+#[test]
+fn test_parse_explicit_type_params() {
+    let code = r#"
+    fn id<a> x: a -> a = x;
+    declare fn host_id<a> x: a -> a;
+    class Functor f where {
+        map<a,b> : (a -> b) -> f a -> f b;
+    }
+    instance<e> Functor (Result e) where {
+        map = prim_map;
+    }
+    let id<a>: a -> a = \x -> x in id 1
+    "#;
+    let program = parse_rex(code).unwrap();
+    assert_eq!(program.decls.len(), 4);
+    match &program.decls[0] {
+        Decl::Fn(fd) => assert_eq!(fd.type_params, vec![Symbol::intern("a")]),
+        other => panic!("expected fn decl, got {other:?}"),
+    }
+    match &program.decls[1] {
+        Decl::DeclareFn(fd) => assert_eq!(fd.type_params, vec![Symbol::intern("a")]),
+        other => panic!("expected declare fn decl, got {other:?}"),
+    }
+    match &program.decls[2] {
+        Decl::Class(cd) => {
+            assert_eq!(cd.params, vec![Symbol::intern("f")]);
+            assert_eq!(
+                cd.methods[0].type_params,
+                vec![Symbol::intern("a"), Symbol::intern("b")]
+            );
+        }
+        other => panic!("expected class decl, got {other:?}"),
+    }
+    match &program.decls[3] {
+        Decl::Instance(inst) => assert_eq!(inst.type_params, vec![Symbol::intern("e")]),
+        other => panic!("expected instance decl, got {other:?}"),
+    }
+    match program.body.unwrap().as_ref() {
+        Expr::Let(_, var, type_params, Some(_), _, _) => {
+            assert_eq!(var.name, Symbol::intern("id"));
+            assert_eq!(type_params, &vec![Symbol::intern("a")]);
+        }
+        other => panic!("expected let with type params, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_type_and_class_heads_reject_angle_type_params() {
+    for (name, code) in [
+        ("type head", "type Box<a> = Box a;"),
+        ("class head", "class Size<a> where { size : a -> i32; }"),
+    ] {
+        if let Ok(program) = parse_rex(code) {
+            panic!("{name}: parse unexpectedly succeeded: {program:?}");
+        }
+    }
 }
 
 #[test]
@@ -989,9 +1047,17 @@ fn test_lambda_and_let_chain() {
     let expected = Arc::new(Expr::Let(
         Span::default(),
         Var::new("inc"),
+        Vec::new(),
         None,
         inc,
-        Arc::new(Expr::Let(Span::default(), Var::new("dbl"), None, dbl, body)),
+        Arc::new(Expr::Let(
+            Span::default(),
+            Var::new("dbl"),
+            Vec::new(),
+            None,
+            dbl,
+            body,
+        )),
     ));
 
     assert_expr_eq!(expr, expected; ignore span);
@@ -1003,8 +1069,9 @@ fn test_let_rec_single_binding() {
     match expr.as_ref() {
         Expr::LetRec(_, bindings, body) => {
             assert_eq!(bindings.len(), 1);
-            let (name, ann, def) = &bindings[0];
+            let (name, type_params, ann, def) = &bindings[0];
             assert_eq!(name.name.as_ref(), "fact");
+            assert!(type_params.is_empty());
             assert!(ann.is_none());
             assert!(matches!(def.as_ref(), Expr::Lam(..)));
             assert_expr_eq!(body.clone(), app!(v!("fact"), u!(5)); ignore span);
@@ -1021,8 +1088,8 @@ fn test_let_rec_mutual_bindings() {
             assert_eq!(bindings.len(), 2);
             assert_eq!(bindings[0].0.name.as_ref(), "even");
             assert_eq!(bindings[1].0.name.as_ref(), "odd");
-            assert!(matches!(bindings[0].2.as_ref(), Expr::Lam(..)));
-            assert!(matches!(bindings[1].2.as_ref(), Expr::Lam(..)));
+            assert!(matches!(bindings[0].3.as_ref(), Expr::Lam(..)));
+            assert!(matches!(bindings[1].3.as_ref(), Expr::Lam(..)));
             assert!(matches!(body.as_ref(), Expr::Tuple(..)));
         }
         other => panic!("expected let rec, got {other:?}"),
@@ -1033,7 +1100,7 @@ fn test_let_rec_mutual_bindings() {
 fn test_and_is_ident() {
     let expr = parse("let and = 1 in and");
     match expr.as_ref() {
-        Expr::Let(_, var, _, def, body) => {
+        Expr::Let(_, var, _, _, def, body) => {
             assert_eq!(var.name.as_ref(), "and");
             assert_expr_eq!(def.clone(), u!(1); ignore span);
             assert_expr_eq!(body.clone(), v!("and"); ignore span);
@@ -1063,7 +1130,7 @@ fn test_let_tuple_destructuring() {
 fn test_type_annotations() {
     let expr = parse("let x: u8 = foo in x");
     match expr.as_ref() {
-        Expr::Let(_, var, Some(TypeExpr::Name(_, name)), _def, _body) => {
+        Expr::Let(_, var, _, Some(TypeExpr::Name(_, name)), _def, _body) => {
             assert_eq!(var.name.as_ref(), "x");
             assert_eq!(name.as_ref(), "u8");
         }
@@ -1101,7 +1168,7 @@ fn test_type_annotations() {
 
     let expr = parse("let t: f32 -> str -> Result bool str = x in t");
     match expr.as_ref() {
-        Expr::Let(_, _var, Some(ann), _def, _body) => {
+        Expr::Let(_, _var, _, Some(ann), _def, _body) => {
             fn is_name(expr: &TypeExpr, expected: &str) -> bool {
                 matches!(expr, TypeExpr::Name(_, name) if name.as_ref() == expected)
             }
@@ -1669,7 +1736,7 @@ fn test_parse_top_level_hole_expr() {
 fn test_parse_hole_in_let_with_annotation() {
     let expr = parse("let x : i32 = ? in x");
     match expr.as_ref() {
-        Expr::Let(_, _var, ann, def, body) => {
+        Expr::Let(_, _var, _, ann, def, body) => {
             assert!(ann.is_some(), "expected annotation");
             assert!(matches!(def.as_ref(), Expr::Hole(..)), "def={def:#?}");
             assert!(matches!(body.as_ref(), Expr::Var(..)), "body={body:#?}");

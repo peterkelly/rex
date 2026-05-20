@@ -39,7 +39,7 @@ fn eval : Expr -> i32 = \expr ->
     case Neg x -> 0 - eval x;
   };
 
-fn is_empty : List a -> bool = \xs ->
+fn is_empty<a> : List a -> bool = \xs ->
   match xs with {
     case [] -> true;
     case _::_ -> false;

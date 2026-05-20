@@ -37,6 +37,7 @@ pub(crate) enum RexRule {
     ImportItem,
     ImportAlias,
     TypeDecl,
+    GenericParams,
     TypeParam,
     TypeVariant,
     FnDecl,
@@ -132,6 +133,7 @@ impl RexRule {
         Self::ImportItem,
         Self::ImportAlias,
         Self::TypeDecl,
+        Self::GenericParams,
         Self::TypeParam,
         Self::TypeVariant,
         Self::FnDecl,
@@ -491,6 +493,15 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     ])),
                 ]),
             ),
+            grammar_rule(
+                R::GenericParams,
+                seq([
+                    tok(T::Lt),
+                    tok(T::Ident),
+                    rep(seq([tok(T::Comma), tok(T::Ident)])),
+                    tok(T::Gt),
+                ]),
+            ),
             grammar_rule(R::TypeParam, tok(T::Ident)),
             grammar_rule(R::TypeVariant, seq([tok(T::Ident), rep(rule(R::TypeAtom))])),
             grammar_comment("Function declarations"),
@@ -500,6 +511,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     tok(T::Fn),
                     cut(seq([
                         tok(T::Ident),
+                        opt(rule(R::GenericParams)),
                         choice([rule(R::FnSignatureDecl), rule(R::FnParamDecl)]),
                     ])),
                 ]),
@@ -577,6 +589,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     cut(seq([
                         tok(T::Fn),
                         tok(T::Ident),
+                        opt(rule(R::GenericParams)),
                         opt(tok(T::Colon)),
                         choice([rule(R::DeclareParamSig), rule(R::BareFnSig)]),
                         label(
@@ -634,13 +647,19 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
             ),
             grammar_rule(
                 R::ClassMethod,
-                seq([rule(R::ValueName), tok(T::Colon), rule(R::TypeExpr)]),
+                seq([
+                    rule(R::ValueName),
+                    opt(rule(R::GenericParams)),
+                    tok(T::Colon),
+                    rule(R::TypeExpr),
+                ]),
             ),
             grammar_rule(
                 R::InstanceDecl,
                 seq([
                     tok(T::Instance),
                     cut(seq([
+                        opt(rule(R::GenericParams)),
                         rule(R::NameRef),
                         rule(R::TypeApp),
                         opt(rule(R::InstanceContext)),
@@ -673,7 +692,13 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
             ),
             grammar_rule(
                 R::InstanceMethod,
-                seq([rule(R::ValueName), tok(T::Assign), rule(R::Expr)]),
+                seq([
+                    rule(R::ValueName),
+                    opt(rule(R::GenericParams)),
+                    opt(seq([tok(T::Colon), rule(R::TypeExpr)])),
+                    tok(T::Assign),
+                    rule(R::Expr),
+                ]),
             ),
             grammar_rule(
                 R::WhereConstraints,
@@ -940,6 +965,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                 R::LetBinding,
                 seq([
                     rule(R::Pattern),
+                    opt(rule(R::GenericParams)),
                     opt(seq([tok(T::Colon), rule(R::TypeExpr)])),
                     tok(T::Assign),
                     rule(R::Expr),
@@ -949,6 +975,7 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                 R::LetRecBinding,
                 seq([
                     rule(R::Pattern),
+                    opt(rule(R::GenericParams)),
                     opt(seq([tok(T::Colon), rule(R::TypeExpr)])),
                     tok(T::Assign),
                     rule(R::Expr),

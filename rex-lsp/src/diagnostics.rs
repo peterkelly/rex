@@ -335,12 +335,12 @@ pub(crate) fn collect_default_record_updates(expr: &Expr, out: &mut Vec<(Span, V
         }
         Expr::Project(_, base, _) => collect_default_record_updates(base, out),
         Expr::Lam(_, _, _, _, _, body) => collect_default_record_updates(body, out),
-        Expr::Let(_, _, _, def, body) => {
+        Expr::Let(_, _, _, _, def, body) => {
             collect_default_record_updates(def, out);
             collect_default_record_updates(body, out);
         }
         Expr::LetRec(_, bindings, body) => {
-            for (_var, _ann, def) in bindings {
+            for (_var, _, _ann, def) in bindings {
                 collect_default_record_updates(def, out);
             }
             collect_default_record_updates(body, out);
@@ -392,7 +392,7 @@ pub(crate) fn find_let_binding_for_def_range_in_expr(
     target: Range,
 ) -> Option<(String, Position)> {
     match expr {
-        Expr::Let(_, var, ann, def, body) => {
+        Expr::Let(_, var, _, ann, def, body) => {
             let def_range = span_to_range(*def.span());
             if ranges_overlap(def_range, target) && ann.is_none() {
                 return Some((var.name.as_ref().to_string(), span_to_range(var.span).end));
@@ -401,7 +401,7 @@ pub(crate) fn find_let_binding_for_def_range_in_expr(
                 .or_else(|| find_let_binding_for_def_range_in_expr(body.as_ref(), target))
         }
         Expr::LetRec(_, bindings, body) => {
-            for (var, ann, def) in bindings {
+            for (var, _, ann, def) in bindings {
                 let def_range = span_to_range(*def.span());
                 if ranges_overlap(def_range, target) && ann.is_none() {
                     return Some((var.name.as_ref().to_string(), span_to_range(var.span).end));
@@ -480,7 +480,7 @@ pub(crate) fn collect_unbound_var_spans(
             collect_unbound_var_spans(body, target, bound, out);
             bound.pop();
         }
-        Expr::Let(_, var, _ann, def, body) => {
+        Expr::Let(_, var, _, _ann, def, body) => {
             collect_unbound_var_spans(def, target, bound, out);
             bound.push(var.name.clone());
             collect_unbound_var_spans(body, target, bound, out);
@@ -488,10 +488,10 @@ pub(crate) fn collect_unbound_var_spans(
         }
         Expr::LetRec(_, bindings, body) => {
             let base_len = bound.len();
-            for (var, _ann, _def) in bindings {
+            for (var, _, _ann, _def) in bindings {
                 bound.push(var.name.clone());
             }
-            for (_var, _ann, def) in bindings {
+            for (_var, _, _ann, def) in bindings {
                 collect_unbound_var_spans(def, target, bound, out);
             }
             collect_unbound_var_spans(body, target, bound, out);

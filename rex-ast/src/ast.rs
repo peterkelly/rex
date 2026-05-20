@@ -416,6 +416,7 @@ pub struct FnDecl {
     pub span: Span,
     pub is_pub: bool,
     pub name: Var,
+    pub type_params: Vec<Symbol>,
     pub params: Vec<(Var, TypeExpr)>,
     pub ret: TypeExpr,
     pub constraints: Vec<TypeConstraint>,
@@ -427,6 +428,7 @@ pub struct DeclareFnDecl {
     pub span: Span,
     pub is_pub: bool,
     pub name: Var,
+    pub type_params: Vec<Symbol>,
     pub params: Vec<(Var, TypeExpr)>,
     pub ret: TypeExpr,
     pub constraints: Vec<TypeConstraint>,
@@ -435,6 +437,7 @@ pub struct DeclareFnDecl {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ClassMethodSig {
     pub name: Symbol,
+    pub type_params: Vec<Symbol>,
     pub typ: TypeExpr,
 }
 
@@ -451,6 +454,8 @@ pub struct ClassDecl {
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct InstanceMethodImpl {
     pub name: Symbol,
+    pub type_params: Vec<Symbol>,
+    pub ann: Option<TypeExpr>,
     pub body: Arc<Expr>,
 }
 
@@ -458,6 +463,7 @@ pub struct InstanceMethodImpl {
 pub struct InstanceDecl {
     pub span: Span,
     pub is_pub: bool,
+    pub type_params: Vec<Symbol>,
     pub class: Symbol,
     pub head: TypeExpr,
     pub context: Vec<TypeConstraint>,
@@ -567,11 +573,20 @@ impl CompilationUnit {
             }
 
             let span = Span::from_begin_end(fd.span.begin, out.span().end);
-            out = Arc::new(Expr::Let(span, fd.name.clone(), Some(sig), lam_body, out));
+            out = Arc::new(Expr::Let(
+                span,
+                fd.name.clone(),
+                fd.type_params.clone(),
+                Some(sig),
+                lam_body,
+                out,
+            ));
         }
         Some(out)
     }
 }
+
+pub type LetRecBinding = (Var, Vec<Symbol>, Option<TypeExpr>, Arc<Expr>);
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -601,11 +616,18 @@ pub enum Expr {
         Vec<TypeConstraint>,
         Arc<Expr>,
     ), // \x -> e
-    Let(Span, Var, Option<TypeExpr>, Arc<Expr>, Arc<Expr>), // let x = e1 in e2
-    LetRec(Span, Vec<(Var, Option<TypeExpr>, Arc<Expr>)>, Arc<Expr>), // let rec f = e1 and g = e2 in e3
-    Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>),                       // if e1 then e2 else e3
-    Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>),                // match e1 with { ... }
-    Ann(Span, Arc<Expr>, TypeExpr),                                   // e is t
+    Let(
+        Span,
+        Var,
+        Vec<Symbol>,
+        Option<TypeExpr>,
+        Arc<Expr>,
+        Arc<Expr>,
+    ), // let x = e1 in e2
+    LetRec(Span, Vec<LetRecBinding>, Arc<Expr>), // let rec f = e1 and g = e2 in e3
+    Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>), // if e1 then e2 else e3
+    Match(Span, Arc<Expr>, Vec<(Pattern, Arc<Expr>)>), // match e1 with { ... }
+    Ann(Span, Arc<Expr>, TypeExpr),   // e is t
 }
 
 fn expr_drop_placeholder() -> Arc<Expr> {
@@ -636,12 +658,12 @@ fn drain_expr(expr: &mut Expr, stack: &mut Vec<Arc<Expr>>) {
             stack.extend(old_scope.iter().map(|(_, expr)| expr.clone()));
             stack.push(mem::replace(body, expr_drop_placeholder()));
         }
-        Expr::Let(_, _, _, def, body) => {
+        Expr::Let(_, _, _, _, def, body) => {
             stack.push(mem::replace(def, expr_drop_placeholder()));
             stack.push(mem::replace(body, expr_drop_placeholder()));
         }
         Expr::LetRec(_, bindings, body) => {
-            for (_var, _ann, def) in mem::take(bindings) {
+            for (_var, _type_params, _ann, def) in mem::take(bindings) {
                 stack.push(def);
             }
             stack.push(mem::replace(body, expr_drop_placeholder()));
@@ -784,14 +806,21 @@ impl Expr {
                 constraints.clone(),
                 body.clone(),
             ),
-            Expr::Let(_, var, ann, def, body) => {
-                Expr::Let(span, var.clone(), ann.clone(), def.clone(), body.clone())
-            }
+            Expr::Let(_, var, type_params, ann, def, body) => Expr::Let(
+                span,
+                var.clone(),
+                type_params.clone(),
+                ann.clone(),
+                def.clone(),
+                body.clone(),
+            ),
             Expr::LetRec(_, bindings, body) => Expr::LetRec(
                 span,
                 bindings
                     .iter()
-                    .map(|(var, ann, def)| (var.clone(), ann.clone(), def.clone()))
+                    .map(|(var, type_params, ann, def)| {
+                        (var.clone(), type_params.clone(), ann.clone(), def.clone())
+                    })
                     .collect(),
                 body.clone(),
             ),
@@ -866,9 +895,10 @@ impl Expr {
                     .collect(),
                 Arc::new(body.reset_spans()),
             ),
-            Expr::Let(_, var, ann, def, body) => Expr::Let(
+            Expr::Let(_, var, type_params, ann, def, body) => Expr::Let(
                 Span::default(),
                 var.reset_spans(),
+                type_params.clone(),
                 ann.as_ref().map(|t| t.reset_spans()),
                 Arc::new(def.reset_spans()),
                 Arc::new(body.reset_spans()),
@@ -877,9 +907,10 @@ impl Expr {
                 Span::default(),
                 bindings
                     .iter()
-                    .map(|(var, ann, def)| {
+                    .map(|(var, type_params, ann, def)| {
                         (
                             var.reset_spans(),
+                            type_params.clone(),
                             ann.as_ref().map(TypeExpr::reset_spans),
                             Arc::new(def.reset_spans()),
                         )
@@ -907,6 +938,20 @@ impl Expr {
             ),
         }
     }
+}
+
+fn fmt_type_params(f: &mut Formatter<'_>, params: &[Symbol]) -> fmt::Result {
+    if params.is_empty() {
+        return Ok(());
+    }
+    '<'.fmt(f)?;
+    for (idx, param) in params.iter().enumerate() {
+        if idx > 0 {
+            ", ".fmt(f)?;
+        }
+        param.fmt(f)?;
+    }
+    '>'.fmt(f)
 }
 
 impl Display for Expr {
@@ -1016,9 +1061,10 @@ impl Display for Expr {
                 " -> ".fmt(f)?;
                 body.fmt(f)
             }
-            Self::Let(_span, var, ann, def, body) => {
+            Self::Let(_span, var, type_params, ann, def, body) => {
                 "let ".fmt(f)?;
                 var.fmt(f)?;
+                fmt_type_params(f, type_params)?;
                 if let Some(ann) = ann {
                     ": ".fmt(f)?;
                     ann.fmt(f)?;
@@ -1030,11 +1076,12 @@ impl Display for Expr {
             }
             Self::LetRec(_span, bindings, body) => {
                 "let rec ".fmt(f)?;
-                for (idx, (var, ann, def)) in bindings.iter().enumerate() {
+                for (idx, (var, type_params, ann, def)) in bindings.iter().enumerate() {
                     if idx > 0 {
                         " and ".fmt(f)?;
                     }
                     var.fmt(f)?;
+                    fmt_type_params(f, type_params)?;
                     if let Some(ann) = ann {
                         ": ".fmt(f)?;
                         ann.fmt(f)?;

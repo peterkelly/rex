@@ -283,6 +283,7 @@ pub(crate) fn interface_decls_from_program(compilation_unit: &CompilationUnit) -
                 span: fd.span,
                 is_pub: fd.is_pub,
                 name: fd.name.clone(),
+                type_params: fd.type_params.clone(),
                 params: fd.params.clone(),
                 ret: fd.ret.clone(),
                 constraints: fd.constraints.clone(),

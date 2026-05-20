@@ -15,8 +15,8 @@ mod symbol;
 
 pub use ast::{
     ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportClause,
-    ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Scope,
-    TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
+    ImportDecl, ImportItem, ImportPath, InstanceDecl, InstanceMethodImpl, LetRecBinding, NameRef,
+    Pattern, Scope, TypeConstraint, TypeDecl, TypeExpr, TypeVariant, Var,
 };
 pub use id::Id;
 pub use span::{Position, Span, Spanned};

@@ -147,7 +147,7 @@ fn validate_import_uses_expr(
             bound.remove(&param.name);
             res
         }
-        Expr::Let(_, var, ann, val, body) => {
+        Expr::Let(_, var, _type_params, ann, val, body) => {
             if let Some(ann) = ann {
                 validate_import_uses_type_expr(ann, bound, aliases, shadowed_values)?;
             }
@@ -158,19 +158,19 @@ fn validate_import_uses_expr(
             res
         }
         Expr::LetRec(_, bindings, body) => {
-            for (_, ann, _) in bindings {
+            for (_, _, ann, _) in bindings {
                 if let Some(ann) = ann {
                     validate_import_uses_type_expr(ann, bound, aliases, shadowed_values)?;
                 }
             }
             let names: Vec<Symbol> = bindings
                 .iter()
-                .map(|(var, _, _)| var.name.clone())
+                .map(|(var, _, _, _)| var.name.clone())
                 .collect();
             for name in &names {
                 bound.insert(name.clone());
             }
-            for (_, _ann, def) in bindings {
+            for (_, _, _ann, def) in bindings {
                 validate_import_uses_expr(def, bound, aliases, shadowed_values)?;
             }
             let res = validate_import_uses_expr(body, bound, aliases, shadowed_values);
@@ -491,6 +491,7 @@ pub(crate) fn rewrite_import_uses(
                     span: fd.span,
                     is_pub: fd.is_pub,
                     name: fd.name.clone(),
+                    type_params: fd.type_params.clone(),
                     params: fd
                         .params
                         .iter()
@@ -545,6 +546,7 @@ pub(crate) fn rewrite_import_uses(
                 span: df.span,
                 is_pub: df.is_pub,
                 name: df.name.clone(),
+                type_params: df.type_params.clone(),
                 params: df
                     .params
                     .iter()
@@ -652,6 +654,7 @@ pub(crate) fn rewrite_import_uses(
                     .iter()
                     .map(|m| ClassMethodSig {
                         name: m.name.clone(),
+                        type_params: m.type_params.clone(),
                         typ: rewrite_import_uses_type_expr(
                             &m.typ,
                             &decl_bound,
@@ -676,6 +679,17 @@ pub(crate) fn rewrite_import_uses(
                         ));
                         InstanceMethodImpl {
                             name: m.name.clone(),
+                            type_params: m.type_params.clone(),
+                            ann: m.ann.as_ref().map(|t| {
+                                rewrite_import_uses_type_expr(
+                                    t,
+                                    &decl_bound,
+                                    aliases,
+                                    imported_types,
+                                    shadowed_types,
+                                    shadowed_values,
+                                )
+                            }),
                             body,
                         }
                     })
@@ -683,6 +697,7 @@ pub(crate) fn rewrite_import_uses(
                 Decl::Instance(InstanceDecl {
                     span: inst.span,
                     is_pub: inst.is_pub,
+                    type_params: inst.type_params.clone(),
                     class: rewrite_import_uses_class_name(
                         &NameRef::from_dotted(inst.class.as_ref()),
                         &decl_bound,
@@ -827,7 +842,7 @@ fn rewrite_import_uses_expr(
             bound.remove(&param.name);
             out
         }
-        Expr::Let(span, var, ann, val, body) => {
+        Expr::Let(span, var, type_params, ann, val, body) => {
             let val = Arc::new(rewrite_import_uses_expr(val, bound, scope));
             bound.insert(var.name.clone());
             let body = Arc::new(rewrite_import_uses_expr(body, bound, scope));
@@ -835,6 +850,7 @@ fn rewrite_import_uses_expr(
             Expr::Let(
                 *span,
                 var.clone(),
+                type_params.clone(),
                 ann.as_ref().map(|t| rewrite_type(t, bound)),
                 val,
                 body,
@@ -843,11 +859,11 @@ fn rewrite_import_uses_expr(
         Expr::LetRec(span, bindings, body) => {
             let anns: Vec<Option<TypeExpr>> = bindings
                 .iter()
-                .map(|(_, ann, _)| ann.as_ref().map(|t| rewrite_type(t, bound)))
+                .map(|(_, _, ann, _)| ann.as_ref().map(|t| rewrite_type(t, bound)))
                 .collect();
             let names: Vec<Symbol> = bindings
                 .iter()
-                .map(|(var, _, _)| var.name.clone())
+                .map(|(var, _, _, _)| var.name.clone())
                 .collect();
             for name in &names {
                 bound.insert(name.clone());
@@ -855,9 +871,10 @@ fn rewrite_import_uses_expr(
             let bindings = bindings
                 .iter()
                 .zip(anns)
-                .map(|((var, _ann, def), ann)| {
+                .map(|((var, type_params, _ann, def), ann)| {
                     (
                         var.clone(),
+                        type_params.clone(),
                         ann,
                         Arc::new(rewrite_import_uses_expr(def, bound, scope)),
                     )
