@@ -93,6 +93,28 @@ fn test_grammar_contract_near_misses_fail() {
 }
 
 #[test]
+fn test_unicode_lambda_and_arrow_syntax_rejected() {
+    for (name, code) in [
+        ("lambda sigil", "λx -> x"),
+        ("lambda arrow", "\\x → x"),
+        ("type arrow", "fn id : i32 → i32 = \\x -> x;"),
+        (
+            "match arm arrow",
+            "match true with { case true → 1; case false -> 0; }",
+        ),
+    ] {
+        let errs = match parse_rex(code) {
+            Ok(program) => panic!("{name}: parse unexpectedly succeeded: {program:?}"),
+            Err(errs) => errs,
+        };
+        assert!(
+            errs.iter().any(|err| err.message.contains("lex error")),
+            "{name}: expected lexical rejection, got {errs:?}"
+        );
+    }
+}
+
+#[test]
 fn test_parse_comment() {
     let expr = parse_rex("true /* this is a boolean */")
         .unwrap()

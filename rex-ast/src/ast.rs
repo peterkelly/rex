@@ -600,7 +600,7 @@ pub enum Expr {
         Option<TypeExpr>,
         Vec<TypeConstraint>,
         Arc<Expr>,
-    ), // λx → e
+    ), // \x -> e
     Let(Span, Var, Option<TypeExpr>, Arc<Expr>, Arc<Expr>), // let x = e1 in e2
     LetRec(Span, Vec<(Var, Option<TypeExpr>, Arc<Expr>)>, Arc<Expr>), // let rec f = e1 and g = e2 in e3
     Ite(Span, Arc<Expr>, Arc<Expr>, Arc<Expr>),                       // if e1 then e2 else e3
@@ -992,7 +992,7 @@ impl Display for Expr {
                 }
             }
             Self::Lam(_span, _scope, param, ann, constraints, body) => {
-                'λ'.fmt(f)?;
+                '\\'.fmt(f)?;
                 if let Some(ann) = ann {
                     '('.fmt(f)?;
                     param.fmt(f)?;
@@ -1013,7 +1013,7 @@ impl Display for Expr {
                         }
                     }
                 }
-                " → ".fmt(f)?;
+                " -> ".fmt(f)?;
                 body.fmt(f)
             }
             Self::Let(_span, var, ann, def, body) => {

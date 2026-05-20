@@ -90,14 +90,14 @@ match d with {
 
 ## Arrow spelling
 
-Arms can use `->` or `→`:
+Match arms use `->`:
 
 ```rex,interactive
 type Bit = T | F;
 
 let v = T in
 match v with {
-  case T → 1;
+  case T -> 1;
   case F -> 0;
 }
 ```

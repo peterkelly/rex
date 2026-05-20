@@ -483,7 +483,7 @@ pub(crate) fn function_defs_from_tokens(tokens: &Tokens) -> HashMap<String, Comp
             }
         };
 
-        // Walk to `=` (skipping whitespace) and then check if the next token is `\` / `λ`.
+        // Walk to `=` (skipping whitespace) and then check if the next token is `\`.
         i += 1;
         while let Some(j) = next_non_ws(i) {
             match &items[j] {

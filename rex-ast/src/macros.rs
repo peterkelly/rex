@@ -204,7 +204,7 @@ macro_rules! app {
 
 #[macro_export]
 macro_rules! lam {
-    (λ $x:ident -> $e:expr) => {
+    ($x:ident -> $e:expr) => {
         ::std::sync::Arc::new($crate::Expr::Lam(
             $crate::Span::default(),
             $crate::Scope::new_sync(),
@@ -215,7 +215,7 @@ macro_rules! lam {
         ))
     };
 
-    ($span:expr; λ $x:ident -> $e:expr) => {
+    ($span:expr; $x:ident -> $e:expr) => {
         ::std::sync::Arc::new($crate::Expr::Lam(
             ($span).into(),
             $crate::Scope::new_sync(),
@@ -226,7 +226,7 @@ macro_rules! lam {
         ))
     };
 
-    ($id:expr, $span:expr; λ $x:ident -> $e:expr) => {
+    ($id:expr, $span:expr; $x:ident -> $e:expr) => {
         ::std::sync::Arc::new($crate::Expr::Lam(
             ($id).into(),
             ($span).into(),

@@ -102,11 +102,10 @@ Run it:
 cargo run -p rex-cli --bin rex -- --snippet hello.rex
 ```
 
-## Unicode (λ, →) versus ASCII
+## Lambda and Arrow Spelling
 
-Rex accepts both:
+Rex uses ASCII-only syntax for lambdas and arrows:
 
 - `\` and `->`
-- `λ` and `→`
 
-Use whichever your editor makes pleasant. The repo’s examples use a mix.
+The Unicode lambda and right-arrow glyphs are not accepted.

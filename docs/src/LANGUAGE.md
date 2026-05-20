@@ -117,7 +117,7 @@ Path resolution:
 
 ### Lambdas
 
-The lambda syntax is `\x -> expr`. Some docs/examples may also use Unicode `λ` and `→`.
+The lambda syntax is `\x -> expr`. Rex only accepts the ASCII spellings `\` and `->`.
 
 ## Expressions
 

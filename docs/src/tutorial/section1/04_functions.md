@@ -14,7 +14,7 @@ Lambdas can take multiple arguments:
 \x y -> x + y
 ```
 
-Rex also accepts the Unicode spellings `λ` and `→`.
+Rex only accepts the ASCII spellings `\` and `->`.
 
 ### Annotating lambda parameters
 

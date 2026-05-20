@@ -15,42 +15,42 @@ let
 in
     (
         match v1 with {
-            case MyCtor1 → 0;
-            case MyCtor2 _ _ → 1;
-            case MyCtor3 {field1} → field1;
+            case MyCtor1 -> 0;
+            case MyCtor2 _ _ -> 1;
+            case MyCtor3 {field1} -> field1;
         },
         match v2 with {
-            case MyCtor1 → 0;
-            case MyCtor2 x y → x + y;
-            case MyCtor3 {field1} → field1;
+            case MyCtor1 -> 0;
+            case MyCtor2 x y -> x + y;
+            case MyCtor3 {field1} -> field1;
         },
         match v3 with {
-            case MyCtor1 → 0;
-            case MyCtor2 _ _ → 1;
-            case MyCtor3 {field1} → field1;
+            case MyCtor1 -> 0;
+            case MyCtor2 _ _ -> 1;
+            case MyCtor3 {field1} -> field1;
         },
         match v4 with {
-            case MyOtherCtor1 x y → x + y;
-            case MyOtherCtor2 _ _ → "";
-            case MyOtherCtor3 {field1} → field1;
-            case MyOtherCtor4 {field1} → field1;
+            case MyOtherCtor1 x y -> x + y;
+            case MyOtherCtor2 _ _ -> "";
+            case MyOtherCtor3 {field1} -> field1;
+            case MyOtherCtor4 {field1} -> field1;
         },
         match v5 with {
-            case MyOtherCtor1 _ _ → "";
-            case MyOtherCtor2 x y → x + y;
-            case MyOtherCtor3 {field1} → field1;
-            case MyOtherCtor4 {field1} → field1;
+            case MyOtherCtor1 _ _ -> "";
+            case MyOtherCtor2 x y -> x + y;
+            case MyOtherCtor3 {field1} -> field1;
+            case MyOtherCtor4 {field1} -> field1;
         },
         match v6 with {
-            case MyOtherCtor1 _ _ → "";
-            case MyOtherCtor2 _ _ → "";
-            case MyOtherCtor3 {field1} → field1;
-            case MyOtherCtor4 {field1} → field1;
+            case MyOtherCtor1 _ _ -> "";
+            case MyOtherCtor2 _ _ -> "";
+            case MyOtherCtor3 {field1} -> field1;
+            case MyOtherCtor4 {field1} -> field1;
         },
         match v7 with {
-            case MyOtherCtor1 _ _ → "";
-            case MyOtherCtor2 _ _ → "";
-            case MyOtherCtor3 {field1} → field1;
-            case MyOtherCtor4 {field1} → field1;
+            case MyOtherCtor1 _ _ -> "";
+            case MyOtherCtor2 _ _ -> "";
+            case MyOtherCtor3 {field1} -> field1;
+            case MyOtherCtor4 {field1} -> field1;
         }
     )

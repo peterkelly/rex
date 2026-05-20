@@ -1,24 +1,24 @@
 let
-    id = λx → x,
-    add: i32 -> i32 -> i32 = λx y → x + y,
-    sub: i32 -> i32 -> i32 = λx y → x - y,
-    mul: i32 -> i32 -> i32 = λx y → x * y,
-    inc: i32 -> i32 = λx → x + 1,
-    dec: i32 -> i32 = λx → x - 1,
-    square: i32 -> i32 = λx → x * x,
-    cube: i32 -> i32 = λx → x * x * x,
-    quad: i32 -> i32 = λx → x * x * x * x,
-    clamp: i32 -> i32 -> i32 -> i32 = λlo hi x → if x < lo then lo else if x > hi then hi else x,
-    is_even: i32 -> bool = λx → x % 2 == 0,
-    is_odd: i32 -> bool = λx → x % 2 != 0,
-    choose: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j → if a + b > c + d then e + f + g + h + i + j else a + b + c + d,
-    mega26: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j k l m n o p q r s t u v w x y z →
+    id = \x -> x,
+    add: i32 -> i32 -> i32 = \x y -> x + y,
+    sub: i32 -> i32 -> i32 = \x y -> x - y,
+    mul: i32 -> i32 -> i32 = \x y -> x * y,
+    inc: i32 -> i32 = \x -> x + 1,
+    dec: i32 -> i32 = \x -> x - 1,
+    square: i32 -> i32 = \x -> x * x,
+    cube: i32 -> i32 = \x -> x * x * x,
+    quad: i32 -> i32 = \x -> x * x * x * x,
+    clamp: i32 -> i32 -> i32 -> i32 = \lo hi x -> if x < lo then lo else if x > hi then hi else x,
+    is_even: i32 -> bool = \x -> x % 2 == 0,
+    is_odd: i32 -> bool = \x -> x % 2 != 0,
+    choose: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = \a b c d e f g h i j -> if a + b > c + d then e + f + g + h + i + j else a + b + c + d,
+    mega26: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = \a b c d e f g h i j k l m n o p q r s t u v w x y z ->
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
         + s + t + u + v + w + x
         + y + z,
-    mega52: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az →
+    mega52: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = \a b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ->
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
@@ -28,7 +28,7 @@ let
         + ak + al + am + an + ao + ap
         + aq + ar + as_ + at + au + av
         + aw + ax + ay + az,
-    mega64: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ba bb bc bd be bf bg bh bi bj bk bl →
+    mega64: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 = \a b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as_ at au av aw ax ay az ba bb bc bd be bf bg bh bi bj bk bl ->
         a + b + c + d + e + f
         + g + h + i + j + k + l
         + m + n + o + p + q + r
@@ -40,7 +40,7 @@ let
         + aw + ax + ay + az + ba + bb
         + bc + bd + be + bf + bg + bh
         + bi + bj + bk + bl,
-    fanout: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) = λa b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af →
+    fanout: i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> i32 -> (i32, i32, i32, i32, i32, i32, i32, i32, i32, i32, i32) = \a b c d e f g h i j k l m n o p q r s t u v w x y z aa ab ac ad ae af ->
         (a + b + c, d + e + f, g + h + i, j + k + l,
         m + n + o, p + q + r, s + t + u, v + w + x,
         y + z + aa, ab + ac + ad, ae + af),
@@ -48,13 +48,13 @@ let
     nums2 = map inc nums,
     nums3 = map square nums,
     nums4 = map cube nums,
-    nums5 = map (λx → x * 3 + 1) nums,
-    nums6 = map (λx → x * x + 2 * x + 1) nums,
-    nums7 = map (λx → clamp 10 200 x) nums,
-    nums8 = map (λx → if is_even x then x + 2 else x + 3) nums,
-    nums9 = map (λx → x * 7 - x % 5) nums,
-    nums10 = map (λx → (x + 5) * (x - 3)) nums,
-    nums11 = map (λx → (x * x) % 97) nums,
+    nums5 = map (\x -> x * 3 + 1) nums,
+    nums6 = map (\x -> x * x + 2 * x + 1) nums,
+    nums7 = map (\x -> clamp 10 200 x) nums,
+    nums8 = map (\x -> if is_even x then x + 2 else x + 3) nums,
+    nums9 = map (\x -> x * 7 - x % 5) nums,
+    nums10 = map (\x -> (x + 5) * (x - 3)) nums,
+    nums11 = map (\x -> (x * x) % 97) nums,
     front20 = take 20 nums,
     mid20 = take 20 (skip 40 nums),
     slice20 = take 20 (skip 120 nums),
@@ -78,51 +78,51 @@ let
     odds_count = count odds,
     pair_list = zip evens odds,
     pair_count = count pair_list,
-    pair_head = match pair_list with { case [] → (0, 0); case p::ps → p; },
+    pair_head = match pair_list with { case [] -> (0, 0); case p::ps -> p; },
     pair_first = pair_head.0,
     pair_second = pair_head.1,
     pair_mix = pair_first + pair_second,
     first_three = (get 0 nums, get 1 nums, get 2 nums),
     last_three = (get 237 nums, get 238 nums, get 239 nums),
-    head_num = match nums with { case [] → 0; case x::xs → x; },
-    head_opt = match nums with { case [] → None; case x::xs → Some x; },
-    opt_to_zero = λx → match x with { case None → 0; case Some v → v; },
+    head_num = match nums with { case [] -> 0; case x::xs -> x; },
+    head_opt = match nums with { case [] -> None; case x::xs -> Some x; },
+    opt_to_zero = \x -> match x with { case None -> 0; case Some v -> v; },
     head_or_zero = opt_to_zero head_opt,
     deep_match =
         match nums with {
-            case [] → 0;
-            case x::xs →
+            case [] -> 0;
+            case x::xs ->
                 match xs with {
-                    case [] → x;
-                    case y::ys →
+                    case [] -> x;
+                    case y::ys ->
                         match ys with {
-                            case [] → x + y;
-                            case z::zs →
+                            case [] -> x + y;
+                            case z::zs ->
                                 match zs with {
-                                    case [] → x + y + z;
-                                    case w::ws → x + y + z + w;
+                                    case [] -> x + y + z;
+                                    case w::ws -> x + y + z + w;
                                 };
                         };
                 };
         },
     first_five =
         match nums with {
-            case [a, b, c, d, e] → a + b + c + d + e;
-            case a::rest → a;
-            case _ → 0;
+            case [a, b, c, d, e] -> a + b + c + d + e;
+            case a::rest -> a;
+            case _ -> 0;
         },
     list_of_lists = [front20, mid20, slice20, tail20],
     list_summary =
         match list_of_lists with {
-            case [a, b, c, d] → sum a + sum b + sum c + sum d;
-            case _ → 0;
+            case [a, b, c, d] -> sum a + sum b + sum c + sum d;
+            case _ -> 0;
         },
-    classify: i32 -> Result i32 i32 = λn → if n % 3 == 0 then Ok n else Err n,
+    classify: i32 -> Result i32 i32 = \n -> if n % 3 == 0 then Ok n else Err n,
     classified = map classify nums,
-    only_ok = filter_map (λx → match x with { case Ok v → Some v; case Err _ → None; }) classified,
+    only_ok = filter_map (\x -> match x with { case Ok v -> Some v; case Err _ -> None; }) classified,
     ok_count = count only_ok,
     ok_sum = sum only_ok,
-    ok_head = match only_ok with { case [] → 0; case x::xs → x; },
+    ok_head = match only_ok with { case [] -> 0; case x::xs -> x; },
     mega26_result = mega26 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26,
     mega52_result = mega52 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52,
     mega64_result = mega64 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47 48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64,

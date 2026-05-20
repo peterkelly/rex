@@ -556,8 +556,8 @@ impl Token {
                 r"(?P<Where>\bwhere\b)|",
                 // Symbols
                 r"(?P<ArrowL><-|←)|",
-                r"(?P<ArrowR>->|→)|",
-                r"(?P<BackSlash>\\|λ)|",
+                r"(?P<ArrowR>->)|",
+                r"(?P<BackSlash>\\)|",
                 r"(?P<BlockComment>(?s:/\*.*?\*/))|",
                 r"(?P<LineComment>//[^\n\r]*)|",
                 r"(?P<CommentL>/\*)|",
