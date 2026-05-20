@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+use std::borrow::Cow;
+
 use futures::executor::block_on;
 use rex_ast::CompilationUnit;
 use rex_engine::{Engine, ValueDisplayOptions};
@@ -20,6 +22,17 @@ fn parse_program(source: &str) -> Result<CompilationUnit, String> {
     parse(source).map_err(|errs| format_parse_errors(&errs))
 }
 
+fn source_with_docs_body(source: &str) -> Result<Cow<'_, str>, String> {
+    let program = parse_program(source)?;
+    if program.body.is_some() {
+        return Ok(Cow::Borrowed(source));
+    }
+    // Interactive docs examples often demonstrate declarations by themselves.
+    // Treat those as snippets whose final expression is unit without changing
+    // the source text shown in the editor.
+    Ok(Cow::Owned(format!("{source}\n()")))
+}
+
 fn format_parse_errors(errs: &[ParseError]) -> String {
     let mut out = String::from("parse error:");
     for err in errs {
@@ -36,7 +49,8 @@ pub fn parse_to_json(source: &str) -> Result<String, String> {
 }
 
 pub fn infer_to_json(source: &str) -> Result<String, String> {
-    let program = parse_program(source)?;
+    let source = source_with_docs_body(source)?;
+    let program = parse_program(source.as_ref())?;
 
     let mut ts = TypeSystem::new_with_prelude().map_err(|e| format!("type system error: {e}"))?;
     ts.set_limits(TypeSystemLimits::safe_defaults());
@@ -59,7 +73,10 @@ pub fn infer_to_json(source: &str) -> Result<String, String> {
 }
 
 pub fn lsp_diagnostics_to_json(source: &str) -> Result<String, String> {
-    let diagnostics = diagnostics_for_source(source);
+    let diagnostics = match source_with_docs_body(source) {
+        Ok(source) => diagnostics_for_source(source.as_ref()),
+        Err(_) => diagnostics_for_source(source),
+    };
     serde_json::to_string(&diagnostics).map_err(|e| format!("serialization error: {e}"))
 }
 
@@ -118,7 +135,7 @@ pub fn lsp_code_actions_to_json(source: &str, line: u32, character: u32) -> Resu
 }
 
 pub async fn eval_to_string(source: &str) -> Result<String, String> {
-    let _ = parse_program(source)?;
+    let source = source_with_docs_body(source)?;
 
     let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
     engine.type_system.set_limits(TypeSystemLimits::unlimited());
@@ -126,7 +143,7 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
     // This avoids behavior differences between the native CLI and wasm playground.
     let (value, _value_ty) = engine
         .into_evaluator()
-        .eval_snippet(source)
+        .eval_snippet(source.as_ref())
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
 
@@ -218,13 +235,13 @@ pub fn wasm_lsp_code_actions_to_json(
 
 #[wasm_bindgen(js_name = evalToJson)]
 pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
-    let _ = parse_program(source).map_err(as_js_err)?;
+    let source = source_with_docs_body(source).map_err(as_js_err)?;
 
     let fut = async move {
         let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
         let (value, _value_ty) = engine
             .into_evaluator()
-            .eval_snippet(source)
+            .eval_snippet(source.as_ref())
             .await
             .map_err(|e| format!("runtime error: {e}"))?;
         let rendered = value
@@ -244,7 +261,8 @@ pub fn wasm_eval_to_string(source: &str) -> Result<String, JsValue> {
 #[cfg(test)]
 mod tests {
     use super::{
-        eval_to_string, lsp_code_actions_to_json, lsp_diagnostics_to_json, wasm_eval_to_json,
+        eval_to_string, infer_to_json, lsp_code_actions_to_json, lsp_diagnostics_to_json,
+        wasm_eval_to_json,
     };
     use futures::executor::block_on;
 
@@ -265,6 +283,30 @@ in
 
         let sanitized = block_on(eval_to_string(source)).expect("wasm string eval failed");
         assert_eq!(sanitized, "(2, [A, B])");
+    }
+
+    #[test]
+    fn declaration_only_docs_source_runs_as_unit() {
+        let source = "fn inc x: i32 -> i32 = x + 1;";
+
+        let json = infer_to_json(source).expect("docs source should infer");
+        let inferred: serde_json::Value = serde_json::from_str(&json).expect("type json");
+        assert_eq!(inferred["type"], "()");
+
+        let diagnostics = lsp_diagnostics_to_json(source).expect("diagnostics json");
+        let diagnostics: serde_json::Value =
+            serde_json::from_str(&diagnostics).expect("diagnostics parse");
+        assert_eq!(
+            diagnostics.as_array().expect("diagnostics array").len(),
+            0,
+            "diagnostics: {diagnostics:#?}"
+        );
+
+        let full = wasm_eval_to_json(source).expect("wasm eval failed");
+        assert!(full.contains("()"));
+
+        let sanitized = block_on(eval_to_string(source)).expect("wasm string eval failed");
+        assert_eq!(sanitized, "()");
     }
 
     #[test]
