@@ -46,8 +46,8 @@
 //! For lightweight tests and command-line style integrations, [`eval`] parses,
 //! typechecks, evaluates, and converts the result to JSON in one call. Production
 //! embedders usually use [`Engine`](engine::Engine) directly so they can
-//! register host modules, set execution bounds, inspect type information, and
-//! handle compile and evaluation errors separately.
+//! register host modules, set parallelism policy, inspect type information,
+//! and handle compile and evaluation errors separately.
 
 /// Rex abstract syntax tree types produced by the parser.
 pub mod ast;

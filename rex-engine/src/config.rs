@@ -1,7 +1,15 @@
 use crate::{
-    builder::export::NativeFuture, handlers::NativeHandleFuture, modules::PRELUDE_MODULE_NAME,
+    builder::export::NativeFuture, error::EngineError, handlers::NativeHandleFuture,
+    modules::PRELUDE_MODULE_NAME,
 };
-use std::{fmt, sync::Arc};
+use std::{
+    fmt,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context as TaskContext, Poll},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PreludeMode {
@@ -37,10 +45,14 @@ impl ExecutionBounds {
     /// Create scheduler bounds for evaluator work.
     ///
     /// `max_ready_work` limits how many ready Rex frames are admitted to the
-    /// active scheduler queue. `max_pending_async_calls` limits how many async
-    /// host-call futures are admitted for polling or executor submission at
-    /// once. Zero values are normalized to one so evaluation can always make
-    /// progress.
+    /// active scheduler queue. This is an internal scheduler-pressure guard:
+    /// it does not reserve external compute capacity and does not prevent
+    /// fan-out frames from being created. Async host-call backpressure is
+    /// controlled by native async permits.
+    ///
+    /// `max_pending_async_calls` is the fixed native async permit count used
+    /// by this legacy controller. Zero values are normalized to one so
+    /// evaluation can always make progress.
     pub const fn new(max_ready_work: usize, max_pending_async_calls: usize) -> Self {
         Self {
             max_ready_work: if max_ready_work == 0 {
@@ -71,14 +83,6 @@ impl ExecutionBounds {
     pub const fn max_pending_async_calls(self) -> usize {
         self.max_pending_async_calls
     }
-
-    pub(crate) fn ready_work_limit(self) -> usize {
-        self.max_ready_work
-    }
-
-    pub(crate) fn pending_async_limit(self) -> usize {
-        self.max_pending_async_calls
-    }
 }
 
 impl Default for ExecutionBounds {
@@ -87,6 +91,98 @@ impl Default for ExecutionBounds {
             Self::DEFAULT_MAX_READY_WORK,
             Self::DEFAULT_MAX_PENDING_ASYNC_CALLS,
         )
+    }
+}
+
+pub struct NativeAsyncPermit {
+    release: Option<Box<dyn FnOnce() + Send + 'static>>,
+}
+
+impl NativeAsyncPermit {
+    pub fn new(release: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            release: Some(Box::new(release)),
+        }
+    }
+
+    pub fn noop() -> Self {
+        Self { release: None }
+    }
+}
+
+impl Drop for NativeAsyncPermit {
+    fn drop(&mut self) {
+        if let Some(release) = self.release.take() {
+            release();
+        }
+    }
+}
+
+impl fmt::Debug for NativeAsyncPermit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NativeAsyncPermit").finish_non_exhaustive()
+    }
+}
+
+pub trait ParallelismController: Send + Sync + 'static {
+    fn ready_work_limit(&self) -> usize;
+
+    fn poll_acquire_native_async(
+        &self,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Result<NativeAsyncPermit, EngineError>>;
+}
+
+pub(crate) struct FixedParallelismController {
+    bounds: ExecutionBounds,
+    active_native_async: Arc<AtomicUsize>,
+    waker: Arc<Mutex<Option<std::task::Waker>>>,
+}
+
+impl FixedParallelismController {
+    pub(crate) fn new(bounds: ExecutionBounds) -> Self {
+        Self {
+            bounds,
+            active_native_async: Arc::new(AtomicUsize::new(0)),
+            waker: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
+impl ParallelismController for FixedParallelismController {
+    fn ready_work_limit(&self) -> usize {
+        self.bounds.max_ready_work
+    }
+
+    fn poll_acquire_native_async(
+        &self,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Result<NativeAsyncPermit, EngineError>> {
+        loop {
+            let active = self.active_native_async.load(Ordering::SeqCst);
+            if active >= self.bounds.max_pending_async_calls {
+                *self.waker.lock().map_err(|_| {
+                    EngineError::Internal("fixed parallelism controller waker poisoned".into())
+                })? = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+            if self
+                .active_native_async
+                .compare_exchange(active, active + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let active_native_async = Arc::clone(&self.active_native_async);
+                let waker = Arc::clone(&self.waker);
+                return Poll::Ready(Ok(NativeAsyncPermit::new(move || {
+                    active_native_async.fetch_sub(1, Ordering::SeqCst);
+                    if let Ok(mut waker) = waker.lock()
+                        && let Some(waker) = waker.take()
+                    {
+                        waker.wake();
+                    }
+                })));
+            }
+        }
     }
 }
 

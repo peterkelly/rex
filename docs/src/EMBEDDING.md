@@ -744,9 +744,20 @@ portable and avoids assuming a particular runtime, which is important for wasm e
 polling is fine for futures that are naturally non-blocking, but CPU-heavy or blocking work should
 be moved onto an executor supplied by the embedding application.
 
-Use `set_async_call_policy` to wrap admitted host futures. The scheduler applies
-`ExecutionBounds::max_pending_async_calls` before this policy is called, so the bound limits how
-many host callbacks can be invoked or submitted to the executor at once.
+Use `set_parallelism_controller` to decide when async host callbacks may be invoked. A
+`ParallelismController` grants a `NativeAsyncPermit` for each admitted
+async native call; the permit is held until that call completes. Controllers can therefore enforce
+process-local limits, shared limits across several evaluators, or externally coordinated limits
+backed by a cluster scheduler.
+
+`ExecutionBounds` remains available as a fixed controller. Its `max_ready_work` value is only an
+internal evaluator queue-pressure guard: it limits how many already-created Rex frames sit in the
+active ready queue, but it does not reserve external compute capacity. Native async permits are the
+backpressure mechanism for host jobs.
+
+Use `set_async_call_policy` to wrap futures after they have been admitted. The policy decides where
+an admitted future runs; the parallelism controller decides whether the host callback is allowed to
+start yet.
 
 ```rust,ignore
 use futures::FutureExt;

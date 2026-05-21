@@ -12,7 +12,10 @@ use crate::{
         },
         type_check::{check_natives_in_engine, type_check_engine},
     },
-    config::{AsyncCallPolicy, EngineOptions, ExecutionBounds, PreludeMode},
+    config::{
+        AsyncCallPolicy, EngineOptions, ExecutionBounds, FixedParallelismController,
+        ParallelismController, PreludeMode,
+    },
     env::{Environment, RootedEnvironment},
     error::{CompileError, EngineError},
     evaluator::{
@@ -84,6 +87,7 @@ where
     registration_module_context: Option<String>,
     async_call_policy: AsyncCallPolicy,
     execution_bounds: ExecutionBounds,
+    parallelism_controller: Arc<dyn ParallelismController>,
     pub heap: Heap,
 }
 
@@ -127,10 +131,23 @@ where
 
     pub fn set_execution_bounds(&mut self, bounds: ExecutionBounds) {
         self.execution_bounds = bounds;
+        self.parallelism_controller = Arc::new(FixedParallelismController::new(bounds));
     }
 
     pub fn with_execution_bounds(mut self, bounds: ExecutionBounds) -> Self {
         self.set_execution_bounds(bounds);
+        self
+    }
+
+    pub fn set_parallelism_controller(&mut self, controller: Arc<dyn ParallelismController>) {
+        self.parallelism_controller = controller;
+    }
+
+    pub fn with_parallelism_controller(
+        mut self,
+        controller: Arc<dyn ParallelismController>,
+    ) -> Self {
+        self.set_parallelism_controller(controller);
         self
     }
 
@@ -142,7 +159,7 @@ where
             type_system: Arc::new(self.type_system.clone()),
             typeclass_cache: Arc::clone(&self.typeclass_cache),
             async_call_policy: self.async_call_policy.clone(),
-            execution_bounds: self.execution_bounds,
+            parallelism_controller: Arc::clone(&self.parallelism_controller),
             heap: self.heap.clone(),
         }
     }
@@ -214,6 +231,9 @@ where
             registration_module_context: None,
             async_call_policy: AsyncCallPolicy::default(),
             execution_bounds: ExecutionBounds::default(),
+            parallelism_controller: Arc::new(FixedParallelismController::new(
+                ExecutionBounds::default(),
+            )),
             heap: Heap::new(),
         }
     }
@@ -255,6 +275,9 @@ where
             registration_module_context: None,
             async_call_policy: AsyncCallPolicy::default(),
             execution_bounds: ExecutionBounds::default(),
+            parallelism_controller: Arc::new(FixedParallelismController::new(
+                ExecutionBounds::default(),
+            )),
             heap: Heap::new(),
         };
         if matches!(options.prelude, PreludeMode::Enabled) {

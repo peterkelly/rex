@@ -77,7 +77,7 @@ where
     let root_frame = runtime
         .heap
         .alloc_ptr_frame(frame_for_expr(initial_parent, expr, env))?;
-    let mut scheduler = EvalScheduler::new(root_frame, runtime.execution_bounds);
+    let mut scheduler = EvalScheduler::new(root_frame, runtime.parallelism_controller.clone());
 
     loop {
         if poll_pending_native(&mut runtime, &mut scheduler, false).await? {

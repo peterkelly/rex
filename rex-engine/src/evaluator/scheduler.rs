@@ -1,5 +1,5 @@
 use crate::{
-    config::ExecutionBounds,
+    config::{NativeAsyncPermit, ParallelismController},
     error::EngineError,
     evaluator::runtime_core::RuntimeCore,
     handlers::{NativeAsyncCall, NativeHandleFuture},
@@ -8,6 +8,7 @@ use crate::{
 use futures::future::poll_fn;
 use std::{
     collections::VecDeque,
+    sync::Arc,
     task::{Context as TaskContext, Poll},
 };
 
@@ -16,14 +17,17 @@ pub(crate) struct EvalScheduler<State: Clone + Send + Sync + 'static> {
     deferred_ready: VecDeque<EvalWorkItem>,
     pending_native: Vec<PendingNative>,
     deferred_native: VecDeque<DeferredNative<State>>,
-    bounds: ExecutionBounds,
+    parallelism_controller: Arc<dyn ParallelismController>,
 }
 
 impl<State> EvalScheduler<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(root: Pointer, bounds: ExecutionBounds) -> Self {
+    pub(crate) fn new(
+        root: Pointer,
+        parallelism_controller: Arc<dyn ParallelismController>,
+    ) -> Self {
         let mut ready = VecDeque::new();
         ready.push_front(EvalWorkItem::enter(root));
         Self {
@@ -31,7 +35,7 @@ where
             deferred_ready: VecDeque::new(),
             pending_native: Vec::new(),
             deferred_native: VecDeque::new(),
-            bounds,
+            parallelism_controller,
         }
     }
 
@@ -56,8 +60,16 @@ where
         !self.pending_native.is_empty()
     }
 
+    fn has_deferred_native(&self) -> bool {
+        !self.deferred_native.is_empty()
+    }
+
     fn enforce_ready_limit(&mut self) {
-        let limit = self.bounds.ready_work_limit();
+        // ready_work_limit is only an internal evaluator queue-pressure
+        // control. It does not reserve external compute capacity and should
+        // not be used as backpressure for host jobs; native async permits do
+        // that at the point where host callbacks are actually invoked.
+        let limit = self.parallelism_controller.ready_work_limit().max(1);
         while self.ready.len() > limit {
             if let Some(item) = self.ready.pop_back() {
                 self.deferred_ready.push_front(item);
@@ -66,7 +78,10 @@ where
     }
 
     fn admit_deferred_ready(&mut self) {
-        let limit = self.bounds.ready_work_limit();
+        // This moves already-created Rex frames between internal queues. It
+        // intentionally remains separate from native async admission, which
+        // is where embedders can reserve scarce cluster or executor capacity.
+        let limit = self.parallelism_controller.ready_work_limit().max(1);
         while self.ready.len() < limit {
             let Some(item) = self.deferred_ready.pop_front() else {
                 break;
@@ -75,13 +90,56 @@ where
         }
     }
 
-    fn admit_deferred_native(&mut self, runtime: &RuntimeCore<State>) {
-        let limit = self.bounds.pending_async_limit();
-        while self.pending_native.len() < limit {
+    fn try_acquire_next_native_permit(
+        &mut self,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Result<bool, EngineError>> {
+        let Some(deferred) = self.deferred_native.front_mut() else {
+            return Poll::Ready(Ok(false));
+        };
+        if deferred.permit.is_some() {
+            return Poll::Ready(Ok(true));
+        }
+        match self.parallelism_controller.poll_acquire_native_async(cx) {
+            Poll::Ready(Ok(permit)) => {
+                deferred.permit = Some(permit);
+                Poll::Ready(Ok(true))
+            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    fn activate_permitted_deferred_native(&mut self, runtime: &RuntimeCore<State>) -> bool {
+        let mut activated = false;
+        while self
+            .deferred_native
+            .front()
+            .is_some_and(|deferred| deferred.permit.is_some())
+        {
             let Some(deferred) = self.deferred_native.pop_front() else {
                 break;
             };
             self.pending_native.push(deferred.activate(runtime));
+            activated = true;
+        }
+        activated
+    }
+
+    fn admit_available_deferred_native(
+        &mut self,
+        cx: &mut TaskContext<'_>,
+        runtime: &RuntimeCore<State>,
+    ) -> Result<bool, EngineError> {
+        let mut activated = false;
+        loop {
+            match self.try_acquire_next_native_permit(cx) {
+                Poll::Ready(Ok(true)) => {
+                    activated |= self.activate_permitted_deferred_native(runtime);
+                }
+                Poll::Ready(Ok(false)) | Poll::Pending => return Ok(activated),
+                Poll::Ready(Err(err)) => return Err(err),
+            }
         }
     }
 
@@ -150,9 +208,19 @@ pub(crate) async fn poll_pending_native<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    scheduler.admit_deferred_native(runtime);
+    poll_fn(|cx| Poll::Ready(scheduler.admit_available_deferred_native(cx, runtime))).await?;
     if !scheduler.has_pending_native() {
-        return Ok(false);
+        if !wait || !scheduler.has_deferred_native() {
+            return Ok(false);
+        }
+        poll_fn(|cx| match scheduler.try_acquire_next_native_permit(cx) {
+            Poll::Ready(Ok(true)) => Poll::Ready(Ok(())),
+            Poll::Ready(Ok(false)) => Poll::Ready(Ok(())),
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+            Poll::Pending => Poll::Pending,
+        })
+        .await?;
+        return Ok(scheduler.activate_permitted_deferred_native(runtime));
     }
 
     let mut protected = Vec::new();
@@ -164,27 +232,59 @@ where
     scheduler.refresh_from_roots(&roots, &mut cursor)?;
     runtime.refresh_from_roots(&roots, &mut cursor)?;
 
-    let ready_index = if wait {
+    enum NativeWaitEvent {
+        Completion(usize),
+        Permit,
+        Idle,
+    }
+
+    let event = if wait {
         Some(
             poll_fn(|cx| match scheduler.poll_pending_native_once(cx) {
-                Some(index) => Poll::Ready(index),
-                None => Poll::Pending,
+                Some(index) => Poll::Ready(Ok(NativeWaitEvent::Completion(index))),
+                None => match scheduler.try_acquire_next_native_permit(cx) {
+                    Poll::Ready(Ok(true)) => Poll::Ready(Ok(NativeWaitEvent::Permit)),
+                    Poll::Ready(Ok(false)) => {
+                        if scheduler.has_pending_native() {
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(Ok(NativeWaitEvent::Idle))
+                        }
+                    }
+                    Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+                    Poll::Pending => {
+                        if scheduler.has_pending_native() {
+                            Poll::Pending
+                        } else {
+                            Poll::Ready(Ok(NativeWaitEvent::Idle))
+                        }
+                    }
+                },
             })
-            .await,
+            .await?,
         )
     } else {
-        poll_fn(|cx| Poll::Ready(scheduler.poll_pending_native_once(cx))).await
+        poll_fn(|cx| {
+            Poll::Ready(Ok::<Option<NativeWaitEvent>, EngineError>(
+                scheduler
+                    .poll_pending_native_once(cx)
+                    .map(NativeWaitEvent::Completion),
+            ))
+        })
+        .await?
     };
 
     let mut cursor = 0;
     scheduler.refresh_from_roots(&roots, &mut cursor)?;
     runtime.refresh_from_roots(&roots, &mut cursor)?;
 
-    let Some(index) = ready_index else {
+    let Some(event) = event else {
         return Ok(false);
     };
+    let NativeWaitEvent::Completion(index) = event else {
+        return Ok(scheduler.activate_permitted_deferred_native(runtime));
+    };
     let (frame, handle) = scheduler.take_pending_native_completion(index)?;
-    scheduler.admit_deferred_native(runtime);
     let value = handle.pointer_for_heap(&runtime.heap)?;
     scheduler.schedule_next(EvalWorkItem::receive(frame, frame, value));
     Ok(true)
@@ -198,18 +298,21 @@ enum PendingNativeState {
 struct PendingNative {
     frame: Pointer,
     state: PendingNativeState,
+    _permit: Option<NativeAsyncPermit>,
 }
 
 struct DeferredNative<State: Clone + Send + Sync + 'static> {
     frame: Pointer,
     call: NativeAsyncCall<State>,
+    permit: Option<NativeAsyncPermit>,
 }
 
 impl PendingNative {
-    fn new(frame: Pointer, future: NativeHandleFuture) -> Self {
+    fn new(frame: Pointer, future: NativeHandleFuture, permit: NativeAsyncPermit) -> Self {
         Self {
             frame,
             state: PendingNativeState::Polling(future),
+            _permit: Some(permit),
         }
     }
 
@@ -217,6 +320,19 @@ impl PendingNative {
         Self {
             frame,
             state: PendingNativeState::Ready(result),
+            _permit: None,
+        }
+    }
+
+    fn ready_with_permit(
+        frame: Pointer,
+        result: Result<Handle, EngineError>,
+        permit: NativeAsyncPermit,
+    ) -> Self {
+        Self {
+            frame,
+            state: PendingNativeState::Ready(result),
+            _permit: Some(permit),
         }
     }
 
@@ -262,13 +378,25 @@ where
     State: Clone + Send + Sync + 'static,
 {
     fn new(frame: Pointer, call: NativeAsyncCall<State>) -> Self {
-        Self { frame, call }
+        Self {
+            frame,
+            call,
+            permit: None,
+        }
     }
 
     fn activate(self, runtime: &RuntimeCore<State>) -> PendingNative {
+        let Some(permit) = self.permit else {
+            return PendingNative::ready(
+                self.frame,
+                Err(EngineError::Internal(
+                    "deferred native activated without an admission permit".into(),
+                )),
+            );
+        };
         match self.call.invoke(runtime) {
-            Ok(future) => PendingNative::new(self.frame, future),
-            Err(err) => PendingNative::ready(self.frame, Err(err)),
+            Ok(future) => PendingNative::new(self.frame, future, permit),
+            Err(err) => PendingNative::ready_with_permit(self.frame, Err(err), permit),
         }
     }
 

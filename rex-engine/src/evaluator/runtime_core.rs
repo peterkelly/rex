@@ -1,6 +1,6 @@
 use crate::{
     builder::registry::{NativeId, NativeRegistry, TypeclassRegistry},
-    config::{AsyncCallPolicy, ExecutionBounds},
+    config::{AsyncCallPolicy, ParallelismController},
     error::EngineError,
     evaluator::native_callable::NativeCallable,
     value::{Heap, Pointer, TempRoots},
@@ -23,7 +23,7 @@ where
     pub(crate) type_system: Arc<TypeSystem>,
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
     pub(crate) async_call_policy: AsyncCallPolicy,
-    pub(crate) execution_bounds: ExecutionBounds,
+    pub(crate) parallelism_controller: Arc<dyn ParallelismController>,
     pub(crate) heap: Heap,
 }
 

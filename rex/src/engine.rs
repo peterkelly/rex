@@ -65,6 +65,12 @@ pub use rex_engine::Evaluator;
 /// Admission limits for evaluator work and pending async host calls.
 pub use rex_engine::ExecutionBounds;
 
+/// Lease returned by a parallelism controller for one admitted async native call.
+pub use rex_engine::NativeAsyncPermit;
+
+/// Dynamic controller for evaluator ready-work and async native admission.
+pub use rex_engine::ParallelismController;
+
 /// Error returned by APIs that perform both compilation and evaluation.
 pub use rex_engine::ExecutionError;
 

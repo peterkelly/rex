@@ -36,7 +36,10 @@ pub use compiler::{
         RuntimeCompatibility, RuntimeLinkContract,
     },
 };
-pub use config::{AsyncCallExecutor, AsyncCallPolicy, EngineOptions, ExecutionBounds, PreludeMode};
+pub use config::{
+    AsyncCallExecutor, AsyncCallPolicy, EngineOptions, ExecutionBounds, NativeAsyncPermit,
+    ParallelismController, PreludeMode,
+};
 pub use env::Environment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
 pub use evaluator::{Evaluator, context::Context};

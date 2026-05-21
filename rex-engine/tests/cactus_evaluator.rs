@@ -1,7 +1,7 @@
 use futures::{FutureExt, channel::oneshot};
 use rex_engine::{
     AsyncCallExecutor, AsyncCallPolicy, Engine, EngineError, ExecutionBounds, FromRex, Handle,
-    Module, NativeFuture,
+    Module, NativeAsyncPermit, NativeFuture, ParallelismController,
 };
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
 use std::collections::VecDeque;
@@ -10,6 +10,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     mpsc,
 };
+use std::task::{Context as TaskContext, Poll, Waker};
 
 async fn eval_value<State>(
     source: &str,
@@ -53,9 +54,67 @@ struct GateParts {
     control: GateControl,
 }
 
+struct DynamicPermitController {
+    ready_work_limit: usize,
+    capacity: AtomicUsize,
+    active: Arc<AtomicUsize>,
+    waker: Arc<Mutex<Option<Waker>>>,
+}
+
 #[derive(Clone)]
 struct CountingCallExecutor {
     spawned: Arc<AtomicUsize>,
+}
+
+impl DynamicPermitController {
+    fn new(capacity: usize) -> Arc<Self> {
+        Arc::new(Self {
+            ready_work_limit: 64,
+            capacity: AtomicUsize::new(capacity),
+            active: Arc::new(AtomicUsize::new(0)),
+            waker: Arc::new(Mutex::new(None)),
+        })
+    }
+
+    fn set_capacity(&self, capacity: usize) {
+        self.capacity.store(capacity, Ordering::SeqCst);
+        if let Some(waker) = self.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+    }
+}
+
+impl ParallelismController for DynamicPermitController {
+    fn ready_work_limit(&self) -> usize {
+        self.ready_work_limit
+    }
+
+    fn poll_acquire_native_async(
+        &self,
+        cx: &mut TaskContext<'_>,
+    ) -> Poll<Result<NativeAsyncPermit, EngineError>> {
+        loop {
+            let active = self.active.load(Ordering::SeqCst);
+            if active >= self.capacity.load(Ordering::SeqCst) {
+                *self.waker.lock().unwrap() = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
+            if self
+                .active
+                .compare_exchange(active, active + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                let active = Arc::clone(&self.active);
+                let waker = Arc::clone(&self.waker);
+                return Poll::Ready(Ok(NativeAsyncPermit::new(move || {
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    if let Some(waker) = waker.lock().unwrap().take() {
+                        waker.wake();
+                    }
+                })));
+            }
+        }
+    }
 }
 
 impl AsyncCallExecutor for CountingCallExecutor {
@@ -765,6 +824,111 @@ async fn pending_async_bound_delays_admitting_host_calls() {
     started.sort();
     assert_eq!(started, vec![1, 2]);
     assert_eq!(result, 3);
+}
+
+#[tokio::test]
+async fn dynamic_native_async_permits_can_increase_during_evaluation() {
+    let (mut engine, gate) = engine_with_gate(3);
+    let controller = DynamicPermitController::new(1);
+    engine.set_parallelism_controller(controller.clone());
+
+    let eval_task =
+        tokio::spawn(async move { eval_i32("sum [gate 1, gate 2, gate 3]", engine).await });
+
+    assert!(
+        wait_for_count(&gate.started, 1).await,
+        "evaluation did not start the first admitted async call"
+    );
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        gate.started.load(Ordering::SeqCst),
+        1,
+        "dynamic controller admitted more async calls before capacity increased"
+    );
+
+    controller.set_capacity(3);
+    assert!(
+        wait_for_count(&gate.started, 3).await,
+        "evaluation did not admit deferred async calls after capacity increased"
+    );
+
+    let mut started = Vec::new();
+    for _ in 0..3 {
+        started.push(gate.started_rx.recv().unwrap());
+    }
+    started.sort();
+    assert_eq!(started, vec![1, 2, 3]);
+
+    for release in gate.releases {
+        release.send(()).unwrap();
+    }
+    let result = eval_task.await.expect("gated evaluation task panicked");
+    assert_eq!(result, 6);
+}
+
+#[tokio::test]
+async fn dynamic_native_async_permits_delay_host_callback_invocation() {
+    let invoked = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(AtomicUsize::new(0));
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let release = Arc::new(Mutex::new(Some(release_rx)));
+
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let controller = DynamicPermitController::new(0);
+    engine.set_parallelism_controller(controller.clone());
+    let mut module = Module::global();
+    module
+        .export_async("gate_call", {
+            let invoked = Arc::clone(&invoked);
+            let started = Arc::clone(&started);
+            let release = Arc::clone(&release);
+            move |_: &(), value: i32| {
+                invoked.fetch_add(1, Ordering::SeqCst);
+                let started = Arc::clone(&started);
+                let started_tx = started_tx.clone();
+                let release = release
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("missing async gate release channel");
+                async move {
+                    started_tx.send(value).unwrap();
+                    started.fetch_add(1, Ordering::SeqCst);
+                    release.await.unwrap();
+                    Ok(value)
+                }
+            }
+        })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    let eval_task = tokio::spawn(async move { eval_i32("gate_call 1", engine).await });
+
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        invoked.load(Ordering::SeqCst),
+        0,
+        "host callback was invoked before a native async permit was available"
+    );
+
+    controller.set_capacity(1);
+    assert!(
+        wait_for_count(&invoked, 1).await,
+        "evaluation did not invoke host callback after a permit became available"
+    );
+    assert!(
+        wait_for_count(&started, 1).await,
+        "admitted host future did not start"
+    );
+    assert_eq!(started_rx.recv().unwrap(), 1);
+    release_tx.send(()).unwrap();
+    let result = eval_task.await.expect("gated evaluation task panicked");
+    assert_eq!(result, 1);
 }
 
 #[tokio::test]
