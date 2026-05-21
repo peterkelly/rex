@@ -193,7 +193,7 @@ where
     runtime.refresh_from_roots(roots, &mut cursor)
 }
 
-fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Frame {
+pub(crate) fn frame_for_expr(parent: Pointer, expr: Arc<TypedExpr>, env: Environment) -> Frame {
     let kind = Arc::clone(&expr.kind);
     match kind.as_ref() {
         TypedExprKind::Bool(_) => Frame::Bool(FrBool {
@@ -1276,7 +1276,7 @@ where
             FrMatchState::EvalArm => Ok(EvalControl::Return(value)),
             _ => unexpected_child_result("match"),
         },
-        Frame::NativeCall(frame) => eval_native_receive(runtime, frame_ptr, frame, value),
+        Frame::NativeCall(frame) => eval_native_receive(runtime, frame_ptr, frame, child, value),
         Frame::NativeAsync(_) => Ok(EvalControl::Return(value)),
         _ => unexpected_child_result("value"),
     }

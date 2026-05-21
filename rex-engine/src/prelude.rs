@@ -1362,8 +1362,9 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
                     func_type: func_ty,
                     elem_type: elem_ty,
                     entries: map.into_iter().collect(),
-                    next_index: 0,
+                    children: Vec::new(),
                     output: BTreeMap::new(),
+                    remaining: 0,
                 },
             )))
         })?;
@@ -1684,8 +1685,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::List,
-                    next_index: 0,
+                    children: Vec::new(),
                     output: Vec::new(),
+                    remaining: 0,
                 },
             )))
         })?;
@@ -1719,8 +1721,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::Array,
-                    next_index: 0,
+                    children: Vec::new(),
                     output: Vec::new(),
+                    remaining: 0,
                 },
             )))
         })?;
@@ -2219,8 +2222,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::List,
-                    next_index: 0,
-                    output: Vec::new(),
+                    children: Vec::new(),
+                    keep: Vec::new(),
+                    remaining: 0,
                 },
             )))
         })?;
@@ -2251,8 +2255,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::Array,
-                    next_index: 0,
-                    output: Vec::new(),
+                    children: Vec::new(),
+                    keep: Vec::new(),
+                    remaining: 0,
                 },
             )))
         })?;
@@ -2325,8 +2330,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         elem_type: elem_ty,
                         values,
                         shape: NativeSequenceShape::List,
-                        next_index: 0,
+                        children: Vec::new(),
                         output: Vec::new(),
+                        remaining: 0,
                     },
                 )))
             },
@@ -2365,8 +2371,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                         elem_type: elem_ty,
                         values,
                         shape: NativeSequenceShape::Array,
-                        next_index: 0,
+                        children: Vec::new(),
                         output: Vec::new(),
+                        remaining: 0,
                     },
                 )))
             },
@@ -2443,8 +2450,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::List,
-                    next_index: 0,
+                    children: Vec::new(),
                     output: Vec::new(),
+                    remaining: 0,
                 },
             )))
         })?;
@@ -2478,8 +2486,9 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
                     elem_type: elem_ty,
                     values,
                     shape: NativeSequenceShape::Array,
-                    next_index: 0,
+                    children: Vec::new(),
                     output: Vec::new(),
+                    remaining: 0,
                 },
             )))
         })?;

@@ -46,6 +46,13 @@ struct GateControl {
     releases: Vec<oneshot::Sender<()>>,
 }
 
+struct GateParts {
+    started: Arc<AtomicUsize>,
+    started_tx: mpsc::Sender<i32>,
+    releases: Arc<Mutex<VecDeque<oneshot::Receiver<()>>>>,
+    control: GateControl,
+}
+
 #[derive(Clone)]
 struct CountingCallExecutor {
     spawned: Arc<AtomicUsize>,
@@ -58,7 +65,7 @@ impl AsyncCallExecutor for CountingCallExecutor {
     }
 }
 
-fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
+fn gate_parts(child_count: usize) -> GateParts {
     let started = Arc::new(AtomicUsize::new(0));
     let (started_tx, started_rx) = mpsc::channel();
     let mut release_txs = Vec::new();
@@ -69,14 +76,27 @@ fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
         release_rxs.push_back(rx);
     }
 
-    let releases = Arc::new(Mutex::new(release_rxs));
+    GateParts {
+        started: Arc::clone(&started),
+        started_tx,
+        releases: Arc::new(Mutex::new(release_rxs)),
+        control: GateControl {
+            started,
+            started_rx,
+            releases: release_txs,
+        },
+    }
+}
+
+fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
+    let parts = gate_parts(child_count);
     let mut engine = Engine::with_prelude(()).unwrap();
     let mut module = Module::global();
     module
         .export_async("gate", {
-            let started = Arc::clone(&started);
-            let started_tx = started_tx.clone();
-            let releases = Arc::clone(&releases);
+            let started = Arc::clone(&parts.started);
+            let started_tx = parts.started_tx.clone();
+            let releases = Arc::clone(&parts.releases);
             move |_: &(), value: i32| {
                 let started = Arc::clone(&started);
                 let started_tx = started_tx.clone();
@@ -96,18 +116,113 @@ fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    (
-        engine,
-        GateControl {
-            started,
-            started_rx,
-            releases: release_txs,
-        },
-    )
+    (engine, parts.control)
+}
+
+fn engine_with_even_gate(child_count: usize) -> (Engine<()>, GateControl) {
+    let parts = gate_parts(child_count);
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut module = Module::global();
+    module
+        .export_async("gate_even", {
+            let started = Arc::clone(&parts.started);
+            let started_tx = parts.started_tx.clone();
+            let releases = Arc::clone(&parts.releases);
+            move |_: &(), value: i32| {
+                let started = Arc::clone(&started);
+                let started_tx = started_tx.clone();
+                let release = releases
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("missing async gate release channel");
+                async move {
+                    started_tx.send(value).unwrap();
+                    started.fetch_add(1, Ordering::SeqCst);
+                    release.await.unwrap();
+                    Ok(value % 2 == 0)
+                }
+            }
+        })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    (engine, parts.control)
+}
+
+fn engine_with_gate_and_even_gate(
+    gate_count: usize,
+    even_gate_count: usize,
+) -> (Engine<()>, GateControl, GateControl) {
+    let value_parts = gate_parts(gate_count);
+    let even_parts = gate_parts(even_gate_count);
+    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut module = Module::global();
+    module
+        .export_async("gate", {
+            let started = Arc::clone(&value_parts.started);
+            let started_tx = value_parts.started_tx.clone();
+            let releases = Arc::clone(&value_parts.releases);
+            move |_: &(), value: i32| {
+                let started = Arc::clone(&started);
+                let started_tx = started_tx.clone();
+                let release = releases
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("missing async gate release channel");
+                async move {
+                    started_tx.send(value).unwrap();
+                    started.fetch_add(1, Ordering::SeqCst);
+                    release.await.unwrap();
+                    Ok(value)
+                }
+            }
+        })
+        .unwrap();
+    module
+        .export_async("gate_even", {
+            let started = Arc::clone(&even_parts.started);
+            let started_tx = even_parts.started_tx.clone();
+            let releases = Arc::clone(&even_parts.releases);
+            move |_: &(), value: i32| {
+                let started = Arc::clone(&started);
+                let started_tx = started_tx.clone();
+                let release = releases
+                    .lock()
+                    .unwrap()
+                    .pop_front()
+                    .expect("missing async gate release channel");
+                async move {
+                    started_tx.send(value).unwrap();
+                    started.fetch_add(1, Ordering::SeqCst);
+                    release.await.unwrap();
+                    Ok(value % 2 == 0)
+                }
+            }
+        })
+        .unwrap();
+    engine.inject_module(module).unwrap();
+
+    (engine, value_parts.control, even_parts.control)
 }
 
 async fn eval_with_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<i32>) {
     let (engine, gate) = engine_with_gate(gate_count);
+    eval_with_gate_control(source, engine, gate, gate_count).await
+}
+
+async fn eval_with_even_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<i32>) {
+    let (engine, gate) = engine_with_even_gate(gate_count);
+    eval_with_gate_control(source, engine, gate, gate_count).await
+}
+
+async fn eval_with_gate_control(
+    source: &str,
+    engine: Engine<()>,
+    gate: GateControl,
+    gate_count: usize,
+) -> (Handle, Type, Vec<i32>) {
     let source = source.to_string();
     let eval_task = tokio::spawn(async move { eval_value(&source, engine).await });
     assert!(
@@ -145,6 +260,15 @@ async fn eval_with_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<
 async fn eval_gated_i32(source: &str, gate_count: usize) -> (i32, Vec<i32>) {
     let (value, _ty, started_values) = eval_with_gates(source, gate_count).await;
     (i32::from_rex(&value).unwrap(), started_values)
+}
+
+fn handle_as_i32_list(value: &Handle) -> Vec<i32> {
+    value
+        .as_list()
+        .unwrap()
+        .iter()
+        .map(|item| i32::from_rex(item).unwrap())
+        .collect()
 }
 
 fn engine_collecting_on_every_alloc() -> Engine<()> {
@@ -201,6 +325,296 @@ async fn list_evaluation_starts_all_async_children() {
     let (result, started_values) = eval_gated_i32("sum [gate 1, gate 2]", 2).await;
     assert_eq!(started_values, vec![1, 2]);
     assert_eq!(result, 3);
+}
+
+#[tokio::test]
+async fn sequence_map_starts_all_async_callbacks() {
+    let (result, started_values) = eval_gated_i32("sum (map gate [1, 2])", 2).await;
+    assert_eq!(started_values, vec![1, 2]);
+    assert_eq!(result, 3);
+}
+
+#[tokio::test]
+async fn sequence_filter_starts_all_async_callbacks() {
+    let (value, ty, started_values) =
+        eval_with_even_gates("filter gate_even [1, 2, 3, 4]", 4).await;
+    assert_eq!(started_values, vec![1, 2, 3, 4]);
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(handle_as_i32_list(&value), vec![2, 4]);
+}
+
+#[tokio::test]
+async fn sequence_filter_map_starts_all_async_callbacks() {
+    let (value, ty, started_values) = eval_with_even_gates(
+        r#"
+        filter_map
+            (\x -> if gate_even x then Some (x * 10) else None)
+            [1, 2, 3, 4]
+        "#,
+        4,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2, 3, 4]);
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(handle_as_i32_list(&value), vec![20, 40]);
+}
+
+#[tokio::test]
+async fn sequence_flat_map_starts_all_async_callbacks() {
+    let (value, ty, started_values) = eval_with_gates(
+        r#"
+        bind
+            (\x -> let y = gate x in [y, y + 100])
+            [1, 2, 3]
+        "#,
+        3,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2, 3]);
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(handle_as_i32_list(&value), vec![1, 101, 2, 102, 3, 103]);
+}
+
+#[tokio::test]
+async fn dict_map_starts_all_async_callbacks() {
+    let (result, started_values) = eval_gated_i32(
+        r#"
+        let
+            mapped = prim_dict_map gate (({ a = 1, b = 2, c = 3 }) is Dict i32)
+        in
+            match mapped with {
+                case {a, b, c} -> a + b + c;
+            }
+        "#,
+        3,
+    )
+    .await;
+    assert_eq!(started_values, vec![1, 2, 3]);
+    assert_eq!(result, 6);
+}
+
+#[tokio::test]
+async fn sequence_map_preserves_order_when_callbacks_complete_out_of_order() {
+    let (engine, mut gate) = engine_with_gate(3);
+    let eval_task = tokio::spawn(async move { eval_value("map gate [1, 2, 3]", engine).await });
+
+    assert!(
+        wait_for_count(&gate.started, 3).await,
+        "evaluation did not start all map callbacks"
+    );
+    let mut started_values = Vec::new();
+    for _ in 0..3 {
+        started_values.push(gate.started_rx.recv().unwrap());
+    }
+    started_values.sort();
+    assert_eq!(started_values, vec![1, 2, 3]);
+
+    gate.releases.remove(2).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated map evaluation task panicked")
+        .expect("gated map evaluation failed");
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(handle_as_i32_list(&value), vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn sequence_filter_preserves_order_when_callbacks_complete_out_of_order() {
+    let (engine, mut gate) = engine_with_even_gate(4);
+    let eval_task =
+        tokio::spawn(async move { eval_value("filter gate_even [1, 2, 3, 4]", engine).await });
+
+    assert!(
+        wait_for_count(&gate.started, 4).await,
+        "evaluation did not start all filter callbacks"
+    );
+    let mut started_values = Vec::new();
+    for _ in 0..4 {
+        started_values.push(gate.started_rx.recv().unwrap());
+    }
+    started_values.sort();
+    assert_eq!(started_values, vec![1, 2, 3, 4]);
+
+    gate.releases.remove(3).send(()).unwrap();
+    gate.releases.remove(1).send(()).unwrap();
+    gate.releases.remove(1).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated filter evaluation task panicked")
+        .expect("gated filter evaluation failed");
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(handle_as_i32_list(&value), vec![2, 4]);
+}
+
+#[tokio::test]
+async fn sequence_filter_map_preserves_order_when_callbacks_complete_out_of_order() {
+    let (engine, mut gate) = engine_with_even_gate(4);
+    let eval_task = tokio::spawn(async move {
+        eval_value(
+            r#"
+            filter_map
+                (\x -> if gate_even x then Some (x * 10) else None)
+                [1, 2, 3, 4]
+            "#,
+            engine,
+        )
+        .await
+    });
+
+    assert!(
+        wait_for_count(&gate.started, 4).await,
+        "evaluation did not start all filter_map callbacks"
+    );
+    let mut started_values = Vec::new();
+    for _ in 0..4 {
+        started_values.push(gate.started_rx.recv().unwrap());
+    }
+    started_values.sort();
+    assert_eq!(started_values, vec![1, 2, 3, 4]);
+
+    gate.releases.remove(3).send(()).unwrap();
+    gate.releases.remove(1).send(()).unwrap();
+    gate.releases.remove(1).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated filter_map evaluation task panicked")
+        .expect("gated filter_map evaluation failed");
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(handle_as_i32_list(&value), vec![20, 40]);
+}
+
+#[tokio::test]
+async fn sequence_flat_map_preserves_order_when_callbacks_complete_out_of_order() {
+    let (engine, mut gate) = engine_with_gate(3);
+    let eval_task = tokio::spawn(async move {
+        eval_value(
+            r#"
+            bind
+                (\x -> let y = gate x in [y, y + 100])
+                [1, 2, 3]
+            "#,
+            engine,
+        )
+        .await
+    });
+
+    assert!(
+        wait_for_count(&gate.started, 3).await,
+        "evaluation did not start all flat_map callbacks"
+    );
+    let mut started_values = Vec::new();
+    for _ in 0..3 {
+        started_values.push(gate.started_rx.recv().unwrap());
+    }
+    started_values.sort();
+    assert_eq!(started_values, vec![1, 2, 3]);
+
+    gate.releases.remove(2).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated flat_map evaluation task panicked")
+        .expect("gated flat_map evaluation failed");
+    assert_eq!(ty, Type::list(Type::builtin(BuiltinTypeId::I32)));
+    assert_eq!(handle_as_i32_list(&value), vec![1, 101, 2, 102, 3, 103]);
+}
+
+#[tokio::test]
+async fn dict_map_preserves_keys_when_callbacks_complete_out_of_order() {
+    let (engine, mut gate) = engine_with_gate(3);
+    let eval_task = tokio::spawn(async move {
+        eval_value(
+            r#"
+            let
+                mapped = prim_dict_map gate (({ a = 1, b = 2, c = 3 }) is Dict i32)
+            in
+                match mapped with {
+                    case {a, b, c} -> a * 100 + b * 10 + c;
+                }
+            "#,
+            engine,
+        )
+        .await
+    });
+
+    assert!(
+        wait_for_count(&gate.started, 3).await,
+        "evaluation did not start all dict_map callbacks"
+    );
+    let mut started_values = Vec::new();
+    for _ in 0..3 {
+        started_values.push(gate.started_rx.recv().unwrap());
+    }
+    started_values.sort();
+    assert_eq!(started_values, vec![1, 2, 3]);
+
+    gate.releases.remove(2).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+    gate.releases.remove(0).send(()).unwrap();
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated dict_map evaluation task panicked")
+        .expect("gated dict_map evaluation failed");
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(i32::from_rex(&value).unwrap(), 123);
+}
+
+#[tokio::test]
+async fn sibling_map_and_filter_fan_out_their_callbacks() {
+    let (engine, gate, even_gate) = engine_with_gate_and_even_gate(2, 2);
+    let eval_task = tokio::spawn(async move {
+        eval_value(
+            r#"
+            let
+                xs = [1, 2]
+            in
+                (sum (map gate xs), count (filter gate_even xs))
+            "#,
+            engine,
+        )
+        .await
+    });
+
+    assert!(
+        wait_for_count(&gate.started, 2).await,
+        "evaluation did not start all map callbacks"
+    );
+    assert!(
+        wait_for_count(&even_gate.started, 2).await,
+        "evaluation did not start all filter callbacks"
+    );
+
+    for release in gate.releases {
+        release.send(()).unwrap();
+    }
+    for release in even_gate.releases {
+        release.send(()).unwrap();
+    }
+
+    let (value, ty) = eval_task
+        .await
+        .expect("gated map/filter evaluation task panicked")
+        .expect("gated map/filter evaluation failed");
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+        ])
+    );
+    let values = value.as_tuple().unwrap();
+    assert_eq!(i32::from_rex(&values[0]).unwrap(), 3);
+    assert_eq!(i32::from_rex(&values[1]).unwrap(), 1);
 }
 
 #[tokio::test]

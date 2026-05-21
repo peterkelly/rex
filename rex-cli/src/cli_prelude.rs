@@ -1,6 +1,8 @@
+use rand::prelude::*;
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use rex::{
     Rex,
@@ -55,9 +57,35 @@ struct CliSubprocess {
 }
 
 pub fn inject_cli_prelude_engine(engine: &mut Engine) -> Result<(), EngineError> {
+    inject_cli_test_natives(engine)?;
     inject_cli_io_natives(engine)?;
     inject_cli_process_natives(engine)?;
     Ok(())
+}
+
+fn inject_cli_test_natives(engine: &mut Engine) -> Result<(), EngineError> {
+    let mut module = Module::new("test");
+    module.export_async("do_something", |_state: &(), n: i32| async move {
+        println!("do_something {} begin", n);
+        let extra = {
+            let mut rng = rand::rng();
+            rng.random_range(1..=1000)
+        };
+        tokio::time::sleep(Duration::from_millis(1000 + extra)).await;
+        println!("do_something {} end", n);
+        Ok::<i32, EngineError>(n)
+    })?;
+    module.export_async("is_even", |_state: &(), n: i32| async move {
+        println!("is_even {} begin", n);
+        let extra = {
+            let mut rng = rand::rng();
+            rng.random_range(1..=1000)
+        };
+        tokio::time::sleep(Duration::from_millis(1000 + extra)).await;
+        println!("is_even {} end", n);
+        Ok::<bool, EngineError>(n % 2 == 0)
+    })?;
+    engine.inject_module(module)
 }
 
 fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {

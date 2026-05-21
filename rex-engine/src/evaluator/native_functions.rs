@@ -3,7 +3,10 @@ use crate::{
     error::EngineError,
     evaluator::{
         application_result_type,
-        eval::{EvalControl, frame_kind_error, refresh_frame_from_roots, unexpected_child_result},
+        eval::{
+            EvalControl, frame_for_expr, frame_kind_error, refresh_frame_from_roots,
+            unexpected_child_result,
+        },
         runtime_core::RuntimeCore,
     },
     overloaded_fn::OverloadedFn,
@@ -18,11 +21,18 @@ use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind, TypedExpr, TypedExprK
 use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) enum NativeStep {
+    Wait,
     Push {
         expr: Arc<TypedExpr>,
         env: Environment,
     },
+    Schedule(usize),
     Return(Pointer),
+}
+
+struct NativeChildSpec {
+    expr: Arc<TypedExpr>,
+    env: Environment,
 }
 
 fn native_step_to_control<State>(
@@ -35,6 +45,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     match step {
+        NativeStep::Wait => {
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::NativeCall(frame))?;
+            Ok(EvalControl::Wait)
+        }
         NativeStep::Return(value) => Ok(EvalControl::Return(value)),
         NativeStep::Push { expr, env } => {
             frame.state = FrNativeCallState::Waiting;
@@ -42,6 +58,46 @@ where
                 .heap
                 .replace_frame(&frame_ptr, Frame::NativeCall(frame))?;
             Ok(EvalControl::Push { expr, env })
+        }
+        NativeStep::Schedule(child_count) => {
+            frame.state = FrNativeCallState::Waiting;
+            runtime
+                .heap
+                .replace_frame(&frame_ptr, Frame::NativeCall(frame))?;
+
+            let roots = runtime.heap.temp_roots(vec![frame_ptr])?;
+            for index in 0..child_count {
+                let current_frame_ptr = roots.get(0)?;
+                let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                    Frame::NativeCall(frame) => frame,
+                    _ => return frame_kind_error("native call"),
+                };
+                let child_spec = current_frame.task.scheduled_child_spec(index)?;
+                let current_frame_ptr = roots.get(0)?;
+                let child = runtime.heap.alloc_ptr_frame(frame_for_expr(
+                    current_frame_ptr,
+                    child_spec.expr,
+                    child_spec.env,
+                ))?;
+                let current_frame_ptr = roots.get(0)?;
+                let mut current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                    Frame::NativeCall(frame) => frame,
+                    _ => return frame_kind_error("native call"),
+                };
+                current_frame.task.push_scheduled_child(child)?;
+                runtime
+                    .heap
+                    .replace_frame(&current_frame_ptr, Frame::NativeCall(current_frame))?;
+            }
+
+            let current_frame_ptr = roots.get(0)?;
+            let current_frame = match runtime.heap.pointer_as_frame(&current_frame_ptr)? {
+                Frame::NativeCall(frame) => frame,
+                _ => return frame_kind_error("native call"),
+            };
+            Ok(EvalControl::Schedule(
+                current_frame.task.scheduled_children()?,
+            ))
         }
     }
 }
@@ -70,6 +126,7 @@ pub(crate) fn eval_native_receive<State>(
     runtime: &RuntimeCore<State>,
     frame_ptr: Pointer,
     mut frame: FrNativeCall,
+    child: Pointer,
     value: Pointer,
 ) -> Result<EvalControl<State>, EngineError>
 where
@@ -79,14 +136,14 @@ where
         return unexpected_child_result("native call");
     }
     if !<NativeTask as Coroutine<State>>::receive_may_allocate(&frame.task) {
-        let step = frame.task.receive(runtime, value)?;
+        let step = frame.task.receive(runtime, child, value)?;
         return native_step_to_control(runtime, frame_ptr, frame, step);
     }
 
-    let mut protected = vec![frame_ptr, value];
+    let mut protected = vec![frame_ptr, child, value];
     Frame::NativeCall(frame.clone()).trace_pointers(&mut protected);
     let roots = runtime.heap.temp_roots(protected.clone())?;
-    let step = frame.task.receive(runtime, value)?;
+    let step = frame.task.receive(runtime, child, value)?;
     let frame_ptr = roots.get(0)?;
     refresh_native_frame_from_roots(&mut frame, &protected, &roots, 1)?;
     native_step_to_control(runtime, frame_ptr, frame, step)
@@ -156,6 +213,62 @@ impl Collection for NativeTask {
     }
 }
 
+impl NativeTask {
+    fn push_scheduled_child(&mut self, child: Pointer) -> Result<(), EngineError> {
+        match self {
+            NativeTask::SequenceMap(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            NativeTask::SequenceFilter(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            NativeTask::SequenceFilterMap(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            NativeTask::SequenceFlatMap(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            NativeTask::DictMap(task) => {
+                task.children.push(child);
+                Ok(())
+            }
+            _ => Err(EngineError::Internal(
+                "native task does not accept scheduled children".into(),
+            )),
+        }
+    }
+
+    fn scheduled_children(&self) -> Result<Vec<Pointer>, EngineError> {
+        match self {
+            NativeTask::SequenceMap(task) => Ok(task.children.clone()),
+            NativeTask::SequenceFilter(task) => Ok(task.children.clone()),
+            NativeTask::SequenceFilterMap(task) => Ok(task.children.clone()),
+            NativeTask::SequenceFlatMap(task) => Ok(task.children.clone()),
+            NativeTask::DictMap(task) => Ok(task.children.clone()),
+            _ => Err(EngineError::Internal(
+                "native task does not have scheduled children".into(),
+            )),
+        }
+    }
+
+    fn scheduled_child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        match self {
+            NativeTask::SequenceMap(task) => task.child_spec(index),
+            NativeTask::SequenceFilter(task) => task.child_spec(index),
+            NativeTask::SequenceFilterMap(task) => task.child_spec(index),
+            NativeTask::SequenceFlatMap(task) => task.child_spec(index),
+            NativeTask::DictMap(task) => task.child_spec(index),
+            _ => Err(EngineError::Internal(
+                "native task does not have scheduled child specs".into(),
+            )),
+        }
+    }
+}
+
 impl<State> Coroutine<State> for NativeTask
 where
     State: Clone + Send + Sync + 'static,
@@ -186,27 +299,28 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
         match self {
-            NativeTask::ApplyUnary(task) => task.receive(runtime, value),
-            NativeTask::SequenceMap(task) => task.receive(runtime, value),
-            NativeTask::SequenceFilter(task) => task.receive(runtime, value),
-            NativeTask::SequenceFilterMap(task) => task.receive(runtime, value),
-            NativeTask::SequenceFlatMap(task) => task.receive(runtime, value),
-            NativeTask::UnaryMap(task) => task.receive(runtime, value),
-            NativeTask::UnaryFilter(task) => task.receive(runtime, value),
-            NativeTask::UnaryFilterMap(task) => task.receive(runtime, value),
-            NativeTask::UnaryFlatMap(task) => task.receive(runtime, value),
-            NativeTask::Fold(task) => task.receive(runtime, value),
-            NativeTask::DictMap(task) => task.receive(runtime, value),
-            NativeTask::DictTraverse(task) => task.receive(runtime, value),
-            NativeTask::ArrayEq(task) => task.receive(runtime, value),
-            NativeTask::Sum(task) => task.receive(runtime, value),
-            NativeTask::Mean(task) => task.receive(runtime, value),
+            NativeTask::ApplyUnary(task) => task.receive(runtime, child, value),
+            NativeTask::SequenceMap(task) => task.receive(runtime, child, value),
+            NativeTask::SequenceFilter(task) => task.receive(runtime, child, value),
+            NativeTask::SequenceFilterMap(task) => task.receive(runtime, child, value),
+            NativeTask::SequenceFlatMap(task) => task.receive(runtime, child, value),
+            NativeTask::UnaryMap(task) => task.receive(runtime, child, value),
+            NativeTask::UnaryFilter(task) => task.receive(runtime, child, value),
+            NativeTask::UnaryFilterMap(task) => task.receive(runtime, child, value),
+            NativeTask::UnaryFlatMap(task) => task.receive(runtime, child, value),
+            NativeTask::Fold(task) => task.receive(runtime, child, value),
+            NativeTask::DictMap(task) => task.receive(runtime, child, value),
+            NativeTask::DictTraverse(task) => task.receive(runtime, child, value),
+            NativeTask::ArrayEq(task) => task.receive(runtime, child, value),
+            NativeTask::Sum(task) => task.receive(runtime, child, value),
+            NativeTask::Mean(task) => task.receive(runtime, child, value),
         }
     }
 
@@ -261,18 +375,53 @@ fn native_apply_step(
     arg: Pointer,
     arg_type: Type,
 ) -> Result<NativeStep, EngineError> {
+    native_apply_spec(func, func_type, arg, arg_type).map(|spec| NativeStep::Push {
+        expr: spec.expr,
+        env: spec.env,
+    })
+}
+
+fn native_apply_spec(
+    func: Pointer,
+    func_type: Type,
+    arg: Pointer,
+    arg_type: Type,
+) -> Result<NativeChildSpec, EngineError> {
     let (env, expr) = synthetic_application_expr(func, func_type, &[(arg, arg_type)])?;
-    Ok(NativeStep::Push {
+    Ok(NativeChildSpec {
         expr: Arc::new(expr),
         env,
     })
 }
 
-fn receive_finishes_sequence(next_index: usize, len: usize) -> bool {
-    match next_index.checked_add(1) {
-        Some(next_index) => next_index >= len,
-        None => true,
+fn rewrite_options(
+    values: &mut [Option<Pointer>],
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    for value in values.iter_mut().flatten() {
+        rewrite_pointer(value, rewrite)?;
     }
+    Ok(())
+}
+
+fn rewrite_nested_options(
+    values: &mut [Option<Option<Pointer>>],
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    for value in values.iter_mut().filter_map(Option::as_mut).flatten() {
+        rewrite_pointer(value, rewrite)?;
+    }
+    Ok(())
+}
+
+fn rewrite_option_vecs(
+    values: &mut [Option<Vec<Pointer>>],
+    rewrite: &mut impl FnMut(Pointer) -> Result<Pointer, EngineError>,
+) -> Result<(), EngineError> {
+    for values in values.iter_mut().flatten() {
+        rewrite_slice(values, rewrite)?;
+    }
+    Ok(())
 }
 
 fn receive_continues_sequence(next_index: usize, len: usize) -> bool {
@@ -291,6 +440,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>;
 
@@ -336,6 +486,7 @@ where
     fn receive(
         &mut self,
         _runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
@@ -353,15 +504,17 @@ pub(crate) struct NativeSequenceMap {
     pub elem_type: Type,
     pub values: Vec<Pointer>,
     pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
+    pub children: Vec<Pointer>,
+    pub output: Vec<Option<Pointer>>,
+    pub remaining: usize,
 }
 
 impl Collection for NativeSequenceMap {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
         out.extend(self.values.iter().copied());
-        out.extend(self.output.iter().copied());
+        out.extend(self.children.iter().copied());
+        out.extend(self.output.iter().flatten().copied());
     }
 
     fn rewrite_pointers(
@@ -370,7 +523,8 @@ impl Collection for NativeSequenceMap {
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
         rewrite_slice(&mut self.values, rewrite)?;
-        rewrite_slice(&mut self.output, rewrite)
+        rewrite_slice(&mut self.children, rewrite)?;
+        rewrite_options(&mut self.output, rewrite)
     }
 }
 impl<State> Coroutine<State> for NativeSequenceMap
@@ -388,42 +542,76 @@ where
                 Vec::new(),
             )?));
         }
-        self.next_index = 0;
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[0],
-            self.elem_type.clone(),
-        )
+        self.children.clear();
+        self.output = vec![None; self.values.len()];
+        self.remaining = self.values.len();
+        Ok(NativeStep::Schedule(self.values.len()))
     }
 
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
-        self.output.push(value);
-        self.next_index += 1;
-        if self.next_index == self.values.len() {
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("native sequence map received unknown child".into())
+            })?;
+        let slot = self.output.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native sequence map result slot out of bounds".into())
+        })?;
+        if slot.is_some() {
+            return Err(EngineError::Internal(
+                "native sequence map received duplicate child result".into(),
+            ));
+        }
+        *slot = Some(value);
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native sequence map received too many results".into())
+        })?;
+        if self.remaining == 0 {
+            let output = self
+                .output
+                .iter()
+                .copied()
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| {
+                    EngineError::Internal(
+                        "native sequence map completed with missing result".into(),
+                    )
+                })?;
             return Ok(NativeStep::Return(alloc_native_sequence(
                 runtime,
                 &self.shape,
-                self.output.clone(),
+                output,
             )?));
         }
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[self.next_index],
-            self.elem_type.clone(),
-        )
+        Ok(NativeStep::Wait)
     }
 
     fn receive_may_allocate(&self) -> bool {
-        receive_finishes_sequence(self.next_index, self.values.len())
+        self.remaining == 1
+    }
+}
+
+impl NativeSequenceMap {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let value = self.values.get(index).copied().ok_or_else(|| {
+            EngineError::Internal("native sequence map child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            value,
+            self.elem_type.clone(),
+        )
     }
 }
 
@@ -434,15 +622,16 @@ pub(crate) struct NativeSequenceFilter {
     pub elem_type: Type,
     pub values: Vec<Pointer>,
     pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
+    pub children: Vec<Pointer>,
+    pub keep: Vec<Option<bool>>,
+    pub remaining: usize,
 }
 
 impl Collection for NativeSequenceFilter {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
         out.extend(self.values.iter().copied());
-        out.extend(self.output.iter().copied());
+        out.extend(self.children.iter().copied());
     }
 
     fn rewrite_pointers(
@@ -451,7 +640,7 @@ impl Collection for NativeSequenceFilter {
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
         rewrite_slice(&mut self.values, rewrite)?;
-        rewrite_slice(&mut self.output, rewrite)
+        rewrite_slice(&mut self.children, rewrite)
     }
 }
 
@@ -470,44 +659,78 @@ where
                 Vec::new(),
             )?));
         }
-        self.next_index = 0;
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[0],
-            self.elem_type.clone(),
-        )
+        self.children.clear();
+        self.keep = vec![None; self.values.len()];
+        self.remaining = self.values.len();
+        Ok(NativeStep::Schedule(self.values.len()))
     }
 
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
-        if runtime.heap.pointer_as_bool(&value)? {
-            self.output.push(self.values[self.next_index]);
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("native sequence filter received unknown child".into())
+            })?;
+        let slot = self.keep.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native sequence filter result slot out of bounds".into())
+        })?;
+        if slot.is_some() {
+            return Err(EngineError::Internal(
+                "native sequence filter received duplicate child result".into(),
+            ));
         }
-        self.next_index += 1;
-        if self.next_index == self.values.len() {
+        *slot = Some(runtime.heap.pointer_as_bool(&value)?);
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native sequence filter received too many results".into())
+        })?;
+        if self.remaining == 0 {
+            let mut output = Vec::new();
+            for (value, keep) in self.values.iter().copied().zip(&self.keep) {
+                match keep {
+                    Some(true) => output.push(value),
+                    Some(false) => {}
+                    None => {
+                        return Err(EngineError::Internal(
+                            "native sequence filter completed with missing result".into(),
+                        ));
+                    }
+                }
+            }
             return Ok(NativeStep::Return(alloc_native_sequence(
                 runtime,
                 &self.shape,
-                self.output.clone(),
+                output,
             )?));
         }
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[self.next_index],
-            self.elem_type.clone(),
-        )
+        Ok(NativeStep::Wait)
     }
 
     fn receive_may_allocate(&self) -> bool {
-        receive_finishes_sequence(self.next_index, self.values.len())
+        self.remaining == 1
+    }
+}
+
+impl NativeSequenceFilter {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let value = self.values.get(index).copied().ok_or_else(|| {
+            EngineError::Internal("native sequence filter child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            value,
+            self.elem_type.clone(),
+        )
     }
 }
 
@@ -518,15 +741,23 @@ pub(crate) struct NativeSequenceFilterMap {
     pub elem_type: Type,
     pub values: Vec<Pointer>,
     pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
+    pub children: Vec<Pointer>,
+    pub output: Vec<Option<Option<Pointer>>>,
+    pub remaining: usize,
 }
 
 impl Collection for NativeSequenceFilterMap {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
         out.extend(self.values.iter().copied());
-        out.extend(self.output.iter().copied());
+        out.extend(self.children.iter().copied());
+        out.extend(
+            self.output
+                .iter()
+                .filter_map(Option::as_ref)
+                .flatten()
+                .copied(),
+        );
     }
 
     fn rewrite_pointers(
@@ -535,7 +766,8 @@ impl Collection for NativeSequenceFilterMap {
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
         rewrite_slice(&mut self.values, rewrite)?;
-        rewrite_slice(&mut self.output, rewrite)
+        rewrite_slice(&mut self.children, rewrite)?;
+        rewrite_nested_options(&mut self.output, rewrite)
     }
 }
 
@@ -554,44 +786,78 @@ where
                 Vec::new(),
             )?));
         }
-        self.next_index = 0;
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[0],
-            self.elem_type.clone(),
-        )
+        self.children.clear();
+        self.output = vec![None; self.values.len()];
+        self.remaining = self.values.len();
+        Ok(NativeStep::Schedule(self.values.len()))
     }
 
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
-        if let Some(value) = option_value_ptr(runtime, value)? {
-            self.output.push(value);
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("native sequence filter_map received unknown child".into())
+            })?;
+        let slot = self.output.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native sequence filter_map result slot out of bounds".into())
+        })?;
+        if slot.is_some() {
+            return Err(EngineError::Internal(
+                "native sequence filter_map received duplicate child result".into(),
+            ));
         }
-        self.next_index += 1;
-        if self.next_index == self.values.len() {
+        *slot = Some(option_value_ptr(runtime, value)?);
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native sequence filter_map received too many results".into())
+        })?;
+        if self.remaining == 0 {
+            let mut output = Vec::new();
+            for value in &self.output {
+                match value {
+                    Some(Some(value)) => output.push(*value),
+                    Some(None) => {}
+                    None => {
+                        return Err(EngineError::Internal(
+                            "native sequence filter_map completed with missing result".into(),
+                        ));
+                    }
+                }
+            }
             return Ok(NativeStep::Return(alloc_native_sequence(
                 runtime,
                 &self.shape,
-                self.output.clone(),
+                output,
             )?));
         }
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[self.next_index],
-            self.elem_type.clone(),
-        )
+        Ok(NativeStep::Wait)
     }
 
     fn receive_may_allocate(&self) -> bool {
-        receive_finishes_sequence(self.next_index, self.values.len())
+        self.remaining == 1
+    }
+}
+
+impl NativeSequenceFilterMap {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let value = self.values.get(index).copied().ok_or_else(|| {
+            EngineError::Internal("native sequence filter_map child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            value,
+            self.elem_type.clone(),
+        )
     }
 }
 
@@ -602,15 +868,17 @@ pub(crate) struct NativeSequenceFlatMap {
     pub elem_type: Type,
     pub values: Vec<Pointer>,
     pub shape: NativeSequenceShape,
-    pub next_index: usize,
-    pub output: Vec<Pointer>,
+    pub children: Vec<Pointer>,
+    pub output: Vec<Option<Vec<Pointer>>>,
+    pub remaining: usize,
 }
 
 impl Collection for NativeSequenceFlatMap {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
         out.extend(self.values.iter().copied());
-        out.extend(self.output.iter().copied());
+        out.extend(self.children.iter().copied());
+        out.extend(self.output.iter().flatten().flatten().copied());
     }
 
     fn rewrite_pointers(
@@ -619,7 +887,8 @@ impl Collection for NativeSequenceFlatMap {
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
         rewrite_slice(&mut self.values, rewrite)?;
-        rewrite_slice(&mut self.output, rewrite)
+        rewrite_slice(&mut self.children, rewrite)?;
+        rewrite_option_vecs(&mut self.output, rewrite)
     }
 }
 
@@ -638,43 +907,77 @@ where
                 Vec::new(),
             )?));
         }
-        self.next_index = 0;
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[0],
-            self.elem_type.clone(),
-        )
+        self.children.clear();
+        self.output = vec![None; self.values.len()];
+        self.remaining = self.values.len();
+        Ok(NativeStep::Schedule(self.values.len()))
     }
 
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
-        self.output
-            .extend(native_flatten_sequence(runtime, &self.shape, value)?);
-        self.next_index += 1;
-        if self.next_index == self.values.len() {
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("native sequence flat_map received unknown child".into())
+            })?;
+        let slot = self.output.get_mut(index).ok_or_else(|| {
+            EngineError::Internal("native sequence flat_map result slot out of bounds".into())
+        })?;
+        if slot.is_some() {
+            return Err(EngineError::Internal(
+                "native sequence flat_map received duplicate child result".into(),
+            ));
+        }
+        *slot = Some(native_flatten_sequence(runtime, &self.shape, value)?);
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native sequence flat_map received too many results".into())
+        })?;
+        if self.remaining == 0 {
+            let mut output = Vec::new();
+            for values in &self.output {
+                match values {
+                    Some(values) => output.extend(values.iter().copied()),
+                    None => {
+                        return Err(EngineError::Internal(
+                            "native sequence flat_map completed with missing result".into(),
+                        ));
+                    }
+                }
+            }
             return Ok(NativeStep::Return(alloc_native_sequence(
                 runtime,
                 &self.shape,
-                self.output.clone(),
+                output,
             )?));
         }
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            self.values[self.next_index],
-            self.elem_type.clone(),
-        )
+        Ok(NativeStep::Wait)
     }
 
     fn receive_may_allocate(&self) -> bool {
-        receive_finishes_sequence(self.next_index, self.values.len())
+        self.remaining == 1
+    }
+}
+
+impl NativeSequenceFlatMap {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let value = self.values.get(index).copied().ok_or_else(|| {
+            EngineError::Internal("native sequence flat_map child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            value,
+            self.elem_type.clone(),
+        )
     }
 }
 
@@ -718,6 +1021,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -777,6 +1081,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -834,6 +1139,7 @@ where
     fn receive(
         &mut self,
         _runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError> {
         Ok(NativeStep::Return(value))
@@ -884,6 +1190,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -965,6 +1272,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1037,14 +1345,16 @@ pub struct NativeDictMap {
     pub func_type: Type,
     pub elem_type: Type,
     pub entries: Vec<(Symbol, Pointer)>,
-    pub next_index: usize,
+    pub children: Vec<Pointer>,
     pub output: BTreeMap<Symbol, Pointer>,
+    pub remaining: usize,
 }
 
 impl Collection for NativeDictMap {
     fn trace_pointers(&self, out: &mut Vec<Pointer>) {
         out.push(self.func);
         out.extend(self.entries.iter().map(|(_, pointer)| *pointer));
+        out.extend(self.children.iter().copied());
         out.extend(self.output.values().copied());
     }
 
@@ -1054,6 +1364,7 @@ impl Collection for NativeDictMap {
     ) -> Result<(), EngineError> {
         rewrite_pointer(&mut self.func, rewrite)?;
         rewrite_entries(&mut self.entries, rewrite)?;
+        rewrite_slice(&mut self.children, rewrite)?;
         rewrite_map_values(&mut self.output, rewrite)
     }
 }
@@ -1071,43 +1382,63 @@ where
                 runtime.heap.alloc_ptr_dict(BTreeMap::new())?,
             ));
         }
-        self.next_index = 0;
-        let (_, value) = self.entries[0].clone();
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            value,
-            self.elem_type.clone(),
-        )
+        self.children.clear();
+        self.output.clear();
+        self.remaining = self.entries.len();
+        Ok(NativeStep::Schedule(self.entries.len()))
     }
 
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
         State: Clone + Send + Sync + 'static,
     {
-        let (key, _) = self.entries[self.next_index].clone();
-        self.output.insert(key, value);
-        self.next_index += 1;
-        if self.next_index == self.entries.len() {
+        let index = self
+            .children
+            .iter()
+            .position(|candidate| *candidate == child)
+            .ok_or_else(|| {
+                EngineError::Internal("native dict map received unknown child".into())
+            })?;
+        let (key, _) = self.entries.get(index).cloned().ok_or_else(|| {
+            EngineError::Internal("native dict map result slot out of bounds".into())
+        })?;
+        if self.output.insert(key, value).is_some() {
+            return Err(EngineError::Internal(
+                "native dict map received duplicate child result".into(),
+            ));
+        }
+        self.remaining = self.remaining.checked_sub(1).ok_or_else(|| {
+            EngineError::Internal("native dict map received too many results".into())
+        })?;
+        if self.remaining == 0 {
             return Ok(NativeStep::Return(
                 runtime.heap.alloc_ptr_dict(self.output.clone())?,
             ));
         }
-        let (_, value) = self.entries[self.next_index].clone();
-        native_apply_step(
-            self.func,
-            self.func_type.clone(),
-            value,
-            self.elem_type.clone(),
-        )
+        Ok(NativeStep::Wait)
     }
 
     fn receive_may_allocate(&self) -> bool {
-        receive_finishes_sequence(self.next_index, self.entries.len())
+        self.remaining == 1
+    }
+}
+
+impl NativeDictMap {
+    fn child_spec(&self, index: usize) -> Result<NativeChildSpec, EngineError> {
+        let (_, value) = self.entries.get(index).ok_or_else(|| {
+            EngineError::Internal("native dict map child index out of bounds".into())
+        })?;
+        native_apply_spec(
+            self.func,
+            self.func_type.clone(),
+            *value,
+            self.elem_type.clone(),
+        )
     }
 }
 
@@ -1166,6 +1497,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1262,6 +1594,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1398,6 +1731,7 @@ where
     fn receive(
         &mut self,
         _runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
@@ -1544,6 +1878,7 @@ where
     fn receive(
         &mut self,
         runtime: &RuntimeCore<State>,
+        _child: Pointer,
         value: Pointer,
     ) -> Result<NativeStep, EngineError>
     where
