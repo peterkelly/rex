@@ -34,17 +34,7 @@ fn write_file(path: &Path, contents: &str) {
 }
 
 #[derive(Clone, Default)]
-struct TestFilesystemImporter {
-    include_roots: Vec<PathBuf>,
-}
-
-impl TestFilesystemImporter {
-    fn with_include_root(root: PathBuf) -> Self {
-        Self {
-            include_roots: vec![root.canonicalize().unwrap()],
-        }
-    }
-}
+struct TestFilesystemImporter;
 
 impl Importer for TestFilesystemImporter {
     fn import<'a>(
@@ -75,20 +65,6 @@ impl Importer for TestFilesystemImporter {
                     }
                 };
                 if let Some(module) = resolve_rex_file(path, expected_sha.clone(), "local")? {
-                    return Ok(Some(module));
-                }
-            }
-
-            for root in &self.include_roots {
-                let mut path = root.clone();
-                for seg in &segs[..segs.len().saturating_sub(1)] {
-                    path.push(seg);
-                }
-                let Some(last) = segs.last() else {
-                    continue;
-                };
-                path.push(format!("{last}.rex"));
-                if let Some(module) = resolve_rex_file(path, expected_sha.clone(), "include")? {
                     return Ok(Some(module));
                 }
             }
@@ -221,7 +197,7 @@ async fn eval_module_via_fs<State: Clone + Send + Sync + 'static>(
     engine: Engine<State>,
     path: &Path,
 ) -> Result<(Handle, Type), EngineError> {
-    eval_module_via_importer(engine, path, Arc::new(TestFilesystemImporter::default())).await
+    eval_module_via_importer(engine, path, Arc::new(TestFilesystemImporter)).await
 }
 
 async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
@@ -258,7 +234,7 @@ async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
     importer_path: impl AsRef<Path>,
 ) -> Result<(Handle, Type), EngineError> {
     let mut engine = engine;
-    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter::default()));
+    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter));
     engine
         .into_evaluator()
         .eval_snippet_at(source, importer_path)
@@ -320,7 +296,7 @@ async fn compile_module_with_importer_accepts_declaration_only_local_module() {
     let program = compiler
         .compile_module_with_importer(
             ImportRequest::new(module.to_string_lossy()),
-            Arc::new(TestFilesystemImporter::default()),
+            Arc::new(TestFilesystemImporter),
         )
         .await
         .unwrap();
@@ -342,7 +318,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut engine = engine_with_prelude();
-    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter::default()));
+    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter));
 
     let mut compiler = engine.into_compiler();
 
@@ -973,42 +949,6 @@ async fn module_import_rejects_private_access() {
     };
     let msg = err.to_string();
     assert!(msg.contains("does not export"), "{msg}");
-}
-
-#[tokio::test]
-async fn module_import_include_roots() {
-    let dir = temp_dir("module_import_include_roots");
-    let include_root = dir.join("includes");
-    let main_root = dir.join("src");
-    let main = main_root.join("main.rex");
-
-    let module = include_root.join("lib").join("math.rex");
-    write_file(
-        &module,
-        r#"
-        pub fn inc x: i32 -> i32 = x + 1;
-"#,
-    );
-
-    write_file(
-        &main,
-        r#"
-        import lib.math as Math;
-        Math.inc 41
-"#,
-    );
-
-    let engine = engine_with_prelude();
-    let importer = Arc::new(TestFilesystemImporter::with_include_root(include_root));
-    let (value_ptr, ty) = eval_module_via_importer(engine, &main, importer)
-        .await
-        .unwrap();
-    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
-    let value = value_ptr.value().unwrap();
-    match value {
-        Value::I32(v) => assert_eq!(v, 42),
-        _ => panic!("expected i32, got {}", value_ptr.type_name().unwrap()),
-    }
 }
 
 #[tokio::test]

@@ -20,10 +20,6 @@ pub enum ModuleError {
     CyclicImport {
         id: ModuleId,
     },
-    InvalidIncludeRoot {
-        path: PathBuf,
-        source: std::io::Error,
-    },
     NotUtf8 {
         kind: &'static str,
         path: PathBuf,
@@ -79,9 +75,6 @@ impl std::fmt::Display for ModuleError {
             ModuleError::EmptyModulePath => write!(f, "empty module path"),
             ModuleError::StatePoisoned => write!(f, "module state poisoned"),
             ModuleError::CyclicImport { id } => write!(f, "cyclic module import: {id}"),
-            ModuleError::InvalidIncludeRoot { path, source } => {
-                write!(f, "invalid include root `{}`: {source}", path.display())
-            }
             ModuleError::NotUtf8 { kind, path, source } => {
                 write!(
                     f,
@@ -147,7 +140,6 @@ impl std::fmt::Display for ModuleError {
 impl std::error::Error for ModuleError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            ModuleError::InvalidIncludeRoot { source, .. } => Some(source),
             ModuleError::NotUtf8 { source, .. } => Some(source),
             ModuleError::Lex { source } => Some(source),
             _ => None,
