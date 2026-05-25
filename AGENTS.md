@@ -51,7 +51,7 @@ cargo clippy --tests
 ## CLI Usage
 
 ```sh
-cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex -- rex-cli/examples/record_update.rex
 cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 

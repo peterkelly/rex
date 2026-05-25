@@ -535,6 +535,13 @@ pub struct CompilationUnit {
 }
 
 impl CompilationUnit {
+    pub fn get_fn_decl(&self, name: &str) -> Option<&FnDecl> {
+        self.decls.iter().find_map(|decl| match decl {
+            Decl::Fn(fd) if fd.name.name.as_ref() == name => Some(fd),
+            _ => None,
+        })
+    }
+
     /// Lower top-level `fn` declarations into nested `let` bindings around `body`.
     ///
     /// This keeps the surface syntax (`Decl::Fn`) intact for tools, while giving

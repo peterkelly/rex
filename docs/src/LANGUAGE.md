@@ -30,11 +30,40 @@ in
   map inc xs
 ```
 
+## Program Entry Points
+
+When a source is run as a program, Rex uses one entry point:
+
+- If the source defines `fn main`, `main` is the entry point. The same source
+  must not also contain a final expression.
+- If the source does not define `main`, the final expression is treated as an
+  implicit zero-argument entry point.
+- If there is no `main` and no final expression, the implicit entry point returns
+  unit.
+
+The CLI passes arguments to `main` from a JSON file supplied with `--inputs`.
+The JSON file is a top-level object whose fields match the parameter names:
+
+```rex
+fn main scale: i32 -> offset: i32 -> i32 =
+  scale + offset;
+```
+
+```json
+{
+  "scale": 3,
+  "offset": 4
+}
+```
+
+The values are converted to Rex values using the parameter types. For files
+without `main`, the input shape is `{}`.
+
 ## Modules and Imports
 
 Rex modules are `.rex` files. Imports are semicolon-terminated top-level declarations.
 Module files are declaration-only: they do not have a top-level expression result. To evaluate an
-expression, use snippet or program entry points.
+expression, run a source as a program entry point.
 
 Supported forms:
 

@@ -43,11 +43,29 @@ String literals are decoded during lexing.
 - Backslash-newline is a line continuation and produces no character.
 - Unsupported or malformed escape sequences are lexical errors.
 
+## Program Entry Points
+
+A Rex source is a compilation unit with zero or more declarations and an optional
+final expression. Entry-point execution uses a single program entry point:
+
+- If the source defines a top-level `fn main`, that function is the entry point.
+  It is an error for the same source to also contain a final expression.
+- If the source does not define `main`, the final expression is treated as an
+  implicit zero-argument entry point.
+- If the source does not define `main` and has no final expression, the implicit
+  zero-argument entry point evaluates to unit.
+
+The CLI supplies arguments to an explicit `main` from a JSON object passed with
+`--inputs`. The object keys must exactly match the `main` parameter names, and
+each value is converted with `json_to_rex` using the corresponding parameter
+type. JSON inputs require concrete parameter types. A source without `main`
+conceptually has the empty input object `{}`.
+
 ## Module Imports
 
 Rex distinguishes between:
 
-- program/snippet execution (declarations + one expression), and
+- program entry-point execution, and
 - module files used by the import system (declaration-only).
 
 When a `.rex` file is loaded as a module via the module system, it must not contain a top-level

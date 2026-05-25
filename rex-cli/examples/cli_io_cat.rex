@@ -1,7 +1,7 @@
 /* CLI example: read_all + write_all
 
 Run:
-  echo -n "hello" | cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/cli_io_cat.rex
+  echo -n "hello" | cargo run -p rex-cli --bin rex -- rex-cli/examples/cli_io_cat.rex
 
 Notes:
   - read_all 0 reads all bytes from stdin (fd 0).

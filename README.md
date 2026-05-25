@@ -99,16 +99,16 @@ This repo is a Cargo workspace. The key crates are:
 
 ## CLI
 
-Run a snippet file:
+Run a Rex file:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex -- rex-cli/examples/record_update.rex
 ```
 
 Run the advanced module import example:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/modules_advanced/main.rex
+cargo run -p rex-cli --bin rex -- rex-cli/examples/modules_advanced/main.rex
 ```
 
 Run inline code:
@@ -117,10 +117,20 @@ Run inline code:
 cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
 ```
 
+Run a program with an explicit `main`:
+
+```sh
+cargo run -p rex-cli --bin rex -- rex-cli/examples/main_inputs.rex \
+  --inputs rex-cli/examples/main_inputs.json
+```
+
 Other useful flags:
 
 - `--emit-ast`: print parsed AST as JSON and exit
-- `--emit-type` (alias: `--type`): print inferred type as JSON and exit
+- `--emit-type` (alias: `--type`): print the entry point result type as JSON
+  and exit
+- `--manifest`: print entry point input and result type metadata as JSON
+- `--inputs <JSON>`: provide a flat JSON object keyed by `main` parameter name
 - `--raw-output`: print string results directly instead of as JSON strings
 - `--stdin`: read a program from stdin
 - `--stack-size-mb`: control the runner thread stack size

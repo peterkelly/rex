@@ -10,10 +10,10 @@ Rex programs are *one expression*, optionally preceded by top-level declarations
 
 ## Running Rex
 
-From this repository, you can run a snippet file:
+From this repository, you can run a Rex file:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/record_update.rex
+cargo run -p rex-cli --bin rex -- rex-cli/examples/record_update.rex
 ```
 
 Or evaluate a small snippet inline:
@@ -99,7 +99,7 @@ in
 Run it:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --snippet hello.rex
+cargo run -p rex-cli --bin rex -- hello.rex
 ```
 
 ## Lambda and Arrow Spelling

@@ -11,5 +11,5 @@ This example demonstrates Rex module imports with nested module dependencies:
 Run it:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --snippet rex-cli/examples/modules_advanced/main.rex
+cargo run -p rex-cli --bin rex -- rex-cli/examples/modules_advanced/main.rex
 ```

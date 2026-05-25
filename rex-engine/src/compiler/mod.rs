@@ -5,6 +5,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use rex_ast::{CompilationUnit, Expr, Symbol};
 use rex_typesystem::types::{TypedExpr, TypedExprKind};
+use rex_typesystem::typesystem::TypeSystem;
 use uuid::Uuid;
 
 use crate::{
@@ -61,6 +62,11 @@ where
     /// Snapshot runtime link capabilities for preflight validation.
     pub fn runtime_env(&self) -> RuntimeEnv {
         RuntimeEnv::from_engine(&self.engine)
+    }
+
+    /// Borrow the compiler's type system snapshot.
+    pub fn type_system(&self) -> &TypeSystem {
+        &self.engine.type_system
     }
 
     /// Typecheck an expression and package it as a prepared program.
@@ -435,15 +441,33 @@ where
     ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
         Box::pin(async move {
             let program = parse_program_from_source(source, None)?;
+            self.compile_snippet_program_with_importer_and_prefix(&program, importer_path, None)
+                .await
+        })
+    }
 
+    /// Rewrite imports for, typecheck, and prepare an already-parsed snippet program.
+    ///
+    /// `importer_path` anchors relative import resolution. `prefix_source` controls
+    /// the namespace used when qualifying top-level declarations; pass `None` for
+    /// an anonymous snippet namespace.
+    pub fn compile_snippet_program_with_importer_and_prefix<'a>(
+        &'a mut self,
+        program: &'a CompilationUnit,
+        importer_path: Option<PathBuf>,
+        prefix_source: Option<ModuleId>,
+    ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
+        Box::pin(async move {
             let importer = importer_path.map(|p| ModuleId::Local { path: p });
-            let prefix = format!("@snippet{}", Uuid::new_v4());
+            let prefix = prefix_source
+                .map(|id| prefix_for_module(&id))
+                .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
             let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
             let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
             let chain = self.engine.modules.import_chain();
             let rewritten = self
                 .rewrite_and_inject_program(
-                    &program,
+                    program,
                     importer,
                     &prefix,
                     &chain,

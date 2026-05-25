@@ -12,10 +12,25 @@ to make the problem obvious.
 
 ## Useful CLI flags
 
-Run a snippet file:
+Run a Rex file:
 
 ```sh
-cargo run -p rex-cli --bin rex -- --snippet path/to/file.rex
+cargo run -p rex-cli --bin rex -- path/to/file.rex
+```
+
+Run a file with JSON inputs for its entry point:
+
+```sh
+cargo run -p rex-cli --bin rex -- path/to/program.rex --inputs path/to/inputs.json
+```
+
+The inputs file is a top-level JSON object. Each field name must match a
+parameter of `main`; files without `main` have the empty input shape `{}`.
+
+Inspect the entry point type metadata:
+
+```sh
+cargo run -p rex-cli --bin rex -- path/to/program.rex --manifest
 ```
 
 Run an inline snippet:
@@ -30,7 +45,7 @@ Show the parsed AST and exit:
 cargo run -p rex-cli --bin rex -- --emit-ast -c '1 + 2'
 ```
 
-Show the inferred type and exit:
+Show the entry point result type and exit:
 
 ```sh
 cargo run -p rex-cli --bin rex -- --emit-type -c 'map ((*) 2) [1, 2, 3]'

@@ -1,0 +1,17 @@
+{
+  "scale": 10,
+  "measurement": {
+    "meta": {
+      "label": "sample",
+      "weight": 3
+    },
+    "value": 4
+  },
+  "threshold": {
+    "meta": {
+      "label": "control",
+      "weight": 5
+    },
+    "limit": 7
+  }
+}
