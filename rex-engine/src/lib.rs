@@ -29,7 +29,7 @@ pub use builder::{
     markdown::registry_markdown,
 };
 pub use compiler::{
-    Compiler,
+    CompileOptions, Compiler,
     program::{
         ClassMethodCapability, ClassMethodRequirement, CompiledExterns, CompiledProgram,
         CompiledProgramBoundary, NativeCapability, NativeRequirement, RuntimeCapabilities,

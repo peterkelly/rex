@@ -44,7 +44,7 @@ Phase-specific errors:
 
 - `Compiler` returns `CompileError`
 - `Evaluator::run` returns `EvalError`
-- convenience helpers like `eval_snippet` return `ExecutionError`
+- APIs that parse, compile, and run in one call return `ExecutionError`
 
 ## Internal Layout
 

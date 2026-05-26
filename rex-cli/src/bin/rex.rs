@@ -11,7 +11,7 @@ use std::sync::Arc;
 use clap::{Args, Parser};
 use rex::{
     ast::{CompilationUnit, Expr, FnDecl, Span, Var},
-    engine::{Context, Engine, Importer, Module, ModuleId},
+    engine::{CompileOptions, Context, Engine, Importer, Module, ModuleId},
     json::{json_to_rex, rex_to_json},
     parser::{ParseError, parse as parse_rex},
     typesystem::{Scheme, Type, TypeKind},
@@ -243,14 +243,9 @@ async fn eval_result_json(
     let mut compiler = engine.into_compiler();
     let call_program = program_with_body(program, signature.body);
     let importer_path = file.map(PathBuf::from);
-    let prefix_source = snippet_prefix_source(importer_path.as_ref());
 
     let compiled = compiler
-        .compile_snippet_program_with_importer_and_prefix(
-            &call_program,
-            importer_path,
-            Some(prefix_source),
-        )
+        .compile_program(&call_program, compile_options(importer_path))
         .await
         .map_err(|e| format!("{e}"))?;
 
@@ -307,13 +302,8 @@ async fn inspect_main_signature(
     let signature_body = signature_body_expr(program, main_decl);
     let main_program = program_with_body(program, Arc::clone(&signature_body));
     let importer_path = file.map(PathBuf::from);
-    let prefix_source = snippet_prefix_source(importer_path.as_ref());
     let compiled = compiler
-        .compile_snippet_program_with_importer_and_prefix(
-            &main_program,
-            importer_path,
-            Some(prefix_source),
-        )
+        .compile_program(&main_program, compile_options(importer_path))
         .await
         .map_err(|e| format!("{e}"))?;
 
@@ -490,6 +480,15 @@ fn snippet_prefix_source(importer_path: Option<&PathBuf>) -> ModuleId {
     importer_path
         .map(|path| ModuleId::Local { path: path.clone() })
         .unwrap_or_else(|| ModuleId::Virtual("__snippet__".to_string()))
+}
+
+fn compile_options(importer_path: Option<PathBuf>) -> CompileOptions {
+    let prefix_source = snippet_prefix_source(importer_path.as_ref());
+    let options = CompileOptions::default().with_prefix_source(prefix_source);
+    match importer_path {
+        Some(path) => options.with_importer_path(path),
+        None => options,
+    }
 }
 
 fn main_call_expr(input_symbols: &[String]) -> Arc<Expr> {

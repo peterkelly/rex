@@ -64,9 +64,14 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).expect("inject decls");
-    let (handle, ty) = engine
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(program.body.as_ref().unwrap().as_ref())
+        .expect("compile source");
+    let ty = compiled.result_type().clone();
+    let handle = compiler
         .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
+        .run(compiled)
         .await
         .expect("evaluate source");
     let display = handle

@@ -31,9 +31,14 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).map_err(|e| format!("{e}"))?;
-    let (handle, ty) = engine
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(program.body.as_ref().unwrap().as_ref())
+        .map_err(|e| format!("{e}"))?;
+    let ty = compiled.result_type().clone();
+    let handle = compiler
         .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
+        .run(compiled)
         .await
         .map_err(|e| format!("{e}"))?;
     assert!(

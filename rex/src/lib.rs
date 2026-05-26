@@ -22,7 +22,10 @@
 //!
 //! ```rust,no_run
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-//! use rex::engine::{Engine, EngineError, Module};
+//! use rex::{
+//!     engine::{CompileOptions, Engine, EngineError, Module},
+//!     parser::parse as parse_rex,
+//! };
 //!
 //! let mut engine = Engine::with_prelude(())?;
 //!
@@ -32,10 +35,14 @@
 //! })?;
 //! engine.inject_module(math)?;
 //!
-//! let (value, typ) = engine
-//!     .into_evaluator()
-//!     .eval_snippet("import host.math (inc);\ninc 41")
+//! let mut compiler = engine.into_compiler();
+//! let parsed = parse_rex("import host.math (inc);\ninc 41")
+//!     .map_err(|errs| EngineError::from(format!("parse error: {errs:?}")))?;
+//! let program = compiler
+//!     .compile_program(&parsed, CompileOptions::default())
 //!     .await?;
+//! let typ = program.result_type().clone();
+//! let value = compiler.into_evaluator().run(program).await?;
 //!
 //! assert_eq!(typ.to_string(), "i32");
 //! assert_eq!(value.as_i32()?, 42);
@@ -91,7 +98,7 @@ pub use rex_proc_macro::Rex;
 /// diagnostics, or set runtime policy should use [`Engine`](engine::Engine)
 /// directly instead.
 pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionError> {
-    parser::parse(source).map_err(|errs| {
+    let parsed = parser::parse(source).map_err(|errs| {
         engine::CompileError::from(engine::EngineError::from(format!("parse error: {errs:?}")))
     })?;
 
@@ -101,7 +108,9 @@ pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionEr
         )))
     })?;
     let mut compiler = engine.into_compiler();
-    let program = compiler.compile_snippet(source).await?;
+    let program = compiler
+        .compile_program(&parsed, engine::CompileOptions::default())
+        .await?;
     let result_type = program.result_type().clone();
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();

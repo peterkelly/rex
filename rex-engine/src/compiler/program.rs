@@ -16,7 +16,7 @@ pub(crate) const RUNTIME_LINK_ABI_VERSION: u32 = 1;
 /// be validated against an evaluator before execution.
 pub struct CompiledProgram {
     /// Name-level summary of external runtime bindings referenced by this program.
-    pub externs: CompiledExterns,
+    externs: CompiledExterns,
     link_contract: RuntimeLinkContract,
     pub(crate) env: Environment,
     pub(crate) expr: Arc<TypedExpr>,

@@ -1,9 +1,6 @@
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-use std::path::Path;
 use std::sync::Arc;
 
-use rex_ast::{Expr, Symbol};
+use rex_ast::Symbol;
 use rex_typesystem::{
     types::{BuiltinTypeId, Type, Types},
     typesystem::TypeSystem,
@@ -11,11 +8,10 @@ use rex_typesystem::{
 };
 
 use crate::{
-    CompileError, Compiler, EvalError, ExecutionError, RuntimeEnv,
+    EvalError, RuntimeEnv,
     compiler::program::{CompiledProgram, RuntimeCapabilities, RuntimeCompatibility},
     error::EngineError,
     evaluator::{eval::eval_typed_expr, runtime_core::RuntimeCore},
-    modules::{ImportRequest, Importer, ModuleId, ResolvedModule, ResolvedModuleContent},
     util::split_fun,
     value::{Cell, Handle, Heap, HeapAccess, Pointer},
 };
@@ -29,16 +25,13 @@ pub(crate) mod scheduler;
 
 /// Single-shot runtime for validating and running prepared Rex code.
 ///
-/// `run` consumes both the evaluator and the [`CompiledProgram`]. Convenience
-/// helpers such as [`Evaluator::eval_snippet`] compile and run in one step, but
-/// still consume the evaluator.
+/// `run` consumes both the evaluator and the [`CompiledProgram`].
 pub struct Evaluator<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) runtime: RuntimeCore<State>,
     pub(crate) runtime_env: RuntimeEnv,
-    pub(crate) compiler: Compiler<State>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,15 +52,10 @@ impl<State> Evaluator<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(
-        runtime: RuntimeCore<State>,
-        runtime_env: RuntimeEnv,
-        compiler: Compiler<State>,
-    ) -> Self {
+    pub(crate) fn new(runtime: RuntimeCore<State>, runtime_env: RuntimeEnv) -> Self {
         Self {
             runtime,
             runtime_env,
-            compiler,
         }
     }
 
@@ -110,94 +98,6 @@ where
             .await
             .map_err(EvalError::from)?;
         heap.handle(pointer).map_err(EvalError::from)
-    }
-
-    /// Compile and run a single expression, returning its value and inferred type.
-    pub async fn eval(self, expr: &Expr) -> Result<(Handle, Type), ExecutionError> {
-        let mut this = self;
-        let program = this.compiler.compile_expr(expr)?;
-        this.run_prepared(program).await
-    }
-
-    async fn run_prepared(
-        mut self,
-        program: CompiledProgram,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        self.runtime_env = RuntimeEnv::from_engine(&self.compiler.engine);
-        self.runtime = self.compiler.engine.runtime_core();
-        let typ = program.result_type().clone();
-        let value = self.run(program).await?;
-        Ok((value, typ))
-    }
-
-    /// Load a declaration-only module through an importer.
-    pub async fn eval_module_with_importer(
-        mut self,
-        request: ImportRequest,
-        importer: Arc<dyn Importer>,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        let result: Result<(Handle, Type), ExecutionError> = {
-            let engine = &mut self.compiler.engine;
-            let chain = engine.modules.import_chain().with_importer(importer);
-            let resolved = chain.import(request).await.map_err(CompileError::from)?;
-            let inst = engine
-                .load_module_from_resolved(resolved, &chain)
-                .await
-                .map_err(CompileError::from)?;
-            Ok((inst.init_value, inst.init_type))
-        };
-        result
-    }
-
-    /// Load declaration-only module source directly.
-    pub async fn eval_module_source(
-        mut self,
-        source: &str,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        let result: Result<(Handle, Type), ExecutionError> = {
-            let engine = &mut self.compiler.engine;
-            let mut hasher = DefaultHasher::new();
-            source.hash(&mut hasher);
-            let id = ModuleId::Virtual(format!("<inline:{:016x}>", hasher.finish()));
-            if let Some(inst) = engine.modules.cached(&id).map_err(EvalError::from)? {
-                Ok((inst.init_value, inst.init_type))
-            } else {
-                let chain = engine.modules.import_chain();
-                let inst = engine
-                    .load_module_from_resolved(
-                        ResolvedModule {
-                            id,
-                            content: ResolvedModuleContent::Source(source.to_string()),
-                        },
-                        &chain,
-                    )
-                    .await
-                    .map_err(CompileError::from)?;
-                Ok((inst.init_value, inst.init_type))
-            }
-        };
-        result
-    }
-
-    /// Compile and run a snippet, returning its value and inferred type.
-    pub async fn eval_snippet(self, source: &str) -> Result<(Handle, Type), ExecutionError> {
-        let mut this = self;
-        let program = this.compiler.compile_snippet(source).await?;
-        this.run_prepared(program).await
-    }
-
-    /// Compile and run a snippet using a path anchor for resolving relative imports.
-    pub async fn eval_snippet_at(
-        self,
-        source: &str,
-        importer_path: impl AsRef<Path>,
-    ) -> Result<(Handle, Type), ExecutionError> {
-        let mut this = self;
-        let program = this
-            .compiler
-            .compile_snippet_at(source, importer_path.as_ref())
-            .await?;
-        this.run_prepared(program).await
     }
 }
 

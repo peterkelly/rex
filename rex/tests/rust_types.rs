@@ -18,11 +18,12 @@ fn inject_globals(
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
     let program = parse_rex(expr).unwrap();
     let heap = engine.heap.clone();
-    let (value, ty) = engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(program.body.as_ref().unwrap().as_ref())
         .unwrap();
+    let ty = compiled.result_type().clone();
+    let value = compiler.into_evaluator().run(compiled).await.unwrap();
     (value, heap, ty)
 }
 
@@ -56,8 +57,9 @@ macro_rules! assert_handle_eq {
 }
 
 /// Helper to infer the type of a Rex expression
-async fn infer_type(engine: &mut Engine<()>, expr: &str) -> Type {
-    let (_, ty) = engine.infer_snippet(expr).await.unwrap();
+async fn infer_type(engine: Engine<()>, expr: &str) -> Type {
+    let mut compiler = engine.into_compiler();
+    let (_, ty) = compiler.infer_snippet(expr, None).await.unwrap();
     ty
 }
 
@@ -139,7 +141,7 @@ async fn vec_rex_type() {
         module.export("return_vec", return_vec)
     });
 
-    let ty = infer_type(&mut engine, r#"return_vec "hello""#).await;
+    let ty = infer_type(engine, r#"return_vec "hello""#).await;
     assert_eq!(
         ty,
         Type::app(
@@ -275,7 +277,7 @@ async fn option_rex_type() {
         module.export("return_opt", return_opt)
     });
 
-    let ty = infer_type(&mut engine, r#"return_opt "hello""#).await;
+    let ty = infer_type(engine, r#"return_opt "hello""#).await;
     assert_eq!(
         ty,
         Type::app(
@@ -448,7 +450,7 @@ async fn result_rex_type() {
         module.export("return_result", return_result)
     });
 
-    let ty = infer_type(&mut engine, r#"return_result "hello""#).await;
+    let ty = infer_type(engine, r#"return_result "hello""#).await;
     assert_eq!(
         ty,
         Type::app(

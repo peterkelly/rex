@@ -8,9 +8,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Symbol;
 use rex_engine::{
-    Context, Engine, EngineError, EngineOptions, Handle, ImportRequest, Importer, Module,
-    ModuleError, ModuleId, PreludeMode, ResolvedModule, ResolvedModuleContent, Value,
+    CompileOptions, Context, Engine, EngineError, EngineOptions, Handle, ImportRequest, Importer,
+    Module, ModuleError, ModuleId, PreludeMode, ResolvedModule, ResolvedModuleContent, Value,
 };
+use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
     types::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Scheme, Type, TypeKind},
@@ -155,7 +156,7 @@ impl RexAdt for LocalRunSpec {
 #[tokio::test]
 async fn prelude_module_can_be_imported_explicitly() {
     let engine = engine_with_prelude();
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import Prelude (map);
@@ -186,7 +187,7 @@ async fn engine_options_can_disable_prelude() {
         },
     )
     .unwrap();
-    let err = eval_snippet(engine, "map ((+) 1) [1, 2]")
+    let err = run_snippet(engine, "map ((+) 1) [1, 2]")
         .await
         .expect_err("prelude should be unavailable when disabled");
     let msg = err.to_string();
@@ -210,36 +211,63 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
     })?;
     let mut engine = engine;
     engine.add_importer("test-fs", importer);
-    engine
-        .into_evaluator()
-        .eval_snippet_at(&source, path)
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_rex(&source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
+    let program = compiler
+        .compile_program(&parsed, CompileOptions::default().with_importer_path(path))
         .await
-        .map_err(|err| err.into_engine_error())
+        .map_err(|err| err.into_engine_error())?;
+    let typ = program.result_type().clone();
+    let value = compiler
+        .into_evaluator()
+        .run(program)
+        .await
+        .map_err(|err| err.into_engine_error())?;
+    Ok((value, typ))
 }
 
-async fn eval_snippet<State: Clone + Send + Sync + 'static>(
+async fn run_snippet<State: Clone + Send + Sync + 'static>(
     engine: Engine<State>,
     source: &str,
 ) -> Result<(Handle, Type), EngineError> {
-    engine
-        .into_evaluator()
-        .eval_snippet(source)
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
+    let program = compiler
+        .compile_program(&parsed, CompileOptions::default())
         .await
-        .map_err(|err| err.into_engine_error())
+        .map_err(|err| err.into_engine_error())?;
+    let typ = program.result_type().clone();
+    let value = compiler
+        .into_evaluator()
+        .run(program)
+        .await
+        .map_err(|err| err.into_engine_error())?;
+    Ok((value, typ))
 }
 
-async fn eval_snippet_at<State: Clone + Send + Sync + 'static>(
+async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
     engine: Engine<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
 ) -> Result<(Handle, Type), EngineError> {
     let mut engine = engine;
     engine.add_importer("test-fs", Arc::new(TestFilesystemImporter));
-    engine
-        .into_evaluator()
-        .eval_snippet_at(source, importer_path)
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
+    let program = compiler
+        .compile_program(
+            &parsed,
+            CompileOptions::default().with_importer_path(importer_path.as_ref()),
+        )
         .await
-        .map_err(|err| err.into_engine_error())
+        .map_err(|err| err.into_engine_error())?;
+    let typ = program.result_type().clone();
+    let value = compiler
+        .into_evaluator()
+        .run(program)
+        .await
+        .map_err(|err| err.into_engine_error())?;
+    Ok((value, typ))
 }
 
 macro_rules! pvals {
@@ -284,32 +312,6 @@ async fn module_import_local_pub() {
 }
 
 #[tokio::test]
-async fn compile_module_with_importer_accepts_declaration_only_local_module() {
-    let dir = temp_dir("compile_module_with_importer_accepts_declaration_only_local_module");
-    let module = dir.join("foo.rex");
-
-    let engine = engine_with_prelude();
-
-    let mut compiler = engine.into_compiler();
-
-    write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
-    let program = compiler
-        .compile_module_with_importer(
-            ImportRequest::new(module.to_string_lossy()),
-            Arc::new(TestFilesystemImporter),
-        )
-        .await
-        .unwrap();
-    let ty = program.result_type().clone();
-    let value_ptr = compiler.into_evaluator().run(program).await.unwrap();
-    assert_eq!(ty, Type::tuple(vec![]));
-    match value_ptr.value().unwrap() {
-        Value::Tuple(items) => assert!(items.is_empty()),
-        other => panic!("expected unit tuple, got {}", other.value_type_name()),
-    }
-}
-
-#[tokio::test]
 async fn snippet_import_reloads_when_local_module_changes() {
     let dir = temp_dir("snippet_import_reloads_when_local_module_changes");
     let module = dir.join("foo.rex");
@@ -322,18 +324,18 @@ async fn snippet_import_reloads_when_local_module_changes() {
 
     let mut compiler = engine.into_compiler();
 
+    let source = "import foo (value);\nvalue 0";
+    let parsed = parse_rex(source).unwrap();
+    let options = CompileOptions::default().with_importer_path(importer.as_path());
     let _ = compiler
-        .compile_snippet_at("import foo (value);\nvalue 0", &importer)
+        .compile_program(&parsed, options.clone())
         .await
         .unwrap();
 
     // Same module path, changed contents: import resolution must observe updated
     // source and invalidate stale per-module caches during preparation.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
-    let program = compiler
-        .compile_snippet_at("import foo (value);\nvalue 0", &importer)
-        .await
-        .unwrap();
+    let program = compiler.compile_program(&parsed, options).await.unwrap();
     let ty = program.result_type().clone();
     let value_ptr = compiler.into_evaluator().run(program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -367,7 +369,7 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
 
     let engine = engine_with_prelude();
 
-    let (value_ptr, _ty) = eval_snippet_at(
+    let (value_ptr, _ty) = run_snippet_at(
         engine,
         r#"
         import a (id);
@@ -410,7 +412,7 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
 
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet_at(
+    let (value_ptr, ty) = run_snippet_at(
         engine,
         r#"
         import dep as D;
@@ -486,7 +488,7 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
 
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet_at(
+    let (value_ptr, ty) = run_snippet_at(
         engine,
         r#"
         import dep as D;
@@ -562,7 +564,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import host.math (inc, double_async as d);
@@ -632,7 +634,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
 
     engine.inject_module(module).unwrap();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import host.ptrsync (pick, pick_typed, heap_i32);
@@ -675,7 +677,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     module.export("id", |_state: &(), x: String| Ok(x)).unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import host.over (id);
@@ -728,7 +730,7 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let (_value_ptr, ty) = eval_snippet(
+    let (_value_ptr, ty) = run_snippet(
         engine,
         r#"
         import host.delay as Delay;
@@ -798,7 +800,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
 
     engine.inject_module(module).unwrap();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import host.ptrasync (pick_async, pick_typed_async as pta, heap_i32_async);
@@ -889,7 +891,7 @@ async fn module_injected_from_rust_wildcard_import() {
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import host.ops (*);
@@ -964,7 +966,7 @@ async fn snippet_can_import_with_explicit_base() {
 
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet_at(
+    let (value_ptr, ty) = run_snippet_at(
         engine,
         r#"
         import foo.bar as Bar;
@@ -1380,7 +1382,7 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
         .unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value_ptr, _ty) = eval_snippet(
+    let (value_ptr, _ty) = run_snippet(
         engine,
         r#"
         import host.types (RunSpec, pending);
@@ -1827,7 +1829,7 @@ async fn module_import_selected_clause_conflicts_with_local() {
 async fn std_json_encode_decode_smoke() {
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import std.json as Json;
@@ -1853,7 +1855,7 @@ async fn std_json_encode_decode_smoke() {
 async fn std_json_roundtrip_nested() {
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import std.json as Json;
@@ -1913,7 +1915,7 @@ async fn std_json_roundtrip_nested() {
 async fn std_json_decode_errors_have_useful_messages() {
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet(engine,
+    let (value_ptr, ty) = run_snippet(engine,
         r#"
         import std.json as Json;
 
@@ -1986,7 +1988,7 @@ async fn std_json_decode_errors_have_useful_messages() {
 async fn std_json_numeric_decode_errors() {
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import std.json as Json;
@@ -2038,7 +2040,7 @@ async fn std_json_numeric_decode_errors() {
 async fn std_json_show_renders_valid_json() {
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import std.json as Json;
@@ -2087,7 +2089,7 @@ async fn std_json_show_renders_valid_json() {
 async fn std_json_parse_and_from_string_roundtrip() {
     let engine = engine_with_prelude();
 
-    let (value_ptr, ty) = eval_snippet(
+    let (value_ptr, ty) = run_snippet(
         engine,
         r#"
         import std.json as Json;

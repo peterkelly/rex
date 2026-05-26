@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use rex::{
     Rex,
-    ast::Symbol,
+    ast::{CompilationUnit, Symbol},
     engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
     parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply},
@@ -169,17 +169,23 @@ impl RexAdt for ManualEnum {
     }
 }
 
+async fn run_program(engine: Engine<()>, program: &CompilationUnit) -> (Handle, Type) {
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(program.body.as_ref().unwrap().as_ref())
+        .unwrap();
+    let ty = compiled.result_type().clone();
+    let handle = compiler.into_evaluator().run(compiled).await.unwrap();
+    (handle, ty)
+}
+
 #[tokio::test]
 async fn manual_struct_adt_can_be_registered_and_roundtripped() {
     let mut engine = Engine::with_prelude(()).unwrap();
     engine.inject_rex_adt::<ManualRecord>().unwrap();
 
     let program = parse_rex("ManualRecord { enabled = true, count = 41 }").unwrap();
-    let (handle, ty) = engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let (handle, ty) = run_program(engine, &program).await;
     assert_eq!(ty, ManualRecord::rex_type());
     let decoded = ManualRecord::from_rex(&handle).unwrap();
     assert_eq!(
@@ -197,11 +203,7 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
     DerivedRecord::inject_rex(&mut engine).unwrap();
 
     let program = parse_rex("DerivedRecord { enabled = true, count = 41 }").unwrap();
-    let (handle, ty) = engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let (handle, ty) = run_program(engine, &program).await;
     assert_eq!(ty, DerivedRecord::rex_type());
     let decoded = DerivedRecord::from_rex(&handle).unwrap();
     assert_eq!(
@@ -227,11 +229,7 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let (handle, ty) = engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let (handle, ty) = run_program(engine, &program).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }
@@ -250,11 +248,7 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let (handle, ty) = engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let (handle, ty) = run_program(engine, &program).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }
@@ -350,11 +344,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
         "#,
     )
     .unwrap();
-    let (handle, ty) = engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let (handle, ty) = run_program(engine, &program).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }
@@ -379,11 +369,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
         "#,
     )
     .unwrap();
-    let (handle, ty) = engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-        .unwrap();
+    let (handle, ty) = run_program(engine, &program).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }

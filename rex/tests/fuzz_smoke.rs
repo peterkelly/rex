@@ -68,6 +68,9 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         let mut module = Module::global();
         module.add_decls(program.decls.clone());
         let _ = engine.inject_module(module);
-        let _ = engine.into_evaluator().eval(body.as_ref()).await;
+        let mut compiler = engine.into_compiler();
+        if let Ok(compiled) = compiler.compile_expr(body.as_ref()) {
+            let _ = compiler.into_evaluator().run(compiled).await;
+        }
     }
 }

@@ -3,6 +3,7 @@ use rex_engine::{
     AsyncCallExecutor, AsyncCallPolicy, Engine, EngineError, ExecutionBounds, FromRex, Handle,
     Module, NativeAsyncPermit, NativeFuture, ParallelismController,
 };
+use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
 use std::collections::VecDeque;
 use std::sync::{
@@ -19,11 +20,19 @@ async fn eval_value<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let evaluator = engine.into_evaluator();
-    evaluator
-        .eval_snippet(source)
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_rex(source).unwrap();
+    let program = compiler
+        .compile_program(&parsed, Default::default())
         .await
-        .map_err(|err| err.into_engine_error())
+        .map_err(|err| err.into_engine_error())?;
+    let typ = program.result_type().clone();
+    let value = compiler
+        .into_evaluator()
+        .run(program)
+        .await
+        .map_err(|err| err.into_engine_error())?;
+    Ok((value, typ))
 }
 
 async fn eval_i32(source: &str, engine: Engine<()>) -> i32 {

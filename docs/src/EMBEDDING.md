@@ -36,12 +36,18 @@ Evaluation API:
 `Evaluator::run` consumes both the evaluator and the compiled program.
 
 ```rust,ignore
-use rex::engine::Engine;
+use rex::{
+    engine::{CompileOptions, Engine},
+    parser::parse,
+};
 
 let engine = Engine::with_prelude(())?;
 let mut compiler = engine.into_compiler();
 
-let program = compiler.compile_snippet("let x = 1 + 2 in x * 3").await?;
+let parsed = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
+let program = compiler
+    .compile_program(&parsed, CompileOptions::default())
+    .await?;
 assert_eq!(program.result_type().to_string(), "i32");
 let evaluator = compiler.into_evaluator();
 evaluator.validate(&program)?;
@@ -78,14 +84,17 @@ Phase-specific errors:
 
 - `Compiler` APIs return `CompileError`
 - `Evaluator::run` returns `EvalError`
-- convenience helpers like `eval_snippet` return `ExecutionError` because they still do both
-  phases
+- APIs that parse, compile, and run in one call return `ExecutionError` because they cross
+  phase boundaries
 
 If you want an explicit preflight before running:
 
 ```rust,ignore
 let mut compiler = engine.into_compiler();
-let program = compiler.compile_snippet("let x = 1 + 2 in x * 3").await?;
+let parsed = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
+let program = compiler
+    .compile_program(&parsed, CompileOptions::default())
+    .await?;
 let runtime = compiler.runtime_env();
 runtime.validate(&program)?;
 
@@ -98,9 +107,8 @@ let value = evaluator.run(program).await?;
 feedback. That is useful for tools and AI agents that want to report missing or incompatible host
 bindings before attempting evaluation.
 
-The convenience helpers such as `Evaluator::eval`, `eval_snippet`, and `eval_snippet_at` route
-through the same prepare/validate/run boundary internally. They are still sugar, but each helper
-consumes the evaluator.
+For pre-parsed expressions, compile with `Compiler::compile_expr` and pass the resulting
+`CompiledProgram` to `Evaluator::run`.
 
 ## Evaluate Rex Code Directly
 
@@ -175,8 +183,8 @@ request.
 Notes:
 
 - importers receive an `ImportRequest` with the requested module name and the importing module id.
-- module-loading workflows use `compile_module_with_importer`, `infer_module_with_importer`,
-  or `eval_module_with_importer`; module source itself remains declaration-only.
+- snippets and parsed programs load declaration-only modules through the compiler's import
+  rewriting path; module source itself remains declaration-only.
 - import clauses (`(*)` / item lists) import exported names into unqualified scope.
 - unqualified imports are context-sensitive: expression positions use values, type positions use
   types, and class/constraint positions use classes.
@@ -190,7 +198,13 @@ For host-managed modules, either call `Engine::inject_module` or add an importer
 
 ```rust,ignore
 use futures::future::BoxFuture;
-use rex::engine::{Engine, ImportRequest, Importer, ModuleId, ResolvedModule, ResolvedModuleContent};
+use rex::{
+    engine::{
+        CompileOptions, Engine, ImportRequest, Importer, ModuleId, ResolvedModule,
+        ResolvedModuleContent,
+    },
+    parser::parse,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -229,10 +243,12 @@ impl Importer for MapImporter {
 }
 
 engine.add_importer("host-map", Arc::new(MapImporter { modules }));
-let value = engine
-    .into_evaluator()
-    .eval_snippet("import acme.main (main);\nmain")
+let mut compiler = engine.into_compiler();
+let parsed = parse("import acme.main (main);\nmain").map_err(|errs| format!("{errs:?}"))?;
+let program = compiler
+    .compile_program(&parsed, CompileOptions::default())
     .await?;
+let value = compiler.into_evaluator().run(program).await?;
 println!("{value}");
 ```
 
@@ -265,7 +281,10 @@ if you want to inspect, transform, or assemble a module in multiple passes befor
 `Future<Output = Result<T, EngineError>>`.
 
 ```rust,ignore
-use rex_engine::{Engine, Module};
+use rex::{
+    engine::{CompileOptions, Engine, Module},
+    parser::parse,
+};
 
 let mut engine = Engine::with_prelude(())?;
 
@@ -273,10 +292,13 @@ let mut math = Module::new("acme.math");
 math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
 engine.inject_module(math)?;
-let value = engine
-    .into_evaluator()
-    .eval_snippet("import acme.math (inc, double_async as d);\ninc (d 20)")
+let mut compiler = engine.into_compiler();
+let parsed = parse("import acme.math (inc, double_async as d);\ninc (d 20)")
+    .map_err(|errs| format!("{errs:?}"))?;
+let program = compiler
+    .compile_program(&parsed, CompileOptions::default())
     .await?;
+let value = compiler.into_evaluator().run(program).await?;
 println!("{value}");
 ```
 
@@ -336,7 +358,8 @@ Example:
 ```rust,ignore
 use rex::{
     Rex,
-    engine::{Engine, EngineError, Module},
+    engine::{CompileOptions, Engine, EngineError, Module},
+    parser::parse,
 };
 
 #[derive(Clone, Debug, PartialEq, Rex)]
@@ -366,18 +389,21 @@ m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
 })?;
 engine.inject_module(m)?;
-let value = engine
-    .into_evaluator()
-    .eval_snippet(
-        r#"
-        import sample (Label, Left, Right, render_label);
-        (
-            render_label (Label { text = "left", side = Left }),
-            render_label (Label { text = "right", side = Right })
-        )
-        "#
+let mut compiler = engine.into_compiler();
+let parsed = parse(
+    r#"
+    import sample (Label, Left, Right, render_label);
+    (
+        render_label (Label { text = "left", side = Left }),
+        render_label (Label { text = "right", side = Right })
     )
+    "#,
+)
+.map_err(|errs| format!("{errs:?}"))?;
+let program = compiler
+    .compile_program(&parsed, CompileOptions::default())
     .await?;
+let value = compiler.into_evaluator().run(program).await?;
 println!("{value}"); // ("left        ", "       right")
 ```
 
@@ -443,14 +469,28 @@ Importer contract:
 
 ### 5) Snippets That Import Relative Modules
 
-If you evaluate ad-hoc Rex snippets that contain imports, use `eval_snippet_at` (or
-`infer_snippet_at`) to provide an importer path anchor:
+If you evaluate ad-hoc Rex snippets that contain imports, parse the snippet and
+pass an importer path in `CompileOptions` for `Compiler::compile_program`. For
+type-only checks through `Compiler::infer_snippet`, pass the same importer path
+argument there:
 
 ```rust,ignore
-let value = engine
-    .into_evaluator()
-    .eval_snippet_at("import foo.bar as Bar;\nBar.add 1 2", "/tmp/workflow/_snippet.rex")
+use rex::{
+    engine::CompileOptions,
+    parser::parse,
+};
+
+let mut compiler = engine.into_compiler();
+let parsed = parse("import foo.bar as Bar;\nBar.add 1 2")
+    .map_err(|errs| format!("{errs:?}"))?;
+let program = compiler
+    .compile_program(
+        &parsed,
+        CompileOptions::default()
+            .with_importer_path(std::path::Path::new("/tmp/workflow/_snippet.rex")),
+    )
     .await?;
+let value = compiler.into_evaluator().run(program).await?;
 ```
 
 ## Engine State
@@ -655,10 +695,10 @@ let body = program
     .body
     .as_ref()
     .expect("snippet must contain a final expression");
-let (value, _ty) = engine
-    .into_evaluator()
-    .eval(body.as_ref())
-    .await?;
+let mut compiler = engine.into_compiler();
+let compiled = compiler.compile_expr(body.as_ref())?;
+let _ty = compiled.result_type().clone();
+let value = compiler.into_evaluator().run(compiled).await?;
 println!("{value}");
 ```
 
@@ -704,7 +744,10 @@ for code in [
         .body
         .as_ref()
         .expect("snippet must contain a final expression");
-    let (value, _ty) = engine.into_evaluator().eval(body.as_ref()).await?;
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler.compile_expr(body.as_ref())?;
+    let _ty = compiled.result_type().clone();
+    let value = compiler.into_evaluator().run(compiled).await?;
     println!("{value}");
 }
 ```
@@ -718,8 +761,8 @@ function whose argument type is `f64`.
 
 ### Async Natives
 
-If your host functions are async, stage them in a module with `export_async` and evaluate with
-`Evaluator::eval`.
+If your host functions are async, stage them in a module with `export_async` and run the compiled
+program with `Evaluator::run`.
 
 ```rust,ignore
 use rex::parser::parse;
@@ -735,7 +778,10 @@ let body = program
     .body
     .as_ref()
     .expect("snippet must contain a final expression");
-let (v, _ty) = engine.into_evaluator().eval(body.as_ref()).await?;
+let mut compiler = engine.into_compiler();
+let compiled = compiler.compile_expr(body.as_ref())?;
+let _ty = compiled.result_type().clone();
+let v = compiler.into_evaluator().run(compiled).await?;
 println!("{v}");
 ```
 
@@ -876,7 +922,10 @@ let body = parse("Just 1")
     .map_err(|errs| format!("parse error: {errs:?}"))?
     .body
     .expect("snippet must contain a final expression");
-let (v, _ty) = engine.into_evaluator().eval(body.as_ref()).await?;
+let mut compiler = engine.into_compiler();
+let compiled = compiler.compile_expr(body.as_ref())?;
+let _ty = compiled.result_type().clone();
+let v = compiler.into_evaluator().run(compiled).await?;
 assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));
 ```
 

@@ -4,6 +4,7 @@ use rex::{
     Rex,
     engine::{Engine, EngineError, Handle, Module},
     json::rex_to_json,
+    parser::parse as parse_rex,
     typesystem::Type,
 };
 use serde::{Deserialize, Serialize};
@@ -11,15 +12,23 @@ use serde::{Deserialize, Serialize};
 fn engine_with_prelude() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
-async fn eval_snippet<State: Clone + Send + Sync + 'static>(
+async fn run_snippet<State: Clone + Send + Sync + 'static>(
     engine: Engine<State>,
     source: &str,
 ) -> Result<(Handle, Type), EngineError> {
-    engine
-        .into_evaluator()
-        .eval_snippet(source)
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_rex(source).unwrap();
+    let program = compiler
+        .compile_program(&parsed, Default::default())
         .await
-        .map_err(|err| err.into_engine_error())
+        .map_err(|err| err.into_engine_error())?;
+    let ty = program.result_type().clone();
+    let value = compiler
+        .into_evaluator()
+        .run(program)
+        .await
+        .map_err(|err| err.into_engine_error())?;
+    Ok((value, ty))
 }
 
 #[derive(Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -52,7 +61,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     engine.inject_module(module).unwrap();
 
     let type_system = engine.type_system.clone();
-    let (value_handle, ty) = eval_snippet(
+    let (value_handle, ty) = run_snippet(
         engine,
         r#"
         import echo (EchoEnum, EchoRecord, Foo, BAR, echo);

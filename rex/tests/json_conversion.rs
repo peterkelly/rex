@@ -1,7 +1,7 @@
 use rex::{
     Rex,
     ast::{CompilationUnit, Symbol},
-    engine::{Engine, Handle, Heap, Value},
+    engine::{CompileOptions, Engine, Handle, Heap, Value},
     json::{json_to_rex, rex_to_json},
     parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
@@ -240,17 +240,21 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let expr_program = parse_program(rex_code);
     let engine = engine_with_eval_json_record();
     let type_system = engine.type_system.clone();
-    let (handle_eval, ty_eval) = engine
-        .into_evaluator()
-        .eval(expr_program.body.as_ref().unwrap().as_ref())
-        .await
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(expr_program.body.as_ref().unwrap().as_ref())
         .unwrap();
+    let ty_eval = compiled.result_type().clone();
+    let handle_eval = compiler.into_evaluator().run(compiled).await.unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
-    let (handle_snippet, ty_snippet) = engine_with_eval_json_record()
-        .into_evaluator()
-        .eval_snippet(rex_code)
+    let mut compiler = engine_with_eval_json_record().into_compiler();
+    let parsed = parse_program(rex_code);
+    let program = compiler
+        .compile_program(&parsed, CompileOptions::default())
         .await
         .unwrap();
+    let ty_snippet = program.result_type().clone();
+    let handle_snippet = compiler.into_evaluator().run(program).await.unwrap();
     assert_eval_json(
         &type_system,
         &handle_snippet,
@@ -261,11 +265,17 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let (handle_snippet_at, ty_snippet_at) = engine_with_eval_json_record()
-        .into_evaluator()
-        .eval_snippet_at(rex_code, &importer)
+    let mut compiler = engine_with_eval_json_record().into_compiler();
+    let parsed = parse_program(rex_code);
+    let program = compiler
+        .compile_program(
+            &parsed,
+            CompileOptions::default().with_importer_path(importer.as_path()),
+        )
         .await
         .unwrap();
+    let ty_snippet_at = program.result_type().clone();
+    let handle_snippet_at = compiler.into_evaluator().run(program).await.unwrap();
     assert_eval_json(
         &type_system,
         &handle_snippet_at,

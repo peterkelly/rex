@@ -22,9 +22,14 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     engine
         .inject_module(module)
         .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
-    let (value, ty) = engine
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(program.body.as_ref().unwrap().as_ref())
+        .unwrap_or_else(|err| panic!("{name}: compile error: {err}"));
+    let ty = compiled.result_type().clone();
+    let value = compiler
         .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
+        .run(compiled)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");

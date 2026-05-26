@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use rex_ast::{CompilationUnit, Expr, Symbol};
-use rex_typesystem::types::{TypedExpr, TypedExprKind};
+use rex_typesystem::types::{Predicate, Type, TypedExpr, TypedExprKind};
 use rex_typesystem::typesystem::TypeSystem;
 use uuid::Uuid;
 
@@ -19,8 +19,8 @@ use crate::{
         type_check::{collect_pattern_bindings, type_check_engine},
     },
     modules::{
-        ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, ResolvedModule,
-        exports_from_program, parse_program_from_source, prefix_for_module,
+        ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, exports_from_program,
+        parse_program_from_source, prefix_for_module, program_from_resolved,
     },
 };
 
@@ -29,6 +29,29 @@ pub(crate) mod type_check;
 
 fn unit_expr() -> Arc<Expr> {
     Arc::new(Expr::Tuple(Default::default(), Vec::new()))
+}
+
+/// Options for compiling an already parsed Rex program.
+#[derive(Clone, Debug, Default)]
+pub struct CompileOptions {
+    /// Path used to resolve relative imports in the program.
+    pub importer_path: Option<PathBuf>,
+    /// Source identity used to qualify top-level declarations.
+    pub prefix_source: Option<ModuleId>,
+}
+
+impl CompileOptions {
+    /// Use `path` as the anchor for resolving relative imports.
+    pub fn with_importer_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.importer_path = Some(path.into());
+        self
+    }
+
+    /// Use `source` to qualify top-level declarations.
+    pub fn with_prefix_source(mut self, source: ModuleId) -> Self {
+        self.prefix_source = Some(source);
+        self
+    }
 }
 
 /// Compile-time view of a prepared Rex engine.
@@ -56,7 +79,7 @@ where
     pub fn into_evaluator(self) -> Evaluator<State> {
         let runtime_env = RuntimeEnv::from_engine(&self.engine);
         let runtime = self.engine.runtime_core();
-        Evaluator::new(runtime, runtime_env, self)
+        Evaluator::new(runtime, runtime_env)
     }
 
     /// Snapshot runtime link capabilities for preflight validation.
@@ -369,97 +392,82 @@ where
         })
     }
 
-    /// Parse, rewrite imports for, typecheck, and prepare a snippet.
-    pub async fn compile_snippet(&mut self, source: &str) -> Result<CompiledProgram, CompileError> {
-        self.compile_snippet_with_importer(source, None)
+    /// Rewrite imports for, typecheck, and prepare an already-parsed program.
+    pub async fn compile_program(
+        &mut self,
+        program: &CompilationUnit,
+        options: CompileOptions,
+    ) -> Result<CompiledProgram, CompileError> {
+        self.compile_program_internal(program, options)
             .await
             .map_err(CompileError::from)
     }
 
-    /// Compile a snippet using a path anchor for resolving relative imports.
-    pub async fn compile_snippet_at(
+    pub async fn infer_snippet(
         &mut self,
         source: &str,
-        importer_path: impl AsRef<Path>,
-    ) -> Result<CompiledProgram, CompileError> {
-        let path = importer_path.as_ref().to_path_buf();
-        self.compile_snippet_with_importer(source, Some(path))
-            .await
-            .map_err(CompileError::from)
+        importer_path: Option<&Path>,
+    ) -> Result<(Vec<Predicate>, Type), CompileError> {
+        let program = parse_program_from_source(source, None).map_err(CompileError::from)?;
+        self.infer_program_internal(
+            &program,
+            CompileOptions {
+                importer_path: importer_path.map(Path::to_path_buf),
+                ..CompileOptions::default()
+            },
+        )
+        .await
+        .map_err(CompileError::from)
     }
 
-    /// Load a declaration-only module through an importer and prepare its module body.
-    pub async fn compile_module_with_importer(
+    pub async fn infer_module_with_importer(
         &mut self,
         request: ImportRequest,
         importer: Arc<dyn Importer>,
-    ) -> Result<CompiledProgram, CompileError> {
+    ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let chain = self.engine.modules.import_chain().with_importer(importer);
         let resolved = chain.import(request).await.map_err(CompileError::from)?;
-        self.compile_module_source(resolved, &chain)
+        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+
+        loading.insert(resolved.id.clone());
+
+        let prefix = prefix_for_module(&resolved.id);
+        let program = program_from_resolved(&resolved).map_err(CompileError::from)?;
+
+        let rewritten = self
+            .rewrite_and_inject_program(
+                &program,
+                Some(resolved.id.clone()),
+                &prefix,
+                &chain,
+                &mut loaded,
+                &mut loading,
+            )
             .await
-            .map_err(CompileError::from)
+            .map_err(CompileError::from)?;
+        let body = rewritten.body.unwrap_or_else(unit_expr);
+        let result = self
+            .engine
+            .infer_type(body.as_ref())
+            .map_err(CompileError::from)?;
+
+        let exports = exports_from_program(&program, &prefix, &resolved.id);
+        loaded.insert(resolved.id.clone(), exports);
+        loading.remove(&resolved.id);
+
+        Ok(result)
     }
 
-    pub(crate) fn compile_module_source<'a>(
-        &'a mut self,
-        resolved: ResolvedModule,
-        chain: &'a ImportChain,
-    ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
-        Box::pin(async move {
-            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-
-            loading.insert(resolved.id.clone());
-
-            let prefix = prefix_for_module(&resolved.id);
-            let program = crate::modules::program_from_resolved(&resolved)?;
-            let rewritten = self
-                .rewrite_and_inject_program(
-                    &program,
-                    Some(resolved.id.clone()),
-                    &prefix,
-                    chain,
-                    &mut loaded,
-                    &mut loading,
-                )
-                .await?;
-
-            let exports = exports_from_program(&program, &prefix, &resolved.id);
-            loaded.insert(resolved.id.clone(), exports);
-            loading.remove(&resolved.id);
-
-            let body = rewritten.body.unwrap_or_else(unit_expr);
-            self.compile_expr_internal(body.as_ref())
-        })
-    }
-
-    fn compile_snippet_with_importer<'a>(
-        &'a mut self,
-        source: &'a str,
-        importer_path: Option<PathBuf>,
-    ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
-        Box::pin(async move {
-            let program = parse_program_from_source(source, None)?;
-            self.compile_snippet_program_with_importer_and_prefix(&program, importer_path, None)
-                .await
-        })
-    }
-
-    /// Rewrite imports for, typecheck, and prepare an already-parsed snippet program.
-    ///
-    /// `importer_path` anchors relative import resolution. `prefix_source` controls
-    /// the namespace used when qualifying top-level declarations; pass `None` for
-    /// an anonymous snippet namespace.
-    pub fn compile_snippet_program_with_importer_and_prefix<'a>(
+    fn compile_program_internal<'a>(
         &'a mut self,
         program: &'a CompilationUnit,
-        importer_path: Option<PathBuf>,
-        prefix_source: Option<ModuleId>,
+        options: CompileOptions,
     ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
         Box::pin(async move {
-            let importer = importer_path.map(|p| ModuleId::Local { path: p });
-            let prefix = prefix_source
+            let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
+            let prefix = options
+                .prefix_source
                 .map(|id| prefix_for_module(&id))
                 .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
             let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
@@ -479,6 +487,37 @@ where
                 .body
                 .ok_or(EngineError::MissingBody { context: "snippet" })?;
             self.compile_expr_internal(body.as_ref())
+        })
+    }
+
+    fn infer_program_internal<'a>(
+        &'a mut self,
+        program: &'a CompilationUnit,
+        options: CompileOptions,
+    ) -> BoxFuture<'a, Result<(Vec<Predicate>, Type), EngineError>> {
+        Box::pin(async move {
+            let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
+            let prefix = options
+                .prefix_source
+                .map(|id| prefix_for_module(&id))
+                .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
+            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+            let chain = self.engine.modules.import_chain();
+            let rewritten = self
+                .rewrite_and_inject_program(
+                    program,
+                    importer,
+                    &prefix,
+                    &chain,
+                    &mut loaded,
+                    &mut loading,
+                )
+                .await?;
+            let body = rewritten
+                .body
+                .ok_or(EngineError::MissingBody { context: "snippet" })?;
+            self.engine.infer_type(body.as_ref())
         })
     }
 }

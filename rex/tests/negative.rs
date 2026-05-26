@@ -27,12 +27,13 @@ async fn compile_err(code: &str) -> EngineError {
     if let Err(e) = engine.inject_module(module) {
         return e;
     }
-    match engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-    {
-        Ok((v, _)) => {
+    let mut compiler = engine.into_compiler();
+    let compiled = match compiler.compile_expr(program.body.as_ref().unwrap().as_ref()) {
+        Ok(compiled) => compiled,
+        Err(e) => return e.into_engine_error(),
+    };
+    match compiler.into_evaluator().run(compiled).await {
+        Ok(v) => {
             let value_type = v.type_name().unwrap_or("<invalid handle>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");
         }

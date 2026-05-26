@@ -77,19 +77,28 @@ fn inject_global_type_decls(engine: &mut Engine, decls: &[Decl]) {
 }
 
 async fn eval_expr(engine: Engine, expr: &Expr) -> Result<Handle, EngineError> {
-    engine
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(expr)
+        .map_err(|err| err.into_engine_error())?;
+    compiler
         .into_evaluator()
-        .eval(expr)
+        .run(compiled)
         .await
         .map_err(|err| err.into_engine_error())
-        .map(|(value, _)| value)
 }
 
 #[tokio::test]
 async fn engine_consumes_into_evaluator() {
     let engine = Engine::with_prelude(()).unwrap();
-    let evaluator = engine.into_evaluator();
-    let (value, ty) = evaluator.eval_snippet("1 + 2").await.unwrap();
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_program("1 + 2");
+    let program = compiler
+        .compile_program(&parsed, Default::default())
+        .await
+        .unwrap();
+    let ty = program.result_type().clone();
+    let value = compiler.into_evaluator().run(program).await.unwrap();
 
     assert_eq!(ty.to_string(), "i32");
     assert_eq!(value.as_i32().unwrap(), 3);
@@ -99,8 +108,9 @@ async fn engine_consumes_into_evaluator() {
 async fn compiler_consumes_into_evaluator() {
     let engine = Engine::with_prelude(()).unwrap();
     let mut compiler = engine.into_compiler();
+    let parsed = parse_program("let answer = 40 + 2 in answer");
     let program = compiler
-        .compile_snippet("let answer = 40 + 2 in answer")
+        .compile_program(&parsed, Default::default())
         .await
         .unwrap();
     let evaluator = compiler.into_evaluator();
@@ -288,7 +298,11 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
     });
 
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler.compile_snippet("inc 1").await.unwrap();
+    let parsed = parse_program("inc 1");
+    let program = compiler
+        .compile_program(&parsed, Default::default())
+        .await
+        .unwrap();
 
     assert_eq!(program.externs().natives, vec![Symbol::intern("inc")]);
     assert_eq!(
@@ -366,7 +380,11 @@ async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
     });
 
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler.compile_snippet("inc 1").await.unwrap();
+    let parsed = parse_program("inc 1");
+    let program = compiler
+        .compile_program(&parsed, Default::default())
+        .await
+        .unwrap();
 
     let mut runtime_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut runtime_engine, |module| {
@@ -396,13 +414,14 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     let compile_engine = Engine::with_prelude(()).unwrap();
 
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler
-        .compile_snippet(
-            r#"
+    let parsed = parse_program(
+        r#"
             let answer = 41 in
                 answer
             "#,
-        )
+    );
+    let program = compiler
+        .compile_program(&parsed, Default::default())
         .await
         .unwrap();
 
@@ -428,7 +447,11 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
     });
 
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler.compile_snippet("answer + 1").await.unwrap();
+    let parsed = parse_program("answer + 1");
+    let program = compiler
+        .compile_program(&parsed, Default::default())
+        .await
+        .unwrap();
 
     assert_eq!(program.externs().natives, vec![Symbol::intern("answer")]);
     assert_eq!(program.externs().class_methods, vec![Symbol::intern("+")]);
@@ -456,9 +479,8 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
 async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
     let compile_engine = Engine::with_prelude(()).unwrap();
     let mut compiler = compile_engine.into_compiler();
-    let program = compiler
-        .compile_snippet(
-            r#"
+    let parsed = parse_program(
+        r#"
             class Pick a where {
                 pick : a -> a;
             }
@@ -469,7 +491,9 @@ async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
 
             pick 1
             "#,
-        )
+    );
+    let program = compiler
+        .compile_program(&parsed, Default::default())
         .await
         .unwrap();
 
@@ -781,7 +805,10 @@ async fn typed_native_injection_uses_handle_conversions() {
     });
 
     let expr = parse("(bump_handle_only 41, shift_handle_only_array (to_array [1, 2, 3]))");
-    let (ptr, ty) = engine.into_evaluator().eval(expr.as_ref()).await.unwrap();
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler.compile_expr(expr.as_ref()).unwrap();
+    let ty = compiled.result_type().clone();
+    let ptr = compiler.into_evaluator().run(compiled).await.unwrap();
 
     assert_eq!(
         ty,

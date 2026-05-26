@@ -11,9 +11,14 @@ async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
     let heap = engine.heap.clone();
-    let (handle, ty) = engine
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler
+        .compile_expr(program.body.as_ref().unwrap().as_ref())
+        .map_err(|err| err.into_engine_error())?;
+    let ty = compiled.result_type().clone();
+    let handle = compiler
         .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
+        .run(compiled)
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((heap, handle, ty))

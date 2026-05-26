@@ -2,16 +2,24 @@ use std::fmt::Debug;
 
 use rex::{
     engine::{Engine, EngineError, FromRex, Handle},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError},
 };
 
 async fn eval(source: &str) -> Result<(Handle, Type), EngineError> {
-    Engine::with_prelude(())
-        .unwrap()
-        .into_evaluator()
-        .eval_snippet(source)
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let parsed = parse_rex(source).unwrap();
+    let program = compiler
+        .compile_program(&parsed, Default::default())
         .await
-        .map_err(|err| err.into_engine_error())
+        .map_err(|err| err.into_engine_error())?;
+    let ty = program.result_type().clone();
+    let value = compiler
+        .into_evaluator()
+        .run(program)
+        .await
+        .map_err(|err| err.into_engine_error())?;
+    Ok((value, ty))
 }
 
 async fn assert_value<T>(source: &str, expected: T, expected_ty: BuiltinTypeId)

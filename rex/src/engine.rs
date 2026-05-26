@@ -4,9 +4,7 @@
 //! [`Engine`](crate::engine::Engine), injects Rex modules or Rust-backed
 //! [`Module`](crate::engine::Module) exports, compiles user source into a
 //! [`CompiledProgram`](crate::engine::CompiledProgram), and runs it with an
-//! [`Evaluator`](crate::engine::Evaluator). Convenience methods such as
-//! [`eval_snippet`](crate::engine::Evaluator::eval_snippet) combine
-//! compilation and execution for the common single-shot case.
+//! [`Evaluator`](crate::engine::Evaluator).
 //!
 //! The public types here are re-exported from the engine crate so applications
 //! can depend on `rex` as their primary embedding crate.
@@ -25,6 +23,9 @@ pub use rex_engine::ClassMethodRequirement;
 
 /// Error from the compile phase of the Rex pipeline.
 pub use rex_engine::CompileError;
+
+/// Options for compiling an already parsed Rex program.
+pub use rex_engine::CompileOptions;
 
 /// Summary of external native and type class bindings referenced by compiled code.
 pub use rex_engine::CompiledExterns;

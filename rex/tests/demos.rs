@@ -1,5 +1,6 @@
 use rex::{
     engine::{Engine, Handle, Heap, Value},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -37,15 +38,23 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                 .build()
                 .unwrap()
                 .block_on(async move {
-                    let mut engine = Engine::with_prelude(()).unwrap();
-                    engine
-                        .infer_snippet(&source)
+                    let engine = Engine::with_prelude(()).unwrap();
+                    let heap = engine.heap.clone();
+                    let mut compiler = engine.into_compiler();
+                    compiler
+                        .infer_snippet(&source, None)
                         .await
                         .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
-                    let heap = engine.heap.clone();
-                    let (value, ty) = engine
+                    let parsed = parse_rex(&source)
+                        .unwrap_or_else(|errs| panic!("{name}: parse error before eval: {errs:?}"));
+                    let program = compiler
+                        .compile_program(&parsed, Default::default())
+                        .await
+                        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+                    let ty = program.result_type().clone();
+                    let value = compiler
                         .into_evaluator()
-                        .eval_snippet(&source)
+                        .run(program)
                         .await
                         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
                     (heap, value, ty)

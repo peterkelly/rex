@@ -1,19 +1,32 @@
 use rex_ast::Symbol;
 use rex_engine::{Engine, EngineError, Handle};
+use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind};
 
-async fn eval_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), EngineError> {
-    engine
-        .into_evaluator()
-        .eval_snippet(source)
+async fn run_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), EngineError> {
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_rex(source).unwrap();
+    let program = compiler
+        .compile_program(&parsed, Default::default())
         .await
-        .map_err(|err| err.into_engine_error())
+        .map_err(|err| err.into_engine_error())?;
+    let typ = program.result_type().clone();
+    let value = compiler
+        .into_evaluator()
+        .run(program)
+        .await
+        .map_err(|err| err.into_engine_error())?;
+    Ok((value, typ))
 }
 
 #[tokio::test]
 async fn owning_evaluator_resources_can_be_kept_after_run() {
     let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let program = compiler.compile_snippet("(7 is i32)").await.unwrap();
+    let parsed = parse_rex("(7 is i32)").unwrap();
+    let program = compiler
+        .compile_program(&parsed, Default::default())
+        .await
+        .unwrap();
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
     let heap = evaluator.heap().clone();
@@ -32,7 +45,7 @@ async fn owning_evaluator_resources_can_be_kept_after_run() {
 #[tokio::test]
 async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
     let engine = Engine::with_prelude(()).unwrap();
-    let (value, ty) = eval_snippet(
+    let (value, ty) = run_snippet(
         engine,
         r#"
         class Pick a where {

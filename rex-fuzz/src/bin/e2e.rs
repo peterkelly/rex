@@ -34,7 +34,10 @@ async fn run_one(input: &[u8]) {
     if engine.inject_module(module).is_err() {
         return;
     }
-    let _ = engine.into_evaluator().eval(body.as_ref()).await;
+    let mut compiler = engine.into_compiler();
+    if let Ok(compiled) = compiler.compile_expr(body.as_ref()) {
+        let _ = compiler.into_evaluator().run(compiled).await;
+    }
 }
 
 #[tokio::main]

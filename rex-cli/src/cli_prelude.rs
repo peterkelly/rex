@@ -263,6 +263,7 @@ async fn subprocess_output(
 mod tests {
     use rex::{
         engine::{Engine, Value},
+        parser::parse as parse_rex,
         typesystem::{BuiltinTypeId, Type},
     };
 
@@ -283,7 +284,13 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
 
         inject_cli_prelude_engine(&mut engine).unwrap();
-        engine.into_evaluator().eval_snippet(code).await.unwrap();
+        let mut compiler = engine.into_compiler();
+        let parsed = parse_rex(code).unwrap();
+        let program = compiler
+            .compile_program(&parsed, Default::default())
+            .await
+            .unwrap();
+        compiler.into_evaluator().run(program).await.unwrap();
     }
 
     #[tokio::test]
@@ -297,7 +304,14 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
 
         inject_cli_prelude_engine(&mut engine).unwrap();
-        let (value, ty) = engine.into_evaluator().eval_snippet(code).await.unwrap();
+        let mut compiler = engine.into_compiler();
+        let parsed = parse_rex(code).unwrap();
+        let program = compiler
+            .compile_program(&parsed, Default::default())
+            .await
+            .unwrap();
+        let ty = program.result_type().clone();
+        let value = compiler.into_evaluator().run(program).await.unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
         assert_eq!(value.to_rust::<String>().unwrap(), "hello");
     }
@@ -317,7 +331,14 @@ mod tests {
         let mut engine = Engine::with_prelude(()).unwrap();
 
         inject_cli_prelude_engine(&mut engine).unwrap();
-        let (value, ty) = engine.into_evaluator().eval_snippet(code).await.unwrap();
+        let mut compiler = engine.into_compiler();
+        let parsed = parse_rex(code).unwrap();
+        let program = compiler
+            .compile_program(&parsed, Default::default())
+            .await
+            .unwrap();
+        let ty = program.result_type().clone();
+        let value = compiler.into_evaluator().run(program).await.unwrap();
         assert_eq!(
             ty,
             Type::tuple(vec![

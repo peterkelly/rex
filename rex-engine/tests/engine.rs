@@ -55,10 +55,11 @@ fn registry_markdown_lists_core_sections() {
 }
 
 #[tokio::test]
-async fn compile_snippet_rejects_declaration_only_input() {
+async fn compile_program_rejects_declaration_only_input() {
     let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let err = match compiler.compile_snippet("fn id<a> x: a -> a = x;").await {
-        Ok(_) => panic!("declaration-only snippet unexpectedly compiled"),
+    let program = parse_program("fn id<a> x: a -> a = x;");
+    let err = match compiler.compile_program(&program, Default::default()).await {
+        Ok(_) => panic!("declaration-only program unexpectedly compiled"),
         Err(err) => err.into_engine_error(),
     };
 
@@ -143,16 +144,18 @@ async fn injected_module_can_define_pub_adt_declarations() {
     module.add_adt_decl(status).unwrap();
     engine.inject_module(module).unwrap();
 
-    let (value, _ty) = engine
-        .into_evaluator()
-        .eval_snippet(
-            r#"
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_program(
+        r#"
             import acme.status (Failed);
             Failed "boom"
             "#,
-        )
+    );
+    let program = compiler
+        .compile_program(&parsed, Default::default())
         .await
         .unwrap();
+    let value = compiler.into_evaluator().run(program).await.unwrap();
 
     match value.value().unwrap() {
         Value::Adt(tag, args) => {
@@ -168,7 +171,10 @@ async fn export_value_registers_global_value() {
     let expr = parse("answer");
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut engine, |module| module.export_value("answer", 42i32));
-    let (value, ty) = engine.into_evaluator().eval(expr.as_ref()).await.unwrap();
+    let mut compiler = engine.into_compiler();
+    let compiled = compiler.compile_expr(expr.as_ref()).unwrap();
+    let ty = compiled.result_type().clone();
+    let value = compiler.into_evaluator().run(compiled).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(value.to_rust::<i32>().unwrap(), 42);
 }
@@ -188,11 +194,8 @@ async fn record_update_requires_known_variant_for_sum_types() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    match engine
-        .into_evaluator()
-        .eval(program.body.as_ref().unwrap().as_ref())
-        .await
-    {
+    let mut compiler = engine.into_compiler();
+    match compiler.compile_expr(program.body.as_ref().unwrap().as_ref()) {
         Err(err) => {
             let EngineError::Type(err) = err.into_engine_error() else {
                 panic!("expected type error");
@@ -200,6 +203,18 @@ async fn record_update_requires_known_variant_for_sum_types() {
             let err = strip_span(err);
             assert!(matches!(err, TypeError::FieldNotKnown { .. }));
         }
-        _ => panic!("expected type error"),
+        Ok(compiled) => {
+            let result = compiler.into_evaluator().run(compiled).await;
+            match result {
+                Err(err) => {
+                    let EngineError::Type(err) = err.into_engine_error() else {
+                        panic!("expected type error");
+                    };
+                    let err = strip_span(err);
+                    assert!(matches!(err, TypeError::FieldNotKnown { .. }));
+                }
+                Ok(_) => panic!("expected type error"),
+            }
+        }
     }
 }

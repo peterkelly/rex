@@ -3,7 +3,6 @@ use crate::{
         export::{Export, HostFnSync},
         qualify::qualify_program,
         registry::{NativeRegistry, TypeclassRegistry},
-        rewrite::{rewrite_import_uses, rewrite_program_with_imports, validate_import_uses},
     },
     compiler::{
         Compiler,
@@ -17,7 +16,7 @@ use crate::{
         ParallelismController, PreludeMode,
     },
     env::{Environment, RootedEnvironment},
-    error::{CompileError, EngineError},
+    error::EngineError,
     evaluator::{
         Evaluator,
         context::Context,
@@ -29,12 +28,9 @@ use crate::{
     },
     handlers::RexDefault,
     modules::{
-        ImportBindingPolicy, ImportBindings, ImportRequest, Importer, Module, ModuleExports,
-        ModuleId, ModuleSystem, ROOT_MODULE_NAME, ResolvedModule, ResolvedModuleContent,
-        StdlibImporter, VirtualModule, add_import_bindings, contains_import_alias, decl_type_names,
-        decl_value_names, default_import_decl, exports_from_program, import_specifier,
-        interface_decls_from_program, parse_program_from_source, prefix_for_module,
-        program_from_resolved, system::ImportChain, types::ModuleInstance, virtual_export_name,
+        ImportRequest, Importer, Module, ModuleExports, ModuleId, ModuleSystem, ROOT_MODULE_NAME,
+        ResolvedModule, ResolvedModuleContent, StdlibImporter, VirtualModule,
+        interface_decls_from_program, prefix_for_module, virtual_export_name,
     },
     prelude::{inject_prelude, inject_prelude_virtual_module},
     util::{
@@ -45,8 +41,8 @@ use crate::{
 };
 use futures::future::BoxFuture;
 use rex_ast::{
-    ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl, InstanceDecl, Scope,
-    Span, Symbol, TypeDecl,
+    ClassDecl, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, InstanceDecl, Scope, Symbol,
+    TypeDecl,
 };
 use rex_typesystem::{
     inference::infer,
@@ -59,10 +55,8 @@ use rex_typesystem::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use uuid::Uuid;
 
 pub struct Engine<State = ()>
 where
@@ -1000,146 +994,6 @@ where
     pub fn add_importer(&mut self, name: impl Into<String>, importer: Arc<dyn Importer>) {
         self.modules.append_importer(name, importer);
     }
-
-    pub(crate) fn load_module_from_resolved<'a>(
-        &'a mut self,
-        resolved: ResolvedModule,
-        chain: &'a ImportChain,
-    ) -> BoxFuture<'a, Result<ModuleInstance, EngineError>> {
-        Box::pin(async move {
-            let source_fingerprint = self.refresh_if_stale(&resolved)?;
-            if let Some(inst) = self.modules.cached(&resolved.id)? {
-                return Ok(inst);
-            }
-
-            self.modules.mark_loading(&resolved.id)?;
-
-            let prefix = prefix_for_module(&resolved.id);
-            let program = program_from_resolved(&resolved)?;
-            if let ResolvedModuleContent::Source(source) = &resolved.content {
-                self.module_sources
-                    .insert(resolved.id.clone(), source.clone());
-            }
-            let exports = exports_from_program(&program, &prefix, &resolved.id);
-            self.module_exports_cache
-                .insert(resolved.id.clone(), exports.clone());
-            let qualified = qualify_program(&program, &prefix);
-            let interfaces = interface_decls_from_program(&qualified);
-            self.module_interface_cache
-                .insert(resolved.id.clone(), interfaces);
-
-            // Resolve imports first so qualified names exist in the environment.
-            let local_values = decl_value_names(&program.decls);
-            let local_types = decl_type_names(&program.decls);
-            let import_policy = ImportBindingPolicy {
-                forbidden_values: &local_values,
-                forbidden_types: &local_types,
-            };
-            let import_bindings = import_bindings_for_decls(
-                self,
-                &program.decls,
-                Some(resolved.id.clone()),
-                chain,
-                &import_policy,
-            )
-            .await?;
-
-            // Qualify local names, then rewrite `alias.foo` uses into internal symbols.
-            validate_import_uses(&qualified, &import_bindings.alias_exports, None)?;
-            let rewritten = rewrite_import_uses(
-                &qualified,
-                &import_bindings.alias_exports,
-                &import_bindings.imported_values,
-                &import_bindings.imported_types,
-                &import_bindings.imported_classes,
-                Some(&local_types),
-                None,
-            );
-
-            self.inject_decls(&rewritten.decls)?;
-            let init_value = self.heap.alloc_tuple(vec![])?;
-            let init_type = Type::tuple(vec![]);
-
-            let inst = ModuleInstance {
-                id: resolved.id.clone(),
-                exports,
-                init_value,
-                init_type,
-                source_fingerprint: source_fingerprint.clone(),
-            };
-            self.modules.store_loaded(inst.clone())?;
-            if let Some(source_fingerprint) = source_fingerprint {
-                self.module_source_fingerprints
-                    .insert(resolved.id.clone(), source_fingerprint);
-            }
-            Ok(inst)
-        })
-    }
-
-    pub async fn infer_module_with_importer(
-        &mut self,
-        request: ImportRequest,
-        importer: Arc<dyn Importer>,
-    ) -> Result<(Vec<Predicate>, Type), CompileError> {
-        let chain = self.modules.import_chain().with_importer(importer);
-        let resolved = chain.import(request).await.map_err(CompileError::from)?;
-        infer_module_source(self, resolved, &chain)
-            .await
-            .map_err(CompileError::from)
-    }
-
-    pub async fn infer_snippet(
-        &mut self,
-        source: &str,
-    ) -> Result<(Vec<Predicate>, Type), CompileError> {
-        self.infer_snippet_with_importer(source, None)
-            .await
-            .map_err(CompileError::from)
-    }
-
-    pub async fn infer_snippet_at(
-        &mut self,
-        source: &str,
-        importer_path: impl AsRef<Path>,
-    ) -> Result<(Vec<Predicate>, Type), CompileError> {
-        let path = importer_path.as_ref().to_path_buf();
-        self.infer_snippet_with_importer(source, Some(path))
-            .await
-            .map_err(CompileError::from)
-    }
-
-    fn infer_snippet_with_importer<'a>(
-        &'a mut self,
-        source: &'a str,
-        importer_path: Option<PathBuf>,
-    ) -> BoxFuture<'a, Result<(Vec<Predicate>, Type), EngineError>> {
-        Box::pin(async move {
-            let program = parse_program_from_source(source, None)?;
-
-            let importer = importer_path.map(|p| ModuleId::Local { path: p });
-
-            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-            let chain = self.modules.import_chain();
-
-            let prefix = format!("@snippet{}", Uuid::new_v4());
-            let rewritten = rewrite_program_with_imports(
-                self,
-                &program,
-                importer,
-                &prefix,
-                &chain,
-                &mut loaded,
-                &mut loading,
-            )
-            .await?;
-            self.inject_decls(&rewritten.decls)?;
-            let body = rewritten
-                .body
-                .ok_or(EngineError::MissingBody { context: "snippet" })?;
-            self.infer_type(body.as_ref())
-        })
-    }
 }
 
 #[derive(Clone)]
@@ -1350,85 +1204,12 @@ where
     if let Some(prev_interface) = engine.module_interface_cache.get(id).cloned() {
         remove_type_level_symbols_for_module_interface(engine, &prev_interface);
     }
-    engine.modules.invalidate(id)?;
     engine.module_exports_cache.remove(id);
     engine.module_interface_cache.remove(id);
     engine.module_sources.remove(id);
     engine.module_source_fingerprints.remove(id);
     engine.published_cycle_interfaces.remove(id);
     Ok(())
-}
-
-fn import_bindings_for_decls<'a, State>(
-    engine: &'a mut Engine<State>,
-    decls: &'a [Decl],
-    importer: Option<ModuleId>,
-    chain: &'a ImportChain,
-    policy: &'a ImportBindingPolicy<'_>,
-) -> BoxFuture<'a, Result<ImportBindings, EngineError>>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    Box::pin(async move {
-        let mut bindings = ImportBindings::default();
-        for decl in decls {
-            let Decl::Import(import_decl) = decl else {
-                continue;
-            };
-            let exports = resolve_module_exports_from_import_decl_async(
-                engine,
-                import_decl,
-                importer.clone(),
-                chain,
-            )
-            .await?;
-            add_import_bindings(&mut bindings, import_decl, &exports, policy)?;
-        }
-        add_default_import_bindings(engine, &mut bindings, decls, importer, chain, policy).await?;
-        Ok(bindings)
-    })
-}
-
-fn infer_module_source<'a, State>(
-    engine: &'a mut Engine<State>,
-    resolved: ResolvedModule,
-    chain: &'a ImportChain,
-) -> BoxFuture<'a, Result<(Vec<Predicate>, Type), EngineError>>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    Box::pin(async move {
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-
-        loading.insert(resolved.id.clone());
-
-        let prefix = prefix_for_module(&resolved.id);
-        let program = program_from_resolved(&resolved)?;
-
-        let rewritten = rewrite_program_with_imports(
-            engine,
-            &program,
-            Some(resolved.id.clone()),
-            &prefix,
-            chain,
-            &mut loaded,
-            &mut loading,
-        )
-        .await?;
-        engine.inject_decls(&rewritten.decls)?;
-
-        let body = rewritten
-            .body
-            .unwrap_or_else(|| Arc::new(Expr::Tuple(Span::default(), Vec::new())));
-        let (preds, ty) = engine.infer_type(body.as_ref())?;
-
-        let exports = exports_from_program(&program, &prefix, &resolved.id);
-        loaded.insert(resolved.id.clone(), exports);
-        loading.remove(&resolved.id);
-
-        Ok((preds, ty))
-    })
 }
 
 fn remove_type_level_symbols_for_module_interface<State>(engine: &mut Engine<State>, decls: &[Decl])
@@ -1464,87 +1245,4 @@ where
             Decl::Import(..) | Decl::Instance(..) => {}
         }
     }
-}
-
-fn resolve_module_exports_from_import_decl_async<'a, State>(
-    engine: &'a mut Engine<State>,
-    import_decl: &'a ImportDecl,
-    importer: Option<ModuleId>,
-    chain: &'a ImportChain,
-) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    Box::pin(async move {
-        let spec = import_specifier(&import_decl.path);
-        let imported = chain
-            .import(ImportRequest {
-                module_name: spec,
-                importer,
-            })
-            .await?;
-        engine.refresh_if_stale(&imported)?;
-        if let Some(exports) = engine.module_exports_cache.get(&imported.id).cloned() {
-            engine.ensure_cycle_interfaces_published(&imported.id)?;
-            return Ok(exports);
-        }
-        let inst = engine.load_module_from_resolved(imported, chain).await?;
-        Ok(inst.exports)
-    })
-}
-
-async fn add_default_import_bindings<State>(
-    engine: &mut Engine<State>,
-    bindings: &mut ImportBindings,
-    decls: &[Decl],
-    importer: Option<ModuleId>,
-    chain: &ImportChain,
-    policy: &ImportBindingPolicy<'_>,
-) -> Result<(), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let default_imports = engine.default_imports().to_vec();
-    for module_name in default_imports {
-        let alias = Symbol::intern(&module_name);
-        if contains_import_alias(decls, &alias) {
-            continue;
-        }
-        let import_decl = default_import_decl(&module_name);
-        let exports = resolve_module_exports_from_import_decl_async(
-            engine,
-            &import_decl,
-            importer.clone(),
-            chain,
-        )
-        .await?;
-        for (local, target) in exports.values() {
-            if !policy.forbidden_values.contains(local)
-                && !bindings.imported_values.contains_key(local)
-            {
-                bindings
-                    .imported_values
-                    .insert(local.clone(), target.clone());
-            }
-        }
-        for (local, target) in exports.types() {
-            if !policy.forbidden_types.contains(local)
-                && !bindings.imported_types.contains_key(local)
-            {
-                bindings
-                    .imported_types
-                    .insert(local.clone(), target.clone());
-            }
-        }
-        for (local, target) in exports.classes() {
-            if !policy.forbidden_types.contains(local)
-                && !bindings.imported_classes.contains_key(local)
-            {
-                bindings
-                    .imported_classes
-                    .insert(local.clone(), target.clone());
-            }
-        }
-    }
-    Ok(())
 }
