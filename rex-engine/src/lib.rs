@@ -5,7 +5,8 @@
 //!
 //! Embedders build an [`Engine`] with host modules and runtime policy, convert
 //! it into a [`Compiler`] to prepare Rex source or ASTs into a
-//! [`CompiledProgram`], then run that program with a single-shot [`Evaluator`].
+//! [`CompiledProgram`], then run that program with a single-shot [`Evaluator`]
+//! and a map of runtime inputs for `main`.
 
 mod builder;
 mod compiler;
@@ -14,6 +15,7 @@ mod env;
 mod error;
 mod evaluator;
 mod handlers;
+mod manifest;
 mod modules;
 mod native_fn;
 mod overloaded_fn;
@@ -44,6 +46,7 @@ pub use env::Environment;
 pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
 pub use evaluator::{Evaluator, context::Context};
 pub use handlers::RexDefault;
+pub use manifest::{MainInputSpec, MainSignature, Manifest, build_manifest, type_has_vars};
 pub use modules::{
     CanonicalSymbol, DenyImporter, ImportRequest, Importer, Module, ModuleExports, ModuleId,
     ModuleInstance, ModuleKey, PRELUDE_MODULE_NAME, ROOT_MODULE_NAME, ResolvedModule,

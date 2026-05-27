@@ -57,7 +57,7 @@ where
     let ty = compiled.result_type().clone();
     let value = compiler
         .into_evaluator()
-        .run(compiled)
+        .run(compiled, Default::default())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((value, ty))
@@ -96,7 +96,11 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
         .await
         .unwrap();
     let ty = program.result_type().clone();
-    let value = compiler.into_evaluator().run(program).await.unwrap();
+    let value = compiler
+        .into_evaluator()
+        .run(program, Default::default())
+        .await
+        .unwrap();
 
     // `Side` and `Correctness` both provide a `Right` constructor in the same module.
     // This ensures Rex keeps them distinct via explicit type ascription (`is Side` vs `is Sample.Correctness`).
@@ -161,7 +165,11 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
         .await
         .unwrap();
     let ty = program.result_type().clone();
-    let value = compiler.into_evaluator().run(program).await.unwrap();
+    let value = compiler
+        .into_evaluator()
+        .run(program, Default::default())
+        .await
+        .unwrap();
 
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     assert_eq!(
@@ -729,7 +737,10 @@ async fn overloaded_exports_types_and_values() {
     let parsed = parse(expr);
     let compiled = compiler.compile_expr(parsed.as_ref()).unwrap();
     let ty = compiled.result_type().clone();
-    let value = compiler.into_evaluator().run(compiled).await;
+    let value = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let value = value.unwrap();
     assert_overload_tuple_type_shape(&ty);
@@ -798,7 +809,10 @@ async fn overloaded_async_exports_types_and_values() {
     let parsed = parse(expr);
     let compiled = compiler.compile_expr(parsed.as_ref()).unwrap();
     let ty = compiled.result_type().clone();
-    let value = compiler.into_evaluator().run(compiled).await;
+    let value = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let value = value.unwrap();
     assert_overload_tuple_type_shape(&ty);

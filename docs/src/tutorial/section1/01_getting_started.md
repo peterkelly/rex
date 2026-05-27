@@ -1,6 +1,7 @@
 # Getting Started
 
-Rex programs are *one expression*, optionally preceded by top-level declarations:
+Small Rex programs can be written as *one expression*, optionally preceded by
+top-level declarations:
 
 - `type` — algebraic data types (ADTs)
 - `class` / `instance` — type classes and instances
@@ -9,6 +10,10 @@ Rex programs are *one expression*, optionally preceded by top-level declarations
 > **Note:** This tutorial focuses on writing Rex code. If you want to embed Rex in Rust, see [Embedding](../../EMBEDDING.md).
 
 ## Running Rex
+
+A runnable Rex file either defines `main` or ends with a final expression. The
+examples in this tutorial usually use final expressions because they keep small
+programs compact.
 
 From this repository, you can run a Rex file:
 
@@ -24,12 +29,13 @@ cargo run -p rex-cli --bin rex -- -c 'map ((*) 2) [1, 2, 3]'
 
 ### What you should see
 
-The CLI prints the evaluated value of the final expression in your program in JSON format. If
+The CLI prints the evaluated value of the program entry point in JSON format. If
 something fails, you’ll get a parse/type/eval error (often with a span).
 
 ## What “one expression” means
 
-Even with declarations, the program result is the final expression:
+Even with declarations, a program without `main` uses the final expression as
+its result:
 
 ```rex,interactive
 fn inc x: i32 -> i32 = x + 1;

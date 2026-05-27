@@ -15,6 +15,7 @@ uuid = { workspace = true }
 rex-typesystem = { path = "../rex-typesystem", version = "3.9.13" }
 futures = { workspace = true }
 rex-parser = { path = "../rex-parser", version = "3.9.13" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 rex-util = { path = "../rex-util", version = "3.9.13" }
 

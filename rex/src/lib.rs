@@ -42,7 +42,7 @@
 //!     .compile_program(&parsed, CompileOptions::default())
 //!     .await?;
 //! let typ = program.result_type().clone();
-//! let value = compiler.into_evaluator().run(program).await?;
+//! let value = compiler.into_evaluator().run(program, Default::default()).await?;
 //!
 //! assert_eq!(typ.to_string(), "i32");
 //! assert_eq!(value.as_i32()?, 42);
@@ -115,7 +115,7 @@ pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionEr
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
 
-    let value = evaluator.run(program).await?;
+    let value = evaluator.run(program, Default::default()).await?;
 
     let json =
         json::rex_to_json(&value, &result_type, &type_system).map_err(engine::EvalError::from)?;

@@ -25,7 +25,8 @@ cargo run -p rex-cli --bin rex -- path/to/program.rex --inputs path/to/inputs.js
 ```
 
 The inputs file is a top-level JSON object. Each field name must match a
-parameter of `main`; files without `main` have the empty input shape `{}`.
+parameter of `main`; runnable files without `main` use their final expression
+and have the empty input shape `{}`.
 
 Inspect the entry point type metadata:
 

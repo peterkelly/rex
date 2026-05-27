@@ -24,10 +24,13 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
   - `Compiler::runtime_env()` to create explicit runtime preflight data.
   - `Engine::into_evaluator()` / `Compiler::into_evaluator()` to consume preparation state into an evaluator.
-  - `Compiler::compile_*` to prepare source into `CompiledProgram`; `Compiler::infer_*` for
+  - `Compiler::compile_program` to prepare a parsed program entry point into `CompiledProgram`;
+    `Compiler::compile_expr` for lower-level expression execution; `Compiler::infer_*` for
     type-only checks.
   - `RuntimeEnv::validate(&compiled)` to preflight runtime linkage before execution.
-  - `Evaluator::validate(&compiled)` / `Evaluator::run(compiled).await` to validate and execute one prepared program. `run` consumes both the evaluator and the compiled program.
+  - `Evaluator::validate(&compiled)` / `Evaluator::run(compiled, inputs).await` to validate and
+    execute one prepared program. `inputs` is a `BTreeMap<String, Handle>` for the program's
+    external `main` interface; `run` consumes the evaluator, compiled program, and input map.
   - `Engine` carries host state as `Engine<State>` (`State: Clone + Send + Sync + 'static`);
     typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed
     `export_async` callbacks receive `&State` and return
@@ -55,8 +58,8 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   current `CompiledProgram` still stores a typed AST plus runtime linkage metadata, but the
   compile/runtime boundary is now explicit in the API.
 - **Single-shot execution**: evaluation is intentionally one-shot. `CompiledProgram` is validated by
-  borrow and then moved into `Evaluator::run`, which consumes the evaluator as well. Prepare all
-  required declarations/modules before constructing or consuming the evaluator.
+  borrow and then moved into `Evaluator::run` with its runtime input map, consuming the evaluator as
+  well. Prepare all required declarations/modules before constructing or consuming the evaluator.
 - **Current linkage model**: `CompiledProgram` captures the prepared expression and the environment
   snapshot needed to run it. Rex declarations that are part of the prepared program are captured
   there. Host-provided exports and typeclass method bindings remain runtime-linked through

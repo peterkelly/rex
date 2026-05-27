@@ -16,7 +16,7 @@ async fn eval(source: &str) -> Result<(Handle, Type), EngineError> {
     let ty = program.result_type().clone();
     let value = compiler
         .into_evaluator()
-        .run(program)
+        .run(program, Default::default())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((value, ty))

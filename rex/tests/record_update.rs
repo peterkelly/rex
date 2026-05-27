@@ -32,7 +32,11 @@ async fn record_update_end_to_end() {
         .compile_expr(program.body.as_ref().unwrap().as_ref())
         .unwrap();
     let ty = compiled.result_type().clone();
-    let value_handle = compiler.into_evaluator().run(compiled).await.unwrap();
+    let value_handle = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![

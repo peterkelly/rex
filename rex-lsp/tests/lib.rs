@@ -71,7 +71,7 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     let ty = compiled.result_type().clone();
     let handle = compiler
         .into_evaluator()
-        .run(compiled)
+        .run(compiled, Default::default())
         .await
         .expect("evaluate source");
     let display = handle

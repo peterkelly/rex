@@ -175,7 +175,11 @@ async fn run_program(engine: Engine<()>, program: &CompilationUnit) -> (Handle, 
         .compile_expr(program.body.as_ref().unwrap().as_ref())
         .unwrap();
     let ty = compiled.result_type().clone();
-    let handle = compiler.into_evaluator().run(compiled).await.unwrap();
+    let handle = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap();
     (handle, ty)
 }
 

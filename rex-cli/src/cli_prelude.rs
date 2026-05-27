@@ -290,7 +290,11 @@ mod tests {
             .compile_program(&parsed, Default::default())
             .await
             .unwrap();
-        compiler.into_evaluator().run(program).await.unwrap();
+        compiler
+            .into_evaluator()
+            .run(program, Default::default())
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -311,7 +315,11 @@ mod tests {
             .await
             .unwrap();
         let ty = program.result_type().clone();
-        let value = compiler.into_evaluator().run(program).await.unwrap();
+        let value = compiler
+            .into_evaluator()
+            .run(program, Default::default())
+            .await
+            .unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
         assert_eq!(value.to_rust::<String>().unwrap(), "hello");
     }
@@ -338,7 +346,11 @@ mod tests {
             .await
             .unwrap();
         let ty = program.result_type().clone();
-        let value = compiler.into_evaluator().run(program).await.unwrap();
+        let value = compiler
+            .into_evaluator()
+            .run(program, Default::default())
+            .await
+            .unwrap();
         assert_eq!(
             ty,
             Type::tuple(vec![

@@ -13,7 +13,7 @@ async fn run_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), Eng
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
-        .run(program)
+        .run(program, Default::default())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((value, typ))
@@ -31,7 +31,7 @@ async fn owning_evaluator_resources_can_be_kept_after_run() {
     let type_system = evaluator.type_system();
     let heap = evaluator.heap().clone();
 
-    let value = evaluator.run(program).await.unwrap();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
 
     assert_eq!(value.to_rust::<i32>().unwrap(), 7);
     assert!(

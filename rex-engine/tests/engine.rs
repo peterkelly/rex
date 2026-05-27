@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
 use rex_engine::{Engine, EngineError, Module, Value, registry_markdown};
@@ -63,9 +63,127 @@ async fn compile_program_rejects_declaration_only_input() {
         Err(err) => err.into_engine_error(),
     };
 
+    assert!(matches!(err, EngineError::MissingMain));
+}
+
+#[tokio::test]
+async fn compile_program_uses_explicit_main_signature_and_runtime_inputs() {
+    let program = parse_program("fn main x: i32 -> y: i32 -> i32 = x + y;");
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let compiled = compiler
+        .compile_program(&program, Default::default())
+        .await
+        .unwrap();
+
+    let signature = compiled.main_signature();
+    assert_eq!(signature.inputs().len(), 2);
+    assert_eq!(signature.inputs()[0].name, "x");
+    assert_eq!(signature.inputs()[0].typ, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(signature.inputs()[1].name, "y");
+    assert_eq!(signature.result_type(), &Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(compiled.result_type(), &Type::builtin(BuiltinTypeId::I32));
+
+    let evaluator = compiler.into_evaluator();
+    let mut inputs = BTreeMap::new();
+    inputs.insert("y".to_string(), evaluator.heap().alloc_i32(5).unwrap());
+    inputs.insert("x".to_string(), evaluator.heap().alloc_i32(37).unwrap());
+    let value = evaluator.run(compiled, inputs).await.unwrap();
+    assert_eq!(value.as_i32().unwrap(), 42);
+}
+
+#[tokio::test]
+async fn compile_program_preserves_function_results_from_main() {
+    let program = parse_program("fn main x: i32 -> i32 -> i32 = \\ y -> x + y;");
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let compiled = compiler
+        .compile_program(&program, Default::default())
+        .await
+        .unwrap();
+
+    let signature = compiled.main_signature();
+    assert_eq!(signature.inputs().len(), 1);
+    assert_eq!(signature.inputs()[0].name, "x");
+    assert_eq!(signature.inputs()[0].typ, Type::builtin(BuiltinTypeId::I32));
+    assert_eq!(
+        signature.result_type(),
+        &Type::fun(
+            Type::builtin(BuiltinTypeId::I32),
+            Type::builtin(BuiltinTypeId::I32),
+        )
+    );
+}
+
+#[tokio::test]
+async fn compile_program_treats_final_expression_as_zero_input_main() {
+    let program = parse_program("1 + 2");
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let compiled = compiler
+        .compile_program(&program, Default::default())
+        .await
+        .unwrap();
+
+    assert!(compiled.main_signature().inputs().is_empty());
+    assert_eq!(compiled.result_type(), &Type::builtin(BuiltinTypeId::I32));
+    let value = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap();
+    assert_eq!(value.as_i32().unwrap(), 3);
+}
+
+#[tokio::test]
+async fn compile_program_rejects_main_plus_final_expression() {
+    let program = parse_program("fn main x: i32 -> i32 = x;\n2");
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let err = match compiler.compile_program(&program, Default::default()).await {
+        Ok(_) => panic!("main plus final expression unexpectedly compiled"),
+        Err(err) => err.into_engine_error(),
+    };
+
+    assert!(matches!(err, EngineError::MainWithFinalExpression));
+}
+
+#[tokio::test]
+async fn evaluator_rejects_missing_or_extra_main_inputs() {
+    let program = parse_program("fn main x: i32 -> i32 = x;");
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let compiled = compiler
+        .compile_program(&program, Default::default())
+        .await
+        .unwrap();
+    let err = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap_err()
+        .into_engine_error();
+
     assert!(matches!(
         err,
-        EngineError::MissingBody { context: "snippet" }
+        EngineError::MainInputMismatch { missing, extra }
+            if missing == vec!["x".to_string()] && extra.is_empty()
+    ));
+
+    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let compiled = compiler
+        .compile_program(&program, Default::default())
+        .await
+        .unwrap();
+    let evaluator = compiler.into_evaluator();
+    let mut inputs = BTreeMap::new();
+    inputs.insert("x".to_string(), evaluator.heap().alloc_i32(1).unwrap());
+    inputs.insert("y".to_string(), evaluator.heap().alloc_i32(2).unwrap());
+    let err = evaluator
+        .run(compiled, inputs)
+        .await
+        .unwrap_err()
+        .into_engine_error();
+
+    assert!(matches!(
+        err,
+        EngineError::MainInputMismatch { missing, extra }
+            if missing.is_empty() && extra == vec!["y".to_string()]
     ));
 }
 
@@ -155,7 +273,11 @@ async fn injected_module_can_define_pub_adt_declarations() {
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
-    let value = compiler.into_evaluator().run(program).await.unwrap();
+    let value = compiler
+        .into_evaluator()
+        .run(program, Default::default())
+        .await
+        .unwrap();
 
     match value.value().unwrap() {
         Value::Adt(tag, args) => {
@@ -174,7 +296,11 @@ async fn export_value_registers_global_value() {
     let mut compiler = engine.into_compiler();
     let compiled = compiler.compile_expr(expr.as_ref()).unwrap();
     let ty = compiled.result_type().clone();
-    let value = compiler.into_evaluator().run(compiled).await.unwrap();
+    let value = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(value.to_rust::<i32>().unwrap(), 42);
 }
@@ -204,7 +330,10 @@ async fn record_update_requires_known_variant_for_sum_types() {
             assert!(matches!(err, TypeError::FieldNotKnown { .. }));
         }
         Ok(compiled) => {
-            let result = compiler.into_evaluator().run(compiled).await;
+            let result = compiler
+                .into_evaluator()
+                .run(compiled, Default::default())
+                .await;
             match result {
                 Err(err) => {
                     let EngineError::Type(err) = err.into_engine_error() else {

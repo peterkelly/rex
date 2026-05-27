@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::IsTerminal;
 use std::io::{self, Read};
@@ -10,17 +10,19 @@ use std::sync::Arc;
 
 use clap::{Args, Parser};
 use rex::{
-    ast::{CompilationUnit, Expr, FnDecl, Span, Var},
-    engine::{CompileOptions, Context, Engine, Importer, Module, ModuleId},
+    ast::CompilationUnit,
+    engine::{
+        CompileOptions, CompiledProgram, Compiler, Engine, Handle, Heap, Importer, MainInputSpec,
+        MainSignature, Manifest, ModuleId, type_has_vars,
+    },
     json::{json_to_rex, rex_to_json},
     parser::{ParseError, parse as parse_rex},
-    typesystem::{Scheme, Type, TypeKind},
+    typesystem::TypeSystem,
 };
 use serde_json::json;
 
 use rex_cli::cli_prelude;
 use rex_cli::filesystem_importer::FilesystemImporter;
-use rex_cli::manifest::{Manifest, build_manifest, type_has_vars};
 
 #[derive(Parser)]
 #[command(name = "rex")]
@@ -185,10 +187,9 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
     } = opts;
 
     let program = parse_rex(source).map_err(|errs| format_parse_errors(&errs))?;
-    let main_decl = program.get_fn_decl("main");
 
     if manifest {
-        let manifest = main_manifest(&program, main_decl, file.as_deref()).await?;
+        let manifest = main_manifest(&program, file.as_deref()).await?;
         let rendered = serde_json::to_string_pretty(&manifest)
             .map_err(|e| format!("failed to serialize manifest JSON: {e}"))?;
         println!("{rendered}");
@@ -200,7 +201,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
             return Err("`--inputs` cannot be used with compiler-output flags".into());
         }
         let type_json = if emit_type {
-            Some(infer_type_json(&program, main_decl, file.as_deref()).await?)
+            Some(infer_type_json(&program, file.as_deref()).await?)
         } else {
             None
         };
@@ -209,8 +210,7 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
         return Ok(());
     }
 
-    let result_json =
-        eval_result_json(&program, main_decl, file.as_deref(), inputs.as_deref()).await?;
+    let result_json = eval_result_json(&program, file.as_deref(), inputs.as_deref()).await?;
     let rendered = render_result_json(&result_json, raw_output)?;
     println!("{rendered}");
     Ok(())
@@ -218,12 +218,12 @@ async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
 
 async fn eval_result_json(
     program: &CompilationUnit,
-    main_decl: Option<&FnDecl>,
     file: Option<&str>,
     inputs_path: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let signature = inspect_main_signature(program, main_decl, file).await?;
-    ensure_concrete_inputs(&signature.params)?;
+    let (compiler, compiled) = compile_cli_program(program, file).await?;
+    let signature = compiled.main_signature().clone();
+    ensure_concrete_inputs(signature.inputs())?;
     let input_value = match inputs_path {
         Some(path) => {
             let raw =
@@ -231,127 +231,50 @@ async fn eval_result_json(
             serde_json::from_str(&raw)
                 .map_err(|e| format!("failed to parse input JSON `{path}`: {e}"))?
         }
-        None if main_decl.is_some() => {
-            return Err("program defines `main`; pass `--inputs <JSON>`".to_string());
+        None if !signature.inputs().is_empty() => {
+            return Err("program requires `main` inputs; pass `--inputs <JSON>`".to_string());
         }
         None => serde_json::json!({}),
     };
-    let inputs = read_main_inputs(input_value, &signature)?;
-
-    let (mut engine, _importer) = init_engine()?;
-    inject_input_values(&mut engine, inputs)?;
-    let mut compiler = engine.into_compiler();
-    let call_program = program_with_body(program, signature.body);
-    let importer_path = file.map(PathBuf::from);
-
-    let compiled = compiler
-        .compile_program(&call_program, compile_options(importer_path))
-        .await
-        .map_err(|e| format!("{e}"))?;
-
     let result_type = compiled.result_type().clone();
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
-    let value = evaluator.run(compiled).await.map_err(|e| format!("{e}"))?;
+    let input_values = read_main_inputs(input_value, &signature)?;
+    let inputs = json_inputs_to_handles(
+        evaluator.heap(),
+        type_system.as_ref(),
+        input_values,
+        &signature,
+    )?;
+    let value = evaluator
+        .run(compiled, inputs)
+        .await
+        .map_err(|e| format!("{e}"))?;
 
     rex_to_json(&value, &result_type, type_system.as_ref())
         .map_err(|e| format!("failed to convert result to JSON: {e}"))
 }
 
-async fn main_manifest(
-    program: &CompilationUnit,
-    main_decl: Option<&FnDecl>,
-    file: Option<&str>,
-) -> Result<Manifest, String> {
-    let signature = inspect_main_signature(program, main_decl, file).await?;
-    Ok(signature.manifest)
-}
-
-struct MainSignature {
-    params: Vec<MainParam>,
-    input_symbols: Vec<String>,
-    body: Arc<Expr>,
-    result_type: Type,
-    manifest: Manifest,
-}
-
-struct MainParam {
-    name: String,
-    typ: Type,
-}
-
-struct MainInput {
-    symbol: String,
-    typ: Type,
-    value: serde_json::Value,
-}
-
-async fn inspect_main_signature(
-    program: &CompilationUnit,
-    main_decl: Option<&FnDecl>,
-    file: Option<&str>,
-) -> Result<MainSignature, String> {
-    if main_decl.is_some() && program.body.is_some() {
-        return Err(
-            "program defines `main` and also has a final expression; remove one entry point".into(),
-        );
-    }
-
-    let (engine, _importer) = init_engine()?;
-    let mut compiler = engine.into_compiler();
-    let signature_body = signature_body_expr(program, main_decl);
-    let main_program = program_with_body(program, Arc::clone(&signature_body));
-    let importer_path = file.map(PathBuf::from);
-    let compiled = compiler
-        .compile_program(&main_program, compile_options(importer_path))
-        .await
-        .map_err(|e| format!("{e}"))?;
-
-    let main_type = compiled.result_type().clone();
-    let (param_types, result_type) = if main_decl.is_some() {
-        decompose_fun_type(&main_type)
-    } else {
-        (Vec::new(), main_type)
-    };
-    let params = main_params(main_decl, param_types)?;
-
-    let input_symbols = params
-        .iter()
-        .enumerate()
-        .map(|(idx, _)| format!("@rex.cli.input.{idx}"))
-        .collect::<Vec<_>>();
-    let body = if main_decl.is_some() {
-        main_call_expr(&input_symbols)
-    } else {
-        signature_body
-    };
-    let manifest = build_manifest(
-        params.iter().map(|param| (param.name.as_str(), &param.typ)),
-        &result_type,
-        compiler.type_system(),
-    )?;
-
-    Ok(MainSignature {
-        params,
-        input_symbols,
-        body,
-        result_type,
-        manifest,
-    })
+async fn main_manifest(program: &CompilationUnit, file: Option<&str>) -> Result<Manifest, String> {
+    let (compiler, compiled) = compile_cli_program(program, file).await?;
+    compiled
+        .main_signature()
+        .manifest(compiler.type_system())
+        .map_err(|e| format!("{e}"))
 }
 
 fn read_main_inputs(
     value: serde_json::Value,
     signature: &MainSignature,
-) -> Result<Vec<MainInput>, String> {
+) -> Result<BTreeMap<String, serde_json::Value>, String> {
     let inputs = value.as_object().ok_or_else(|| {
         "input JSON must be an object whose fields are parameter names".to_string()
     })?;
 
     let expected = signature
-        .params
+        .inputs()
         .iter()
-        .map(|param| param.name.as_str())
+        .map(|input| input.name.as_str())
         .collect::<BTreeSet<_>>();
     let actual = inputs.keys().map(String::as_str).collect::<BTreeSet<_>>();
     if expected != actual {
@@ -372,108 +295,60 @@ fn read_main_inputs(
     }
 
     signature
-        .params
+        .inputs()
         .iter()
-        .zip(&signature.input_symbols)
-        .map(|(param, symbol)| {
+        .map(|input| {
             let value = inputs
-                .get(&param.name)
-                .ok_or_else(|| format!("missing input `{}`", param.name))?
+                .get(&input.name)
+                .ok_or_else(|| format!("missing input `{}`", input.name))?
                 .clone();
-            Ok(MainInput {
-                symbol: symbol.clone(),
-                typ: param.typ.clone(),
-                value,
-            })
+            Ok((input.name.clone(), value))
         })
         .collect()
 }
 
-fn inject_input_values(engine: &mut Engine, inputs: Vec<MainInput>) -> Result<(), String> {
-    let mut module = Module::global();
-    for input in inputs {
-        let MainInput { symbol, typ, value } = input;
-        let scheme = Scheme::new(vec![], vec![], typ.clone());
-        module
-            .export_native(
-                symbol,
-                scheme,
-                0,
-                move |ctx: Context<()>, _typ: &Type, _args| {
-                    json_to_rex(ctx.heap(), &value, &typ, ctx.type_system())
-                },
-            )
-            .map_err(|e| format!("{e}"))?;
+fn json_inputs_to_handles(
+    heap: &Heap,
+    type_system: &TypeSystem,
+    values: BTreeMap<String, serde_json::Value>,
+    signature: &MainSignature,
+) -> Result<BTreeMap<String, Handle>, String> {
+    let mut out = BTreeMap::new();
+    for input in signature.inputs() {
+        let value = values
+            .get(&input.name)
+            .ok_or_else(|| format!("missing input `{}`", input.name))?;
+        let handle = json_to_rex(heap, value, &input.typ, type_system)
+            .map_err(|e| format!("failed to convert input `{}` from JSON: {e}", input.name))?;
+        out.insert(input.name.clone(), handle);
     }
-    engine.inject_module(module).map_err(|e| format!("{e}"))
+    Ok(out)
 }
 
-fn ensure_concrete_inputs(params: &[MainParam]) -> Result<(), String> {
-    for param in params {
-        if type_has_vars(&param.typ) {
+fn ensure_concrete_inputs(inputs: &[MainInputSpec]) -> Result<(), String> {
+    for input in inputs {
+        if type_has_vars(&input.typ) {
             return Err(format!(
                 "`main` parameter `{}` has polymorphic type `{}`; JSON inputs require concrete parameter types",
-                param.name, param.typ
+                input.name, input.typ
             ));
         }
     }
     Ok(())
 }
 
-fn signature_body_expr(program: &CompilationUnit, main_decl: Option<&FnDecl>) -> Arc<Expr> {
-    if main_decl.is_some() {
-        Arc::new(Expr::Var(Var::new("main")))
-    } else {
-        program.body.clone().unwrap_or_else(unit_expr)
-    }
-}
-
-fn main_params(
-    main_decl: Option<&FnDecl>,
-    param_types: Vec<Type>,
-) -> Result<Vec<MainParam>, String> {
-    let Some(main_decl) = main_decl else {
-        if param_types.is_empty() {
-            return Ok(Vec::new());
-        }
-        return Err(format!(
-            "implicit `main` should have 0 argument(s), but its inferred type has {}",
-            param_types.len()
-        ));
-    };
-
-    if param_types.len() != main_decl.params.len() {
-        return Err(format!(
-            "`main` declares {} parameter(s), but its inferred type has {} argument(s)",
-            main_decl.params.len(),
-            param_types.len()
-        ));
-    }
-
-    let mut seen = BTreeSet::new();
-    main_decl
-        .params
-        .iter()
-        .zip(param_types)
-        .map(|((var, _), typ)| {
-            let name = var.name.to_string();
-            if !seen.insert(name.clone()) {
-                return Err(format!("duplicate `main` parameter `{name}`"));
-            }
-            Ok(MainParam { name, typ })
-        })
-        .collect()
-}
-
-fn program_with_body(program: &CompilationUnit, body: Arc<Expr>) -> CompilationUnit {
-    CompilationUnit {
-        decls: program.decls.clone(),
-        body: Some(body),
-    }
-}
-
-fn unit_expr() -> Arc<Expr> {
-    Arc::new(Expr::Tuple(Span::default(), Vec::new()))
+async fn compile_cli_program(
+    program: &CompilationUnit,
+    file: Option<&str>,
+) -> Result<(Compiler, CompiledProgram), String> {
+    let (engine, _importer) = init_engine()?;
+    let mut compiler = engine.into_compiler();
+    let importer_path = file.map(PathBuf::from);
+    let compiled = compiler
+        .compile_program(program, compile_options(importer_path))
+        .await
+        .map_err(|e| format!("{e}"))?;
+    Ok((compiler, compiled))
 }
 
 fn snippet_prefix_source(importer_path: Option<&PathBuf>) -> ModuleId {
@@ -489,28 +364,6 @@ fn compile_options(importer_path: Option<PathBuf>) -> CompileOptions {
         Some(path) => options.with_importer_path(path),
         None => options,
     }
-}
-
-fn main_call_expr(input_symbols: &[String]) -> Arc<Expr> {
-    let mut expr = Arc::new(Expr::Var(Var::new("main")));
-    for symbol in input_symbols {
-        expr = Arc::new(Expr::App(
-            Span::default(),
-            expr,
-            Arc::new(Expr::Var(Var::new(symbol))),
-        ));
-    }
-    expr
-}
-
-fn decompose_fun_type(typ: &Type) -> (Vec<Type>, Type) {
-    let mut params = Vec::new();
-    let mut cur = typ.clone();
-    while let TypeKind::Fun(param, ret) = cur.as_ref() {
-        params.push(param.clone());
-        cur = ret.clone();
-    }
-    (params, cur)
 }
 
 fn render_result_json(value: &serde_json::Value, raw_output: bool) -> Result<String, String> {
@@ -543,13 +396,12 @@ fn emit_json(
 
 async fn infer_type_json(
     program: &CompilationUnit,
-    main_decl: Option<&FnDecl>,
     file: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let signature = inspect_main_signature(program, main_decl, file).await?;
+    let (_compiler, compiled) = compile_cli_program(program, file).await?;
 
     Ok(json!({
-        "type": signature.result_type.to_string(),
+        "type": compiled.result_type().to_string(),
         "constraints": [],
     }))
 }
@@ -594,11 +446,8 @@ mod tests {
     async fn emit_ast_and_type_are_json() {
         let source = "1 + 2";
         let program = parse_rex(source).expect("parse");
-        let main_decl = program.get_fn_decl("main");
 
-        let ty_json = infer_type_json(&program, main_decl, None)
-            .await
-            .expect("infer");
+        let ty_json = infer_type_json(&program, None).await.expect("infer");
         let ast_out = emit_json(&program, true, None).expect("emit ast");
         let type_out = emit_json(&program, false, Some(ty_json.clone())).expect("emit type");
         let both_out = emit_json(&program, true, Some(ty_json)).expect("emit both");
@@ -617,8 +466,7 @@ mod tests {
         "#;
 
         let program = parse_rex(source).expect("parse");
-        let main_decl = program.get_fn_decl("main");
-        let value = eval_result_json(&program, main_decl, None, None)
+        let value = eval_result_json(&program, None, None)
             .await
             .expect("eval result json");
         assert_eq!(value, serde_json::json!({ "Rect": [2, 3] }));
@@ -668,9 +516,8 @@ mod tests {
         std::fs::write(&main, source).expect("write main.rex");
         let main = main.to_string_lossy().to_string();
         let program = parse_rex(source).expect("parse");
-        let main_decl = program.get_fn_decl("main");
 
-        let json = infer_type_json(&program, main_decl, Some(&main))
+        let json = infer_type_json(&program, Some(&main))
             .await
             .expect("infer file");
         let _ = std::fs::remove_dir_all(&root);
@@ -683,9 +530,8 @@ mod tests {
             fn main x: i32 -> i32 = x + 1;
         "#;
         let program = parse_rex(source).expect("parse");
-        let main_decl = program.get_fn_decl("main").expect("main decl");
 
-        let json = infer_type_json(&program, Some(main_decl), None)
+        let json = infer_type_json(&program, None)
             .await
             .expect("infer entrypoint");
 
@@ -700,9 +546,8 @@ mod tests {
             41
         "#;
         let program = parse_rex(source).expect("parse");
-        let main_decl = program.get_fn_decl("main");
 
-        let err = infer_type_json(&program, main_decl, None)
+        let err = infer_type_json(&program, None)
             .await
             .expect_err("main plus final expression should fail");
 
@@ -716,7 +561,6 @@ mod tests {
             fn main x: i32 -> y: i32 -> i32 = x + y;
         "#;
         let program = parse_rex(source).expect("parse");
-        let main_decl = program.get_fn_decl("main").expect("main decl");
 
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -725,14 +569,9 @@ mod tests {
         let inputs = std::env::temp_dir().join(format!("rex-main-inputs-{nonce}.json"));
         std::fs::write(&inputs, r#"{ "y": 5, "x": 37 }"#).expect("write inputs");
 
-        let actual = eval_result_json(
-            &program,
-            Some(main_decl),
-            None,
-            Some(&inputs.to_string_lossy()),
-        )
-        .await
-        .expect("eval main");
+        let actual = eval_result_json(&program, None, Some(&inputs.to_string_lossy()))
+            .await
+            .expect("eval main");
         let _ = std::fs::remove_file(&inputs);
 
         assert_eq!(actual, serde_json::json!(42));
@@ -746,11 +585,8 @@ mod tests {
             fn main box: Box -> i32 = box.value;
         "#;
         let program = parse_rex(source).expect("parse");
-        let main_decl = program.get_fn_decl("main").expect("main decl");
 
-        let manifest = main_manifest(&program, Some(main_decl), None)
-            .await
-            .expect("manifest");
+        let manifest = main_manifest(&program, None).await.expect("manifest");
         let manifest = serde_json::to_value(manifest).expect("manifest json");
 
         assert!(manifest.get("entrypoint").is_none());
@@ -785,10 +621,10 @@ mod tests {
         let inputs = std::env::temp_dir().join(format!("rex-implicit-main-inputs-{nonce}.json"));
         std::fs::write(&inputs, r#"{}"#).expect("write inputs");
 
-        let actual = eval_result_json(&program, None, None, Some(&inputs.to_string_lossy()))
+        let actual = eval_result_json(&program, None, Some(&inputs.to_string_lossy()))
             .await
             .expect("eval implicit main");
-        let manifest = main_manifest(&program, None, None)
+        let manifest = main_manifest(&program, None)
             .await
             .expect("implicit manifest");
         let manifest = serde_json::to_value(manifest).expect("manifest json");

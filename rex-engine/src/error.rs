@@ -202,6 +202,21 @@ pub enum EngineError {
     UnsupportedExpr,
     #[error("{context} must contain a final expression")]
     MissingBody { context: &'static str },
+    #[error("program must define `main` or contain a final expression")]
+    MissingMain,
+    #[error("program defines `main` and also has a final expression; remove one entry point")]
+    MainWithFinalExpression,
+    #[error("duplicate `main` parameter `{name}`")]
+    DuplicateMainInput { name: String },
+    #[error(
+        "`main` declares {declared} parameter(s), but its inferred type has {inferred} argument(s)"
+    )]
+    MainArityMismatch { declared: usize, inferred: usize },
+    #[error("inputs do not match `main` parameters (missing: {missing:?}, extra: {extra:?})")]
+    MainInputMismatch {
+        missing: Vec<String>,
+        extra: Vec<String>,
+    },
     #[error("empty sequence")]
     EmptySequence,
     #[error("index {index} out of bounds in `{name}` (len {len})")]

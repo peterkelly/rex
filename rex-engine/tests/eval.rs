@@ -83,7 +83,7 @@ async fn eval_expr(engine: Engine, expr: &Expr) -> Result<Handle, EngineError> {
         .map_err(|err| err.into_engine_error())?;
     compiler
         .into_evaluator()
-        .run(compiled)
+        .run(compiled, Default::default())
         .await
         .map_err(|err| err.into_engine_error())
 }
@@ -98,7 +98,11 @@ async fn engine_consumes_into_evaluator() {
         .await
         .unwrap();
     let ty = program.result_type().clone();
-    let value = compiler.into_evaluator().run(program).await.unwrap();
+    let value = compiler
+        .into_evaluator()
+        .run(program, Default::default())
+        .await
+        .unwrap();
 
     assert_eq!(ty.to_string(), "i32");
     assert_eq!(value.as_i32().unwrap(), 3);
@@ -114,7 +118,7 @@ async fn compiler_consumes_into_evaluator() {
         .await
         .unwrap();
     let evaluator = compiler.into_evaluator();
-    let value = evaluator.run(program).await.unwrap();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
 
     assert_eq!(value.as_i32().unwrap(), 42);
 }
@@ -359,7 +363,7 @@ async fn runtime_env_validates_compiled_program_requirements_before_eval() {
         } if missing_natives == vec![Symbol::intern("inc")]
     ));
     let err = evaluator
-        .run(program)
+        .run(program, Default::default())
         .await
         .unwrap_err()
         .into_engine_error();
@@ -435,7 +439,7 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     let evaluator = runtime_compiler.into_evaluator();
     assert!(evaluator.compatibility_with(&program).is_compatible());
     evaluator.validate(&program).unwrap();
-    let value = evaluator.run(program).await.unwrap();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 41);
 }
 
@@ -808,7 +812,11 @@ async fn typed_native_injection_uses_handle_conversions() {
     let mut compiler = engine.into_compiler();
     let compiled = compiler.compile_expr(expr.as_ref()).unwrap();
     let ty = compiled.result_type().clone();
-    let ptr = compiler.into_evaluator().run(compiled).await.unwrap();
+    let ptr = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap();
 
     assert_eq!(
         ty,

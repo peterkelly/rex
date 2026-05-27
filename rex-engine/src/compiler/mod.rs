@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use rex_ast::{CompilationUnit, Expr, Symbol};
-use rex_typesystem::types::{Predicate, Type, TypedExpr, TypedExprKind};
+use rex_ast::{CompilationUnit, Expr, FnDecl, Symbol, Var};
+use rex_typesystem::types::{Predicate, Type, TypeKind, TypedExpr, TypedExprKind};
 use rex_typesystem::typesystem::TypeSystem;
 use uuid::Uuid;
 
@@ -18,6 +18,7 @@ use crate::{
         },
         type_check::{collect_pattern_bindings, type_check_engine},
     },
+    manifest::{MainInputSpec, MainSignature},
     modules::{
         ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, exports_from_program,
         parse_program_from_source, prefix_for_module, program_from_resolved,
@@ -26,10 +27,6 @@ use crate::{
 
 pub(crate) mod program;
 pub(crate) mod type_check;
-
-fn unit_expr() -> Arc<Expr> {
-    Arc::new(Expr::Tuple(Default::default(), Vec::new()))
-}
 
 /// Options for compiling an already parsed Rex program.
 #[derive(Clone, Debug, Default)]
@@ -94,18 +91,20 @@ where
 
     /// Typecheck an expression and package it as a prepared program.
     pub fn compile_expr(&mut self, expr: &Expr) -> Result<CompiledProgram, CompileError> {
-        self.compile_expr_internal(expr).map_err(CompileError::from)
+        let typed = self.type_check(expr).map_err(CompileError::from)?;
+        let signature = MainSignature::new(Vec::new(), typed.typ.clone());
+        Ok(self.compile_typed_expr(typed, signature))
     }
 
-    pub(crate) fn compile_expr_internal(
-        &mut self,
-        expr: &Expr,
-    ) -> Result<CompiledProgram, EngineError> {
-        let typed = self.type_check(expr)?;
+    fn compile_typed_expr(
+        &self,
+        typed: TypedExpr,
+        main_signature: MainSignature,
+    ) -> CompiledProgram {
         let env = self.engine.env_snapshot();
         let externs = self.collect_externs(&typed, &env);
         let link_contract = self.link_contract(&typed, &env);
-        Ok(CompiledProgram::new(externs, link_contract, env, typed))
+        CompiledProgram::new(externs, link_contract, main_signature, env, typed)
     }
 
     pub(crate) fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
@@ -393,14 +392,40 @@ where
     }
 
     /// Rewrite imports for, typecheck, and prepare an already-parsed program.
+    ///
+    /// Programs are compiled using Rex's external `main` semantics: a program
+    /// with `fn main ...` exposes that function's parameters as runtime inputs;
+    /// otherwise a final expression is treated as an implicit zero-input main.
     pub async fn compile_program(
         &mut self,
         program: &CompilationUnit,
         options: CompileOptions,
     ) -> Result<CompiledProgram, CompileError> {
-        self.compile_program_internal(program, options)
-            .await
-            .map_err(CompileError::from)
+        let entry = main_entry_program(program)?;
+        let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
+        let prefix = options
+            .prefix_source
+            .map(|id| prefix_for_module(&id))
+            .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
+        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+        let chain = self.engine.modules.import_chain();
+        let rewritten = self
+            .rewrite_and_inject_program(
+                &entry.program,
+                importer,
+                &prefix,
+                &chain,
+                &mut loaded,
+                &mut loading,
+            )
+            .await?;
+        let body = rewritten
+            .body
+            .ok_or(EngineError::MissingBody { context: "program" })?;
+        let typed = self.type_check(body.as_ref())?;
+        let main_signature = main_signature_for_type(entry.param_names, &typed.typ)?;
+        Ok(self.compile_typed_expr(typed, main_signature))
     }
 
     pub async fn infer_snippet(
@@ -409,15 +434,29 @@ where
         importer_path: Option<&Path>,
     ) -> Result<(Vec<Predicate>, Type), CompileError> {
         let program = parse_program_from_source(source, None).map_err(CompileError::from)?;
-        self.infer_program_internal(
-            &program,
-            CompileOptions {
-                importer_path: importer_path.map(Path::to_path_buf),
-                ..CompileOptions::default()
-            },
-        )
-        .await
-        .map_err(CompileError::from)
+        let importer = importer_path.map(|p| ModuleId::Local {
+            path: p.to_path_buf(),
+        });
+        let prefix = format!("@snippet{}", Uuid::new_v4());
+        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
+        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+        let chain = self.engine.modules.import_chain();
+        let rewritten = self
+            .rewrite_and_inject_program(
+                &program,
+                importer,
+                &prefix,
+                &chain,
+                &mut loaded,
+                &mut loading,
+            )
+            .await?;
+        let body = rewritten
+            .body
+            .ok_or(EngineError::MissingBody { context: "snippet" })?;
+        self.engine
+            .infer_type(body.as_ref())
+            .map_err(CompileError::from)
     }
 
     pub async fn infer_module_with_importer(
@@ -446,7 +485,9 @@ where
             )
             .await
             .map_err(CompileError::from)?;
-        let body = rewritten.body.unwrap_or_else(unit_expr);
+        let body = rewritten
+            .body
+            .unwrap_or_else(|| Arc::new(Expr::Tuple(Default::default(), Vec::new())));
         let result = self
             .engine
             .infer_type(body.as_ref())
@@ -458,66 +499,69 @@ where
 
         Ok(result)
     }
+}
 
-    fn compile_program_internal<'a>(
-        &'a mut self,
-        program: &'a CompilationUnit,
-        options: CompileOptions,
-    ) -> BoxFuture<'a, Result<CompiledProgram, EngineError>> {
-        Box::pin(async move {
-            let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
-            let prefix = options
-                .prefix_source
-                .map(|id| prefix_for_module(&id))
-                .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
-            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-            let chain = self.engine.modules.import_chain();
-            let rewritten = self
-                .rewrite_and_inject_program(
-                    program,
-                    importer,
-                    &prefix,
-                    &chain,
-                    &mut loaded,
-                    &mut loading,
-                )
-                .await?;
-            let body = rewritten
-                .body
-                .ok_or(EngineError::MissingBody { context: "snippet" })?;
-            self.compile_expr_internal(body.as_ref())
-        })
+struct MainEntryProgram {
+    program: CompilationUnit,
+    param_names: Vec<String>,
+}
+
+fn main_entry_program(program: &CompilationUnit) -> Result<MainEntryProgram, EngineError> {
+    let main_decl = program.get_fn_decl("main");
+    match (main_decl, program.body.as_ref()) {
+        (Some(_), Some(_)) => Err(EngineError::MainWithFinalExpression),
+        (Some(main_decl), None) => Ok(MainEntryProgram {
+            program: CompilationUnit {
+                decls: program.decls.clone(),
+                body: Some(Arc::new(Expr::Var(Var::new("main")))),
+            },
+            param_names: main_param_names(main_decl)?,
+        }),
+        (None, Some(body)) => Ok(MainEntryProgram {
+            program: CompilationUnit {
+                decls: program.decls.clone(),
+                body: Some(Arc::clone(body)),
+            },
+            param_names: Vec::new(),
+        }),
+        (None, None) => Err(EngineError::MissingMain),
+    }
+}
+
+fn main_param_names(main_decl: &FnDecl) -> Result<Vec<String>, EngineError> {
+    let mut seen = BTreeSet::new();
+    let mut names = Vec::with_capacity(main_decl.params.len());
+    for (var, _) in &main_decl.params {
+        let name = var.name.to_string();
+        if !seen.insert(name.clone()) {
+            return Err(EngineError::DuplicateMainInput { name });
+        }
+        names.push(name);
+    }
+    Ok(names)
+}
+
+fn main_signature_for_type(
+    param_names: Vec<String>,
+    typ: &Type,
+) -> Result<MainSignature, EngineError> {
+    let declared = param_names.len();
+    let mut cur = typ.clone();
+    let mut inputs = Vec::with_capacity(declared);
+
+    for name in param_names {
+        let TypeKind::Fun(param, ret) = cur.as_ref() else {
+            return Err(EngineError::MainArityMismatch {
+                declared,
+                inferred: inputs.len(),
+            });
+        };
+        inputs.push(MainInputSpec {
+            name,
+            typ: param.clone(),
+        });
+        cur = ret.clone();
     }
 
-    fn infer_program_internal<'a>(
-        &'a mut self,
-        program: &'a CompilationUnit,
-        options: CompileOptions,
-    ) -> BoxFuture<'a, Result<(Vec<Predicate>, Type), EngineError>> {
-        Box::pin(async move {
-            let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
-            let prefix = options
-                .prefix_source
-                .map(|id| prefix_for_module(&id))
-                .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
-            let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-            let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-            let chain = self.engine.modules.import_chain();
-            let rewritten = self
-                .rewrite_and_inject_program(
-                    program,
-                    importer,
-                    &prefix,
-                    &chain,
-                    &mut loaded,
-                    &mut loading,
-                )
-                .await?;
-            let body = rewritten
-                .body
-                .ok_or(EngineError::MissingBody { context: "snippet" })?;
-            self.engine.infer_type(body.as_ref())
-        })
-    }
+    Ok(MainSignature::new(inputs, cur))
 }

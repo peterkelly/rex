@@ -38,7 +38,7 @@ async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String>
     let ty = compiled.result_type().clone();
     let handle = compiler
         .into_evaluator()
-        .run(compiled)
+        .run(compiled, Default::default())
         .await
         .map_err(|e| format!("{e}"))?;
     assert!(

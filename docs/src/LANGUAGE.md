@@ -38,8 +38,8 @@ When a source is run as a program, Rex uses one entry point:
   must not also contain a final expression.
 - If the source does not define `main`, the final expression is treated as an
   implicit zero-argument entry point.
-- If there is no `main` and no final expression, the implicit entry point returns
-  unit.
+- If there is no `main` and no final expression, running the source as a program
+  is an error.
 
 The CLI passes arguments to `main` from a JSON file supplied with `--inputs`.
 The JSON file is a top-level object whose fields match the parameter names:
@@ -56,8 +56,9 @@ fn main scale: i32 -> offset: i32 -> i32 =
 }
 ```
 
-The values are converted to Rex values using the parameter types. For files
-without `main`, the input shape is `{}`.
+The values are converted to Rex values using the parameter types. Runnable files
+without `main` use their final expression as the entry point, so their input
+shape is `{}`.
 
 ## Modules and Imports
 

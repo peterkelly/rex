@@ -30,10 +30,13 @@ Evaluation API:
 
 - `Engine` builds the host environment.
 - `Compiler` prepares user code into a `CompiledProgram`.
-- `Evaluator` owns the runtime core and runs one prepared program.
+- `Evaluator` owns the runtime core and runs one prepared program with runtime inputs for `main`.
 
 `Evaluator` is single-shot: preflight validation borrows the compiled program, and
-`Evaluator::run` consumes both the evaluator and the compiled program.
+`Evaluator::run` consumes the evaluator, the compiled program, and a `BTreeMap<String, Handle>` of
+inputs. Programs are compiled with Rex's singular external interface semantics: an explicit
+`fn main ...` defines named runtime inputs, while a final expression without `main` is treated as
+an implicit zero-input `main`.
 
 ```rust,ignore
 use rex::{
@@ -51,13 +54,14 @@ let program = compiler
 assert_eq!(program.result_type().to_string(), "i32");
 let evaluator = compiler.into_evaluator();
 evaluator.validate(&program)?;
-let value = evaluator.run(program).await?;
+let value = evaluator.run(program, Default::default()).await?;
 ```
 
 What "compiled" means in the current design:
 
 - parsing, import rewriting, declaration injection, and typechecking have already happened
 - `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
+- `CompiledProgram::main_signature()` reports input names/types and the external result type
 - runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
 - internally, `RuntimeEnv` keeps only the link capabilities needed for preflight validation
 - `Evaluator` owns the runtime core needed for execution
@@ -65,8 +69,8 @@ What "compiled" means in the current design:
   contract explicit, including the current ABI version and the required callable shapes
 - `CompiledProgram::storage_boundary()` and `RuntimeEnv::storage_boundary()` mark both values as
   API artifacts, not serialization-ready artifacts
-- `Evaluator::run` consumes the evaluator and compiled program; use a new engine/compiler/evaluator
-  for another generated workflow
+- `Evaluator::run` consumes the evaluator, compiled program, and runtime input map; use a new
+  engine/compiler/evaluator for another generated workflow
 
 What is currently captured versus linked:
 
@@ -100,15 +104,15 @@ runtime.validate(&program)?;
 
 let evaluator = compiler.into_evaluator();
 evaluator.validate(&program)?;
-let value = evaluator.run(program).await?;
+let value = evaluator.run(program, Default::default()).await?;
 ```
 
 `RuntimeEnv::compatibility_with` and `Evaluator::compatibility_with` return structured link
 feedback. That is useful for tools and AI agents that want to report missing or incompatible host
 bindings before attempting evaluation.
 
-For pre-parsed expressions, compile with `Compiler::compile_expr` and pass the resulting
-`CompiledProgram` to `Evaluator::run`.
+For lower-level expression execution, compile with `Compiler::compile_expr` and pass an empty input
+map to `Evaluator::run`.
 
 ## Evaluate Rex Code Directly
 
@@ -131,7 +135,7 @@ let body = program
     .expect("snippet must contain a final expression");
 let program = compiler.compile_expr(body.as_ref())?;
 let evaluator = compiler.into_evaluator();
-let value = evaluator.run(program).await?;
+let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
 ```
 
@@ -248,7 +252,7 @@ let parsed = parse("import acme.main (main);\nmain").map_err(|errs| format!("{er
 let program = compiler
     .compile_program(&parsed, CompileOptions::default())
     .await?;
-let value = compiler.into_evaluator().run(program).await?;
+let value = compiler.into_evaluator().run(program, Default::default()).await?;
 println!("{value}");
 ```
 
@@ -298,7 +302,7 @@ let parsed = parse("import acme.math (inc, double_async as d);\ninc (d 20)")
 let program = compiler
     .compile_program(&parsed, CompileOptions::default())
     .await?;
-let value = compiler.into_evaluator().run(program).await?;
+let value = compiler.into_evaluator().run(program, Default::default()).await?;
 println!("{value}");
 ```
 
@@ -403,7 +407,7 @@ let parsed = parse(
 let program = compiler
     .compile_program(&parsed, CompileOptions::default())
     .await?;
-let value = compiler.into_evaluator().run(program).await?;
+let value = compiler.into_evaluator().run(program, Default::default()).await?;
 println!("{value}"); // ("left        ", "       right")
 ```
 
@@ -490,7 +494,7 @@ let program = compiler
             .with_importer_path(std::path::Path::new("/tmp/workflow/_snippet.rex")),
     )
     .await?;
-let value = compiler.into_evaluator().run(program).await?;
+let value = compiler.into_evaluator().run(program, Default::default()).await?;
 ```
 
 ## Engine State
@@ -698,7 +702,7 @@ let body = program
 let mut compiler = engine.into_compiler();
 let compiled = compiler.compile_expr(body.as_ref())?;
 let _ty = compiled.result_type().clone();
-let value = compiler.into_evaluator().run(compiled).await?;
+let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
 println!("{value}");
 ```
 
@@ -747,7 +751,7 @@ for code in [
     let mut compiler = engine.into_compiler();
     let compiled = compiler.compile_expr(body.as_ref())?;
     let _ty = compiled.result_type().clone();
-    let value = compiler.into_evaluator().run(compiled).await?;
+    let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
     println!("{value}");
 }
 ```
@@ -781,7 +785,7 @@ let body = program
 let mut compiler = engine.into_compiler();
 let compiled = compiler.compile_expr(body.as_ref())?;
 let _ty = compiled.result_type().clone();
-let v = compiler.into_evaluator().run(compiled).await?;
+let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
 println!("{v}");
 ```
 
@@ -925,7 +929,7 @@ let body = parse("Just 1")
 let mut compiler = engine.into_compiler();
 let compiled = compiler.compile_expr(body.as_ref())?;
 let _ty = compiled.result_type().clone();
-let v = compiler.into_evaluator().run(compiled).await?;
+let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
 assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));
 ```
 

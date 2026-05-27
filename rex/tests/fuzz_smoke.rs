@@ -70,7 +70,10 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         let _ = engine.inject_module(module);
         let mut compiler = engine.into_compiler();
         if let Ok(compiled) = compiler.compile_expr(body.as_ref()) {
-            let _ = compiler.into_evaluator().run(compiled).await;
+            let _ = compiler
+                .into_evaluator()
+                .run(compiled, Default::default())
+                .await;
         }
     }
 }

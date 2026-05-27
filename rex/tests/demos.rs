@@ -54,7 +54,7 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                     let ty = program.result_type().clone();
                     let value = compiler
                         .into_evaluator()
-                        .run(program)
+                        .run(program, Default::default())
                         .await
                         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
                     (heap, value, ty)

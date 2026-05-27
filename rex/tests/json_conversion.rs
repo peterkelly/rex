@@ -245,7 +245,11 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .compile_expr(expr_program.body.as_ref().unwrap().as_ref())
         .unwrap();
     let ty_eval = compiled.result_type().clone();
-    let handle_eval = compiler.into_evaluator().run(compiled).await.unwrap();
+    let handle_eval = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
     let mut compiler = engine_with_eval_json_record().into_compiler();
     let parsed = parse_program(rex_code);
@@ -254,7 +258,11 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .await
         .unwrap();
     let ty_snippet = program.result_type().clone();
-    let handle_snippet = compiler.into_evaluator().run(program).await.unwrap();
+    let handle_snippet = compiler
+        .into_evaluator()
+        .run(program, Default::default())
+        .await
+        .unwrap();
     assert_eval_json(
         &type_system,
         &handle_snippet,
@@ -275,7 +283,11 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .await
         .unwrap();
     let ty_snippet_at = program.result_type().clone();
-    let handle_snippet_at = compiler.into_evaluator().run(program).await.unwrap();
+    let handle_snippet_at = compiler
+        .into_evaluator()
+        .run(program, Default::default())
+        .await
+        .unwrap();
     assert_eval_json(
         &type_system,
         &handle_snippet_at,

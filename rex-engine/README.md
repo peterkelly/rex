@@ -1,13 +1,11 @@
 # Rex Engine (`rex-engine`)
 
 This crate prepares and evaluates Rex programs and supports host-native injection of functions and
-values. The API now exposes an explicit preparation boundary: `Engine` builds the host
-environment, `Compiler` prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator`
-runs one prepared program. The evaluator still owns the compiler/engine state it needs for
-convenience entry points, but the compile/runtime split is now a first-class part of the public
-API. The runtime stores values in the heap and returns rooted `Handle`s; `Handle::value()` exposes
-safe public `Value` views for inspection. It supports closures, application, let-in, if-then-else,
-tuples/lists/dicts, and `match` expressions.
+values. The API exposes an explicit preparation boundary: `Engine` builds the host environment,
+`Compiler` prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator` runs one
+prepared program with a map of runtime inputs for `main`. The runtime stores values in the heap and
+returns rooted `Handle`s; `Handle::value()` exposes safe public `Value` views for inspection. It
+supports closures, application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 
 ## Quickstart
 
@@ -26,14 +24,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = parse("inc answer").map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
-    let body = program.body.as_ref().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing final expression")
-    })?;
     let mut compiler = engine.into_compiler();
-    let compiled = compiler.compile_expr(body.as_ref())?;
+    let compiled = compiler.compile_program(&program, Default::default()).await?;
     let evaluator = compiler.into_evaluator();
     evaluator.validate(&compiled)?;
-    let value = evaluator.run(compiled).await?;
+    let value = evaluator.run(compiled, Default::default()).await?;
 
     assert_eq!(value.as_i32()?, 43);
     Ok(())

@@ -23,7 +23,11 @@ async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
         .compile_expr(program.body.as_ref().unwrap().as_ref())
         .unwrap();
     let ty = compiled.result_type().clone();
-    let value = compiler.into_evaluator().run(compiled).await.unwrap();
+    let value = compiler
+        .into_evaluator()
+        .run(compiled, Default::default())
+        .await
+        .unwrap();
     (value, heap, ty)
 }
 

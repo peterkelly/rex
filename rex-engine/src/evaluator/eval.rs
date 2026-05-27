@@ -2004,7 +2004,7 @@ fn project_pointer_with_access(
     }
 }
 
-fn synthetic_application_expr_from_head(
+pub(crate) fn synthetic_application_expr_from_head(
     mut env: Environment,
     head: TypedExpr,
     args: &[(Pointer, Type)],

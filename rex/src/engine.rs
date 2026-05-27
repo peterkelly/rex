@@ -36,6 +36,15 @@ pub use rex_engine::CompiledProgram;
 /// Metadata describing what a [`CompiledProgram`] captures and whether it is serializable.
 pub use rex_engine::CompiledProgramBoundary;
 
+/// One named input accepted by a compiled Rex program.
+pub use rex_engine::MainInputSpec;
+
+/// Externally visible main input and result types for a compiled program.
+pub use rex_engine::MainSignature;
+
+/// JSON-serializable description of a compiled program's external types.
+pub use rex_engine::Manifest;
+
 /// Compile-time view of an [`Engine`] used to prepare Rex source for execution.
 pub use rex_engine::Compiler;
 
@@ -158,6 +167,12 @@ pub use rex_engine::Value;
 
 /// Formatting options for displaying Rex runtime values.
 pub use rex_engine::ValueDisplayOptions;
+
+/// Build a manifest from named inputs plus a result type.
+pub use rex_engine::build_manifest;
+
+/// Return true when a type still contains type variables.
+pub use rex_engine::type_has_vars;
 
 /// Convert ADT collection errors into an embedder-facing [`EngineError`].
 pub use rex_engine::collect_adts_error_to_engine;

@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use rex_ast::Symbol;
 use rex_typesystem::{
@@ -11,7 +14,10 @@ use crate::{
     EvalError, RuntimeEnv,
     compiler::program::{CompiledProgram, RuntimeCapabilities, RuntimeCompatibility},
     error::EngineError,
-    evaluator::{eval::eval_typed_expr, runtime_core::RuntimeCore},
+    evaluator::{
+        eval::{eval_typed_expr, synthetic_application_expr_from_head},
+        runtime_core::RuntimeCore,
+    },
     util::split_fun,
     value::{Cell, Handle, Heap, HeapAccess, Pointer},
 };
@@ -25,7 +31,8 @@ pub(crate) mod scheduler;
 
 /// Single-shot runtime for validating and running prepared Rex code.
 ///
-/// `run` consumes both the evaluator and the [`CompiledProgram`].
+/// `run` consumes both the evaluator and the [`CompiledProgram`], and applies
+/// the supplied runtime inputs to the program's external `main` interface.
 pub struct Evaluator<State = ()>
 where
     State: Clone + Send + Sync + 'static,
@@ -89,16 +96,57 @@ where
         self.runtime_env.validate(program)
     }
 
-    /// Validate and run one prepared program, consuming the evaluator.
-    pub async fn run(self, program: CompiledProgram) -> Result<Handle, EvalError> {
+    /// Validate and run one prepared program with runtime main inputs.
+    pub async fn run(
+        self,
+        program: CompiledProgram,
+        inputs: BTreeMap<String, Handle>,
+    ) -> Result<Handle, EvalError> {
         self.runtime_env.validate_internal(&program)?;
         let runtime = self.runtime;
         let heap = runtime.heap.clone();
-        let pointer = eval_typed_expr(runtime, program.env, program.expr)
+        let main_signature = program.main_signature().clone();
+        let args = main_input_args(&heap, &main_signature, &inputs)?;
+        let (env, expr) = if args.is_empty() {
+            (program.env, program.expr.as_ref().clone())
+        } else {
+            synthetic_application_expr_from_head(program.env, program.expr.as_ref().clone(), &args)?
+        };
+        let pointer = eval_typed_expr(runtime, env, Arc::new(expr))
             .await
             .map_err(EvalError::from)?;
+        drop(inputs);
         heap.handle(pointer).map_err(EvalError::from)
     }
+}
+
+fn main_input_args(
+    heap: &Heap,
+    signature: &crate::MainSignature,
+    inputs: &BTreeMap<String, Handle>,
+) -> Result<Vec<(Pointer, Type)>, EngineError> {
+    let expected = signature
+        .inputs()
+        .iter()
+        .map(|input| input.name.clone())
+        .collect::<BTreeSet<_>>();
+    let actual = inputs.keys().cloned().collect::<BTreeSet<_>>();
+    if expected != actual {
+        let missing = expected.difference(&actual).cloned().collect();
+        let extra = actual.difference(&expected).cloned().collect();
+        return Err(EngineError::MainInputMismatch { missing, extra });
+    }
+
+    signature
+        .inputs()
+        .iter()
+        .map(|input| {
+            let handle = inputs.get(&input.name).ok_or_else(|| {
+                EngineError::Internal("validated input map was incomplete".into())
+            })?;
+            Ok((handle.pointer_for_heap(heap)?, input.typ.clone()))
+        })
+        .collect()
 }
 
 fn cell_type(heap: &HeapAccess<'_>, cell: &Cell) -> Result<Type, EngineError> {

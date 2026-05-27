@@ -52,14 +52,15 @@ final expression. Entry-point execution uses a single program entry point:
   It is an error for the same source to also contain a final expression.
 - If the source does not define `main`, the final expression is treated as an
   implicit zero-argument entry point.
-- If the source does not define `main` and has no final expression, the implicit
-  zero-argument entry point evaluates to unit.
+- If the source does not define `main` and has no final expression, entry-point
+  execution is an error.
 
 The CLI supplies arguments to an explicit `main` from a JSON object passed with
 `--inputs`. The object keys must exactly match the `main` parameter names, and
 each value is converted with `json_to_rex` using the corresponding parameter
-type. JSON inputs require concrete parameter types. A source without `main`
-conceptually has the empty input object `{}`.
+type. JSON inputs require concrete parameter types. A runnable source without
+`main` uses its final expression as an implicit entry point and conceptually has
+the empty input object `{}`.
 
 ## Module Imports
 

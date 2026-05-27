@@ -220,7 +220,7 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
-        .run(program)
+        .run(program, Default::default())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((value, typ))
@@ -239,7 +239,7 @@ async fn run_snippet<State: Clone + Send + Sync + 'static>(
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
-        .run(program)
+        .run(program, Default::default())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((value, typ))
@@ -264,7 +264,7 @@ async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
-        .run(program)
+        .run(program, Default::default())
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((value, typ))
@@ -337,7 +337,11 @@ async fn snippet_import_reloads_when_local_module_changes() {
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
     let program = compiler.compile_program(&parsed, options).await.unwrap();
     let ty = program.result_type().clone();
-    let value_ptr = compiler.into_evaluator().run(program).await.unwrap();
+    let value_ptr = compiler
+        .into_evaluator()
+        .run(program, Default::default())
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 2),

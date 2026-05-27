@@ -149,7 +149,7 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
         .map_err(|e| format!("runtime error: {e}"))?;
     let value = compiler
         .into_evaluator()
-        .run(program)
+        .run(program, Default::default())
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
 
@@ -253,7 +253,7 @@ pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
             .map_err(|e| format!("runtime error: {e}"))?;
         let value = compiler
             .into_evaluator()
-            .run(program)
+            .run(program, Default::default())
             .await
             .map_err(|e| format!("runtime error: {e}"))?;
         let rendered = value

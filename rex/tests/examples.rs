@@ -29,7 +29,7 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
     let ty = compiled.result_type().clone();
     let value = compiler
         .into_evaluator()
-        .run(compiled)
+        .run(compiled, Default::default())
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");

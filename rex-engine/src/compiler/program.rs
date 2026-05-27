@@ -1,4 +1,4 @@
-use crate::env::Environment;
+use crate::{env::Environment, manifest::MainSignature};
 use rex_ast::Symbol;
 use rex_typesystem::types::{Scheme, Type, TypedExpr};
 use std::{
@@ -18,6 +18,7 @@ pub struct CompiledProgram {
     /// Name-level summary of external runtime bindings referenced by this program.
     externs: CompiledExterns,
     link_contract: RuntimeLinkContract,
+    main_signature: MainSignature,
     pub(crate) env: Environment,
     pub(crate) expr: Arc<TypedExpr>,
 }
@@ -26,20 +27,27 @@ impl CompiledProgram {
     pub(crate) fn new(
         externs: CompiledExterns,
         link_contract: RuntimeLinkContract,
+        main_signature: MainSignature,
         env: Environment,
         expr: TypedExpr,
     ) -> Self {
         Self {
             externs,
             link_contract,
+            main_signature,
             env,
             expr: Arc::new(expr),
         }
     }
 
-    /// Inferred result type of the prepared expression.
+    /// Externally visible result type after applying all main inputs.
     pub fn result_type(&self) -> &Type {
-        &self.expr.typ
+        self.main_signature.result_type()
+    }
+
+    /// Externally visible main input and result types.
+    pub fn main_signature(&self) -> &MainSignature {
+        &self.main_signature
     }
 
     /// Name-level summary of external native and class-method references.
