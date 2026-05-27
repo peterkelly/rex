@@ -6,9 +6,6 @@ use crate::{
     },
     compiler::{
         Compiler,
-        program::{
-            ClassMethodCapability, NativeCapability, RUNTIME_LINK_ABI_VERSION, RuntimeCapabilities,
-        },
         type_check::{check_natives_in_engine, type_check_engine},
     },
     config::{
@@ -155,52 +152,6 @@ where
             async_call_policy: self.async_call_policy.clone(),
             parallelism_controller: Arc::clone(&self.parallelism_controller),
             heap: self.heap.clone(),
-        }
-    }
-
-    pub(crate) fn runtime_capabilities_snapshot(&self) -> RuntimeCapabilities {
-        let mut natives = self.natives.entries.keys().cloned().collect::<Vec<_>>();
-        let mut class_methods = self
-            .type_system
-            .class_methods
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        let mut native_impls = BTreeMap::new();
-        for (name, impls) in &self.natives.entries {
-            let mut caps = impls
-                .iter()
-                .map(|imp| NativeCapability {
-                    name: name.clone(),
-                    arity: imp.arity,
-                    scheme: imp.scheme.clone(),
-                })
-                .collect::<Vec<_>>();
-            caps.sort_by(|a, b| {
-                a.arity
-                    .cmp(&b.arity)
-                    .then_with(|| a.scheme.typ.to_string().cmp(&b.scheme.typ.to_string()))
-            });
-            native_impls.insert(name.clone(), caps);
-        }
-        let mut class_method_impls = BTreeMap::new();
-        for (name, info) in &self.type_system.class_methods {
-            class_method_impls.insert(
-                name.clone(),
-                ClassMethodCapability {
-                    name: name.clone(),
-                    scheme: info.scheme.clone(),
-                },
-            );
-        }
-        natives.sort();
-        class_methods.sort();
-        RuntimeCapabilities {
-            abi_version: RUNTIME_LINK_ABI_VERSION,
-            natives,
-            class_methods,
-            native_impls,
-            class_method_impls,
         }
     }
 

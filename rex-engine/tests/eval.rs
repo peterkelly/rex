@@ -295,125 +295,6 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
 }
 
 #[tokio::test]
-async fn runtime_env_validates_compiled_program_requirements_before_eval() {
-    let mut compile_engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut compile_engine, |module| {
-        module.export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
-    });
-
-    let mut compiler = compile_engine.into_compiler();
-    let parsed = parse_program("inc 1");
-    let program = compiler
-        .compile_program(&parsed, Default::default())
-        .await
-        .unwrap();
-
-    assert_eq!(program.externs().natives, vec![Symbol::intern("inc")]);
-    assert_eq!(
-        program.link_contract().abi_version,
-        runtime_engine_abi_version()
-    );
-    assert_eq!(program.link_contract().natives.len(), 1);
-    assert_ne!(program.link_fingerprint(), 0);
-    assert!(!program.storage_boundary().serializable);
-    assert!(program.storage_boundary().captures_process_local_env);
-
-    let runtime_compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let runtime = runtime_compiler.runtime_env();
-    let compatibility = runtime.compatibility_with(&program);
-    assert_eq!(
-        compatibility.expected_abi_version,
-        runtime.capabilities().abi_version
-    );
-    assert_eq!(
-        compatibility.actual_abi_version,
-        runtime.capabilities().abi_version
-    );
-    assert_eq!(compatibility.missing_natives, vec![Symbol::intern("inc")]);
-    assert!(!compatibility.is_compatible());
-    assert_ne!(runtime.fingerprint(), 0);
-    assert!(!runtime.storage_boundary().serializable);
-    assert!(!runtime.storage_boundary().contains_runtime_core);
-    assert!(!runtime.storage_boundary().contains_loader_state);
-
-    let err = runtime.validate(&program).unwrap_err().into_engine_error();
-    assert!(matches!(
-        err,
-        EngineError::Link {
-            expected_abi_version,
-            actual_abi_version,
-            missing_natives,
-            ..
-        } if expected_abi_version == actual_abi_version && missing_natives == vec![Symbol::intern("inc")]
-    ));
-
-    let evaluator = runtime_compiler.into_evaluator();
-    let compatibility = evaluator.compatibility_with(&program);
-    assert_eq!(compatibility.missing_natives, vec![Symbol::intern("inc")]);
-    assert!(!compatibility.is_compatible());
-    let err = evaluator
-        .validate(&program)
-        .unwrap_err()
-        .into_engine_error();
-    assert!(matches!(
-        err,
-        EngineError::Link {
-            missing_natives,
-            ..
-        } if missing_natives == vec![Symbol::intern("inc")]
-    ));
-    let err = evaluator
-        .run(program, Default::default())
-        .await
-        .unwrap_err()
-        .into_engine_error();
-    assert!(matches!(
-        err,
-        EngineError::Link {
-            missing_natives,
-            ..
-        } if missing_natives == vec![Symbol::intern("inc")]
-    ));
-}
-
-#[tokio::test]
-async fn runtime_env_reports_incompatible_native_bindings_before_eval() {
-    let mut compile_engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut compile_engine, |module| {
-        module.export("inc", |_: &(), x: i32| Ok(x + 1))
-    });
-
-    let mut compiler = compile_engine.into_compiler();
-    let parsed = parse_program("inc 1");
-    let program = compiler
-        .compile_program(&parsed, Default::default())
-        .await
-        .unwrap();
-
-    let mut runtime_engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut runtime_engine, |module| {
-        module.export("inc", |_: &(), value: String| Ok(value))
-    });
-    let runtime_compiler = runtime_engine.into_compiler();
-    let runtime = runtime_compiler.runtime_env();
-    let compatibility = runtime.compatibility_with(&program);
-    assert_eq!(
-        compatibility.incompatible_natives,
-        vec![Symbol::intern("inc")]
-    );
-    assert!(!compatibility.is_compatible());
-
-    let err = runtime.validate(&program).unwrap_err().into_engine_error();
-    assert!(matches!(
-        err,
-        EngineError::Link {
-            incompatible_natives,
-            ..
-        } if incompatible_natives == vec![Symbol::intern("inc")]
-    ));
-}
-
-#[tokio::test]
 async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     let compile_engine = Engine::with_prelude(()).unwrap();
 
@@ -431,20 +312,13 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
 
     assert!(program.externs().is_empty(), "{:?}", program.externs());
 
-    let runtime_compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let runtime = runtime_compiler.runtime_env();
-    assert!(runtime.compatibility_with(&program).is_compatible());
-    runtime.validate(&program).unwrap();
-
-    let evaluator = runtime_compiler.into_evaluator();
-    assert!(evaluator.compatibility_with(&program).is_compatible());
-    evaluator.validate(&program).unwrap();
+    let evaluator = compiler.into_evaluator();
     let value = evaluator.run(program, Default::default()).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 41);
 }
 
 #[tokio::test]
-async fn export_value_is_runtime_linked_like_other_host_exports() {
+async fn export_value_is_reported_as_an_extern() {
     let mut compile_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut compile_engine, |module| {
         module.export_value("answer", 41i32)
@@ -460,78 +334,12 @@ async fn export_value_is_runtime_linked_like_other_host_exports() {
     assert_eq!(program.externs().natives, vec![Symbol::intern("answer")]);
     assert_eq!(program.externs().class_methods, vec![Symbol::intern("+")]);
 
-    let runtime_compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let runtime = runtime_compiler.runtime_env();
-    let compatibility = runtime.compatibility_with(&program);
-    assert_eq!(
-        compatibility.missing_natives,
-        vec![Symbol::intern("answer")]
-    );
-    assert!(!compatibility.is_compatible());
-
-    let err = runtime.validate(&program).unwrap_err().into_engine_error();
-    assert!(matches!(
-        err,
-        EngineError::Link {
-            missing_natives,
-            ..
-        } if missing_natives == vec![Symbol::intern("answer")]
-    ));
-}
-
-#[tokio::test]
-async fn runtime_env_reports_missing_class_method_bindings_before_eval() {
-    let compile_engine = Engine::with_prelude(()).unwrap();
-    let mut compiler = compile_engine.into_compiler();
-    let parsed = parse_program(
-        r#"
-            class Pick a where {
-                pick : a -> a;
-            }
-
-            instance Pick i32 where {
-                pick = \x -> x;
-            }
-
-            pick 1
-            "#,
-    );
-    let program = compiler
-        .compile_program(&parsed, Default::default())
+    let value = compiler
+        .into_evaluator()
+        .run(program, Default::default())
         .await
         .unwrap();
-
-    assert_eq!(
-        program.externs().class_methods,
-        vec![Symbol::intern("pick")]
-    );
-
-    let runtime_compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let runtime = runtime_compiler.runtime_env();
-    let compatibility = runtime.compatibility_with(&program);
-    assert_eq!(
-        compatibility.missing_class_methods,
-        vec![Symbol::intern("pick")]
-    );
-    assert!(!compatibility.is_compatible());
-
-    let err = runtime.validate(&program).unwrap_err().into_engine_error();
-    assert!(matches!(
-        err,
-        EngineError::Link {
-            missing_class_methods,
-            ..
-        } if missing_class_methods == vec![Symbol::intern("pick")]
-    ));
-}
-
-fn runtime_engine_abi_version() -> u32 {
-    Engine::with_prelude(())
-        .unwrap()
-        .into_compiler()
-        .runtime_env()
-        .capabilities()
-        .abi_version
+    assert_eq!(value.as_i32().unwrap(), 42);
 }
 
 #[tokio::test]

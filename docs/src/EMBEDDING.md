@@ -32,11 +32,10 @@ Evaluation API:
 - `Compiler` prepares user code into a `CompiledProgram`.
 - `Evaluator` owns the runtime core and runs one prepared program with runtime inputs for `main`.
 
-`Evaluator` is single-shot: preflight validation borrows the compiled program, and
-`Evaluator::run` consumes the evaluator, the compiled program, and a `BTreeMap<String, Handle>` of
-inputs. Programs are compiled with Rex's singular external interface semantics: an explicit
-`fn main ...` defines named runtime inputs, while a final expression without `main` is treated as
-an implicit zero-input `main`.
+`Evaluator` is single-shot: `Evaluator::run` consumes the evaluator, the compiled program, and a
+`BTreeMap<String, Handle>` of inputs. Programs are compiled with Rex's singular external interface
+semantics: an explicit `fn main ...` defines named runtime inputs, while a final expression without
+`main` is treated as an implicit zero-input `main`.
 
 ```rust,ignore
 use rex::{
@@ -53,7 +52,6 @@ let program = compiler
     .await?;
 assert_eq!(program.result_type().to_string(), "i32");
 let evaluator = compiler.into_evaluator();
-evaluator.validate(&program)?;
 let value = evaluator.run(program, Default::default()).await?;
 ```
 
@@ -62,27 +60,21 @@ What "compiled" means in the current design:
 - parsing, import rewriting, declaration injection, and typechecking have already happened
 - `CompiledProgram` carries a typed expression plus the environment snapshot needed to run it
 - `CompiledProgram::main_signature()` reports input names/types and the external result type
-- runtime-linked requirements are still explicit, and `RuntimeEnv::validate` checks them before execution
-- internally, `RuntimeEnv` keeps only the link capabilities needed for preflight validation
 - `Evaluator` owns the runtime core needed for execution
-- `CompiledProgram::link_contract()` and `RuntimeEnv::capabilities()` now make the runtime link
-  contract explicit, including the current ABI version and the required callable shapes
-- `CompiledProgram::storage_boundary()` and `RuntimeEnv::storage_boundary()` mark both values as
-  API artifacts, not serialization-ready artifacts
 - `Evaluator::run` consumes the evaluator, compiled program, and runtime input map; use a new
   engine/compiler/evaluator for another generated workflow
 
-What is currently captured versus linked:
+What is captured:
 
 - Rex declarations that are part of the prepared program are captured into the compiled env snapshot
 - host-provided exports registered through `export`, `export_async`, `export_native`,
-  `export_native_async`, or `export_value` are runtime-linked and must be available in the
-  evaluator runtime
-- typeclass method bindings are also runtime-linked through the evaluator runtime
+  `export_native_async`, or `export_value` are carried by the evaluator produced from the same
+  compiler
+- typeclass method bindings are carried by that same evaluator runtime
 
-That means `CompiledProgram` is engine-independent at the API level, but it is not a fully
-self-contained serialized artifact. It is best thought of as a prepared program plus explicit
-runtime link requirements.
+That means a `CompiledProgram` is intended to be run by the evaluator created from the same
+compiler. Rex does not currently expose a portable compiled artifact or cross-runtime linking
+model.
 
 Phase-specific errors:
 
@@ -90,26 +82,6 @@ Phase-specific errors:
 - `Evaluator::run` returns `EvalError`
 - APIs that parse, compile, and run in one call return `ExecutionError` because they cross
   phase boundaries
-
-If you want an explicit preflight before running:
-
-```rust,ignore
-let mut compiler = engine.into_compiler();
-let parsed = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
-let program = compiler
-    .compile_program(&parsed, CompileOptions::default())
-    .await?;
-let runtime = compiler.runtime_env();
-runtime.validate(&program)?;
-
-let evaluator = compiler.into_evaluator();
-evaluator.validate(&program)?;
-let value = evaluator.run(program, Default::default()).await?;
-```
-
-`RuntimeEnv::compatibility_with` and `Evaluator::compatibility_with` return structured link
-feedback. That is useful for tools and AI agents that want to report missing or incompatible host
-bindings before attempting evaluation.
 
 For lower-level expression execution, compile with `Compiler::compile_expr` and pass an empty input
 map to `Evaluator::run`.

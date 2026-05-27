@@ -20,7 +20,6 @@ mod modules;
 mod native_fn;
 mod overloaded_fn;
 mod prelude;
-mod runtime_env;
 mod stack;
 mod util;
 mod value;
@@ -32,11 +31,7 @@ pub use builder::{
 };
 pub use compiler::{
     CompileOptions, Compiler,
-    program::{
-        ClassMethodCapability, ClassMethodRequirement, CompiledExterns, CompiledProgram,
-        CompiledProgramBoundary, NativeCapability, NativeRequirement, RuntimeCapabilities,
-        RuntimeCompatibility, RuntimeLinkContract,
-    },
+    program::{CompiledExterns, CompiledProgram},
 };
 pub use config::{
     AsyncCallExecutor, AsyncCallPolicy, EngineOptions, ExecutionBounds, NativeAsyncPermit,
@@ -52,6 +47,5 @@ pub use modules::{
     ModuleInstance, ModuleKey, PRELUDE_MODULE_NAME, ROOT_MODULE_NAME, ResolvedModule,
     ResolvedModuleContent, StdlibImporter, SymbolKind, virtual_export_name,
 };
-pub use runtime_env::{RuntimeEnv, RuntimeEnvBoundary};
 pub use util::collect_adts_error_to_engine;
 pub use value::{FromRex, Handle, Heap, IntoRex, Value, ValueDisplayOptions};

@@ -9,13 +9,10 @@ use rex_typesystem::typesystem::TypeSystem;
 use uuid::Uuid;
 
 use crate::{
-    CompileError, EngineError, Environment, Evaluator, RuntimeEnv,
+    CompileError, EngineError, Environment, Evaluator,
     builder::{engine::Engine, rewrite::rewrite_program_with_imports},
     compiler::{
-        program::{
-            ClassMethodRequirement, CompiledExterns, CompiledProgram, NativeRequirement,
-            RUNTIME_LINK_ABI_VERSION, RuntimeLinkContract,
-        },
+        program::{CompiledExterns, CompiledProgram},
         type_check::{collect_pattern_bindings, type_check_engine},
     },
     manifest::{MainInputSpec, MainSignature},
@@ -54,9 +51,8 @@ impl CompileOptions {
 /// Compile-time view of a prepared Rex engine.
 ///
 /// A compiler owns the engine state needed for import rewriting, declaration
-/// injection, typechecking, and runtime link-contract construction. Convert it
-/// into an [`Evaluator`] once all programs you need from that preparation state
-/// have been compiled.
+/// injection, and typechecking. Convert it into an [`Evaluator`] once all
+/// programs you need from that preparation state have been compiled.
 pub struct Compiler<State = ()>
 where
     State: Clone + Send + Sync + 'static,
@@ -74,14 +70,8 @@ where
 
     /// Consume this compiler and build a single-shot evaluator.
     pub fn into_evaluator(self) -> Evaluator<State> {
-        let runtime_env = RuntimeEnv::from_engine(&self.engine);
         let runtime = self.engine.runtime_core();
-        Evaluator::new(runtime, runtime_env)
-    }
-
-    /// Snapshot runtime link capabilities for preflight validation.
-    pub fn runtime_env(&self) -> RuntimeEnv {
-        RuntimeEnv::from_engine(&self.engine)
+        Evaluator::new(runtime)
     }
 
     /// Borrow the compiler's type system snapshot.
@@ -103,8 +93,7 @@ where
     ) -> CompiledProgram {
         let env = self.engine.env_snapshot();
         let externs = self.collect_externs(&typed, &env);
-        let link_contract = self.link_contract(&typed, &env);
-        CompiledProgram::new(externs, link_contract, main_signature, env, typed)
+        CompiledProgram::new(externs, main_signature, env, typed)
     }
 
     pub(crate) fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
@@ -226,141 +215,6 @@ where
         natives.sort();
         class_methods.sort();
         CompiledExterns {
-            natives,
-            class_methods,
-        }
-    }
-
-    fn link_contract(&self, expr: &TypedExpr, env: &Environment) -> RuntimeLinkContract {
-        enum ScopeWalkStep<'b> {
-            Expr(&'b TypedExpr),
-            Push(Symbol),
-            PushMany(Vec<Symbol>),
-            Pop(usize),
-        }
-
-        let mut native_requirements = BTreeSet::new();
-        let mut class_method_requirements = BTreeSet::new();
-        let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![ScopeWalkStep::Expr(expr)];
-        while let Some(frame) = stack.pop() {
-            match frame {
-                ScopeWalkStep::Expr(expr) => match expr.kind.as_ref() {
-                    TypedExprKind::Var { name, .. } => {
-                        if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
-                            continue;
-                        }
-                        if self.engine.type_system.class_methods.contains_key(name) {
-                            class_method_requirements.insert(ClassMethodRequirement {
-                                name: name.clone(),
-                                typ: expr.typ.clone(),
-                            });
-                        } else if self.engine.has_native_name(name) {
-                            native_requirements.insert(NativeRequirement {
-                                name: name.clone(),
-                                typ: expr.typ.clone(),
-                            });
-                        }
-                    }
-                    TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
-                        for elem in elems.iter().rev() {
-                            stack.push(ScopeWalkStep::Expr(elem));
-                        }
-                    }
-                    TypedExprKind::Dict(kvs) => {
-                        for v in kvs.values().rev() {
-                            stack.push(ScopeWalkStep::Expr(v));
-                        }
-                    }
-                    TypedExprKind::RecordUpdate { base, updates } => {
-                        for v in updates.values().rev() {
-                            stack.push(ScopeWalkStep::Expr(v));
-                        }
-                        stack.push(ScopeWalkStep::Expr(base));
-                    }
-                    TypedExprKind::App(f, x) => {
-                        stack.push(ScopeWalkStep::Expr(x));
-                        stack.push(ScopeWalkStep::Expr(f));
-                    }
-                    TypedExprKind::Project { expr, .. } => stack.push(ScopeWalkStep::Expr(expr)),
-                    TypedExprKind::Lam { param, body } => {
-                        stack.push(ScopeWalkStep::Pop(1));
-                        stack.push(ScopeWalkStep::Expr(body));
-                        stack.push(ScopeWalkStep::Push(param.clone()));
-                    }
-                    TypedExprKind::Let { name, def, body } => {
-                        stack.push(ScopeWalkStep::Pop(1));
-                        stack.push(ScopeWalkStep::Expr(body));
-                        stack.push(ScopeWalkStep::Push(name.clone()));
-                        stack.push(ScopeWalkStep::Expr(def));
-                    }
-                    TypedExprKind::LetRec { bindings, body } => {
-                        if !bindings.is_empty() {
-                            stack.push(ScopeWalkStep::Pop(bindings.len()));
-                            stack.push(ScopeWalkStep::Expr(body));
-                            for (_, def) in bindings.iter().rev() {
-                                stack.push(ScopeWalkStep::Expr(def));
-                            }
-                            stack.push(ScopeWalkStep::PushMany(
-                                bindings.iter().map(|(name, _)| name.clone()).collect(),
-                            ));
-                        } else {
-                            stack.push(ScopeWalkStep::Expr(body));
-                        }
-                    }
-                    TypedExprKind::Ite {
-                        cond,
-                        then_expr,
-                        else_expr,
-                    } => {
-                        stack.push(ScopeWalkStep::Expr(else_expr));
-                        stack.push(ScopeWalkStep::Expr(then_expr));
-                        stack.push(ScopeWalkStep::Expr(cond));
-                    }
-                    TypedExprKind::Match { scrutinee, arms } => {
-                        for (pat, arm_expr) in arms.iter().rev() {
-                            let mut bindings = Vec::new();
-                            collect_pattern_bindings(pat, &mut bindings);
-                            let count = bindings.len();
-                            if count != 0 {
-                                stack.push(ScopeWalkStep::Pop(count));
-                                stack.push(ScopeWalkStep::Expr(arm_expr));
-                                stack.push(ScopeWalkStep::PushMany(bindings));
-                            } else {
-                                stack.push(ScopeWalkStep::Expr(arm_expr));
-                            }
-                        }
-                        stack.push(ScopeWalkStep::Expr(scrutinee));
-                    }
-                    TypedExprKind::Bool(..)
-                    | TypedExprKind::Uint(..)
-                    | TypedExprKind::Int(..)
-                    | TypedExprKind::Float(..)
-                    | TypedExprKind::String(..)
-                    | TypedExprKind::Uuid(..)
-                    | TypedExprKind::DateTime(..)
-                    | TypedExprKind::Hole => {}
-                },
-                ScopeWalkStep::Push(sym) => bound.push(sym),
-                ScopeWalkStep::PushMany(syms) => bound.extend(syms),
-                ScopeWalkStep::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
-            }
-        }
-
-        let mut natives = native_requirements.into_iter().collect::<Vec<_>>();
-        let mut class_methods = class_method_requirements.into_iter().collect::<Vec<_>>();
-        natives.sort_by(|a, b| {
-            a.name
-                .cmp(&b.name)
-                .then_with(|| a.typ.to_string().cmp(&b.typ.to_string()))
-        });
-        class_methods.sort_by(|a, b| {
-            a.name
-                .cmp(&b.name)
-                .then_with(|| a.typ.to_string().cmp(&b.typ.to_string()))
-        });
-        RuntimeLinkContract {
-            abi_version: RUNTIME_LINK_ABI_VERSION,
             natives,
             class_methods,
         }

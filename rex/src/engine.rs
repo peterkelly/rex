@@ -15,12 +15,6 @@ pub use rex_engine::AsyncCallExecutor;
 /// Runtime policy for polling or dispatching async host-call futures.
 pub use rex_engine::AsyncCallPolicy;
 
-/// Runtime-side implementation metadata for a type class method.
-pub use rex_engine::ClassMethodCapability;
-
-/// A type class method required by a compiled program at runtime.
-pub use rex_engine::ClassMethodRequirement;
-
 /// Error from the compile phase of the Rex pipeline.
 pub use rex_engine::CompileError;
 
@@ -30,11 +24,8 @@ pub use rex_engine::CompileOptions;
 /// Summary of external native and type class bindings referenced by compiled code.
 pub use rex_engine::CompiledExterns;
 
-/// A prepared Rex program that can be validated and evaluated once.
+/// A prepared Rex program that can be evaluated once.
 pub use rex_engine::CompiledProgram;
-
-/// Metadata describing what a [`CompiledProgram`] captures and whether it is serializable.
-pub use rex_engine::CompiledProgramBoundary;
 
 /// One named input accepted by a compiled Rex program.
 pub use rex_engine::MainInputSpec;
@@ -69,7 +60,7 @@ pub use rex_engine::EngineOptions;
 /// Error from the evaluation phase after code has compiled.
 pub use rex_engine::EvalError;
 
-/// Single-shot runtime used to validate and run a compiled Rex program.
+/// Single-shot runtime used to run a compiled Rex program.
 pub use rex_engine::Evaluator;
 
 /// Admission limits for evaluator work and pending async host calls.
@@ -117,14 +108,8 @@ pub use rex_engine::Module;
 /// Stable identity assigned to an imported module.
 pub use rex_engine::ModuleId;
 
-/// Runtime-side metadata for one native function implementation.
-pub use rex_engine::NativeCapability;
-
 /// Boxed future returned by handle-based async native functions.
 pub use rex_engine::NativeFuture;
-
-/// Native function signature required by a compiled program at runtime.
-pub use rex_engine::NativeRequirement;
 
 /// Name of the automatically injected Rex prelude module.
 pub use rex_engine::PRELUDE_MODULE_NAME;
@@ -146,21 +131,6 @@ pub use rex_engine::ResolvedModuleContent;
 
 /// Trait for producing a Rex default value for a Rust-facing type.
 pub use rex_engine::RexDefault;
-
-/// Runtime capabilities available to satisfy a compiled program's link contract.
-pub use rex_engine::RuntimeCapabilities;
-
-/// Compatibility report between compiled requirements and runtime capabilities.
-pub use rex_engine::RuntimeCompatibility;
-
-/// Preflight view of runtime linkage available to an evaluator.
-pub use rex_engine::RuntimeEnv;
-
-/// Metadata describing what a [`RuntimeEnv`] captures and whether it is serializable.
-pub use rex_engine::RuntimeEnvBoundary;
-
-/// Runtime ABI and callable requirements captured by a [`CompiledProgram`].
-pub use rex_engine::RuntimeLinkContract;
 
 /// Safe public view of a Rex runtime value stored in the heap.
 pub use rex_engine::Value;

@@ -27,7 +27,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut compiler = engine.into_compiler();
     let compiled = compiler.compile_program(&program, Default::default()).await?;
     let evaluator = compiler.into_evaluator();
-    evaluator.validate(&compiled)?;
     let value = evaluator.run(compiled, Default::default()).await?;
 
     assert_eq!(value.as_i32()?, 43);
@@ -47,12 +46,12 @@ The engine implementation is split by phase:
 
 - `builder/`: host environment construction, module injection, import rewriting, export
   registration, and registry reporting.
-- `compiler/`: typechecking plus `CompiledProgram` and runtime link-contract construction.
+- `compiler/`: typechecking plus `CompiledProgram` construction and extern collection.
 - `evaluator/`: scheduler-driven execution, native dispatch, runtime context, and runtime core
   state.
 
-Shared runtime pieces such as heap values, engine options, module identities, native handlers, and
-runtime preflight data live beside those phase directories.
+Shared runtime pieces such as heap values, engine options, module identities, and native handlers
+live beside those phase directories.
 
 ## Injection API
 

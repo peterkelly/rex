@@ -11,8 +11,8 @@ use rex_typesystem::{
 };
 
 use crate::{
-    EvalError, RuntimeEnv,
-    compiler::program::{CompiledProgram, RuntimeCapabilities, RuntimeCompatibility},
+    EvalError,
+    compiler::program::CompiledProgram,
     error::EngineError,
     evaluator::{
         eval::{eval_typed_expr, synthetic_application_expr_from_head},
@@ -29,7 +29,7 @@ pub(crate) mod native_functions;
 pub(crate) mod runtime_core;
 pub(crate) mod scheduler;
 
-/// Single-shot runtime for validating and running prepared Rex code.
+/// Single-shot runtime for running prepared Rex code.
 ///
 /// `run` consumes both the evaluator and the [`CompiledProgram`], and applies
 /// the supplied runtime inputs to the program's external `main` interface.
@@ -38,7 +38,6 @@ where
     State: Clone + Send + Sync + 'static,
 {
     pub(crate) runtime: RuntimeCore<State>,
-    pub(crate) runtime_env: RuntimeEnv,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,16 +58,8 @@ impl<State> Evaluator<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(runtime: RuntimeCore<State>, runtime_env: RuntimeEnv) -> Self {
-        Self {
-            runtime,
-            runtime_env,
-        }
-    }
-
-    /// Runtime link-capability snapshot associated with this evaluator.
-    pub fn runtime_env(&self) -> &RuntimeEnv {
-        &self.runtime_env
+    pub(crate) fn new(runtime: RuntimeCore<State>) -> Self {
+        Self { runtime }
     }
 
     /// Type system captured by the evaluator runtime.
@@ -81,22 +72,7 @@ where
         &self.runtime.heap
     }
 
-    /// Runtime capabilities available for satisfying compiled link contracts.
-    pub fn capabilities(&self) -> &RuntimeCapabilities {
-        self.runtime_env.capabilities()
-    }
-
-    /// Compare this runtime with a prepared program's link contract.
-    pub fn compatibility_with(&self, program: &CompiledProgram) -> RuntimeCompatibility {
-        self.runtime_env.compatibility_with(program)
-    }
-
-    /// Preflight a prepared program without consuming either value.
-    pub fn validate(&self, program: &CompiledProgram) -> Result<(), EvalError> {
-        self.runtime_env.validate(program)
-    }
-
-    /// Validate and run one prepared program with runtime main inputs.
+    /// Run one prepared program with runtime main inputs.
     ///
     /// The `inputs` map must contain one [`Handle`] for each parameter in the
     /// program's main signature, keyed by parameter name. When using the
@@ -107,7 +83,6 @@ where
         program: CompiledProgram,
         inputs: BTreeMap<String, Handle>,
     ) -> Result<Handle, EvalError> {
-        self.runtime_env.validate_internal(&program)?;
         let runtime = self.runtime;
         let heap = runtime.heap.clone();
         let main_signature = program.main_signature().clone();
