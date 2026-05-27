@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::IsTerminal;
 use std::io::{self, Read};
@@ -12,12 +11,11 @@ use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
     engine::{
-        CompileOptions, CompiledProgram, Compiler, Engine, Handle, Heap, Importer, MainInputSpec,
-        MainSignature, Manifest, ModuleId, type_has_vars,
+        CompileOptions, CompiledProgram, Compiler, Engine, Importer, MainInputSpec, Manifest,
+        ModuleId, type_has_vars,
     },
-    json::{json_to_rex, rex_to_json},
+    json::{json_to_main_inputs, rex_to_json},
     parser::{ParseError, parse as parse_rex},
-    typesystem::TypeSystem,
 };
 use serde_json::json;
 
@@ -239,13 +237,13 @@ async fn eval_result_json(
     let result_type = compiled.result_type().clone();
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
-    let input_values = read_main_inputs(input_value, &signature)?;
-    let inputs = json_inputs_to_handles(
+    let inputs = json_to_main_inputs(
         evaluator.heap(),
-        type_system.as_ref(),
-        input_values,
+        input_value,
         &signature,
-    )?;
+        type_system.as_ref(),
+    )
+    .map_err(|e| format!("{e}"))?;
     let value = evaluator
         .run(compiled, inputs)
         .await
@@ -261,68 +259,6 @@ async fn main_manifest(program: &CompilationUnit, file: Option<&str>) -> Result<
         .main_signature()
         .manifest(compiler.type_system())
         .map_err(|e| format!("{e}"))
-}
-
-fn read_main_inputs(
-    value: serde_json::Value,
-    signature: &MainSignature,
-) -> Result<BTreeMap<String, serde_json::Value>, String> {
-    let inputs = value.as_object().ok_or_else(|| {
-        "input JSON must be an object whose fields are parameter names".to_string()
-    })?;
-
-    let expected = signature
-        .inputs()
-        .iter()
-        .map(|input| input.name.as_str())
-        .collect::<BTreeSet<_>>();
-    let actual = inputs.keys().map(String::as_str).collect::<BTreeSet<_>>();
-    if expected != actual {
-        let missing = expected
-            .difference(&actual)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(", ");
-        let extra = actual
-            .difference(&expected)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(format!(
-            "inputs do not match entry point parameters (missing: [{}], extra: [{}])",
-            missing, extra
-        ));
-    }
-
-    signature
-        .inputs()
-        .iter()
-        .map(|input| {
-            let value = inputs
-                .get(&input.name)
-                .ok_or_else(|| format!("missing input `{}`", input.name))?
-                .clone();
-            Ok((input.name.clone(), value))
-        })
-        .collect()
-}
-
-fn json_inputs_to_handles(
-    heap: &Heap,
-    type_system: &TypeSystem,
-    values: BTreeMap<String, serde_json::Value>,
-    signature: &MainSignature,
-) -> Result<BTreeMap<String, Handle>, String> {
-    let mut out = BTreeMap::new();
-    for input in signature.inputs() {
-        let value = values
-            .get(&input.name)
-            .ok_or_else(|| format!("missing input `{}`", input.name))?;
-        let handle = json_to_rex(heap, value, &input.typ, type_system)
-            .map_err(|e| format!("failed to convert input `{}` from JSON: {e}", input.name))?;
-        out.insert(input.name.clone(), handle);
-    }
-    Ok(out)
 }
 
 fn ensure_concrete_inputs(inputs: &[MainInputSpec]) -> Result<(), String> {

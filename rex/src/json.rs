@@ -5,7 +5,7 @@
 //! rather than through Rust generics and [`IntoRex`](crate::engine::IntoRex) /
 //! [`FromRex`](crate::engine::FromRex).
 
-use crate::engine::{EngineError, Handle, Heap};
+use crate::engine::{EngineError, Handle, Heap, MainSignature};
 use rex_ast::Symbol;
 use rex_typesystem::{
     types::{AdtDecl, BuiltinTypeId, Type, TypeKind},
@@ -746,4 +746,46 @@ fn type_mismatch_handle(handle: &Handle, want: &Type) -> EngineError {
         )),
         Err(e) => e,
     }
+}
+
+/// Convert JSON object inputs for a compiled `main` signature into Rex runtime handles.
+///
+/// Use this when an embedder receives entry-point inputs as JSON and wants to
+/// pass them to [`Evaluator::run`](crate::engine::Evaluator::run). The JSON
+/// value must be an object whose keys exactly match the compiled
+/// [`MainSignature`] input names. Pass the resulting map directly as the
+/// `inputs` argument to `Evaluator::run`.
+pub fn json_to_main_inputs(
+    heap: &Heap,
+    value: Value,
+    signature: &MainSignature,
+    type_system: &TypeSystem,
+) -> Result<BTreeMap<String, Handle>, EngineError> {
+    let Value::Object(mut inputs) = value else {
+        return Err(error(
+            "input JSON must be an object whose fields are parameter names".to_string(),
+        ));
+    };
+
+    let mut matched = Vec::with_capacity(signature.inputs().len());
+    let mut missing = Vec::new();
+    for input in signature.inputs() {
+        match inputs.remove(&input.name) {
+            Some(value) => matched.push((input.name.clone(), input.typ.clone(), value)),
+            None => missing.push(input.name.clone()),
+        }
+    }
+
+    let extra = inputs.into_iter().map(|(name, _)| name).collect::<Vec<_>>();
+    if !missing.is_empty() || !extra.is_empty() {
+        return Err(EngineError::MainInputMismatch { missing, extra });
+    }
+
+    let mut out = BTreeMap::new();
+    for (name, typ, value) in matched {
+        let handle = json_to_rex(heap, &value, &typ, type_system)
+            .map_err(|e| error(format!("failed to convert input `{name}` from JSON: {e}")))?;
+        out.insert(name, handle);
+    }
+    Ok(out)
 }

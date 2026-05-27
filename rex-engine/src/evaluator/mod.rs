@@ -97,6 +97,11 @@ where
     }
 
     /// Validate and run one prepared program with runtime main inputs.
+    ///
+    /// The `inputs` map must contain one [`Handle`] for each parameter in the
+    /// program's main signature, keyed by parameter name. When using the
+    /// top-level `rex` crate and those inputs are available as JSON, callers
+    /// can build this map with `rex::json::json_to_main_inputs`.
     pub async fn run(
         self,
         program: CompiledProgram,
