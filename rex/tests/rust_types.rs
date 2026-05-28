@@ -4,12 +4,13 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{Engine, EngineError, FromRex, Handle, Heap, Value},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
 
 /// Helper to evaluate a Rex expression and return the result handle.
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
-    let program = common::parse_program(expr).unwrap();
+    let program = parse_rex(expr).unwrap();
     let (heap, value, ty) = common::run_program_body_with_heap(engine, &program)
         .await
         .unwrap();

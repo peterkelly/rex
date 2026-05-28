@@ -294,7 +294,14 @@ async fn export_value_registers_global_value() {
     let mut engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut engine, |module| module.export_value("answer", 42i32));
     let mut compiler = engine.into_compiler();
-    let compiled = compiler.compile_expr(expr.as_ref()).unwrap();
+    let body_program = CompilationUnit {
+        decls: Vec::new(),
+        body: Some(expr),
+    };
+    let compiled = compiler
+        .compile_program(&body_program, Default::default())
+        .await
+        .unwrap();
     let ty = compiled.result_type().clone();
     let value = compiler
         .into_evaluator()
@@ -321,7 +328,14 @@ async fn record_update_requires_known_variant_for_sum_types() {
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
     let mut compiler = engine.into_compiler();
-    match compiler.compile_expr(program.body.as_ref().unwrap().as_ref()) {
+    let body_program = CompilationUnit {
+        decls: Vec::new(),
+        body: program.body.clone(),
+    };
+    match compiler
+        .compile_program(&body_program, Default::default())
+        .await
+    {
         Err(err) => {
             let EngineError::Type(err) = err.into_engine_error() else {
                 panic!("expected type error");

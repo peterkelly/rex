@@ -3,6 +3,7 @@ mod common;
 use rex::{
     engine::{CompiledProgram, Engine, EngineError, Evaluator},
     json::{json_to_main_inputs, rex_to_json},
+    parser::parse as parse_rex,
 };
 use serde_json::{Value, json};
 
@@ -13,7 +14,7 @@ struct Prepared {
 }
 
 async fn prepare(source: &str) -> Prepared {
-    let parsed = common::parse_program(source).unwrap();
+    let parsed = parse_rex(source).unwrap();
     let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
     let compiled = compiler
         .compile_program(&parsed, Default::default())

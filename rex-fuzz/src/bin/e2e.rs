@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+use rex_ast::CompilationUnit;
 use rex_engine::{Engine, Module};
 use rex_fuzz::{FuzzError, fuzz_source_input, read_stdin_bytes};
 use rex_parser::parse;
@@ -35,7 +36,14 @@ async fn run_one(input: &[u8]) {
         return;
     }
     let mut compiler = engine.into_compiler();
-    if let Ok(compiled) = compiler.compile_expr(body.as_ref()) {
+    let body_program = CompilationUnit {
+        decls: Vec::new(),
+        body: Some(body.clone()),
+    };
+    if let Ok(compiled) = compiler
+        .compile_program(&body_program, Default::default())
+        .await
+    {
         let _ = compiler
             .into_evaluator()
             .run(compiled, Default::default())

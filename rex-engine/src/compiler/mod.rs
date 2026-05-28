@@ -79,13 +79,6 @@ where
         &self.engine.type_system
     }
 
-    /// Typecheck an expression and package it as a prepared program.
-    pub fn compile_expr(&mut self, expr: &Expr) -> Result<CompiledProgram, CompileError> {
-        let typed = self.type_check(expr).map_err(CompileError::from)?;
-        let signature = MainSignature::new(Vec::new(), typed.typ.clone());
-        Ok(self.compile_typed_expr(typed, signature))
-    }
-
     fn compile_typed_expr(
         &self,
         typed: TypedExpr,

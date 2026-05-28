@@ -2,11 +2,18 @@ mod common;
 
 use rex::{
     engine::Value,
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type},
 };
 
 async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expected_type: Type) {
-    common::parse_program_or_panic(name, source);
+    parse_rex(source).unwrap_or_else(|errs| {
+        let mut out = String::from("parse error:");
+        for err in errs {
+            out.push_str(&format!("\n  {err}"));
+        }
+        panic!("{name}:\n{out}");
+    });
     let (_heap, value, ty) = common::eval_source(source)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));

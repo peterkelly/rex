@@ -5,6 +5,7 @@ use rex::{
     ast::Symbol,
     engine::{CompileOptions, Engine, Handle, Heap, Value},
     json::{json_to_rex, rex_to_json},
+    parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
 };
 use serde::Serialize;
@@ -234,12 +235,14 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .unwrap(),
         expected_json
     );
-    let expr_program = common::parse_program(rex_code).unwrap();
+    let parsed = parse_rex(rex_code).unwrap();
     let engine = engine_with_eval_json_record();
     let type_system = engine.type_system.clone();
     let mut compiler = engine.into_compiler();
+    assert!(parsed.decls.is_empty());
     let compiled = compiler
-        .compile_expr(expr_program.body.as_ref().unwrap().as_ref())
+        .compile_program(&parsed, Default::default())
+        .await
         .unwrap();
     let ty_eval = compiled.result_type().clone();
     let handle_eval = compiler
@@ -249,7 +252,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
     let mut compiler = engine_with_eval_json_record().into_compiler();
-    let parsed = common::parse_program(rex_code).unwrap();
+    let parsed = parse_rex(rex_code).unwrap();
     let program = compiler
         .compile_program(&parsed, CompileOptions::default())
         .await
@@ -271,7 +274,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
     let mut compiler = engine_with_eval_json_record().into_compiler();
-    let parsed = common::parse_program(rex_code).unwrap();
+    let parsed = parse_rex(rex_code).unwrap();
     let program = compiler
         .compile_program(
             &parsed,

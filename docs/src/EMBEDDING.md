@@ -83,29 +83,22 @@ Phase-specific errors:
 - APIs that parse, compile, and run in one call return `ExecutionError` because they cross
   phase boundaries
 
-For lower-level expression execution, compile with `Compiler::compile_expr` and pass an empty input
-map to `Evaluator::run`.
+Compile parsed Rex sources with `Compiler::compile_program` and pass the resulting
+`CompiledProgram` to `Evaluator::run`.
 
 ## Evaluate Rex Code Directly
 
 ```rust,ignore
 use rex::{
-    engine::{Engine, Module},
+    engine::Engine,
     parser::parse,
 };
 
 let program = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
 
-let mut engine = Engine::with_prelude(())?;
-let mut globals = Module::global();
-globals.add_decls(program.decls.clone());
-engine.inject_module(globals)?;
+let engine = Engine::with_prelude(())?;
 let mut compiler = engine.into_compiler();
-let body = program
-    .body
-    .as_ref()
-    .expect("snippet must contain a final expression");
-let program = compiler.compile_expr(body.as_ref())?;
+let program = compiler.compile_program(&program, Default::default()).await?;
 let evaluator = compiler.into_evaluator();
 let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
@@ -663,16 +656,9 @@ instance<t> Size (List t) where {
 
 let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 
-let mut engine = Engine::with_prelude(())?;
-let mut globals = Module::global();
-globals.add_decls(program.decls.clone());
-engine.inject_module(globals)?;
-let body = program
-    .body
-    .as_ref()
-    .expect("snippet must contain a final expression");
+let engine = Engine::with_prelude(())?;
 let mut compiler = engine.into_compiler();
-let compiled = compiler.compile_expr(body.as_ref())?;
+let compiled = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
 let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
 println!("{value}");
@@ -716,12 +702,8 @@ for code in [
     engine.inject_module(globals)?;
 
     let program = parse(code).map_err(|errs| format!("parse error: {errs:?}"))?;
-    let body = program
-        .body
-        .as_ref()
-        .expect("snippet must contain a final expression");
     let mut compiler = engine.into_compiler();
-    let compiled = compiler.compile_expr(body.as_ref())?;
+    let compiled = compiler.compile_program(&program, Default::default()).await?;
     let _ty = compiled.result_type().clone();
     let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
     println!("{value}");
@@ -750,12 +732,8 @@ globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
 engine.inject_module(globals)?;
 
 let program = parse("inc 1").map_err(|errs| format!("parse error: {errs:?}"))?;
-let body = program
-    .body
-    .as_ref()
-    .expect("snippet must contain a final expression");
 let mut compiler = engine.into_compiler();
-let compiled = compiler.compile_expr(body.as_ref())?;
+let compiled = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
 let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
 println!("{v}");
@@ -894,12 +872,9 @@ enum Maybe<T> {
 let mut engine = Engine::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut engine)?;
 
-let body = parse("Just 1")
-    .map_err(|errs| format!("parse error: {errs:?}"))?
-    .body
-    .expect("snippet must contain a final expression");
+let program = parse("Just 1").map_err(|errs| format!("parse error: {errs:?}"))?;
 let mut compiler = engine.into_compiler();
-let compiled = compiler.compile_expr(body.as_ref())?;
+let compiled = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
 let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
 assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));

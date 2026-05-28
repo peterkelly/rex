@@ -78,8 +78,13 @@ fn inject_global_type_decls(engine: &mut Engine, decls: &[Decl]) {
 
 async fn eval_expr(engine: Engine, expr: &Expr) -> Result<Handle, EngineError> {
     let mut compiler = engine.into_compiler();
+    let program = CompilationUnit {
+        decls: Vec::new(),
+        body: Some(Arc::new(expr.clone())),
+    };
     let compiled = compiler
-        .compile_expr(expr)
+        .compile_program(&program, Default::default())
+        .await
         .map_err(|err| err.into_engine_error())?;
     compiler
         .into_evaluator()
@@ -618,7 +623,14 @@ async fn typed_native_injection_uses_handle_conversions() {
 
     let expr = parse("(bump_handle_only 41, shift_handle_only_array (to_array [1, 2, 3]))");
     let mut compiler = engine.into_compiler();
-    let compiled = compiler.compile_expr(expr.as_ref()).unwrap();
+    let program = CompilationUnit {
+        decls: Vec::new(),
+        body: Some(expr),
+    };
+    let compiled = compiler
+        .compile_program(&program, Default::default())
+        .await
+        .unwrap();
     let ty = compiled.result_type().clone();
     let ptr = compiler
         .into_evaluator()

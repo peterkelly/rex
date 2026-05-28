@@ -1,11 +1,9 @@
 #![allow(dead_code)]
 
-use std::sync::Arc;
-
 use rex::{
-    ast::{CompilationUnit, Expr, Symbol},
+    ast::{CompilationUnit, Symbol},
     engine::{Engine, EngineError, Handle, Heap, Module, Value, ValueDisplayOptions},
-    parser::{ParseError, parse as parse_rex},
+    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError, TypeKind},
 };
 
@@ -14,26 +12,6 @@ pub fn strip_type_span(mut err: TypeError) -> TypeError {
         err = *error;
     }
     err
-}
-
-pub fn format_parse_errors(errs: &[ParseError]) -> String {
-    let mut out = String::from("parse error:");
-    for err in errs {
-        out.push_str(&format!("\n  {err}"));
-    }
-    out
-}
-
-pub fn parse_program(source: &str) -> Result<CompilationUnit, Vec<ParseError>> {
-    parse_rex(source)
-}
-
-pub fn parse_program_or_panic(name: &str, source: &str) -> CompilationUnit {
-    parse_program(source).unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)))
-}
-
-pub fn parse_body(source: &str) -> Arc<Expr> {
-    parse_rex(source).unwrap().body.unwrap()
 }
 
 pub fn inject_globals<State: Clone + Send + Sync + 'static>(
@@ -45,16 +23,21 @@ pub fn inject_globals<State: Clone + Send + Sync + 'static>(
     engine.inject_module(module)
 }
 
-pub async fn run_expr<State>(
+pub async fn run_program_body<State>(
     engine: Engine<State>,
-    expr: &Expr,
+    program: &CompilationUnit,
 ) -> Result<(Handle, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     let mut compiler = engine.into_compiler();
+    let body_program = CompilationUnit {
+        decls: Vec::new(),
+        body: program.body.clone(),
+    };
     let compiled = compiler
-        .compile_expr(expr)
+        .compile_program(&body_program, Default::default())
+        .await
         .map_err(|err| err.into_engine_error())?;
     let ty = compiled.result_type().clone();
     let value = compiler
@@ -63,16 +46,6 @@ where
         .await
         .map_err(|err| err.into_engine_error())?;
     Ok((value, ty))
-}
-
-pub async fn run_program_body<State>(
-    engine: Engine<State>,
-    program: &CompilationUnit,
-) -> Result<(Handle, Type), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    run_expr(engine, program.body.as_ref().unwrap().as_ref()).await
 }
 
 pub async fn run_program_body_with_heap<State>(

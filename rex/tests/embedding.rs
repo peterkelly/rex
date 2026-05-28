@@ -315,10 +315,12 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    let expr = common::parse_body(
+    let (value, ty) = common::run_snippet(
+        engine,
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
-    );
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    )
+    .await
+    .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -353,8 +355,9 @@ async fn derived_rex_default_can_read_host_state() {
 
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
-    let expr = common::parse_body("let e: Entity1 = default in e");
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) = common::run_snippet(engine, "let e: Entity1 = default in e")
+        .await
+        .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
     let decoded = Entity1::from_rex(&value).unwrap();
@@ -385,10 +388,12 @@ async fn derived_rex_default_record_update_can_override_fields() {
 
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
-    let expr = common::parse_body(
+    let (value, ty) = common::run_snippet(
+        engine,
         r#"let e: Entity1 = { default with { name = "sample", tags = Some (to_array ["x", "y"]), numbers = to_array [7, 11] } } in e"#,
-    );
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    )
+    .await
+    .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
     let decoded = Entity1::from_rex(&value).unwrap();
@@ -419,8 +424,9 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
 
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
-    let expr = common::parse_body(r#"Entity2 "sample" [7, 11]"#);
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) = common::run_snippet(engine, r#"Entity2 "sample" [7, 11]"#)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
     let decoded = Entity2::from_rex(&value).unwrap();
@@ -451,7 +457,8 @@ async fn entity2_constructor_result_can_be_record_updated() {
 
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
-    let expr = common::parse_body(
+    let (value, ty) = common::run_snippet(
+        engine,
         r#"{
             (Entity2 "sample" [7, 11])
             with {
@@ -459,8 +466,9 @@ async fn entity2_constructor_result_can_be_record_updated() {
                 tags = Some (to_array ["x", "y"])
             }
         }"#,
-    );
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    )
+    .await
+    .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
     let decoded = Entity2::from_rex(&value).unwrap();
@@ -494,8 +502,12 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    let expr = common::parse_body("(have_role_async \"editor\", have_role_async \"admin\")");
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) = common::run_snippet(
+        engine,
+        "(have_role_async \"editor\", have_role_async \"admin\")",
+    )
+    .await
+    .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -536,8 +548,9 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
     })
     .unwrap();
 
-    let expr = common::parse_body(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) = common::run_snippet(engine, r#"(repeat_value "rex" 3, repeat_value true 2)"#)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -583,8 +596,10 @@ async fn generic_export_can_swap_two_values_of_different_types() {
     })
     .unwrap();
 
-    let expr = common::parse_body(r#"(swap_pair "left" 7, swap_pair true "right")"#);
-    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) =
+        common::run_snippet(engine, r#"(swap_pair "left" 7, swap_pair true "right")"#)
+            .await
+            .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -655,8 +670,11 @@ async fn overloaded_exports_types_and_values() {
     let (_, inferred) = compiler.infer_snippet(expr, None).await.unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
-    let parsed = common::parse_body(expr);
-    let compiled = compiler.compile_expr(parsed.as_ref()).unwrap();
+    let body_program = parse_rex(expr).unwrap();
+    let compiled = compiler
+        .compile_program(&body_program, Default::default())
+        .await
+        .unwrap();
     let ty = compiled.result_type().clone();
     let value = compiler
         .into_evaluator()
@@ -727,8 +745,11 @@ async fn overloaded_async_exports_types_and_values() {
     let (_, inferred) = compiler.infer_snippet(expr, None).await.unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
-    let parsed = common::parse_body(expr);
-    let compiled = compiler.compile_expr(parsed.as_ref()).unwrap();
+    let body_program = parse_rex(expr).unwrap();
+    let compiled = compiler
+        .compile_program(&body_program, Default::default())
+        .await
+        .unwrap();
     let ty = compiled.result_type().clone();
     let value = compiler
         .into_evaluator()

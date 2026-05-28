@@ -1,12 +1,14 @@
 mod common;
 
 use rex::{
+    ast::CompilationUnit,
     engine::{Engine, EngineError, Module},
+    parser::parse as parse_rex,
     typesystem::TypeError,
 };
 
 async fn compile_err(code: &str) -> EngineError {
-    let program = common::parse_program(code).unwrap_or_else(|errs| {
+    let program = parse_rex(code).unwrap_or_else(|errs| {
         panic!("expected parse success, got: {errs:?}\ncode:\n{code}");
     });
 
@@ -17,7 +19,15 @@ async fn compile_err(code: &str) -> EngineError {
         return e;
     }
     let mut compiler = engine.into_compiler();
-    let compiled = match compiler.compile_expr(program.body.as_ref().unwrap().as_ref()) {
+    // Preserve declaration-injected body diagnostics here.
+    let body_program = CompilationUnit {
+        decls: Vec::new(),
+        body: program.body.clone(),
+    };
+    let compiled = match compiler
+        .compile_program(&body_program, Default::default())
+        .await
+    {
         Ok(compiled) => compiled,
         Err(e) => return e.into_engine_error(),
     };
@@ -83,7 +93,7 @@ async fn parse_rejects_invalid_programs() {
     ];
 
     for (name, code) in cases {
-        let res = common::parse_program(code);
+        let res = parse_rex(code);
         assert!(
             res.is_err(),
             "expected parse error for `{name}`, but parse succeeded"

@@ -6,7 +6,7 @@ use rex::{
     engine::{Engine, Module},
     parser::parse as parse_rex,
 };
-use rex_ast::{Decl, Expr, NameRef, TypeExpr};
+use rex_ast::{CompilationUnit, Decl, Expr, NameRef, TypeExpr};
 use rex_engine::ValueDisplayOptions;
 use rex_lsp::*;
 use rex_lsp::{
@@ -65,8 +65,13 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     module.add_decls(program.decls.clone());
     engine.inject_module(module).expect("inject decls");
     let mut compiler = engine.into_compiler();
+    let body_program = CompilationUnit {
+        decls: Vec::new(),
+        body: program.body.clone(),
+    };
     let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
+        .compile_program(&body_program, Default::default())
+        .await
         .expect("compile source");
     let ty = compiled.result_type().clone();
     let handle = compiler

@@ -24,8 +24,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
   - `Engine::into_evaluator()` / `Compiler::into_evaluator()` to consume preparation state into an evaluator.
   - `Compiler::compile_program` to prepare a parsed program entry point into `CompiledProgram`;
-    `Compiler::compile_expr` for lower-level expression execution; `Compiler::infer_*` for
-    type-only checks.
+    `Compiler::infer_*` for type-only checks.
   - `Evaluator::run(compiled, inputs).await` to execute one prepared program. `inputs` is a
     `BTreeMap<String, Handle>` for the program's external `main` interface; `run` consumes the
     evaluator, compiled program, and input map.
