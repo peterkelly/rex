@@ -1,9 +1,10 @@
+mod common;
+
 use rex::{
     Rex,
-    ast::{CompilationUnit, Symbol},
+    ast::Symbol,
     engine::{CompileOptions, Engine, Handle, Heap, Value},
     json::{json_to_rex, rex_to_json},
-    parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
 };
 use serde::Serialize;
@@ -35,10 +36,6 @@ fn temp_dir(name: &str) -> PathBuf {
     dir.push(format!("rex-json-eval-{name}-{nanos}"));
     fs::create_dir_all(&dir).unwrap();
     dir
-}
-
-fn parse_program(source: &str) -> CompilationUnit {
-    parse_rex(source).unwrap()
 }
 
 fn fixed_uuid() -> Uuid {
@@ -237,7 +234,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .unwrap(),
         expected_json
     );
-    let expr_program = parse_program(rex_code);
+    let expr_program = common::parse_program(rex_code).unwrap();
     let engine = engine_with_eval_json_record();
     let type_system = engine.type_system.clone();
     let mut compiler = engine.into_compiler();
@@ -252,7 +249,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
     let mut compiler = engine_with_eval_json_record().into_compiler();
-    let parsed = parse_program(rex_code);
+    let parsed = common::parse_program(rex_code).unwrap();
     let program = compiler
         .compile_program(&parsed, CompileOptions::default())
         .await
@@ -274,7 +271,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
     let mut compiler = engine_with_eval_json_record().into_compiler();
-    let parsed = parse_program(rex_code);
+    let parsed = common::parse_program(rex_code).unwrap();
     let program = compiler
         .compile_program(
             &parsed,

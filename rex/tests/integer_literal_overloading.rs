@@ -1,6 +1,7 @@
+mod common;
+
 use rex::{
     engine::{Engine, EngineError, Handle, Heap, Module, Value},
-    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -18,25 +19,9 @@ fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), Engin
 }
 
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    let program = parse_rex(code).unwrap();
-
     let mut engine = Engine::with_prelude(()).unwrap();
     register_integer_literal_natives(&mut engine)?;
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine.inject_module(module)?;
-    let heap = engine.heap.clone();
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .map_err(|err| err.into_engine_error())?;
-    let ty = compiled.result_type().clone();
-    let handle = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((heap, handle, ty))
+    common::eval_source_with_engine(engine, code).await
 }
 
 fn expected_values() -> Vec<&'static str> {

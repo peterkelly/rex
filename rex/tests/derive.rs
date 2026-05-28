@@ -1,6 +1,8 @@
+mod common;
+
 use rex::{
     Rex,
-    ast::{CompilationUnit, Symbol},
+    ast::Symbol,
     engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
     json::rex_to_json,
     parser::parse as parse_rex,
@@ -9,57 +11,14 @@ use rex::{
 use serde::Serialize;
 use std::collections::HashMap;
 
-fn inject_globals(
-    engine: &mut Engine<()>,
-    build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
-) -> Result<(), EngineError> {
-    let mut module = Module::global();
-    build(&mut module)?;
-    engine.inject_module(module)
-}
-
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    let program = parse_rex(code).unwrap();
-
     let mut engine = Engine::with_prelude(())?;
     MyInnerStruct::inject_rex(&mut engine)?;
     MyStruct::inject_rex(&mut engine)?;
     Boxed::<i32>::inject_rex(&mut engine)?;
     Maybe::<i32>::inject_rex(&mut engine)?;
     Shape::inject_rex(&mut engine)?;
-
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine.inject_module(module)?;
-    let heap = engine.heap.clone();
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .map_err(|err| err.into_engine_error())?;
-    let ty = compiled.result_type().clone();
-    let handle = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((heap, handle, ty))
-}
-
-async fn run_program(
-    engine: Engine<()>,
-    program: &CompilationUnit,
-) -> Result<(Handle, Type), EngineError> {
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .map_err(|err| err.into_engine_error())?;
-    let ty = compiled.result_type().clone();
-    let handle = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((handle, ty))
+    common::eval_source_with_engine(engine, code).await
 }
 
 #[derive(Rex, Debug, PartialEq, Serialize, Clone)]
@@ -246,7 +205,7 @@ async fn derive_struct_eval_json_matches_rust_serde_json() {
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
     let type_system = engine.type_system.clone();
-    let (v_handle, ty) = run_program(engine, &program).await.unwrap();
+    let (v_handle, ty) = common::run_program_body(engine, &program).await.unwrap();
 
     let actual_rex = rex_to_json(&v_handle, &ty, &type_system).unwrap();
 
@@ -327,7 +286,7 @@ async fn derive_generic_worked_example_polymorphic_adt() {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module).unwrap();
-    let (v_handle, ty) = run_program(engine, &program).await.unwrap();
+    let (v_handle, ty) = common::run_program_body(engine, &program).await.unwrap();
     let expected_ty = Type::tuple(vec![Maybe::<i32>::rex_type(), Maybe::<bool>::rex_type()]);
     assert_eq!(ty, expected_ty);
     let v = v_handle.value().unwrap();
@@ -371,14 +330,14 @@ async fn derive_can_be_used_in_injected_native_functions() {
         MyInnerStruct::inject_rex(&mut engine).unwrap();
         MyStruct::inject_rex(&mut engine).unwrap();
 
-        inject_globals(&mut engine, |module| {
+        common::inject_globals(&mut engine, |module| {
             module.export("bump_y", |_: &(), mut s: MyStruct| {
                 s.y += 1;
                 Ok(s)
             })
         })
         .unwrap();
-        inject_globals(&mut engine, |module| {
+        common::inject_globals(&mut engine, |module| {
             module.export_value(
                 "const_struct",
                 MyStruct {
@@ -396,7 +355,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
         engine
     }
 
-    let (v_handle, ty) = run_program(engine_with_struct_exports(), &program)
+    let (v_handle, ty) = common::run_program_body(engine_with_struct_exports(), &program)
         .await
         .unwrap();
     assert_eq!(ty, MyStruct::rex_type());
@@ -404,7 +363,7 @@ async fn derive_can_be_used_in_injected_native_functions() {
     assert_eq!(bumped.y, 43);
 
     let program = parse_rex("const_struct.y").unwrap();
-    let (v, ty) = run_program(engine_with_struct_exports(), &program)
+    let (v, ty) = common::run_program_body(engine_with_struct_exports(), &program)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -416,7 +375,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Shape::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export_value("shape", Shape::Rectangle(3, 4))
     })
     .unwrap();
@@ -430,7 +389,7 @@ async fn derive_enum_can_be_injected_as_value_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let (v, ty) = run_program(engine, &program).await.unwrap();
+    let (v, ty) = common::run_program_body(engine, &program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(v.as_i32().unwrap(), 12);
 }
@@ -449,7 +408,7 @@ async fn derive_types_implement_rex_adt_trait() {
         "#,
     )
     .unwrap();
-    let (v, ty) = run_program(engine, &program).await.unwrap();
+    let (v, ty) = common::run_program_body(engine, &program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(v.as_i32().unwrap(), 10);
 }
@@ -459,7 +418,7 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     let mut engine = Engine::with_prelude(()).unwrap();
     Maybe::<i32>::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export("unwrap_or_zero", |_: &(), m: Maybe<i32>| {
             Ok(match m {
                 Maybe::Just(v) => v,
@@ -470,7 +429,7 @@ async fn derive_generic_enum_can_be_used_as_injected_fn_arg_and_return() {
     .unwrap();
 
     let program = parse_rex("(unwrap_or_zero (Just 5), unwrap_or_zero Nothing)").unwrap();
-    let (v_handle, ty) = run_program(engine, &program).await.unwrap();
+    let (v_handle, ty) = common::run_program_body(engine, &program).await.unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -548,7 +507,7 @@ async fn derive_inject_rex_registers_acyclic_dependency_closure() {
         "#,
     )
     .unwrap();
-    let (v_handle, ty) = run_program(engine, &program).await.unwrap();
+    let (v_handle, ty) = common::run_program_body(engine, &program).await.unwrap();
 
     assert_eq!(ty, RootNode::rex_type());
     let decoded = RootNode::from_rex(&v_handle).unwrap();
@@ -636,7 +595,7 @@ async fn derive_leaf_rex_type_field_does_not_require_rex_adt_dependency() {
     Fragment::inject_rex(&mut engine).unwrap();
 
     let program = parse_rex("Fragment [1, 2, 3]").unwrap();
-    let (v_handle, ty) = run_program(engine, &program).await.unwrap();
+    let (v_handle, ty) = common::run_program_body(engine, &program).await.unwrap();
 
     assert_eq!(ty, Fragment::rex_type());
     let decoded = Fragment::from_rex(&v_handle).unwrap();
@@ -650,7 +609,7 @@ async fn derive_leaf_rex_type_record_fields_support_manual_leaf_types() {
 
     let program =
         parse_rex("BoundingBox { min = (1.0, 2.0, 3.0), max = (4.0, 5.0, 6.0) }").unwrap();
-    let (v_handle, ty) = run_program(engine, &program).await.unwrap();
+    let (v_handle, ty) = common::run_program_body(engine, &program).await.unwrap();
 
     assert_eq!(ty, BoundingBox::rex_type());
     let decoded = BoundingBox::from_rex(&v_handle).unwrap();

@@ -1,6 +1,7 @@
+mod common;
+
 use rex::{
-    engine::{Engine, Module, Value},
-    parser::parse as parse_rex,
+    engine::Value,
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -21,22 +22,7 @@ async fn record_update_end_to_end() {
         in
             (foo2.x, match sum2 with { case A {x} -> x; case B {x} -> x; })
     "#;
-    let program = parse_rex(code).unwrap();
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine.inject_module(module).unwrap();
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .unwrap();
-    let ty = compiled.result_type().clone();
-    let value_handle = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .unwrap();
+    let (_heap, value_handle, ty) = common::eval_source(code).await.unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![

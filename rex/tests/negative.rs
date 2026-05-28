@@ -1,23 +1,12 @@
+mod common;
+
 use rex::{
-    ast::CompilationUnit,
     engine::{Engine, EngineError, Module},
-    parser::{ParseError, parse},
     typesystem::TypeError,
 };
 
-fn strip_span(mut err: TypeError) -> TypeError {
-    while let TypeError::Spanned { error, .. } = err {
-        err = *error;
-    }
-    err
-}
-
-fn parse_program(code: &str) -> Result<CompilationUnit, Vec<ParseError>> {
-    parse(code)
-}
-
 async fn compile_err(code: &str) -> EngineError {
-    let program = parse_program(code).unwrap_or_else(|errs| {
+    let program = common::parse_program(code).unwrap_or_else(|errs| {
         panic!("expected parse success, got: {errs:?}\ncode:\n{code}");
     });
 
@@ -50,7 +39,7 @@ async fn expect_type_err(code: &str, f: impl FnOnce(&TypeError) -> bool) {
     let EngineError::Type(te) = err else {
         panic!("expected type error, got: {err:?}\ncode:\n{code}");
     };
-    let te = strip_span(te);
+    let te = common::strip_type_span(te);
     assert!(f(&te), "unexpected type error: {te:?}\ncode:\n{code}");
 }
 
@@ -94,7 +83,7 @@ async fn parse_rejects_invalid_programs() {
     ];
 
     for (name, code) in cases {
-        let res = parse_program(code);
+        let res = common::parse_program(code);
         assert!(
             res.is_err(),
             "expected parse error for `{name}`, but parse succeeded"

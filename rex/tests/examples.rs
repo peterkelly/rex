@@ -1,35 +1,13 @@
+mod common;
+
 use rex::{
-    engine::{Engine, Module, Value},
-    parser::{ParseError, parse as parse_rex},
+    engine::Value,
     typesystem::{BuiltinTypeId, Type},
 };
 
-fn format_parse_errors(errs: &[ParseError]) -> String {
-    let mut out = String::from("parse error:");
-    for err in errs {
-        out.push_str(&format!("\n  {err}"));
-    }
-    out
-}
-
 async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expected_type: Type) {
-    let program =
-        parse_rex(source).unwrap_or_else(|errs| panic!("{name}:\n{}", format_parse_errors(&errs)));
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine
-        .inject_module(module)
-        .unwrap_or_else(|err| panic!("{name}: engine decl error: {err}"));
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .unwrap_or_else(|err| panic!("{name}: compile error: {err}"));
-    let ty = compiled.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
+    common::parse_program_or_panic(name, source);
+    let (_heap, value, ty) = common::eval_source(source)
         .await
         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");

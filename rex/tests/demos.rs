@@ -1,3 +1,5 @@
+mod common;
+
 use rex::{
     engine::{Engine, Handle, Heap, Value},
     parser::parse as parse_rex,
@@ -65,31 +67,8 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
         .unwrap()
 }
 
-fn tuple_items(value: &Handle) -> Vec<Handle> {
-    let Value::Tuple(items) = value.value().unwrap() else {
-        panic!("expected tuple, got {}", value.type_name().unwrap());
-    };
-    items
-}
-
-fn list_elements(list: &Handle) -> Vec<Handle> {
-    let mut out = Vec::new();
-    let mut cur = list.clone();
-    loop {
-        match cur.value().unwrap() {
-            Value::Adt(tag, _args) if tag.as_ref() == "Empty" => return out,
-            Value::Adt(tag, args) if tag.as_ref() == "Cons" => {
-                assert_eq!(args.len(), 2, "Cons must have exactly two fields");
-                out.push(args[0].clone());
-                cur = args[1].clone();
-            }
-            other => panic!("expected list, got {}", other.value_type_name()),
-        }
-    }
-}
-
 fn list_i32_values(handle: &Handle) -> Vec<i32> {
-    let elems = list_elements(handle);
+    let elems = common::list_elements(handle);
     elems
         .iter()
         .map(|p| p.to_rust::<i32>().unwrap())
@@ -159,7 +138,7 @@ async fn demo_binary_search_tree() {
             Type::builtin(BuiltinTypeId::Bool),
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 3);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 6);
     assert!(items[1].to_rust::<bool>().unwrap());
@@ -184,7 +163,7 @@ async fn demo_expression_evaluator() {
             Type::builtin(BuiltinTypeId::I32),
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 3);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 14);
     assert_eq!(items[1].to_rust::<i32>().unwrap(), 3);
@@ -208,7 +187,7 @@ async fn demo_dijkstra_lite() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 7);
     assert_eq!(items[1].to_rust::<i32>().unwrap(), 5);
@@ -231,7 +210,7 @@ async fn demo_knapsack_01() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 8);
     assert_eq!(items[1].to_rust::<i32>().unwrap(), 12);
@@ -256,7 +235,7 @@ async fn demo_union_find() {
             Type::builtin(BuiltinTypeId::I32),
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 4);
     assert!(items[0].to_rust::<bool>().unwrap());
     assert!(!items[1].to_rust::<bool>().unwrap());
@@ -283,7 +262,7 @@ async fn demo_prefix_parser() {
             Type::builtin(BuiltinTypeId::Bool),
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 4);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 14);
     assert!(items[1].to_rust::<bool>().unwrap());
@@ -310,7 +289,7 @@ async fn demo_topological_sort() {
         ty_str.ends_with(".Node)"),
         "topological_sort: expected element type ending in .Node, got {ty_str}"
     );
-    let elems = list_elements(&value);
+    let elems = common::list_elements(&value);
     assert_eq!(elems.len(), 4);
     for (idx, expected_tag) in ["A", "B", "C", "D"].iter().enumerate() {
         let Value::Adt(tag, args) = elems[idx].value().unwrap() else {
@@ -339,7 +318,7 @@ fn demo_n_queens() {
             Type::builtin(BuiltinTypeId::I32)
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 2);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 2);
     assert_eq!(items[1].to_rust::<i32>().unwrap(), 10);

@@ -1,10 +1,11 @@
 #![allow(clippy::disallowed_names)]
 
+mod common;
+
 use rex::{
     Rex,
     engine::{Engine, EngineError, Handle, Module},
     json::rex_to_json,
-    parser::parse as parse_rex,
     typesystem::Type,
 };
 use serde::{Deserialize, Serialize};
@@ -16,19 +17,7 @@ async fn run_snippet<State: Clone + Send + Sync + 'static>(
     engine: Engine<State>,
     source: &str,
 ) -> Result<(Handle, Type), EngineError> {
-    let mut compiler = engine.into_compiler();
-    let parsed = parse_rex(source).unwrap();
-    let program = compiler
-        .compile_program(&parsed, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    let ty = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((value, ty))
+    common::run_snippet(engine, source).await
 }
 
 #[derive(Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]

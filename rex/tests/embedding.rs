@@ -1,10 +1,10 @@
-use std::sync::Arc;
+mod common;
 
 use rex::{
     Rex,
-    ast::{Expr, Symbol},
+    ast::Symbol,
     engine::{
-        Context, Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, RexDefault, Value,
+        Context, Engine, EngineError, FromRex, Handle, IntoRex, Module, RexDefault, Value,
         virtual_export_name,
     },
     parser::parse as parse_rex,
@@ -35,32 +35,6 @@ fn render_label(label: Label) -> String {
         Side::Left => format!("{:<12}", label.text),
         Side::Right => format!("{:>12}", label.text),
     }
-}
-
-fn inject_globals<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
-    build: impl FnOnce(&mut Module<State>) -> Result<(), EngineError>,
-) -> Result<(), EngineError> {
-    let mut module = Module::global();
-    build(&mut module)?;
-    engine.inject_module(module)
-}
-
-async fn run_expr<State>(engine: Engine<State>, expr: &Expr) -> Result<(Handle, Type), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(expr)
-        .map_err(|err| err.into_engine_error())?;
-    let ty = compiled.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((value, ty))
 }
 
 #[tokio::test]
@@ -114,7 +88,7 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
             correctness_ty,
         ])
     );
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 4);
     assert_eq!(
         items[0].to_rust::<String>().unwrap(),
@@ -209,17 +183,12 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     };
 
     match err {
-        EngineError::Type(mut e) => {
-            while let TypeError::Spanned { error, .. } = e {
-                e = *error;
+        EngineError::Type(e) => match common::strip_type_span(e) {
+            TypeError::AmbiguousOverload(name) => {
+                assert!(name.as_ref().ends_with(".Right"));
             }
-            match e {
-                TypeError::AmbiguousOverload(name) => {
-                    assert!(name.as_ref().ends_with(".Right"));
-                }
-                other => panic!("expected ambiguous overload error, got {other:?}"),
-            }
-        }
+            other => panic!("expected ambiguous overload error, got {other:?}"),
+        },
         other => panic!("expected type error, got {other:?}"),
     }
 }
@@ -299,68 +268,20 @@ async fn have_role_async(state: HostState, role: String) -> Result<bool, EngineE
     Ok(state.roles.iter().any(|r| r == &role))
 }
 
-fn parse(code: &str) -> Arc<Expr> {
-    parse_rex(code).unwrap().body.unwrap()
-}
-fn tuple_items(value: &Handle) -> Vec<Handle> {
-    let Value::Tuple(items) = value.value().unwrap() else {
-        panic!("expected tuple, got {}", value.type_name().unwrap());
-    };
-    items
-}
-
-fn list_from_handles(heap: &Heap, values: Vec<Handle>) -> Result<Handle, EngineError> {
-    let mut list = heap.alloc_adt(Symbol::intern("Empty"), vec![])?;
-    for value in values.into_iter().rev() {
-        list = heap.alloc_adt(Symbol::intern("Cons"), vec![value, list])?;
-    }
-    Ok(list)
-}
-
-fn handle_as_list(handle: &Handle) -> Result<Vec<Handle>, EngineError> {
-    let mut out = Vec::new();
-    let mut cursor = handle.clone();
-    loop {
-        let Value::Adt(tag, args) = cursor.value()? else {
-            return Err(EngineError::NativeType {
-                expected: "List a".into(),
-                got: cursor.type_name()?.into(),
-            });
-        };
-        if tag == Symbol::intern("Empty") {
-            return Ok(out);
-        }
-        if tag == Symbol::intern("Cons") && args.len() == 2 {
-            out.push(args[0].clone());
-            cursor = args[1].clone();
-            continue;
-        }
-        return Err(EngineError::NativeType {
-            expected: "List a".into(),
-            got: cursor.type_name()?.into(),
-        });
-    }
-}
-
-fn is_i32_or_var(ty: &Type) -> bool {
-    matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name_str() == "i32")
-        || matches!(ty.as_ref(), TypeKind::Var(_))
-}
-
 fn assert_overload_tuple_type_shape(ty: &Type) {
     let TypeKind::Tuple(items) = ty.as_ref() else {
         panic!("expected tuple type, got {ty}");
     };
     assert_eq!(items.len(), 6);
     assert!(
-        is_i32_or_var(&items[0]),
+        common::is_i32_or_var(&items[0]),
         "expected i32/var at index 0, got {}",
         items[0]
     );
     assert_eq!(items[1], Type::builtin(BuiltinTypeId::String));
     assert_eq!(items[2], Type::builtin(BuiltinTypeId::Bool));
     assert!(
-        is_i32_or_var(&items[3]),
+        common::is_i32_or_var(&items[3]),
         "expected i32/var at index 3, got {}",
         items[3]
     );
@@ -385,7 +306,7 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export("current_account_id", current_account_id)?;
         module.export("current_project_id", current_project_id)?;
         module.export("is_admin", is_admin)?;
@@ -394,10 +315,10 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    let expr = parse(
+    let expr = common::parse_body(
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
     );
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -409,7 +330,7 @@ async fn injected_functions_can_read_shared_state_fields() {
         ])
     );
 
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 5);
     assert_eq!(items[0].to_rust::<Uuid>().unwrap(), account_id);
     assert_eq!(items[1].to_rust::<Uuid>().unwrap(), project_id);
@@ -432,8 +353,8 @@ async fn derived_rex_default_can_read_host_state() {
 
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
-    let expr = parse("let e: Entity1 = default in e");
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let expr = common::parse_body("let e: Entity1 = default in e");
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
     let decoded = Entity1::from_rex(&value).unwrap();
@@ -464,10 +385,10 @@ async fn derived_rex_default_record_update_can_override_fields() {
 
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
-    let expr = parse(
+    let expr = common::parse_body(
         r#"let e: Entity1 = { default with { name = "sample", tags = Some (to_array ["x", "y"]), numbers = to_array [7, 11] } } in e"#,
     );
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
 
     let decoded = Entity1::from_rex(&value).unwrap();
@@ -498,8 +419,8 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
 
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
-    let expr = parse(r#"Entity2 "sample" [7, 11]"#);
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let expr = common::parse_body(r#"Entity2 "sample" [7, 11]"#);
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
     let decoded = Entity2::from_rex(&value).unwrap();
@@ -530,7 +451,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
 
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
-    let expr = parse(
+    let expr = common::parse_body(
         r#"{
             (Entity2 "sample" [7, 11])
             with {
@@ -539,7 +460,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
             }
         }"#,
     );
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
 
     let decoded = Entity2::from_rex(&value).unwrap();
@@ -566,15 +487,15 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export_async("have_role_async", |state: &HostState, role: String| {
             have_role_async(state.clone(), role)
         })
     })
     .unwrap();
 
-    let expr = parse("(have_role_async \"editor\", have_role_async \"admin\")");
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let expr = common::parse_body("(have_role_async \"editor\", have_role_async \"admin\")");
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -583,7 +504,7 @@ async fn async_injected_functions_can_read_shared_state_fields() {
         ])
     );
 
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 2);
     assert!(items[0].to_rust::<bool>().unwrap());
     assert!(!items[1].to_rust::<bool>().unwrap());
@@ -605,18 +526,18 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
             Type::fun(Type::builtin(BuiltinTypeId::I32), Type::list(t)),
         ),
     );
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export_native("repeat_value", scheme, 2, |engine, _, args| {
             let value = args[0].clone();
             let len = args[1].to_rust::<i32>()?;
             let copies = (0..len.max(0)).map(|_| value.clone()).collect();
-            list_from_handles(engine.heap(), copies)
+            common::list_from_handles(engine.heap(), copies)
         })
     })
     .unwrap();
 
-    let expr = parse(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let expr = common::parse_body(r#"(repeat_value "rex" 3, repeat_value true 2)"#);
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -625,14 +546,14 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
         ])
     );
 
-    let items = tuple_items(&value);
-    let repeated_strings = handle_as_list(&items[0]).unwrap();
+    let items = common::tuple_items(&value);
+    let repeated_strings = common::list_elements(&items[0]);
     assert_eq!(repeated_strings.len(), 3);
     assert_eq!(repeated_strings[0].to_rust::<String>().unwrap(), "rex");
     assert_eq!(repeated_strings[1].to_rust::<String>().unwrap(), "rex");
     assert_eq!(repeated_strings[2].to_rust::<String>().unwrap(), "rex");
 
-    let repeated_bools = handle_as_list(&items[1]).unwrap();
+    let repeated_bools = common::list_elements(&items[1]);
     assert_eq!(repeated_bools.len(), 2);
     assert!(repeated_bools[0].to_rust::<bool>().unwrap());
     assert!(repeated_bools[1].to_rust::<bool>().unwrap());
@@ -653,7 +574,7 @@ async fn generic_export_can_swap_two_values_of_different_types() {
         vec![],
         Type::fun(p.clone(), Type::fun(q.clone(), Type::tuple(vec![q, p]))),
     );
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export_native("swap_pair", scheme, 2, |engine, _, args| {
             engine
                 .heap()
@@ -662,8 +583,8 @@ async fn generic_export_can_swap_two_values_of_different_types() {
     })
     .unwrap();
 
-    let expr = parse(r#"(swap_pair "left" 7, swap_pair true "right")"#);
-    let (value, ty) = run_expr(engine, expr.as_ref()).await.unwrap();
+    let expr = common::parse_body(r#"(swap_pair "left" 7, swap_pair true "right")"#);
+    let (value, ty) = common::run_expr(engine, expr.as_ref()).await.unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -678,13 +599,13 @@ async fn generic_export_can_swap_two_values_of_different_types() {
         ])
     );
 
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
 
-    let first_swap = tuple_items(&items[0]);
+    let first_swap = common::tuple_items(&items[0]);
     assert_eq!(first_swap[0].to_rust::<i32>().unwrap(), 7);
     assert_eq!(first_swap[1].to_rust::<String>().unwrap(), "left");
 
-    let second_swap = tuple_items(&items[1]);
+    let second_swap = common::tuple_items(&items[1]);
     assert_eq!(second_swap[0].to_rust::<String>().unwrap(), "right");
     assert!(second_swap[1].to_rust::<bool>().unwrap());
 }
@@ -695,7 +616,7 @@ async fn overloaded_exports_types_and_values() {
 
     EmbedRecord::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export("over1", |_state: &(), x: i32| Ok(x + 1))?;
         module.export("over1", |_state: &(), x: bool| {
             Ok(if x {
@@ -734,7 +655,7 @@ async fn overloaded_exports_types_and_values() {
     let (_, inferred) = compiler.infer_snippet(expr, None).await.unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
-    let parsed = parse(expr);
+    let parsed = common::parse_body(expr);
     let compiled = compiler.compile_expr(parsed.as_ref()).unwrap();
     let ty = compiled.result_type().clone();
     let value = compiler
@@ -745,7 +666,7 @@ async fn overloaded_exports_types_and_values() {
     let value = value.unwrap();
     assert_overload_tuple_type_shape(&ty);
 
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 6);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 42);
     assert_eq!(items[1].to_rust::<String>().unwrap(), "bool:true");
@@ -760,7 +681,7 @@ async fn overloaded_async_exports_types_and_values() {
     let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
     EmbedRecord::inject_rex(&mut engine).unwrap();
 
-    inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut engine, |module| {
         module.export_async("a1", |_state: &(), x: i32| async move { Ok(x + 1) })?;
         module.export_async("a1", |_state: &(), x: bool| async move {
             Ok(if x {
@@ -806,7 +727,7 @@ async fn overloaded_async_exports_types_and_values() {
     let (_, inferred) = compiler.infer_snippet(expr, None).await.unwrap();
     assert_overload_tuple_type_shape(&inferred);
 
-    let parsed = parse(expr);
+    let parsed = common::parse_body(expr);
     let compiled = compiler.compile_expr(parsed.as_ref()).unwrap();
     let ty = compiled.result_type().clone();
     let value = compiler
@@ -817,7 +738,7 @@ async fn overloaded_async_exports_types_and_values() {
     let value = value.unwrap();
     assert_overload_tuple_type_shape(&ty);
 
-    let items = tuple_items(&value);
+    let items = common::tuple_items(&value);
     assert_eq!(items.len(), 6);
     assert_eq!(items[0].to_rust::<i32>().unwrap(), 42);
     assert_eq!(items[1].to_rust::<String>().unwrap(), "bool:true");

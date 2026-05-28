@@ -1,73 +1,10 @@
-use rex::{
-    engine::{Engine, Module, ValueDisplayOptions},
-    parser::parse as parse_rex,
-    typesystem::{BuiltinTypeId, Type, TypeKind},
+mod common;
+
+use rex::typesystem::{BuiltinTypeId, Type};
+
+use common::{
+    assert_eval_display as assert_eval, assert_eval_error_contains as assert_err_contains,
 };
-
-fn type_compatible(actual: &Type, expected: &Type) -> bool {
-    match (actual.as_ref(), expected.as_ref()) {
-        (TypeKind::Var(_), TypeKind::Con(tc)) if tc.name_str() == "i32" => true,
-        (TypeKind::Con(a), TypeKind::Con(b)) => a == b,
-        (TypeKind::App(af, aa), TypeKind::App(ef, ea))
-        | (TypeKind::Fun(af, aa), TypeKind::Fun(ef, ea)) => {
-            type_compatible(af, ef) && type_compatible(aa, ea)
-        }
-        (TypeKind::Tuple(as_), TypeKind::Tuple(es)) if as_.len() == es.len() => as_
-            .iter()
-            .zip(es.iter())
-            .all(|(a, e)| type_compatible(a, e)),
-        (TypeKind::Record(as_), TypeKind::Record(es)) if as_.len() == es.len() => as_
-            .iter()
-            .zip(es.iter())
-            .all(|((an, at), (en, et))| an == en && type_compatible(at, et)),
-        _ => false,
-    }
-}
-
-async fn eval_to_string(code: &str, expected_ty: Type) -> Result<String, String> {
-    let program = parse_rex(code).map_err(|errs| format!("parse error: {errs:?}"))?;
-
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine.inject_module(module).map_err(|e| format!("{e}"))?;
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .map_err(|e| format!("{e}"))?;
-    let ty = compiled.result_type().clone();
-    let handle = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .map_err(|e| format!("{e}"))?;
-    assert!(
-        type_compatible(&ty, &expected_ty),
-        "eval returned unexpected type for: {code}\nactual: {ty}\nexpected: {expected_ty}"
-    );
-    let opts = ValueDisplayOptions {
-        include_numeric_suffixes: true,
-        ..ValueDisplayOptions::default()
-    };
-    handle.display_with(opts).map_err(|e| format!("{e}"))
-}
-
-async fn assert_eval(code: &str, expected: &str, expected_ty: Type) {
-    let actual = eval_to_string(code, expected_ty)
-        .await
-        .unwrap_or_else(|e| panic!("expected ok, got error: {e}"));
-    assert_eq!(actual, expected);
-}
-
-async fn assert_err_contains(code: &str, needle: &str) {
-    let err = eval_to_string(code, Type::builtin(BuiltinTypeId::I32))
-        .await
-        .unwrap_err();
-    assert!(
-        err.contains(needle),
-        "expected error containing {needle:?}, got: {err}"
-    );
-}
 
 #[tokio::test]
 async fn default_record_dispatch() {

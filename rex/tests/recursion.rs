@@ -1,67 +1,19 @@
+mod common;
+
 use rex::{
-    engine::{Engine, EngineError, Handle, Heap, Module},
-    parser::parse as parse_rex,
-    typesystem::{BuiltinTypeId, Type, TypeKind},
+    engine::{EngineError, Handle, Heap},
+    typesystem::{BuiltinTypeId, Type},
 };
 
 async fn eval(source: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    let program = parse_rex(source).unwrap();
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine.inject_module(module)?;
-    let heap = engine.heap.clone();
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .map_err(|err| err.into_engine_error())?;
-    let ty = compiled.result_type().clone();
-    let handle = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((heap, handle, ty))
-}
-
-trait HandleRef {
-    fn handle_ref(&self) -> &Handle;
-}
-
-impl HandleRef for Handle {
-    fn handle_ref(&self) -> &Handle {
-        self
-    }
-}
-
-impl HandleRef for &Handle {
-    fn handle_ref(&self) -> &Handle {
-        self
-    }
-}
-
-macro_rules! assert_handle_eq {
-    ($lhs:expr, $rhs:expr) => {{
-        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
-        let rhs: Handle = HandleRef::handle_ref(&$rhs).clone();
-        assert!(
-            lhs.value_eq(&rhs).unwrap(),
-            "left: {}, right: {}",
-            lhs.display().unwrap(),
-            rhs.display().unwrap()
-        );
-    }};
+    common::eval_source(source).await
 }
 
 async fn assert_i32_result(source: &str, expected: i32) {
     let (heap, handle, ty) = eval(source).await.unwrap();
-    assert!(
-        matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name_str() == "i32")
-            || matches!(ty.as_ref(), TypeKind::Var(_)),
-        "eval returned unexpected type for: {source}"
-    );
+    common::assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(expected).unwrap();
-    assert_handle_eq!(&handle, &expected);
+    common::assert_handles_eq(&handle, &expected);
 }
 
 async fn assert_even_odd_tuple(source: &str) {
@@ -82,7 +34,7 @@ async fn assert_even_odd_tuple(source: &str) {
     let t2 = heap.alloc_bool(false).unwrap();
     let t3 = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
-    assert_handle_eq!(&handle, &expected);
+    common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]

@@ -1,25 +1,14 @@
+mod common;
+
 use std::fmt::Debug;
 
 use rex::{
     engine::{Engine, EngineError, FromRex, Handle},
-    parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError},
 };
 
 async fn eval(source: &str) -> Result<(Handle, Type), EngineError> {
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
-    let parsed = parse_rex(source).unwrap();
-    let program = compiler
-        .compile_program(&parsed, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    let ty = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((value, ty))
+    common::run_snippet(Engine::with_prelude(()).unwrap(), source).await
 }
 
 async fn assert_value<T>(source: &str, expected: T, expected_ty: BuiltinTypeId)
@@ -34,13 +23,6 @@ where
 async fn assert_runtime_error(source: &str, expected: &str) {
     let err = eval(source).await.unwrap_err();
     assert_eq!(err.to_string(), expected, "{source}");
-}
-
-fn strip_type_span(mut err: TypeError) -> TypeError {
-    while let TypeError::Spanned { error, .. } = err {
-        err = *error;
-    }
-    err
 }
 
 macro_rules! assert_integer_ops {
@@ -224,7 +206,7 @@ async fn unsigned_subtraction_does_not_enable_negative_literals() {
         panic!("expected type error");
     };
     assert!(matches!(
-        strip_type_span(err),
+        common::strip_type_span(err),
         TypeError::NoInstance(class, ty)
             if class.as_ref() == "AdditiveGroup" && ty == "u32"
     ));

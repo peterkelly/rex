@@ -1,64 +1,12 @@
+mod common;
+
 use rex::{
-    engine::{Engine, EngineError, Handle, Heap, Module, Value},
-    parser::parse as parse_rex,
+    engine::{EngineError, Handle, Heap, Value},
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
 
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    let program = parse_rex(code).unwrap();
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine.inject_module(module)?;
-    let heap = engine.heap.clone();
-    let mut compiler = engine.into_compiler();
-    let compiled = compiler
-        .compile_expr(program.body.as_ref().unwrap().as_ref())
-        .map_err(|err| err.into_engine_error())?;
-    let ty = compiled.result_type().clone();
-    let handle = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
-    Ok((heap, handle, ty))
-}
-
-trait HandleRef {
-    fn handle_ref(&self) -> &Handle;
-}
-
-impl HandleRef for Handle {
-    fn handle_ref(&self) -> &Handle {
-        self
-    }
-}
-
-impl HandleRef for &Handle {
-    fn handle_ref(&self) -> &Handle {
-        self
-    }
-}
-
-macro_rules! assert_handle_eq {
-    ($lhs:expr, $rhs:expr) => {{
-        let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
-        let rhs: Handle = HandleRef::handle_ref(&$rhs).clone();
-        assert!(
-            lhs.value_eq(&rhs).unwrap(),
-            "left: {}, right: {}",
-            lhs.display().unwrap(),
-            rhs.display().unwrap()
-        );
-    }};
-}
-
-fn assert_i32_or_var(ty: &Type) {
-    assert!(
-        matches!(ty.as_ref(), TypeKind::Con(tc) if tc.name_str() == "i32")
-            || matches!(ty.as_ref(), TypeKind::Var(_)),
-        "expected i32 or type variable, got {ty}"
-    );
+    common::eval_source(code).await
 }
 
 #[tokio::test]
@@ -78,9 +26,9 @@ async fn let_rec_self_recursive_factorial() {
     )
     .await
     .unwrap();
-    assert_i32_or_var(&ty);
+    common::assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(720).unwrap();
-    assert_handle_eq!(&handle, &expected);
+    common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
@@ -99,9 +47,9 @@ async fn let_rec_self_recursive_fibonacci() {
     )
     .await
     .unwrap();
-    assert_i32_or_var(&ty);
+    common::assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(21).unwrap();
-    assert_handle_eq!(&handle, &expected);
+    common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
@@ -132,7 +80,7 @@ async fn let_rec_mutual_even_odd() {
     let t2 = heap.alloc_bool(false).unwrap();
     let t3 = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![t0, t1, t2, t3]).unwrap();
-    assert_handle_eq!(&handle, &expected);
+    common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
@@ -154,14 +102,14 @@ async fn let_rec_mutual_three_function_group() {
     };
     assert_eq!(items.len(), 3);
     for item in items {
-        assert_i32_or_var(item);
+        common::assert_i32_or_var(item);
     }
 
     let a = heap.alloc_i32(0).unwrap();
     let b = heap.alloc_i32(1).unwrap();
     let c = heap.alloc_i32(2).unwrap();
     let expected = heap.alloc_tuple(vec![a, b, c]).unwrap();
-    assert_handle_eq!(&handle, &expected);
+    common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
@@ -180,12 +128,12 @@ async fn let_rec_function_is_still_polymorphic() {
         panic!("expected tuple type, got {ty}");
     };
     assert_eq!(items.len(), 2);
-    assert_i32_or_var(&items[0]);
+    common::assert_i32_or_var(&items[0]);
     assert_eq!(items[1], Type::builtin(BuiltinTypeId::Bool));
     let one = heap.alloc_i32(1).unwrap();
     let tru = heap.alloc_bool(true).unwrap();
     let expected = heap.alloc_tuple(vec![one, tru]).unwrap();
-    assert_handle_eq!(&handle, &expected);
+    common::assert_handles_eq(&handle, &expected);
 }
 
 #[tokio::test]
@@ -209,7 +157,7 @@ async fn let_rec_allows_self_referential_data_cycles() {
     };
     assert_eq!(tag.as_ref(), "Cons");
     assert_eq!(args.len(), 2);
-    assert_handle_eq!(&handle, &args[1]);
+    common::assert_handles_eq(&handle, &args[1]);
 }
 
 #[tokio::test]
@@ -254,6 +202,6 @@ async fn let_rec_allows_mutual_data_cycles() {
         );
     };
     assert_eq!(b_args.len(), 2);
-    assert_handle_eq!(&a_args[1], &b_handle);
-    assert_handle_eq!(&b_args[1], &a_handle);
+    common::assert_handles_eq(&a_args[1], &b_handle);
+    common::assert_handles_eq(&b_args[1], &a_handle);
 }
