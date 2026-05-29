@@ -8,14 +8,12 @@ async fn run_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), Eng
     let parsed = parse_rex(source).unwrap();
     let program = compiler
         .compile_program(&parsed, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
         .run(program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     Ok((value, typ))
 }
 

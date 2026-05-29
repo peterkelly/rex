@@ -33,7 +33,8 @@ The crates are designed so you can use them independently (e.g. parser-only tool
     `export_async` callbacks receive `&State` and return
     `Future<Output = Result<T, EngineError>>`, while handle-based native APIs
     (`export_native*`) receive `Context<State>`.
-  - public phase errors are split as `CompileError`, `EvalError`, and `ExecutionError` (for convenience entry points that do both phases).
+  - compile and evaluation APIs return `EngineError`; convenience entry
+    points that cross phases return `ExecutionError`.
   - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.

@@ -9,7 +9,7 @@ use rex_typesystem::typesystem::TypeSystem;
 use uuid::Uuid;
 
 use crate::{
-    CompileError, EngineError, Environment, Evaluator,
+    EngineError, Environment, Evaluator,
     builder::{engine::Engine, rewrite::rewrite_program_with_imports},
     compiler::{
         program::{CompiledExterns, CompiledProgram},
@@ -247,7 +247,7 @@ where
         &mut self,
         program: &CompilationUnit,
         options: CompileOptions,
-    ) -> Result<CompiledProgram, CompileError> {
+    ) -> Result<CompiledProgram, EngineError> {
         let entry = main_entry_program(program)?;
         let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
         let prefix = options
@@ -279,8 +279,8 @@ where
         &mut self,
         source: &str,
         importer_path: Option<&Path>,
-    ) -> Result<(Vec<Predicate>, Type), CompileError> {
-        let program = parse_program_from_source(source, None).map_err(CompileError::from)?;
+    ) -> Result<(Vec<Predicate>, Type), EngineError> {
+        let program = parse_program_from_source(source, None)?;
         let importer = importer_path.map(|p| ModuleId::Local {
             path: p.to_path_buf(),
         });
@@ -301,25 +301,23 @@ where
         let body = rewritten
             .body
             .ok_or(EngineError::MissingBody { context: "snippet" })?;
-        self.engine
-            .infer_type(body.as_ref())
-            .map_err(CompileError::from)
+        self.engine.infer_type(body.as_ref())
     }
 
     pub async fn infer_module_with_importer(
         &mut self,
         request: ImportRequest,
         importer: Arc<dyn Importer>,
-    ) -> Result<(Vec<Predicate>, Type), CompileError> {
+    ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let chain = self.engine.modules.import_chain().with_importer(importer);
-        let resolved = chain.import(request).await.map_err(CompileError::from)?;
+        let resolved = chain.import(request).await?;
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
 
         loading.insert(resolved.id.clone());
 
         let prefix = prefix_for_module(&resolved.id);
-        let program = program_from_resolved(&resolved).map_err(CompileError::from)?;
+        let program = program_from_resolved(&resolved)?;
 
         let rewritten = self
             .rewrite_and_inject_program(
@@ -330,15 +328,11 @@ where
                 &mut loaded,
                 &mut loading,
             )
-            .await
-            .map_err(CompileError::from)?;
+            .await?;
         let body = rewritten
             .body
             .unwrap_or_else(|| Arc::new(Expr::Tuple(Default::default(), Vec::new())));
-        let result = self
-            .engine
-            .infer_type(body.as_ref())
-            .map_err(CompileError::from)?;
+        let result = self.engine.infer_type(body.as_ref())?;
 
         let exports = exports_from_program(&program, &prefix, &resolved.id);
         loaded.insert(resolved.id.clone(), exports);

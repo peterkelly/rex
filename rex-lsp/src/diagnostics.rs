@@ -157,7 +157,7 @@ pub(crate) fn push_type_diagnostics(
     };
 
     if let Err(err) = result {
-        push_engine_error(err.into_engine_error(), diagnostics, compilation_unit);
+        push_engine_error(err, diagnostics, compilation_unit);
         return;
     }
 

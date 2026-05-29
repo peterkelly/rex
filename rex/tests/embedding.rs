@@ -179,7 +179,7 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     .unwrap();
     let err = match compiler.compile_program(&parsed, Default::default()).await {
         Ok(_) => panic!("expected ambiguity error for overlapping constructor in match pattern"),
-        Err(err) => err.into_engine_error(),
+        Err(err) => err,
     };
 
     match err {

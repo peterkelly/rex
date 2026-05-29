@@ -6,7 +6,7 @@ use rex_typesystem::error::TypeError;
 
 use crate::modules::ModuleId;
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum ModuleError {
     NotFound {
         module_name: String,
@@ -147,7 +147,7 @@ impl std::error::Error for ModuleError {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum EngineError {
     #[error("unknown variable `{0}`")]
     UnknownVar(Symbol),
@@ -225,53 +225,25 @@ pub enum EngineError {
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub struct CompileError(#[from] EngineError);
-
-impl CompileError {
-    pub fn as_engine_error(&self) -> &EngineError {
-        &self.0
-    }
-
-    pub fn into_engine_error(self) -> EngineError {
-        self.0
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub struct EvalError(#[from] EngineError);
-
-impl EvalError {
-    pub fn as_engine_error(&self) -> &EngineError {
-        &self.0
-    }
-
-    pub fn into_engine_error(self) -> EngineError {
-        self.0
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
 pub enum ExecutionError {
     #[error(transparent)]
-    Compile(#[from] CompileError),
+    Compile(#[from] EngineError),
     #[error(transparent)]
-    Eval(#[from] EvalError),
+    Eval(EngineError),
 }
 
 impl ExecutionError {
     pub fn as_engine_error(&self) -> &EngineError {
         match self {
-            ExecutionError::Compile(err) => err.as_engine_error(),
-            ExecutionError::Eval(err) => err.as_engine_error(),
+            ExecutionError::Compile(err) => err,
+            ExecutionError::Eval(err) => err,
         }
     }
 
     pub fn into_engine_error(self) -> EngineError {
         match self {
-            ExecutionError::Compile(err) => err.into_engine_error(),
-            ExecutionError::Eval(err) => err.into_engine_error(),
+            ExecutionError::Compile(err) => err,
+            ExecutionError::Eval(err) => err,
         }
     }
 }

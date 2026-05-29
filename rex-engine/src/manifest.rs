@@ -7,7 +7,7 @@ use rex_typesystem::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{CompileError, EngineError};
+use crate::EngineError;
 
 /// Externally visible type signature of a compiled Rex program.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,7 +57,7 @@ impl MainSignature {
     }
 
     /// Build a manifest containing all main input types and the result type.
-    pub fn manifest(&self, type_system: &TypeSystem) -> Result<Manifest, CompileError> {
+    pub fn manifest(&self, type_system: &TypeSystem) -> Result<Manifest, EngineError> {
         build_manifest(
             self.inputs
                 .iter()
@@ -73,7 +73,7 @@ pub fn build_manifest<'a, I>(
     inputs: I,
     result_type: &Type,
     type_system: &TypeSystem,
-) -> Result<Manifest, CompileError>
+) -> Result<Manifest, EngineError>
 where
     I: IntoIterator<Item = (&'a str, &'a Type)>,
 {
@@ -84,8 +84,7 @@ where
     }
 
     schemes.push(("result".to_string(), scheme_for_type(result_type.clone())));
-    let type_bundle = TypeBundle::from_schemes(schemes, type_system)
-        .map_err(|e| CompileError::from(EngineError::Type(e)))?;
+    let type_bundle = TypeBundle::from_schemes(schemes, type_system).map_err(EngineError::Type)?;
 
     Ok(Manifest {
         name: None,

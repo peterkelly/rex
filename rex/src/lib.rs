@@ -98,15 +98,11 @@ pub use rex_proc_macro::Rex;
 /// diagnostics, or set runtime policy should use [`Engine`](engine::Engine)
 /// directly instead.
 pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionError> {
-    let parsed = parser::parse(source).map_err(|errs| {
-        engine::CompileError::from(engine::EngineError::from(format!("parse error: {errs:?}")))
-    })?;
+    let parsed = parser::parse(source)
+        .map_err(|errs| engine::EngineError::from(format!("parse error: {errs:?}")))?;
 
-    let engine = engine::Engine::with_prelude(()).map_err(|e| {
-        engine::CompileError::from(engine::EngineError::from(format!(
-            "failed to initialize engine: {e}"
-        )))
-    })?;
+    let engine = engine::Engine::with_prelude(())
+        .map_err(|e| engine::EngineError::from(format!("failed to initialize engine: {e}")))?;
     let mut compiler = engine.into_compiler();
     let program = compiler
         .compile_program(&parsed, engine::CompileOptions::default())
@@ -115,9 +111,12 @@ pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionEr
     let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
 
-    let value = evaluator.run(program, Default::default()).await?;
+    let value = evaluator
+        .run(program, Default::default())
+        .await
+        .map_err(engine::ExecutionError::Eval)?;
 
-    let json =
-        json::rex_to_json(&value, &result_type, &type_system).map_err(engine::EvalError::from)?;
+    let json = json::rex_to_json(&value, &result_type, &type_system)
+        .map_err(engine::ExecutionError::Eval)?;
     Ok(json)
 }

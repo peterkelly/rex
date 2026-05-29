@@ -11,7 +11,6 @@ use rex_typesystem::{
 };
 
 use crate::{
-    EvalError,
     compiler::program::CompiledProgram,
     error::EngineError,
     evaluator::{
@@ -82,7 +81,7 @@ where
         self,
         program: CompiledProgram,
         inputs: BTreeMap<String, Handle>,
-    ) -> Result<Handle, EvalError> {
+    ) -> Result<Handle, EngineError> {
         let runtime = self.runtime;
         let heap = runtime.heap.clone();
         let main_signature = program.main_signature().clone();
@@ -92,11 +91,9 @@ where
         } else {
             synthetic_application_expr_from_head(program.env, program.expr.as_ref().clone(), &args)?
         };
-        let pointer = eval_typed_expr(runtime, env, Arc::new(expr))
-            .await
-            .map_err(EvalError::from)?;
+        let pointer = eval_typed_expr(runtime, env, Arc::new(expr)).await?;
         drop(inputs);
-        heap.handle(pointer).map_err(EvalError::from)
+        heap.handle(pointer)
     }
 }
 

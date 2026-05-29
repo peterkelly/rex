@@ -29,7 +29,7 @@ async fn compile_err(code: &str) -> EngineError {
         .await
     {
         Ok(compiled) => compiled,
-        Err(e) => return e.into_engine_error(),
+        Err(e) => return e,
     };
     match compiler
         .into_evaluator()
@@ -40,7 +40,7 @@ async fn compile_err(code: &str) -> EngineError {
             let value_type = v.type_name().unwrap_or("<invalid handle>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");
         }
-        Err(e) => e.into_engine_error(),
+        Err(e) => e,
     }
 }
 

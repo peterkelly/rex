@@ -84,13 +84,11 @@ async fn eval_expr(engine: Engine, expr: &Expr) -> Result<Handle, EngineError> {
     };
     let compiled = compiler
         .compile_program(&program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     compiler
         .into_evaluator()
         .run(compiled, Default::default())
         .await
-        .map_err(|err| err.into_engine_error())
 }
 
 #[tokio::test]

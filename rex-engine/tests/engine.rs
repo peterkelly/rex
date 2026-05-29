@@ -60,7 +60,7 @@ async fn compile_program_rejects_declaration_only_input() {
     let program = parse_program("fn id<a> x: a -> a = x;");
     let err = match compiler.compile_program(&program, Default::default()).await {
         Ok(_) => panic!("declaration-only program unexpectedly compiled"),
-        Err(err) => err.into_engine_error(),
+        Err(err) => err,
     };
 
     assert!(matches!(err, EngineError::MissingMain));
@@ -138,7 +138,7 @@ async fn compile_program_rejects_main_plus_final_expression() {
     let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
     let err = match compiler.compile_program(&program, Default::default()).await {
         Ok(_) => panic!("main plus final expression unexpectedly compiled"),
-        Err(err) => err.into_engine_error(),
+        Err(err) => err,
     };
 
     assert!(matches!(err, EngineError::MainWithFinalExpression));
@@ -156,8 +156,7 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
         .into_evaluator()
         .run(compiled, Default::default())
         .await
-        .unwrap_err()
-        .into_engine_error();
+        .unwrap_err();
 
     assert!(matches!(
         err,
@@ -174,11 +173,7 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
     let mut inputs = BTreeMap::new();
     inputs.insert("x".to_string(), evaluator.heap().alloc_i32(1).unwrap());
     inputs.insert("y".to_string(), evaluator.heap().alloc_i32(2).unwrap());
-    let err = evaluator
-        .run(compiled, inputs)
-        .await
-        .unwrap_err()
-        .into_engine_error();
+    let err = evaluator.run(compiled, inputs).await.unwrap_err();
 
     assert!(matches!(
         err,
@@ -337,7 +332,7 @@ async fn record_update_requires_known_variant_for_sum_types() {
         .await
     {
         Err(err) => {
-            let EngineError::Type(err) = err.into_engine_error() else {
+            let EngineError::Type(err) = err else {
                 panic!("expected type error");
             };
             let err = strip_span(err);
@@ -350,7 +345,7 @@ async fn record_update_requires_known_variant_for_sum_types() {
                 .await;
             match result {
                 Err(err) => {
-                    let EngineError::Type(err) = err.into_engine_error() else {
+                    let EngineError::Type(err) = err else {
                         panic!("expected type error");
                     };
                     let err = strip_span(err);

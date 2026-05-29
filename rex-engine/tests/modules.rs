@@ -215,14 +215,12 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
     let parsed = parse_rex(&source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
     let program = compiler
         .compile_program(&parsed, CompileOptions::default().with_importer_path(path))
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
         .run(program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     Ok((value, typ))
 }
 
@@ -234,14 +232,12 @@ async fn run_snippet<State: Clone + Send + Sync + 'static>(
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
     let program = compiler
         .compile_program(&parsed, CompileOptions::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
         .run(program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     Ok((value, typ))
 }
 
@@ -259,14 +255,12 @@ async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
             &parsed,
             CompileOptions::default().with_importer_path(importer_path.as_ref()),
         )
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     let typ = program.result_type().clone();
     let value = compiler
         .into_evaluator()
         .run(program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     Ok((value, typ))
 }
 

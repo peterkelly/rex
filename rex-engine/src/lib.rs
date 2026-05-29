@@ -38,7 +38,7 @@ pub use config::{
     ParallelismController, PreludeMode,
 };
 pub use env::Environment;
-pub use error::{CompileError, EngineError, EvalError, ExecutionError, ModuleError};
+pub use error::{EngineError, ExecutionError, ModuleError};
 pub use evaluator::{Evaluator, context::Context};
 pub use handlers::RexDefault;
 pub use manifest::{MainInputSpec, MainSignature, Manifest, build_manifest, type_has_vars};

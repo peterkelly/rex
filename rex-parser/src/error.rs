@@ -4,7 +4,7 @@ use rex_ast::Span;
 
 use crate::lexer::LexicalError;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParseError {
     pub span: Span,
     pub message: String,

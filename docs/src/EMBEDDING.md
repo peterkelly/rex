@@ -78,8 +78,8 @@ model.
 
 Phase-specific errors:
 
-- `Compiler` APIs return `CompileError`
-- `Evaluator::run` returns `EvalError`
+- `Compiler` APIs return `EngineError`
+- `Evaluator::run` returns `EngineError`
 - APIs that parse, compile, and run in one call return `ExecutionError` because they cross
   phase boundaries
 

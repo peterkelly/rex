@@ -15,9 +15,6 @@ pub use rex_engine::AsyncCallExecutor;
 /// Runtime policy for polling or dispatching async host-call futures.
 pub use rex_engine::AsyncCallPolicy;
 
-/// Error from the compile phase of the Rex pipeline.
-pub use rex_engine::CompileError;
-
 /// Options for compiling an already parsed Rex program.
 pub use rex_engine::CompileOptions;
 
@@ -56,9 +53,6 @@ pub use rex_engine::ModuleError;
 
 /// Options used when constructing an [`Engine`].
 pub use rex_engine::EngineOptions;
-
-/// Error from the evaluation phase after code has compiled.
-pub use rex_engine::EvalError;
 
 /// Single-shot runtime used to run a compiled Rex program.
 pub use rex_engine::Evaluator;

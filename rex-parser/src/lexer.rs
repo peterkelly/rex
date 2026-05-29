@@ -110,7 +110,7 @@ pub enum Token {
     Eof(Span),
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum LexicalError {
     #[error("Unexpected token {0}")]
     UnexpectedToken(Span),

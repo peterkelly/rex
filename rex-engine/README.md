@@ -36,8 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 Phase-specific errors:
 
-- `Compiler` returns `CompileError`
-- `Evaluator::run` returns `EvalError`
+- `Compiler` returns `EngineError`
+- `Evaluator::run` returns `EngineError`
 - APIs that parse, compile, and run in one call return `ExecutionError`
 
 ## Internal Layout

@@ -37,14 +37,12 @@ where
     };
     let compiled = compiler
         .compile_program(&body_program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     let ty = compiled.result_type().clone();
     let value = compiler
         .into_evaluator()
         .run(compiled, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     Ok((value, ty))
 }
 
@@ -89,14 +87,12 @@ where
     let parsed = parse_rex(source).unwrap();
     let program = compiler
         .compile_program(&parsed, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     let ty = program.result_type().clone();
     let value = compiler
         .into_evaluator()
         .run(program, Default::default())
-        .await
-        .map_err(|err| err.into_engine_error())?;
+        .await?;
     Ok((value, ty))
 }
 
@@ -105,10 +101,7 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let mut compiler = engine.into_compiler();
-    let (_, ty) = compiler
-        .infer_snippet(source, None)
-        .await
-        .map_err(|err| err.into_engine_error())?;
+    let (_, ty) = compiler.infer_snippet(source, None).await?;
     Ok(ty)
 }
 
