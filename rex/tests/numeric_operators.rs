@@ -3,25 +3,26 @@ mod common;
 use std::fmt::Debug;
 
 use rex::{
-    engine::{Engine, EngineError, FromRex, Handle},
+    engine::{Engine, EngineError, FromRex},
     typesystem::{BuiltinTypeId, Type, TypeError},
 };
-
-async fn eval(source: &str) -> Result<(Handle, Type), EngineError> {
-    common::run_snippet(Engine::with_prelude(()).unwrap(), source).await
-}
 
 async fn assert_value<T>(source: &str, expected: T, expected_ty: BuiltinTypeId)
 where
     T: FromRex + PartialEq + Debug,
 {
-    let (value, ty) = eval(source).await.unwrap();
+    let (_heap, value, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), source)
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(expected_ty), "{source}");
     assert_eq!(value.to_rust::<T>().unwrap(), expected, "{source}");
 }
 
 async fn assert_runtime_error(source: &str, expected: &str) {
-    let err = eval(source).await.unwrap_err();
+    let err = match common::eval_source(Engine::with_prelude(()).unwrap(), source).await {
+        Ok(_) => panic!("expected error for {source}"),
+        Err(err) => err,
+    };
     assert_eq!(err.to_string(), expected, "{source}");
 }
 
@@ -201,7 +202,12 @@ sub_unsigned 5 3
 
 #[tokio::test]
 async fn unsigned_subtraction_does_not_enable_negative_literals() {
-    let err = eval("let x: u32 = -3 in x").await.unwrap_err();
+    let err = match common::eval_source(Engine::with_prelude(()).unwrap(), "let x: u32 = -3 in x")
+        .await
+    {
+        Ok(_) => panic!("expected type error"),
+        Err(err) => err,
+    };
     let EngineError::Type(err) = err else {
         panic!("expected type error");
     };

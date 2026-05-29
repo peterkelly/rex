@@ -14,10 +14,9 @@ async fn assert_program_ok(name: &str, source: &str, expected_value: i32, expect
         }
         panic!("{name}:\n{out}");
     });
-    let (_heap, value, ty) =
-        common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), source)
-            .await
-            .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
+    let (_heap, value, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), source)
+        .await
+        .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
     assert_eq!(ty, expected_type, "{name}: unexpected eval type");
 
     match value

@@ -12,7 +12,7 @@ use rex::{
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
     let program = parse_rex(expr).unwrap();
     let heap = engine.heap.clone();
-    let (value, ty) = common::run_program_body(engine, &program).await.unwrap();
+    let (value, ty) = common::run_program(engine, &program).await.unwrap();
     (value, heap, ty)
 }
 

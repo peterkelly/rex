@@ -9,7 +9,7 @@ use common::strip_type_span;
 
 #[tokio::test]
 async fn spec_c_style_comments_are_trivia() {
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         r#"
         /* Block comments may contain arbitrary text like @#$.
@@ -30,7 +30,7 @@ async fn spec_c_style_comments_are_trivia() {
 
 #[tokio::test]
 async fn spec_explicit_type_parameter_fixes_bad_rex() {
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         r#"
 fn add<z32> : i32 -> z32 -> z32 = \x y -> x + y;
@@ -57,7 +57,7 @@ let
 in
   f (Bar { x = 1 })
 "#;
-    let err = match common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), code).await {
+    let err = match common::eval_source(Engine::with_prelude(()).unwrap(), code).await {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -84,7 +84,7 @@ instance C i32 where {
 }
 c
 "#;
-    let err = match common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), code).await {
+    let err = match common::eval_source(Engine::with_prelude(()).unwrap(), code).await {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -105,7 +105,7 @@ instance Pick bool where {
 }
 pick
 "#;
-    let err = match common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), code).await {
+    let err = match common::eval_source(Engine::with_prelude(()).unwrap(), code).await {
         Ok(_) => panic!("expected error"),
         Err(e) => e,
     };
@@ -116,10 +116,9 @@ pick
 async fn spec_defaulting_picks_a_concrete_type_for_numeric_classes() {
     // `zero` has type `a` with an `AdditiveMonoid a` constraint.
     // With no other type hints, the engine defaults the ambiguous type.
-    let (_heap, handle, ty) =
-        common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), "zero")
-            .await
-            .unwrap();
+    let (_heap, handle, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), "zero")
+        .await
+        .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
     assert!(matches!(handle.value().unwrap(), Value::F32(_)));
 }
@@ -127,7 +126,7 @@ async fn spec_defaulting_picks_a_concrete_type_for_numeric_classes() {
 #[tokio::test]
 async fn spec_integer_literals_unify_with_integral_context() {
     let (_heap, handle, ty) =
-        common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), "let x: u64 = 4 in x")
+        common::eval_source(Engine::with_prelude(()).unwrap(), "let x: u64 = 4 in x")
             .await
             .unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::U64));
@@ -139,7 +138,7 @@ async fn spec_integer_literals_unify_with_integral_context() {
 
 #[tokio::test]
 async fn spec_float_literals_unify_with_float_context() {
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         r#"
         let
@@ -160,7 +159,7 @@ async fn spec_float_literals_unify_with_float_context() {
 
 #[tokio::test]
 async fn test_let_tuple_destructuring() {
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (1, \"Hello\", true), (x, y, z) = t in x",
     )
@@ -171,7 +170,7 @@ async fn test_let_tuple_destructuring() {
         Value::I32(n) => assert_eq!(n, 1),
         _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (1, \"Hello\", true), (x, y, z) = t in y",
     )
@@ -182,7 +181,7 @@ async fn test_let_tuple_destructuring() {
         Value::String(s) => assert_eq!(s, "Hello"),
         _ => panic!("expected string, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (1, \"Hello\", true), (x, y, z) = t in z",
     )
@@ -197,7 +196,7 @@ async fn test_let_tuple_destructuring() {
 
 #[tokio::test]
 async fn test_string_literal_escape_sequences() {
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         r#""a\nb\r\t\\\"\'\?\a\b\f\v\0\x41\101\u03BB\U0001F600""#,
     )
@@ -214,7 +213,7 @@ async fn test_string_literal_escape_sequences() {
 
 #[tokio::test]
 async fn test_match_tuple_destructuring() {
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (1, \"Hello\", true) in match t with { case (x, y, z) -> x; }",
     )
@@ -225,7 +224,7 @@ async fn test_match_tuple_destructuring() {
         Value::I32(n) => assert_eq!(n, 1),
         _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (1, \"Hello\", true) in match t with { case (x, y, z) -> y; }",
     )
@@ -236,7 +235,7 @@ async fn test_match_tuple_destructuring() {
         Value::String(s) => assert_eq!(s, "Hello"),
         _ => panic!("expected string, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (1, \"Hello\", true) in match t with { case (x, y, z) -> z; }",
     )
@@ -251,7 +250,7 @@ async fn test_match_tuple_destructuring() {
 
 #[tokio::test]
 async fn test_tuple_projection() {
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (4, \"Hello\", true) in t.0",
     )
@@ -262,7 +261,7 @@ async fn test_tuple_projection() {
         Value::I32(n) => assert_eq!(n, 4),
         _ => panic!("expected i32, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (4, \"Hello\", true) in t.1",
     )
@@ -273,7 +272,7 @@ async fn test_tuple_projection() {
         Value::String(s) => assert_eq!(s, "Hello"),
         _ => panic!("expected string, got {}", handle.type_name().unwrap()),
     }
-    let (_heap, handle, ty) = common::eval_source_with_engine(
+    let (_heap, handle, ty) = common::eval_source(
         Engine::with_prelude(()).unwrap(),
         "let t = (4, \"Hello\", true) in t.2",
     )

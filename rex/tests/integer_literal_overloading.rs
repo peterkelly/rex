@@ -21,7 +21,7 @@ fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), Engin
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
     let mut engine = Engine::with_prelude(()).unwrap();
     register_integer_literal_natives(&mut engine)?;
-    common::eval_source_with_engine(engine, code).await
+    common::eval_source(engine, code).await
 }
 
 fn expected_values() -> Vec<&'static str> {

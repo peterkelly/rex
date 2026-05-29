@@ -22,10 +22,9 @@ async fn record_update_end_to_end() {
         in
             (foo2.x, match sum2 with { case A {x} -> x; case B {x} -> x; })
     "#;
-    let (_heap, value_handle, ty) =
-        common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), code)
-            .await
-            .unwrap();
+    let (_heap, value_handle, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), code)
+        .await
+        .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![

@@ -23,7 +23,7 @@ pub fn inject_globals<State: Clone + Send + Sync + 'static>(
     engine.inject_module(module)
 }
 
-pub async fn run_program_body<State>(
+pub async fn run_program<State>(
     engine: Engine<State>,
     program: &CompilationUnit,
 ) -> Result<(Handle, Type), EngineError>
@@ -31,12 +31,8 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let mut compiler = engine.into_compiler();
-    let body_program = CompilationUnit {
-        decls: Vec::new(),
-        body: program.body.clone(),
-    };
     let compiled = compiler
-        .compile_program(&body_program, Default::default())
+        .compile_program(program, Default::default())
         .await?;
     let ty = compiled.result_type().clone();
     let value = compiler
@@ -46,40 +42,17 @@ where
     Ok((value, ty))
 }
 
-pub async fn eval_source_with_engine<State>(
-    mut engine: Engine<State>,
+pub async fn eval_source<State>(
+    engine: Engine<State>,
     source: &str,
 ) -> Result<(Heap, Handle, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     let program = parse_rex(source).unwrap();
-    let mut module = Module::global();
-    module.add_decls(program.decls.clone());
-    engine.inject_module(module)?;
     let heap = engine.heap.clone();
-    let (handle, ty) = run_program_body(engine, &program).await?;
+    let (handle, ty) = run_program(engine, &program).await?;
     Ok((heap, handle, ty))
-}
-
-pub async fn run_snippet<State>(
-    engine: Engine<State>,
-    source: &str,
-) -> Result<(Handle, Type), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let mut compiler = engine.into_compiler();
-    let parsed = parse_rex(source).unwrap();
-    let program = compiler
-        .compile_program(&parsed, Default::default())
-        .await?;
-    let ty = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await?;
-    Ok((value, ty))
 }
 
 pub fn tuple_items(value: &Handle) -> Vec<Handle> {
@@ -151,14 +124,39 @@ pub fn type_compatible(actual: &Type, expected: &Type) -> bool {
     }
 }
 
+fn strip_snippet_type_prefixes(rendered: &str) -> String {
+    let mut out = String::with_capacity(rendered.len());
+    let mut rest = rendered;
+
+    while let Some(start) = rest.find("@snippet") {
+        out.push_str(&rest[..start]);
+        let after_marker = &rest[start + "@snippet".len()..];
+        if let Some(dot) = after_marker.find('.') {
+            rest = &after_marker[dot + 1..];
+        } else {
+            out.push_str("@snippet");
+            rest = after_marker;
+        }
+    }
+
+    out.push_str(rest);
+    out
+}
+
 pub async fn eval_to_display_string(code: &str, expected_ty: Type) -> Result<String, String> {
     let (_heap, handle, ty) =
-        eval_source_with_engine(Engine::with_prelude(()).map_err(|e| format!("{e}"))?, code)
+        eval_source(Engine::with_prelude(()).map_err(|e| format!("{e}"))?, code)
             .await
-            .map_err(|e| format!("{e}"))?;
+            .map_err(|e| strip_snippet_type_prefixes(&format!("{e}")))?;
+    let actual_ty_display = strip_snippet_type_prefixes(&ty.to_string());
+    let expected_ty_display = strip_snippet_type_prefixes(&expected_ty.to_string());
+    // FIXME: Direct snippet compilation gives local test ADTs internal
+    // `@snippet<uuid>.Type` names. Until public type rendering has a real
+    // namespace-to-surface-name layer, strip that generated prefix here so
+    // tests can compare the user-facing type text they actually care about.
     assert!(
-        type_compatible(&ty, &expected_ty),
-        "eval returned unexpected type for: {code}\nactual: {ty}\nexpected: {expected_ty}"
+        type_compatible(&ty, &expected_ty) || actual_ty_display == expected_ty_display,
+        "eval returned unexpected type for: {code}\nactual: {actual_ty_display}\nexpected: {expected_ty_display}"
     );
     let opts = ValueDisplayOptions {
         include_numeric_suffixes: true,

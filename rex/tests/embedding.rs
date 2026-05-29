@@ -315,7 +315,7 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    let (value, ty) = common::run_snippet(
+    let (_heap, value, ty) = common::eval_source(
         engine,
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
     )
@@ -355,7 +355,7 @@ async fn derived_rex_default_can_read_host_state() {
 
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
-    let (value, ty) = common::run_snippet(engine, "let e: Entity1 = default in e")
+    let (_heap, value, ty) = common::eval_source(engine, "let e: Entity1 = default in e")
         .await
         .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
@@ -388,7 +388,7 @@ async fn derived_rex_default_record_update_can_override_fields() {
 
     Entity1::inject_rex_with_default(&mut engine).unwrap();
 
-    let (value, ty) = common::run_snippet(
+    let (_heap, value, ty) = common::eval_source(
         engine,
         r#"let e: Entity1 = { default with { name = "sample", tags = Some (to_array ["x", "y"]), numbers = to_array [7, 11] } } in e"#,
     )
@@ -424,7 +424,7 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
 
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
-    let (value, ty) = common::run_snippet(engine, r#"Entity2 "sample" [7, 11]"#)
+    let (_heap, value, ty) = common::eval_source(engine, r#"Entity2 "sample" [7, 11]"#)
         .await
         .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
@@ -457,7 +457,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
 
     Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
 
-    let (value, ty) = common::run_snippet(
+    let (_heap, value, ty) = common::eval_source(
         engine,
         r#"{
             (Entity2 "sample" [7, 11])
@@ -502,7 +502,7 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    let (value, ty) = common::run_snippet(
+    let (_heap, value, ty) = common::eval_source(
         engine,
         "(have_role_async \"editor\", have_role_async \"admin\")",
     )
@@ -548,9 +548,10 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
     })
     .unwrap();
 
-    let (value, ty) = common::run_snippet(engine, r#"(repeat_value "rex" 3, repeat_value true 2)"#)
-        .await
-        .unwrap();
+    let (_heap, value, ty) =
+        common::eval_source(engine, r#"(repeat_value "rex" 3, repeat_value true 2)"#)
+            .await
+            .unwrap();
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -596,8 +597,8 @@ async fn generic_export_can_swap_two_values_of_different_types() {
     })
     .unwrap();
 
-    let (value, ty) =
-        common::run_snippet(engine, r#"(swap_pair "left" 7, swap_pair true "right")"#)
+    let (_heap, value, ty) =
+        common::eval_source(engine, r#"(swap_pair "left" 7, swap_pair true "right")"#)
             .await
             .unwrap();
     assert_eq!(

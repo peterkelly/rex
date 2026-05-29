@@ -1,16 +1,14 @@
 mod common;
 
 use rex::{
-    engine::{Engine, EngineError, Handle, Heap},
+    engine::Engine,
     typesystem::{BuiltinTypeId, Type},
 };
 
-async fn eval(source: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), source).await
-}
-
 async fn assert_i32_result(source: &str, expected: i32) {
-    let (heap, handle, ty) = eval(source).await.unwrap();
+    let (heap, handle, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), source)
+        .await
+        .unwrap();
     common::assert_i32_or_var(&ty);
     let expected = heap.alloc_i32(expected).unwrap();
     common::assert_handles_eq(&handle, &expected);
@@ -24,7 +22,9 @@ async fn assert_even_odd_tuple(source: &str) {
         bool_ty.clone(),
         bool_ty,
     ]);
-    let (heap, handle, ty) = eval(source).await.unwrap();
+    let (heap, handle, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), source)
+        .await
+        .unwrap();
     assert_eq!(
         ty, expected_ty,
         "eval returned unexpected type for: {source}"

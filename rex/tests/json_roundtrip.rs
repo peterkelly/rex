@@ -4,22 +4,14 @@ mod common;
 
 use rex::{
     Rex,
-    engine::{Engine, EngineError, Handle, Module},
+    engine::{Engine, Module},
     json::rex_to_json,
-    typesystem::Type,
 };
 use serde::{Deserialize, Serialize};
 
 fn engine_with_prelude() -> Engine {
     Engine::with_prelude(()).unwrap()
 }
-async fn run_snippet<State: Clone + Send + Sync + 'static>(
-    engine: Engine<State>,
-    source: &str,
-) -> Result<(Handle, Type), EngineError> {
-    common::run_snippet(engine, source).await
-}
-
 #[derive(Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
 enum EchoEnum {
     Foo,
@@ -50,7 +42,7 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
     engine.inject_module(module).unwrap();
 
     let type_system = engine.type_system.clone();
-    let (value_handle, ty) = run_snippet(
+    let (_heap, value_handle, ty) = common::eval_source(
         engine,
         r#"
         import echo (EchoEnum, EchoRecord, Foo, BAR, echo);
