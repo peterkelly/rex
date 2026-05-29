@@ -11,15 +11,20 @@ use rex::{
 /// Helper to evaluate a Rex expression and return the result handle.
 async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
     let program = parse_rex(expr).unwrap();
-    let (heap, value, ty) = common::run_program_body_with_heap(engine, &program)
-        .await
-        .unwrap();
+    let heap = engine.heap.clone();
+    let (value, ty) = common::run_program_body(engine, &program).await.unwrap();
     (value, heap, ty)
 }
 
 /// Helper to infer the type of a Rex expression
 async fn infer_type(engine: Engine<()>, expr: &str) -> Type {
-    common::infer_type(engine, expr).await.unwrap()
+    let mut compiler = engine.into_compiler();
+    let parsed = parse_rex(expr).unwrap();
+    let program = compiler
+        .compile_program(&parsed, Default::default())
+        .await
+        .unwrap();
+    program.result_type().clone()
 }
 
 #[tokio::test]

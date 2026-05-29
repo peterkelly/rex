@@ -43,10 +43,6 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                     let engine = Engine::with_prelude(()).unwrap();
                     let heap = engine.heap.clone();
                     let mut compiler = engine.into_compiler();
-                    compiler
-                        .infer_snippet(&source, None)
-                        .await
-                        .unwrap_or_else(|err| panic!("{name}: infer error: {err}"));
                     let parsed = parse_rex(&source)
                         .unwrap_or_else(|errs| panic!("{name}: parse error before eval: {errs:?}"));
                     let program = compiler

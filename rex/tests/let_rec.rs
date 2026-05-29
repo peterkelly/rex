@@ -1,12 +1,12 @@
 mod common;
 
 use rex::{
-    engine::{EngineError, Handle, Heap, Value},
+    engine::{Engine, EngineError, Handle, Heap, Value},
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
 
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    common::eval_source(code).await
+    common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), code).await
 }
 
 #[tokio::test]

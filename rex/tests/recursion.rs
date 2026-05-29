@@ -1,12 +1,12 @@
 mod common;
 
 use rex::{
-    engine::{EngineError, Handle, Heap},
+    engine::{Engine, EngineError, Handle, Heap},
     typesystem::{BuiltinTypeId, Type},
 };
 
 async fn eval(source: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    common::eval_source(source).await
+    common::eval_source_with_engine(Engine::with_prelude(()).unwrap(), source).await
 }
 
 async fn assert_i32_result(source: &str, expected: i32) {

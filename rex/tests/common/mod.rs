@@ -46,18 +46,6 @@ where
     Ok((value, ty))
 }
 
-pub async fn run_program_body_with_heap<State>(
-    engine: Engine<State>,
-    program: &CompilationUnit,
-) -> Result<(Heap, Handle, Type), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let heap = engine.heap.clone();
-    let (handle, ty) = run_program_body(engine, program).await?;
-    Ok((heap, handle, ty))
-}
-
 pub async fn eval_source_with_engine<State>(
     mut engine: Engine<State>,
     source: &str,
@@ -69,11 +57,9 @@ where
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     engine.inject_module(module)?;
-    run_program_body_with_heap(engine, &program).await
-}
-
-pub async fn eval_source(source: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    eval_source_with_engine(Engine::with_prelude(())?, source).await
+    let heap = engine.heap.clone();
+    let (handle, ty) = run_program_body(engine, &program).await?;
+    Ok((heap, handle, ty))
 }
 
 pub async fn run_snippet<State>(
@@ -94,15 +80,6 @@ where
         .run(program, Default::default())
         .await?;
     Ok((value, ty))
-}
-
-pub async fn infer_type<State>(engine: Engine<State>, source: &str) -> Result<Type, EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
-    let mut compiler = engine.into_compiler();
-    let (_, ty) = compiler.infer_snippet(source, None).await?;
-    Ok(ty)
 }
 
 pub fn tuple_items(value: &Handle) -> Vec<Handle> {
@@ -175,7 +152,10 @@ pub fn type_compatible(actual: &Type, expected: &Type) -> bool {
 }
 
 pub async fn eval_to_display_string(code: &str, expected_ty: Type) -> Result<String, String> {
-    let (_heap, handle, ty) = eval_source(code).await.map_err(|e| format!("{e}"))?;
+    let (_heap, handle, ty) =
+        eval_source_with_engine(Engine::with_prelude(()).map_err(|e| format!("{e}"))?, code)
+            .await
+            .map_err(|e| format!("{e}"))?;
     assert!(
         type_compatible(&ty, &expected_ty),
         "eval returned unexpected type for: {code}\nactual: {ty}\nexpected: {expected_ty}"

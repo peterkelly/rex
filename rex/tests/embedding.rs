@@ -666,23 +666,20 @@ async fn overloaded_exports_types_and_values() {
     )
     "#;
 
-    let mut compiler = engine.into_compiler();
-    let (_, inferred) = compiler.infer_snippet(expr, None).await.unwrap();
-    assert_overload_tuple_type_shape(&inferred);
-
     let body_program = parse_rex(expr).unwrap();
+    let mut compiler = engine.into_compiler();
     let compiled = compiler
         .compile_program(&body_program, Default::default())
         .await
         .unwrap();
     let ty = compiled.result_type().clone();
+    assert_overload_tuple_type_shape(&ty);
     let value = compiler
         .into_evaluator()
         .run(compiled, Default::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let value = value.unwrap();
-    assert_overload_tuple_type_shape(&ty);
 
     let items = common::tuple_items(&value);
     assert_eq!(items.len(), 6);
@@ -741,23 +738,20 @@ async fn overloaded_async_exports_types_and_values() {
     )
     "#;
 
-    let mut compiler = engine.into_compiler();
-    let (_, inferred) = compiler.infer_snippet(expr, None).await.unwrap();
-    assert_overload_tuple_type_shape(&inferred);
-
     let body_program = parse_rex(expr).unwrap();
+    let mut compiler = engine.into_compiler();
     let compiled = compiler
         .compile_program(&body_program, Default::default())
         .await
         .unwrap();
     let ty = compiled.result_type().clone();
+    assert_overload_tuple_type_shape(&ty);
     let value = compiler
         .into_evaluator()
         .run(compiled, Default::default())
         .await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let value = value.unwrap();
-    assert_overload_tuple_type_shape(&ty);
 
     let items = common::tuple_items(&value);
     assert_eq!(items.len(), 6);
