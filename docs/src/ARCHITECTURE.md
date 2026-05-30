@@ -44,7 +44,7 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 
 - `builder/` owns engine construction, module injection, import qualification/rewrite, host export
   registration, and registry markdown.
-- `compiler/` owns typechecking, `CompiledProgram`, and extern collection.
+- `compiler/` owns typechecking and `CompiledProgram` construction.
 - `evaluator/` owns execution, scheduling, native dispatch, `Context`, and the runtime core.
 - `modules/`, `value.rs`, and `config.rs` hold shared module identities, heap values/GC roots,
   and runtime options.

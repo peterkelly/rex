@@ -46,7 +46,7 @@ The engine implementation is split by phase:
 
 - `builder/`: host environment construction, module injection, import rewriting, export
   registration, and registry reporting.
-- `compiler/`: typechecking plus `CompiledProgram` construction and extern collection.
+- `compiler/`: typechecking plus `CompiledProgram` construction.
 - `evaluator/`: scheduler-driven execution, native dispatch, runtime context, and runtime core
   state.
 

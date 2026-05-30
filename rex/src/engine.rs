@@ -18,9 +18,6 @@ pub use rex_engine::AsyncCallPolicy;
 /// Options for compiling an already parsed Rex program.
 pub use rex_engine::CompileOptions;
 
-/// Summary of external native and type class bindings referenced by compiled code.
-pub use rex_engine::CompiledExterns;
-
 /// A prepared Rex program that can be evaluated once.
 pub use rex_engine::CompiledProgram;
 

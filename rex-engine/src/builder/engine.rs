@@ -99,10 +99,6 @@ where
         self.env.clone()
     }
 
-    pub(crate) fn has_native_name(&self, name: &Symbol) -> bool {
-        self.natives.has_name(name)
-    }
-
     pub fn async_call_policy(&self) -> &AsyncCallPolicy {
         &self.async_call_policy
     }

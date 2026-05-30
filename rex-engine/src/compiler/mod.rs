@@ -3,18 +3,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
-use rex_ast::{CompilationUnit, Expr, FnDecl, Symbol, Var};
-use rex_typesystem::types::{Predicate, Type, TypeKind, TypedExpr, TypedExprKind};
+use rex_ast::{CompilationUnit, Expr, FnDecl, Var};
+use rex_typesystem::types::{Predicate, Type, TypeKind, TypedExpr};
 use rex_typesystem::typesystem::TypeSystem;
 use uuid::Uuid;
 
 use crate::{
-    EngineError, Environment, Evaluator,
+    EngineError, Evaluator,
     builder::{engine::Engine, rewrite::rewrite_program_with_imports},
-    compiler::{
-        program::{CompiledExterns, CompiledProgram},
-        type_check::{collect_pattern_bindings, type_check_engine},
-    },
+    compiler::{program::CompiledProgram, type_check::type_check_engine},
     manifest::{MainInputSpec, MainSignature},
     modules::{
         ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, exports_from_program,
@@ -85,132 +82,11 @@ where
         main_signature: MainSignature,
     ) -> CompiledProgram {
         let env = self.engine.env_snapshot();
-        let externs = self.collect_externs(&typed, &env);
-        CompiledProgram::new(externs, main_signature, env, typed)
+        CompiledProgram::new(main_signature, env, typed)
     }
 
     pub(crate) fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
         type_check_engine(&mut self.engine, expr)
-    }
-
-    fn collect_externs(&self, expr: &TypedExpr, env: &Environment) -> CompiledExterns {
-        enum ScopeWalkStep<'b> {
-            Expr(&'b TypedExpr),
-            Push(Symbol),
-            PushMany(Vec<Symbol>),
-            Pop(usize),
-        }
-
-        let mut natives = BTreeSet::new();
-        let mut class_methods = BTreeSet::new();
-        let mut bound: Vec<Symbol> = Vec::new();
-        let mut stack = vec![ScopeWalkStep::Expr(expr)];
-        while let Some(frame) = stack.pop() {
-            match frame {
-                ScopeWalkStep::Expr(expr) => match expr.kind.as_ref() {
-                    TypedExprKind::Var { name, .. } => {
-                        if bound.iter().any(|sym| sym == name) || env.get(name).is_some() {
-                            continue;
-                        }
-                        if self.engine.type_system.class_methods.contains_key(name) {
-                            class_methods.insert(name.clone());
-                        } else if self.engine.has_native_name(name) {
-                            natives.insert(name.clone());
-                        }
-                    }
-                    TypedExprKind::Tuple(elems) | TypedExprKind::List(elems) => {
-                        for elem in elems.iter().rev() {
-                            stack.push(ScopeWalkStep::Expr(elem));
-                        }
-                    }
-                    TypedExprKind::Dict(kvs) => {
-                        for v in kvs.values().rev() {
-                            stack.push(ScopeWalkStep::Expr(v));
-                        }
-                    }
-                    TypedExprKind::RecordUpdate { base, updates } => {
-                        for v in updates.values().rev() {
-                            stack.push(ScopeWalkStep::Expr(v));
-                        }
-                        stack.push(ScopeWalkStep::Expr(base));
-                    }
-                    TypedExprKind::App(f, x) => {
-                        stack.push(ScopeWalkStep::Expr(x));
-                        stack.push(ScopeWalkStep::Expr(f));
-                    }
-                    TypedExprKind::Project { expr, .. } => stack.push(ScopeWalkStep::Expr(expr)),
-                    TypedExprKind::Lam { param, body } => {
-                        stack.push(ScopeWalkStep::Pop(1));
-                        stack.push(ScopeWalkStep::Expr(body));
-                        stack.push(ScopeWalkStep::Push(param.clone()));
-                    }
-                    TypedExprKind::Let { name, def, body } => {
-                        stack.push(ScopeWalkStep::Pop(1));
-                        stack.push(ScopeWalkStep::Expr(body));
-                        stack.push(ScopeWalkStep::Push(name.clone()));
-                        stack.push(ScopeWalkStep::Expr(def));
-                    }
-                    TypedExprKind::LetRec { bindings, body } => {
-                        if !bindings.is_empty() {
-                            stack.push(ScopeWalkStep::Pop(bindings.len()));
-                            stack.push(ScopeWalkStep::Expr(body));
-                            for (_, def) in bindings.iter().rev() {
-                                stack.push(ScopeWalkStep::Expr(def));
-                            }
-                            stack.push(ScopeWalkStep::PushMany(
-                                bindings.iter().map(|(name, _)| name.clone()).collect(),
-                            ));
-                        } else {
-                            stack.push(ScopeWalkStep::Expr(body));
-                        }
-                    }
-                    TypedExprKind::Ite {
-                        cond,
-                        then_expr,
-                        else_expr,
-                    } => {
-                        stack.push(ScopeWalkStep::Expr(else_expr));
-                        stack.push(ScopeWalkStep::Expr(then_expr));
-                        stack.push(ScopeWalkStep::Expr(cond));
-                    }
-                    TypedExprKind::Match { scrutinee, arms } => {
-                        for (pat, arm_expr) in arms.iter().rev() {
-                            let mut bindings = Vec::new();
-                            collect_pattern_bindings(pat, &mut bindings);
-                            let count = bindings.len();
-                            if count != 0 {
-                                stack.push(ScopeWalkStep::Pop(count));
-                                stack.push(ScopeWalkStep::Expr(arm_expr));
-                                stack.push(ScopeWalkStep::PushMany(bindings));
-                            } else {
-                                stack.push(ScopeWalkStep::Expr(arm_expr));
-                            }
-                        }
-                        stack.push(ScopeWalkStep::Expr(scrutinee));
-                    }
-                    TypedExprKind::Bool(..)
-                    | TypedExprKind::Uint(..)
-                    | TypedExprKind::Int(..)
-                    | TypedExprKind::Float(..)
-                    | TypedExprKind::String(..)
-                    | TypedExprKind::Uuid(..)
-                    | TypedExprKind::DateTime(..)
-                    | TypedExprKind::Hole => {}
-                },
-                ScopeWalkStep::Push(sym) => bound.push(sym),
-                ScopeWalkStep::PushMany(syms) => bound.extend(syms),
-                ScopeWalkStep::Pop(count) => bound.truncate(bound.len().saturating_sub(count)),
-            }
-        }
-
-        let mut natives = natives.into_iter().collect::<Vec<_>>();
-        let mut class_methods = class_methods.into_iter().collect::<Vec<_>>();
-        natives.sort();
-        class_methods.sort();
-        CompiledExterns {
-            natives,
-            class_methods,
-        }
     }
 
     fn rewrite_and_inject_program<'a>(

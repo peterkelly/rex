@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
+use rex_ast::{CompilationUnit, Decl, Expr};
 use rex_engine::{Context, Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
@@ -313,15 +313,13 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
         .await
         .unwrap();
 
-    assert!(program.externs().is_empty(), "{:?}", program.externs());
-
     let evaluator = compiler.into_evaluator();
     let value = evaluator.run(program, Default::default()).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 41);
 }
 
 #[tokio::test]
-async fn export_value_is_reported_as_an_extern() {
+async fn exported_value_resolves_at_runtime() {
     let mut compile_engine = Engine::with_prelude(()).unwrap();
     inject_globals(&mut compile_engine, |module| {
         module.export_value("answer", 41i32)
@@ -333,9 +331,6 @@ async fn export_value_is_reported_as_an_extern() {
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
-
-    assert_eq!(program.externs().natives, vec![Symbol::intern("answer")]);
-    assert_eq!(program.externs().class_methods, vec![Symbol::intern("+")]);
 
     let value = compiler
         .into_evaluator()

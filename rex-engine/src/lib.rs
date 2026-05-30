@@ -29,10 +29,7 @@ pub use builder::{
     export::{Export, HostFnAsync, HostFnSync, NativeFuture},
     markdown::registry_markdown,
 };
-pub use compiler::{
-    CompileOptions, Compiler,
-    program::{CompiledExterns, CompiledProgram},
-};
+pub use compiler::{CompileOptions, Compiler, program::CompiledProgram};
 pub use config::{
     AsyncCallExecutor, AsyncCallPolicy, EngineOptions, ExecutionBounds, NativeAsyncPermit,
     ParallelismController, PreludeMode,
