@@ -1,5 +1,8 @@
-use crate::{builder::engine::Engine, error::EngineError, util::impl_matches_type};
-use rex_ast::{Expr, Pattern, Span, Symbol};
+use crate::{
+    builder::engine::Engine, error::EngineError, modules::collect_pattern_bindings,
+    util::impl_matches_type,
+};
+use rex_ast::{Expr, Span, Symbol};
 use rex_typesystem::{
     error::TypeError,
     inference::infer_typed,
@@ -313,37 +316,6 @@ fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
         }
     }
     Ok((typed.apply(&subst), preds))
-}
-
-pub(crate) fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
-    match pat {
-        Pattern::Wildcard(..) => {}
-        Pattern::Var(var) => out.push(var.name.clone()),
-        Pattern::Named(_, _, ps) => {
-            for p in ps {
-                collect_pattern_bindings(p, out);
-            }
-        }
-        Pattern::Tuple(_, ps) => {
-            for p in ps {
-                collect_pattern_bindings(p, out);
-            }
-        }
-        Pattern::List(_, ps) => {
-            for p in ps {
-                collect_pattern_bindings(p, out);
-            }
-        }
-        Pattern::Cons(_, head, tail) => {
-            collect_pattern_bindings(head, out);
-            collect_pattern_bindings(tail, out);
-        }
-        Pattern::Dict(_, fields) => {
-            for (_key, pat) in fields {
-                collect_pattern_bindings(pat, out);
-            }
-        }
-    }
 }
 
 fn collect_default_candidates(expr: &TypedExpr, out: &mut Vec<Type>) {

@@ -1,5 +1,6 @@
+use crate::imports::prepare_program_with_imports;
 use crate::prelude::*;
-use crate::{code_actions::*, completion::*, imports::*, queries::*, shared::*};
+use crate::{code_actions::*, completion::*, queries::*, shared::*};
 
 pub fn diagnostics_from_text(session: &AnalysisSession, uri: &Url, text: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
@@ -158,11 +159,46 @@ pub(crate) fn push_type_diagnostics(
     };
 
     if let Err(err) = result {
+        if let Some(import_diagnostics) =
+            import_diagnostics_for_engine_error(session, uri, compilation_unit, &err)
+        {
+            diagnostics.extend(import_diagnostics);
+            return;
+        }
         push_engine_error(err, diagnostics, compilation_unit);
         return;
     }
 
     push_hole_diagnostics(compilation_unit, diagnostics);
+}
+
+fn import_diagnostics_for_engine_error(
+    session: &AnalysisSession,
+    uri: &Url,
+    compilation_unit: &CompilationUnit,
+    err: &EngineError,
+) -> Option<Vec<Diagnostic>> {
+    let EngineError::Module(module_err) = err else {
+        return None;
+    };
+    match module_err.as_ref() {
+        ModuleError::MissingExport { .. }
+        | ModuleError::DuplicateImportedName { .. }
+        | ModuleError::ImportNameConflictsWithLocal { .. } => {}
+        _ => return None,
+    }
+    let (_rewritten, _ts, _imports, diagnostics) =
+        prepare_program_with_imports(session, uri, compilation_unit).ok()?;
+    let message = err.to_string();
+    let matching: Vec<Diagnostic> = diagnostics
+        .into_iter()
+        .filter(|diag| diag.message == message)
+        .collect();
+    if matching.is_empty() {
+        None
+    } else {
+        Some(matching)
+    }
 }
 
 pub(crate) fn push_engine_error(

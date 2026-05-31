@@ -30,7 +30,7 @@ pub(crate) use types::{module_key_for_module, prefix_for_module};
 pub const ROOT_MODULE_NAME: &str = "__root__";
 pub const PRELUDE_MODULE_NAME: &str = "Prelude";
 
-pub(crate) fn import_specifier(path: &ImportPath) -> String {
+pub fn import_specifier(path: &ImportPath) -> String {
     match path {
         ImportPath::Local { segments, sha } => {
             let base = segments
@@ -54,14 +54,14 @@ pub(crate) fn import_specifier(path: &ImportPath) -> String {
     }
 }
 
-pub(crate) fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
+pub fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
     decls.iter().any(|decl| match decl {
         Decl::Import(import_decl) => import_decl.alias == *alias,
         _ => false,
     })
 }
 
-pub(crate) fn default_import_decl(module_name: &str) -> ImportDecl {
+pub fn default_import_decl(module_name: &str) -> ImportDecl {
     ImportDecl {
         span: Span::default(),
         is_pub: false,
@@ -75,19 +75,19 @@ pub(crate) fn default_import_decl(module_name: &str) -> ImportDecl {
 }
 
 #[derive(Default)]
-pub(crate) struct ImportBindings {
-    pub(crate) alias_exports: BTreeMap<Symbol, ModuleExports>,
-    pub(crate) imported_values: BTreeMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_types: BTreeMap<Symbol, CanonicalSymbol>,
-    pub(crate) imported_classes: BTreeMap<Symbol, CanonicalSymbol>,
+pub struct ImportBindings {
+    pub alias_exports: BTreeMap<Symbol, ModuleExports>,
+    pub imported_values: BTreeMap<Symbol, CanonicalSymbol>,
+    pub imported_types: BTreeMap<Symbol, CanonicalSymbol>,
+    pub imported_classes: BTreeMap<Symbol, CanonicalSymbol>,
 }
 
-pub(crate) struct ImportBindingPolicy<'a> {
-    pub(crate) forbidden_values: &'a BTreeSet<Symbol>,
-    pub(crate) forbidden_types: &'a BTreeSet<Symbol>,
+pub struct ImportBindingPolicy<'a> {
+    pub forbidden_values: &'a BTreeSet<Symbol>,
+    pub forbidden_types: &'a BTreeSet<Symbol>,
 }
 
-pub(crate) fn add_import_bindings(
+pub fn add_import_bindings(
     out: &mut ImportBindings,
     import: &ImportDecl,
     exports: &ModuleExports,
@@ -187,8 +187,8 @@ pub(crate) fn add_import_bindings(
     }
 }
 
-// FIXME: There are three copies of this function
-pub(crate) fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
+// Shared by module import rewriting and tooling diagnostics.
+pub fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
     match pat {
         Pattern::Wildcard(..) => {}
         Pattern::Var(v) => out.push(v.name.clone()),
@@ -214,7 +214,7 @@ pub(crate) fn collect_pattern_bindings(pat: &Pattern, out: &mut Vec<Symbol>) {
     }
 }
 
-pub(crate) fn alias_is_visible(
+pub fn alias_is_visible(
     name: &Symbol,
     bound: &BTreeSet<Symbol>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
@@ -228,8 +228,7 @@ pub(crate) fn alias_is_visible(
     }
 }
 
-// FIXME: There is another copy of this function in rex-lsp
-pub(crate) fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol)> {
+pub fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol)> {
     match name {
         NameRef::Qualified(_, segments) if segments.len() == 2 => {
             Some((&segments[0], &segments[1]))
@@ -238,7 +237,7 @@ pub(crate) fn qualified_alias_member(name: &NameRef) -> Option<(&Symbol, &Symbol
     }
 }
 
-pub(crate) fn decl_value_names(decls: &[Decl]) -> BTreeSet<Symbol> {
+pub fn decl_value_names(decls: &[Decl]) -> BTreeSet<Symbol> {
     let mut out = BTreeSet::new();
     for decl in decls {
         match decl {
@@ -259,7 +258,7 @@ pub(crate) fn decl_value_names(decls: &[Decl]) -> BTreeSet<Symbol> {
     out
 }
 
-pub(crate) fn decl_type_names(decls: &[Decl]) -> BTreeSet<Symbol> {
+pub fn decl_type_names(decls: &[Decl]) -> BTreeSet<Symbol> {
     let mut out = BTreeSet::new();
     for decl in decls {
         match decl {
@@ -275,7 +274,7 @@ pub(crate) fn decl_type_names(decls: &[Decl]) -> BTreeSet<Symbol> {
     out
 }
 
-pub(crate) fn interface_decls_from_program(compilation_unit: &CompilationUnit) -> Vec<Decl> {
+pub fn interface_decls_from_program(compilation_unit: &CompilationUnit) -> Vec<Decl> {
     let mut out = Vec::new();
     for decl in &compilation_unit.decls {
         match decl {
@@ -299,7 +298,7 @@ pub(crate) fn interface_decls_from_program(compilation_unit: &CompilationUnit) -
     out
 }
 
-pub(crate) fn exports_from_program(
+pub fn exports_from_program(
     compilation_unit: &CompilationUnit,
     prefix: &str,
     module_id: &ModuleId,
@@ -389,7 +388,7 @@ pub(crate) fn exports_from_program(
     exports
 }
 
-pub(crate) fn parse_program_from_source(
+pub fn parse_program_from_source(
     source: &str,
     context: Option<&ModuleId>,
 ) -> Result<CompilationUnit, EngineError> {
@@ -411,9 +410,7 @@ pub(crate) fn parse_program_from_source(
     Ok(program)
 }
 
-pub(crate) fn program_from_resolved(
-    resolved: &ResolvedModule,
-) -> Result<CompilationUnit, EngineError> {
+pub fn program_from_resolved(resolved: &ResolvedModule) -> Result<CompilationUnit, EngineError> {
     match &resolved.content {
         ResolvedModuleContent::Source(source) => {
             parse_program_from_source(source, Some(&resolved.id))

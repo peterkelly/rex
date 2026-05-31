@@ -169,11 +169,7 @@ pub(crate) struct LspModuleService {
 #[derive(Clone)]
 pub(crate) struct LspLoadedModule {
     pub(crate) id: ModuleId,
-    pub(crate) path: Option<PathBuf>,
-    pub(crate) hash: String,
     pub(crate) source: String,
-    pub(crate) label: String,
-    pub(crate) keep_constraints: bool,
 }
 
 impl LspModuleService {
@@ -275,11 +271,7 @@ impl LspModuleService {
         }
         Ok(Some(LspLoadedModule {
             id: ModuleId::Virtual(module_name.to_string()),
-            path: None,
-            hash,
             source: source.to_string(),
-            label: module_name.to_string(),
-            keep_constraints: true,
         }))
     }
 
@@ -341,11 +333,7 @@ impl LspModuleService {
         })?;
         Ok(LspLoadedModule {
             id: ModuleId::Local { path: path.clone() },
-            path: Some(path.clone()),
-            hash,
             source,
-            label: path.display().to_string(),
-            keep_constraints: false,
         })
     }
 
@@ -360,11 +348,7 @@ impl LspModuleService {
         self.check_path_hash(&path, &hash, expected_sha, kind)?;
         Ok(LspLoadedModule {
             id: ModuleId::Local { path: path.clone() },
-            path: Some(path.clone()),
-            hash,
             source,
-            label: path.display().to_string(),
-            keep_constraints: false,
         })
     }
 
@@ -418,9 +402,7 @@ pub(crate) fn tokenize_and_parse(
 pub struct ImportModuleInfo {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) path: Option<PathBuf>,
-    pub(crate) value_map: HashMap<Symbol, Symbol>, // field -> internal name
-    pub(crate) type_map: HashMap<Symbol, Symbol>,
-    pub(crate) class_map: HashMap<Symbol, Symbol>,
+    pub(crate) exports: ModuleExports,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) export_defs: HashMap<String, Span>,
 }
@@ -465,9 +447,4 @@ pub(crate) fn prelude_completion_values() -> &'static Vec<(String, CompletionIte
         out.sort_by(|(a, _), (b, _)| a.cmp(b));
         out
     })
-}
-
-pub(crate) fn module_prefix(hash: &str) -> String {
-    let short = if hash.len() >= 16 { &hash[..16] } else { hash };
-    format!("@m{short}")
 }

@@ -21,8 +21,34 @@ use rex_ast::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt,
     sync::Arc,
 };
+
+#[derive(Debug, Eq, PartialEq)]
+pub struct ImportUseError {
+    pub span: rex_ast::Span,
+    pub error: EngineError,
+}
+
+impl ImportUseError {
+    fn missing_export(span: rex_ast::Span, module: Symbol, export: Symbol) -> Self {
+        Self {
+            span,
+            error: crate::ModuleError::MissingExport { module, export }.into(),
+        }
+    }
+
+    pub fn into_error(self) -> EngineError {
+        self.error
+    }
+}
+
+impl fmt::Display for ImportUseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(f)
+    }
+}
 
 pub(crate) fn rewrite_program_with_imports<'a, State>(
     engine: &'a mut Engine<State>,
@@ -118,19 +144,19 @@ fn validate_import_uses_expr(
     bound: &mut BTreeSet<Symbol>,
     aliases: &BTreeMap<Symbol, ModuleExports>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
-) -> Result<(), EngineError> {
+) -> Result<(), ImportUseError> {
     match expr {
-        Expr::Project(_, base, field) => {
+        Expr::Project(span, base, field) => {
             if let Expr::Var(v) = base.as_ref()
                 && alias_is_visible(&v.name, bound, shadowed_values)
                 && let Some(exports) = aliases.get(&v.name)
                 && exports.value(field).is_none()
             {
-                return Err(crate::ModuleError::MissingExport {
-                    module: v.name.clone(),
-                    export: field.clone(),
-                }
-                .into());
+                return Err(ImportUseError::missing_export(
+                    *span,
+                    v.name.clone(),
+                    field.clone(),
+                ));
             }
             validate_import_uses_expr(base, bound, aliases, shadowed_values)
         }
@@ -139,7 +165,13 @@ fn validate_import_uses_expr(
                 validate_import_uses_type_expr(ann, bound, aliases, shadowed_values)?;
             }
             for c in constraints {
-                validate_import_uses_class_name(&c.class, bound, aliases, shadowed_values)?;
+                validate_import_uses_class_name(
+                    &c.class,
+                    *c.typ.span(),
+                    bound,
+                    aliases,
+                    shadowed_values,
+                )?;
                 validate_import_uses_type_expr(&c.typ, bound, aliases, shadowed_values)?;
             }
             bound.insert(param.name.clone());
@@ -241,10 +273,11 @@ fn validate_import_uses_expr(
 
 fn validate_import_uses_class_name(
     class: &NameRef,
+    span: rex_ast::Span,
     bound: &BTreeSet<Symbol>,
     aliases: &BTreeMap<Symbol, ModuleExports>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
-) -> Result<(), EngineError> {
+) -> Result<(), ImportUseError> {
     let Some((alias_sym, member_sym)) = qualified_alias_member(class) else {
         return Ok(());
     };
@@ -257,11 +290,11 @@ fn validate_import_uses_class_name(
     if exports.class(member_sym).is_some() {
         return Ok(());
     }
-    Err(crate::ModuleError::MissingExport {
-        module: alias_sym.clone(),
-        export: member_sym.clone(),
-    }
-    .into())
+    Err(ImportUseError::missing_export(
+        span,
+        alias_sym.clone(),
+        member_sym.clone(),
+    ))
 }
 
 fn validate_import_uses_type_expr(
@@ -269,9 +302,9 @@ fn validate_import_uses_type_expr(
     bound: &BTreeSet<Symbol>,
     aliases: &BTreeMap<Symbol, ModuleExports>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
-) -> Result<(), EngineError> {
+) -> Result<(), ImportUseError> {
     match ty {
-        TypeExpr::Name(_, name) => {
+        TypeExpr::Name(span, name) => {
             let Some((alias_sym, member_sym)) = qualified_alias_member(name) else {
                 return Ok(());
             };
@@ -284,11 +317,11 @@ fn validate_import_uses_type_expr(
             if exports.typ(member_sym).is_some() || exports.class(member_sym).is_some() {
                 Ok(())
             } else {
-                Err(crate::ModuleError::MissingExport {
-                    module: alias_sym.clone(),
-                    export: member_sym.clone(),
-                }
-                .into())
+                Err(ImportUseError::missing_export(
+                    *span,
+                    alias_sym.clone(),
+                    member_sym.clone(),
+                ))
             }
         }
         TypeExpr::App(_, f, x) => {
@@ -314,11 +347,11 @@ fn validate_import_uses_type_expr(
     }
 }
 
-pub(crate) fn validate_import_uses(
+pub fn validate_import_uses_with_spans(
     compilation_unit: &CompilationUnit,
     aliases: &BTreeMap<Symbol, ModuleExports>,
     shadowed_values: Option<&BTreeSet<Symbol>>,
-) -> Result<(), EngineError> {
+) -> Result<(), ImportUseError> {
     for decl in &compilation_unit.decls {
         match decl {
             Decl::Fn(fd) => {
@@ -334,6 +367,7 @@ pub(crate) fn validate_import_uses(
                 for c in &fd.constraints {
                     validate_import_uses_class_name(
                         &c.class,
+                        *c.typ.span(),
                         &BTreeSet::new(),
                         aliases,
                         shadowed_values,
@@ -362,6 +396,7 @@ pub(crate) fn validate_import_uses(
                 for c in &df.constraints {
                     validate_import_uses_class_name(
                         &c.class,
+                        *c.typ.span(),
                         &BTreeSet::new(),
                         aliases,
                         shadowed_values,
@@ -390,6 +425,7 @@ pub(crate) fn validate_import_uses(
                 for c in &cd.supers {
                     validate_import_uses_class_name(
                         &c.class,
+                        *c.typ.span(),
                         &BTreeSet::new(),
                         aliases,
                         shadowed_values,
@@ -413,6 +449,7 @@ pub(crate) fn validate_import_uses(
             Decl::Instance(inst) => {
                 validate_import_uses_class_name(
                     &NameRef::from_dotted(inst.class.as_ref()),
+                    inst.span,
                     &BTreeSet::new(),
                     aliases,
                     shadowed_values,
@@ -426,6 +463,7 @@ pub(crate) fn validate_import_uses(
                 for c in &inst.context {
                     validate_import_uses_class_name(
                         &c.class,
+                        *c.typ.span(),
                         &BTreeSet::new(),
                         aliases,
                         shadowed_values,
@@ -457,7 +495,16 @@ pub(crate) fn validate_import_uses(
     Ok(())
 }
 
-pub(crate) fn rewrite_import_uses(
+pub fn validate_import_uses(
+    compilation_unit: &CompilationUnit,
+    aliases: &BTreeMap<Symbol, ModuleExports>,
+    shadowed_values: Option<&BTreeSet<Symbol>>,
+) -> Result<(), EngineError> {
+    validate_import_uses_with_spans(compilation_unit, aliases, shadowed_values)
+        .map_err(ImportUseError::into_error)
+}
+
+pub fn rewrite_import_uses(
     compilation_unit: &CompilationUnit,
     aliases: &BTreeMap<Symbol, ModuleExports>,
     imported_values: &BTreeMap<Symbol, CanonicalSymbol>,
@@ -1189,7 +1236,7 @@ where
     })
 }
 
-fn load_module_types_from_resolved<'a, State>(
+pub(crate) fn load_module_types_from_resolved<'a, State>(
     engine: &'a mut Engine<State>,
     resolved: ResolvedModule,
     chain: &'a ImportChain,

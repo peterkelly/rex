@@ -11,14 +11,17 @@ pub(crate) use lsp_types::{
     Location, MarkupContent, MarkupKind, Position, Range, SymbolKind, TextEdit, Url, WorkspaceEdit,
 };
 pub(crate) use rex_ast::{
-    ClassDecl, ClassMethodSig, CompilationUnit, Decl, DeclareFnDecl, Expr, FnDecl, ImportDecl,
-    ImportPath, InstanceDecl, InstanceMethodImpl, NameRef, Pattern, Symbol, TypeConstraint,
-    TypeDecl, TypeExpr, TypeVariant, Var,
+    CompilationUnit, Decl, Expr, ImportDecl, ImportPath, Pattern, Symbol, TypeDecl, TypeExpr,
 };
 pub(crate) use rex_ast::{Position as RexPosition, Span, Spanned};
 pub(crate) use rex_engine::{
-    Engine, EngineError, ImportRequest, Importer, ModuleError, ModuleId, ResolvedModule,
-    ResolvedModuleContent,
+    Engine, EngineError, ImportRequest, Importer, ModuleError, ModuleExports, ModuleId,
+    ResolvedModule, ResolvedModuleContent,
+    module_semantics::{
+        ImportBindingPolicy, ImportBindings, add_import_bindings, collect_pattern_bindings,
+        decl_type_names, decl_value_names, exports_from_program, load_import_for_tooling,
+        prefix_for_module, rewrite_import_uses, validate_import_uses_with_spans,
+    },
 };
 pub(crate) use rex_parser::{
     error::ParseError,

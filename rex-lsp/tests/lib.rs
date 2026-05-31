@@ -13,7 +13,7 @@ use rex_lsp::{code_actions::*, document::*, imports::*, public::*, queries::*, s
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 fn expect_object(value: &Value) -> &Map<String, Value> {
     value.as_object().expect("object")
@@ -54,6 +54,34 @@ fn assert_internal_name_ref(name: &NameRef) {
         }
         other => panic!("expected unqualified rewritten name, got {other:?}"),
     }
+}
+
+fn position_of(text: &str, needle: &str) -> Position {
+    let index = text
+        .find(needle)
+        .unwrap_or_else(|| panic!("missing `{needle}` in test source"));
+    let prefix = &text[..index];
+    let line = prefix.bytes().filter(|b| *b == b'\n').count() as u32;
+    let character = prefix
+        .rsplit('\n')
+        .next()
+        .expect("split always returns one item")
+        .chars()
+        .count() as u32;
+    Position { line, character }
+}
+
+fn engine_local_module_prefix(path: &Path) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for b in b"local:" {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    for b in path.as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+    }
+    format!("@m{hash:016x}")
 }
 
 async fn eval_source_to_display(code: &str) -> (String, String) {
@@ -366,6 +394,91 @@ pick is i32
 }
 
 #[test]
+fn prepare_program_registers_imported_class_decls_for_typechecking() {
+    let dir = temp_dir("prepare_program_registers_imported_class_decls_for_typechecking");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub class Pick a where {
+    pick : a;
+}
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep as D;
+
+instance D.Pick i32 where {
+    pick = 7;
+}
+pick is i32
+"#;
+    let program = parse_rex(source).expect("parse");
+    let (rewritten, mut ts, _imports, diags) =
+        prepare_program_with_imports(&uri, &program).expect("prepare");
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+    ts.register_decls(&rewritten.decls)
+        .expect("prepared declarations should typecheck");
+}
+
+#[test]
+fn prepare_program_registers_transitive_imported_signature_deps() {
+    let dir = temp_dir("prepare_program_registers_transitive_imported_signature_deps");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    let base = dir.join("base.rex");
+    fs::write(
+        &base,
+        r#"
+pub type Boxed = Boxed i32;
+"#,
+    )
+    .expect("write base");
+    fs::write(
+        &dep,
+        r#"
+import base as B;
+
+pub fn make x: i32 -> B.Boxed = B.Boxed x;
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep as D;
+
+D.make 1
+"#;
+    let program = parse_rex(source).expect("parse");
+    let (rewritten, ts, _imports, diags) =
+        prepare_program_with_imports(&uri, &program).expect("prepare");
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+    let canonical_dep = dep.canonicalize().expect("canonical dep path");
+    let expected_name = format!("{}.make", engine_local_module_prefix(&canonical_dep));
+    assert!(
+        ts.env
+            .lookup(&rex_ast::Symbol::intern(&expected_name))
+            .is_some(),
+        "expected transitive-dependent signature `{expected_name}` to be registered"
+    );
+    let Expr::App(_, f, _) = rewritten.body.as_ref().expect("body").as_ref() else {
+        panic!("expected application, got {:?}", rewritten.body);
+    };
+    let Expr::Var(var) = f.as_ref() else {
+        panic!("expected rewritten imported function var, got {f:?}");
+    };
+    assert_eq!(var.name.as_ref(), expected_name);
+}
+
+#[test]
 fn diagnostics_report_missing_class_export_in_instance_header() {
     let dir = temp_dir("diagnostics_report_missing_class_export_in_instance_header");
     let main = dir.join("main.rex");
@@ -428,6 +541,64 @@ fn id x: D.Missing -> D.Missing = x;
             .any(|d| d.message.contains("does not export") && d.message.contains("Missing")),
         "diagnostics: {diags:#?}"
     );
+}
+
+#[test]
+fn diagnostics_report_missing_value_export_at_projection_span() {
+    let dir = temp_dir("diagnostics_report_missing_value_export_at_projection_span");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub fn present x: i32 -> i32 = x;
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep as D;
+
+D.missing 1
+"#;
+    let diags = diagnostics_from_text(&uri, source);
+    let diag = diags
+        .iter()
+        .find(|d| d.message.contains("does not export") && d.message.contains("missing"))
+        .unwrap_or_else(|| panic!("diagnostics: {diags:#?}"));
+    assert_eq!(diag.range.start, position_of(source, "D.missing"));
+}
+
+#[test]
+fn diagnostics_report_missing_type_export_at_type_name_span() {
+    let dir = temp_dir("diagnostics_report_missing_type_export_at_type_name_span");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub type Present = Present i32;
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep as D;
+
+fn id x: D.Missing -> i32 = 0;
+
+0
+"#;
+    let diags = diagnostics_from_text(&uri, source);
+    let diag = diags
+        .iter()
+        .find(|d| d.message.contains("does not export") && d.message.contains("Missing"))
+        .unwrap_or_else(|| panic!("diagnostics: {diags:#?}"));
+    assert_eq!(diag.range.start, position_of(source, "D.Missing"));
 }
 
 #[test]
@@ -671,6 +842,197 @@ let D: D.Num -> i32 = \_ -> 0 in
 "#;
     let diags = diagnostics_from_text(&uri, source);
     assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+}
+
+#[test]
+fn diagnostics_accept_selected_value_import_with_alias() {
+    let dir = temp_dir("diagnostics_accept_selected_value_import_with_alias");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub fn add x: i32 -> y: i32 -> i32 = x + y;
+pub fn triple x: i32 -> i32 = x * 3;
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep (add, triple as t);
+
+add (t 10) 2
+"#;
+    let diags = diagnostics_from_text(&uri, source);
+    assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+}
+
+#[test]
+fn prepare_program_uses_engine_module_id_prefix_for_imported_values() {
+    let dir = temp_dir("prepare_program_uses_engine_module_id_prefix_for_imported_values");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub fn add x: i32 -> y: i32 -> i32 = x + y;
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep as D;
+
+D.add 20 22
+"#;
+    let program = parse_rex(source).expect("parse");
+    let (rewritten, _ts, _imports, diags) =
+        prepare_program_with_imports(&uri, &program).expect("prepare");
+    assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
+
+    let canonical_dep = dep.canonicalize().expect("canonical dep path");
+    let expected_name = format!("{}.add", engine_local_module_prefix(&canonical_dep));
+    let Expr::App(_, f, _) = rewritten.body.as_ref().expect("body").as_ref() else {
+        panic!("expected outer application, got {:?}", rewritten.body);
+    };
+    let Expr::App(_, f, _) = f.as_ref() else {
+        panic!("expected inner application, got {f:?}");
+    };
+    let Expr::Var(var) = f.as_ref() else {
+        panic!("expected rewritten imported function var, got {f:?}");
+    };
+    assert_eq!(var.name.as_ref(), expected_name);
+}
+
+#[test]
+fn diagnostics_accept_selected_type_and_constructor_import() {
+    let dir = temp_dir("diagnostics_accept_selected_type_and_constructor_import");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub type Token = Token;
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep (Token);
+
+let id: Token -> Token = \x -> x in
+id Token
+"#;
+    let diags = diagnostics_from_text(&uri, source);
+    assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+}
+
+#[test]
+fn diagnostics_accept_wildcard_type_and_class_imports() {
+    let dir = temp_dir("diagnostics_accept_wildcard_type_and_class_imports");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub type Status = Ready | Failed;
+
+pub class Pick a where {
+    pick : a;
+}
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep (*);
+
+instance Pick Status where {
+    pick = Ready;
+}
+
+pick is Status
+"#;
+    let diags = diagnostics_from_text(&uri, source);
+    assert!(diags.is_empty(), "diagnostics: {diags:#?}");
+}
+
+#[test]
+fn diagnostics_report_duplicate_selected_import_name() {
+    let dir = temp_dir("diagnostics_report_duplicate_selected_import_name");
+    let main = dir.join("main.rex");
+    let left = dir.join("foo").join("left.rex");
+    let right = dir.join("foo").join("right.rex");
+    fs::create_dir_all(left.parent().expect("left parent")).expect("create module dir");
+    fs::write(
+        &left,
+        r#"
+pub fn add x: i32 -> y: i32 -> i32 = x + y;
+"#,
+    )
+    .expect("write left");
+    fs::write(
+        &right,
+        r#"
+pub fn mul x: i32 -> y: i32 -> i32 = x * y;
+"#,
+    )
+    .expect("write right");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import foo.left (add);
+import foo.right (mul as add);
+
+add 1 2
+"#;
+    let diags = diagnostics_from_text(&uri, source);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("duplicate imported name `add`")),
+        "diagnostics: {diags:#?}"
+    );
+}
+
+#[test]
+fn diagnostics_report_selected_import_conflict_with_local() {
+    let dir = temp_dir("diagnostics_report_selected_import_conflict_with_local");
+    let main = dir.join("main.rex");
+    let dep = dir.join("dep.rex");
+    fs::write(
+        &dep,
+        r#"
+pub fn add x: i32 -> y: i32 -> i32 = x + y;
+"#,
+    )
+    .expect("write dep");
+    fs::write(&main, "()").expect("write main");
+
+    let uri = Url::from_file_path(&main).expect("main file uri");
+    let source = r#"
+import dep (add);
+
+fn add x: i32 -> y: i32 -> i32 = x - y;
+
+add 10 2
+"#;
+    let diags = diagnostics_from_text(&uri, source);
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("conflicts with local declaration")),
+        "diagnostics: {diags:#?}"
+    );
 }
 
 #[test]

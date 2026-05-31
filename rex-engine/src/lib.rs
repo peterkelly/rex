@@ -16,6 +16,7 @@ mod error;
 mod evaluator;
 mod handlers;
 mod manifest;
+pub mod module_semantics;
 mod modules;
 mod native_fn;
 mod overloaded_fn;

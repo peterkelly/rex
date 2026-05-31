@@ -284,7 +284,7 @@ pub struct ModuleInstance {
     pub source_fingerprint: Option<String>,
 }
 
-pub(crate) fn module_key_for_module(id: &ModuleId) -> ModuleKey {
+pub fn module_key_for_module(id: &ModuleId) -> ModuleKey {
     // Use a stable hash over stable identity bytes so canonical internal symbols
     // are deterministic across process runs/toolchains.
     // FNV-1a reference:
@@ -318,15 +318,15 @@ fn hash_module_identity(state: &mut u64, id: &ModuleId) {
     }
 }
 
-pub(crate) fn prefix_for_module_key(key: ModuleKey) -> String {
+pub fn prefix_for_module_key(key: ModuleKey) -> String {
     format!("@m{:016x}", key.as_u64())
 }
 
-pub(crate) fn prefix_for_module(id: &ModuleId) -> String {
+pub fn prefix_for_module(id: &ModuleId) -> String {
     prefix_for_module_key(module_key_for_module(id))
 }
 
-pub(crate) fn qualify(prefix: &str, name: &Symbol) -> Symbol {
+pub fn qualify(prefix: &str, name: &Symbol) -> Symbol {
     Symbol::intern(&format!("{prefix}.{}", name.as_ref()))
 }
 
