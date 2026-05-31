@@ -2,18 +2,21 @@ use crate::prelude::*;
 use crate::{completion::*, diagnostics::*, imports::*, queries::*, shared::*};
 
 pub fn code_actions_for_source(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     request_range: Range,
     diagnostics: &[Diagnostic],
 ) -> Vec<CodeActionOrCommand> {
-    let parsed = tokenize_and_parse_cached(uri, text)
+    let parsed = session
+        .tokenize_and_parse_cached(uri, text)
         .ok()
         .map(|(_tokens, program)| program);
     let mut actions = Vec::new();
 
     // Hole fill is position-driven and should be available even when other diagnostics exist.
     actions.extend(code_actions_for_hole_fill(
+        session,
         uri,
         text,
         parsed.as_ref(),
@@ -31,6 +34,7 @@ pub fn code_actions_for_source(
             continue;
         }
         actions.extend(code_actions_for_diagnostic(
+            session,
             uri,
             text,
             parsed.as_ref(),
@@ -43,6 +47,7 @@ pub fn code_actions_for_source(
 }
 
 pub(crate) fn code_actions_for_hole_fill(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     compilation_unit: Option<&CompilationUnit>,
@@ -64,7 +69,7 @@ pub(crate) fn code_actions_for_hole_fill(
     };
     let hole_range = span_to_range(hole_span);
     let pos = hole_range.start;
-    let candidates = hole_fill_candidates_at_position(uri, text, pos);
+    let candidates = hole_fill_candidates_at_position(session, uri, text, pos);
     let mut actions = Vec::new();
     for (name, replacement) in candidates.into_iter().take(8) {
         let diagnostic = Diagnostic {
@@ -86,6 +91,7 @@ pub(crate) fn code_actions_for_hole_fill(
 }
 
 pub(crate) fn code_actions_for_diagnostic(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     compilation_unit: Option<&CompilationUnit>,
@@ -104,6 +110,7 @@ pub(crate) fn code_actions_for_diagnostic(
         .contains("typed hole `?` must be filled before evaluation")
     {
         actions.extend(code_actions_for_hole_fill(
+            session,
             uri,
             text,
             compilation_unit,
@@ -525,15 +532,16 @@ pub(crate) fn split_fun_type(typ: &Type) -> (Vec<Type>, Type) {
 }
 
 pub(crate) fn in_scope_value_types_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Vec<(String, Type)> {
-    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+    let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return Vec::new();
     };
     let Ok((program, mut ts, _imports, _import_diags)) =
-        prepare_program_with_imports(uri, &program)
+        prepare_program_with_imports(session, uri, &program)
     else {
         return Vec::new();
     };
@@ -712,25 +720,26 @@ pub(crate) fn in_scope_value_types_at_position(
 }
 
 pub(crate) fn hole_fill_candidates_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Vec<(String, String)> {
-    let Some(target_type) = expected_type_at_position_type(uri, text, position) else {
+    let Some(target_type) = expected_type_at_position_type(session, uri, text, position) else {
         return Vec::new();
     };
-    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+    let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return Vec::new();
     };
     let Ok((program, mut ts, _imports, _import_diags)) =
-        prepare_program_with_imports(uri, &program)
+        prepare_program_with_imports(session, uri, &program)
     else {
         return Vec::new();
     };
     if inject_program_decls(&mut ts, &program, None).is_err() {
         return Vec::new();
     }
-    let mut in_scope = in_scope_value_types_at_position(uri, text, position)
+    let mut in_scope = in_scope_value_types_at_position(session, uri, text, position)
         .into_iter()
         .filter(|(name, _)| is_ident_like(name))
         .collect::<Vec<_>>();

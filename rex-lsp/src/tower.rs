@@ -36,12 +36,13 @@ use crate::{
         execute_semantic_loop_apply_best_quick_fixes, execute_semantic_loop_apply_quick_fix,
         execute_semantic_loop_step, hover_type_contents,
     },
-    shared::{clear_parse_cache, with_open_documents},
+    shared::{AnalysisSession, AnalysisState},
 };
 
 struct RexServer {
     client: Client,
     documents: RwLock<HashMap<Url, String>>,
+    analysis: AnalysisState,
 }
 
 impl RexServer {
@@ -49,23 +50,25 @@ impl RexServer {
         Self {
             client,
             documents: RwLock::new(HashMap::new()),
+            analysis: AnalysisState::new(),
         }
     }
 
-    async fn document_with_snapshot(&self, uri: &Url) -> Option<(String, HashMap<Url, String>)> {
+    async fn document_with_session(&self, uri: &Url) -> Option<(String, AnalysisSession)> {
         let documents = self.documents.read().await;
         let text = documents.get(uri)?.clone();
-        Some((text, documents.clone()))
+        Some((text, self.analysis.session(documents.clone())))
     }
 
     async fn publish_diagnostics(&self, uri: Url, text: &str) {
         let uri_for_job = uri.clone();
         let text_for_job = text.to_string();
-        let documents = self.documents.read().await.clone();
+        let session = {
+            let documents = self.documents.read().await;
+            self.analysis.session(documents.clone())
+        };
         let diagnostics = match tokio::task::spawn_blocking(move || {
-            with_open_documents(documents, || {
-                diagnostics_from_text(&uri_for_job, &text_for_job)
-            })
+            diagnostics_from_text(&session, &uri_for_job, &text_for_job)
         })
         .await
         {
@@ -151,7 +154,7 @@ impl LanguageServer for RexServer {
             .write()
             .await
             .insert(uri.clone(), text.clone());
-        clear_parse_cache(&uri);
+        self.analysis.clear_parse_cache(&uri);
         self.publish_diagnostics(uri, &text).await;
     }
 
@@ -168,7 +171,7 @@ impl LanguageServer for RexServer {
                 .write()
                 .await
                 .insert(uri.clone(), text.clone());
-            clear_parse_cache(&uri);
+            self.analysis.clear_parse_cache(&uri);
             self.publish_diagnostics(uri, &text).await;
         }
     }
@@ -176,23 +179,21 @@ impl LanguageServer for RexServer {
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let uri = params.text_document.uri;
         self.documents.write().await.remove(&uri);
-        clear_parse_cache(&uri);
+        self.analysis.clear_parse_cache(&uri);
         self.client.publish_diagnostics(uri, Vec::new(), None).await;
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+        let Some((text, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text.clone();
         let type_contents = match tokio::task::spawn_blocking(move || {
-            with_open_documents(documents, || {
-                hover_type_contents(&uri_for_job, &text_for_job, position)
-            })
+            hover_type_contents(&session, &uri_for_job, &text_for_job, position)
         })
         .await
         {
@@ -219,16 +220,14 @@ impl LanguageServer for RexServer {
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+        let Some((text, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let items = match tokio::task::spawn_blocking(move || {
-            with_open_documents(documents, || {
-                completion_items(&uri_for_job, &text_for_job, position)
-            })
+            completion_items(&session, &uri_for_job, &text_for_job, position)
         })
         .await
         {
@@ -245,7 +244,7 @@ impl LanguageServer for RexServer {
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
         let uri = params.text_document.uri;
-        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+        let Some((text, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
@@ -254,9 +253,7 @@ impl LanguageServer for RexServer {
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let actions = match tokio::task::spawn_blocking(move || {
-            with_open_documents(documents, || {
-                code_actions_for_source(&uri_for_job, &text_for_job, range, &diagnostics)
-            })
+            code_actions_for_source(&session, &uri_for_job, &text_for_job, range, &diagnostics)
         })
         .await
         {
@@ -279,35 +276,37 @@ impl LanguageServer for RexServer {
             let Some(uri) = command_uri(&arguments) else {
                 return Ok(None);
             };
-            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+            let Some((text, session)) = self.document_with_session(&uri).await else {
                 return Ok(None);
             };
-            return Ok(with_open_documents(documents, || {
-                execute_query_command_for_document_without_position(&command, &uri, &text)
-            }));
+            return Ok(execute_query_command_for_document_without_position(
+                &session, &command, &uri, &text,
+            ));
         }
         if command == CMD_SEMANTIC_LOOP_STEP {
             let Some((uri, position)) = command_uri_and_position(&arguments) else {
                 return Ok(None);
             };
-            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+            let Some((text, session)) = self.document_with_session(&uri).await else {
                 return Ok(None);
             };
-            return Ok(with_open_documents(documents, || {
-                execute_semantic_loop_step(&uri, &text, position)
-            }));
+            return Ok(execute_semantic_loop_step(&session, &uri, &text, position));
         }
         if command == CMD_SEMANTIC_LOOP_APPLY_QUICK_FIX_AT {
             let Some((uri, position, quick_fix_id)) = command_uri_position_and_id(&arguments)
             else {
                 return Ok(None);
             };
-            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+            let Some((text, session)) = self.document_with_session(&uri).await else {
                 return Ok(None);
             };
-            return Ok(with_open_documents(documents, || {
-                execute_semantic_loop_apply_quick_fix(&uri, &text, position, &quick_fix_id)
-            }));
+            return Ok(execute_semantic_loop_apply_quick_fix(
+                &session,
+                &uri,
+                &text,
+                position,
+                &quick_fix_id,
+            ));
         }
         if command == CMD_SEMANTIC_LOOP_APPLY_BEST_QUICK_FIXES_AT {
             let Some((uri, position, max_steps, strategy, dry_run)) =
@@ -315,25 +314,23 @@ impl LanguageServer for RexServer {
             else {
                 return Ok(None);
             };
-            let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+            let Some((text, session)) = self.document_with_session(&uri).await else {
                 return Ok(None);
             };
-            return Ok(with_open_documents(documents, || {
-                execute_semantic_loop_apply_best_quick_fixes(
-                    &uri, &text, position, max_steps, strategy, dry_run,
-                )
-            }));
+            return Ok(execute_semantic_loop_apply_best_quick_fixes(
+                &session, &uri, &text, position, max_steps, strategy, dry_run,
+            ));
         }
 
         let Some((uri, position)) = command_uri_and_position(&arguments) else {
             return Ok(None);
         };
-        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+        let Some((text, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
-        Ok(with_open_documents(documents, || {
-            execute_query_command_for_document(&command, &uri, &text, position)
-        }))
+        Ok(execute_query_command_for_document(
+            &session, &command, &uri, &text, position,
+        ))
     }
 
     async fn goto_definition(
@@ -342,16 +339,14 @@ impl LanguageServer for RexServer {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+        let Some((text, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let response = match tokio::task::spawn_blocking(move || {
-            with_open_documents(documents, || {
-                goto_definition_response(&uri_for_job, &text_for_job, position)
-            })
+            goto_definition_response(&session, &uri_for_job, &text_for_job, position)
         })
         .await
         {
@@ -370,16 +365,20 @@ impl LanguageServer for RexServer {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
-        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+        let Some((text, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let refs = match tokio::task::spawn_blocking(move || {
-            with_open_documents(documents, || {
-                references_for_source(&uri_for_job, &text_for_job, position, include_declaration)
-            })
+            references_for_source(
+                &session,
+                &uri_for_job,
+                &text_for_job,
+                position,
+                include_declaration,
+            )
         })
         .await
         {
@@ -398,16 +397,14 @@ impl LanguageServer for RexServer {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let new_name = params.new_name;
-        let Some((text, documents)) = self.document_with_snapshot(&uri).await else {
+        let Some((text, session)) = self.document_with_session(&uri).await else {
             return Ok(None);
         };
 
         let uri_for_job = uri.clone();
         let text_for_job = text;
         let edit = match tokio::task::spawn_blocking(move || {
-            with_open_documents(documents, || {
-                rename_for_source(&uri_for_job, &text_for_job, position, &new_name)
-            })
+            rename_for_source(&session, &uri_for_job, &text_for_job, position, &new_name)
         })
         .await
         {
@@ -431,7 +428,8 @@ impl LanguageServer for RexServer {
         let Some(text) = text else {
             return Ok(None);
         };
-        let symbols = document_symbols_for_source(&uri, &text);
+        let session = self.analysis.empty_session();
+        let symbols = document_symbols_for_source(&session, &uri, &text);
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 

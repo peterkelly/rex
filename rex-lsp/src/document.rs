@@ -109,8 +109,12 @@ pub(crate) fn symbol_for_decl(decl: &Decl) -> Option<DocumentSymbol> {
     }
 }
 
-pub(crate) fn document_symbols_for_source(uri: &Url, text: &str) -> Vec<DocumentSymbol> {
-    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+pub(crate) fn document_symbols_for_source(
+    session: &AnalysisSession,
+    uri: &Url,
+    text: &str,
+) -> Vec<DocumentSymbol> {
+    let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return Vec::new();
     };
     program.decls.iter().filter_map(symbol_for_decl).collect()

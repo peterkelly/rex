@@ -9,9 +9,7 @@ use rex::{
 use rex_ast::{CompilationUnit, Decl, Expr, NameRef, TypeExpr};
 use rex_engine::ValueDisplayOptions;
 use rex_lsp::*;
-use rex_lsp::{
-    code_actions::*, diagnostics::*, document::*, imports::*, public::*, queries::*, shared::*,
-};
+use rex_lsp::{code_actions::*, document::*, imports::*, public::*, queries::*, shared::*};
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
@@ -88,6 +86,90 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     (display, ty.to_string())
 }
 
+fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::diagnostics::diagnostics_from_text(&session, uri, text)
+}
+
+fn prepare_program_with_imports(
+    uri: &Url,
+    compilation_unit: &CompilationUnit,
+) -> std::result::Result<PreparedProgram, String> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::imports::prepare_program_with_imports(&session, uri, compilation_unit)
+}
+
+fn code_actions_for_source(
+    uri: &Url,
+    text: &str,
+    request_range: Range,
+    diagnostics: &[Diagnostic],
+) -> Vec<CodeActionOrCommand> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::code_actions::code_actions_for_source(&session, uri, text, request_range, diagnostics)
+}
+
+fn execute_query_command_for_document(
+    command: &str,
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Option<Value> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::queries::execute_query_command_for_document(&session, command, uri, text, position)
+}
+
+fn execute_query_command_for_document_without_position(
+    command: &str,
+    uri: &Url,
+    text: &str,
+) -> Option<Value> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::queries::execute_query_command_for_document_without_position(
+        &session, command, uri, text,
+    )
+}
+
+fn execute_semantic_loop_step(uri: &Url, text: &str, position: Position) -> Option<Value> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::queries::execute_semantic_loop_step(&session, uri, text, position)
+}
+
+fn execute_semantic_loop_apply_quick_fix(
+    uri: &Url,
+    text: &str,
+    position: Position,
+    quick_fix_id: &str,
+) -> Option<Value> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::queries::execute_semantic_loop_apply_quick_fix(
+        &session,
+        uri,
+        text,
+        position,
+        quick_fix_id,
+    )
+}
+
+fn execute_semantic_loop_apply_best_quick_fixes(
+    uri: &Url,
+    text: &str,
+    position: Position,
+    max_steps: usize,
+    strategy: BulkQuickFixStrategy,
+    dry_run: bool,
+) -> Option<Value> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::queries::execute_semantic_loop_apply_best_quick_fixes(
+        &session, uri, text, position, max_steps, strategy, dry_run,
+    )
+}
+
+fn hole_expected_types_for_document(uri: &Url, text: &str) -> Vec<Value> {
+    let session = AnalysisSession::isolated();
+    rex_lsp::queries::hole_expected_types_for_document(&session, uri, text)
+}
+
 #[test]
 fn stdlib_json_imports_typecheck_for_non_file_uri() {
     let uri = Url::parse("untitled:Test.rex").expect("uri");
@@ -155,19 +237,30 @@ D.fresh 1
         "expected stale disk module to miss fresh export, got {disk_diags:?}"
     );
 
-    let mut documents = HashMap::new();
-    documents.insert(uri.clone(), source.to_string());
-    documents.insert(
+    let mut first_snapshot = HashMap::new();
+    first_snapshot.insert(uri.clone(), source.to_string());
+    first_snapshot.insert(
         dep_uri,
         r#"
 pub fn fresh x: i32 -> i32 = x + 1;
 "#
         .to_string(),
     );
-    let open_diags = with_open_documents(documents, || diagnostics_from_text(&uri, source));
+    let state = AnalysisState::new();
+    let open_session = state.session(first_snapshot);
+    let open_diags = rex_lsp::diagnostics::diagnostics_from_text(&open_session, &uri, source);
     assert!(
         open_diags.is_empty(),
         "expected open dependency buffer to typecheck, got {open_diags:?}"
+    );
+
+    let stale_session = state.session(HashMap::from([(uri.clone(), source.to_string())]));
+    let stale_diags = rex_lsp::diagnostics::diagnostics_from_text(&stale_session, &uri, source);
+    assert!(
+        stale_diags
+            .iter()
+            .any(|diag| diag.message.contains("does not export `fresh`")),
+        "expected separate session without open dependency to use stale disk module, got {stale_diags:?}"
     );
 }
 
@@ -720,7 +813,6 @@ in
     (a, b)
 "#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
 
     let mut field_diags: Vec<Diagnostic> = diagnostics_from_text(&uri, text)
         .into_iter()
@@ -837,7 +929,6 @@ fn parse_ph : string -> Result string f64 = \raw ->
   if raw == "7.3" then Ok 7.3 else Err "bad reading";
 "#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let diags = diagnostics_from_text(&uri, text);
     let full = full_document_range(text);
     let unification = diags
@@ -861,7 +952,6 @@ let input = "42" in
 let out : Result string i32 = ? in
 out"#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let diags = diagnostics_from_text(&uri, text);
     let full = full_document_range(text);
     let unification = diags
@@ -968,7 +1058,6 @@ in
   xs
 "#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let diagnostics = diagnostics_from_text(&uri, text);
     let list_diag = diagnostics
         .into_iter()
@@ -1020,7 +1109,6 @@ fn code_actions_offer_non_exhaustive_match_fix() {
 fn code_actions_offer_function_value_mismatch_fixes() {
     let text = "let f = \\x -> x in f + 1";
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let diagnostics = diagnostics_from_text(&uri, text);
     let fun_mismatch = diagnostics
         .into_iter()
@@ -1058,7 +1146,6 @@ in
   xs
 "#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let diagnostics = diagnostics_from_text(&uri, text);
     let mismatch = diagnostics
         .into_iter()
@@ -1123,7 +1210,6 @@ in
     (a, b)
 "#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let diagnostics = diagnostics_from_text(&uri, text);
     let diag = diagnostics
         .into_iter()
@@ -1211,7 +1297,6 @@ fn aa_mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let request_range = Range {
         start: Position {
             line: 2,
@@ -1252,7 +1337,6 @@ fn aa_mk : i32 -> i32 = \x -> x;
 let y : i32 = ? in y
 "#;
     let uri = in_memory_doc_uri();
-    clear_parse_cache(&uri);
     let diagnostics = diagnostics_from_text(&uri, text);
     let hole_diag = diagnostics
         .iter()

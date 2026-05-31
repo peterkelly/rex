@@ -954,6 +954,7 @@ pub type PreparedProgram = (
 );
 
 pub fn prepare_program_with_imports(
+    session: &AnalysisSession,
     uri: &Url,
     compilation_unit: &CompilationUnit,
 ) -> std::result::Result<PreparedProgram, String> {
@@ -961,7 +962,7 @@ pub fn prepare_program_with_imports(
         TypeSystem::new_with_prelude().map_err(|e| format!("failed to build prelude: {e}"))?;
     let mut diagnostics = Vec::new();
 
-    let module_service = LspModuleService::current();
+    let module_service = session.module_service();
 
     let mut imports: HashMap<Symbol, ImportModuleInfo> = HashMap::new();
 
@@ -1219,6 +1220,7 @@ pub fn prepare_program_with_imports(
 }
 
 pub(crate) fn completion_exports_for_module_alias(
+    session: &AnalysisSession,
     uri: &Url,
     compilation_unit: &CompilationUnit,
     alias: &str,
@@ -1235,7 +1237,8 @@ pub(crate) fn completion_exports_for_module_alias(
         return Ok(Vec::new());
     };
 
-    let Some(module) = LspModuleService::current()
+    let Some(module) = session
+        .module_service()
         .load_import_path(uri, &import_decl.path)
         .map_err(|err| err.to_string())?
     else {

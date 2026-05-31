@@ -9,14 +9,15 @@ pub(crate) struct HoverType {
 }
 
 pub(crate) fn hover_type_contents(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<HoverContents> {
-    let (tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
+    let (tokens, program) = session.tokenize_and_parse_cached(uri, text).ok()?;
     let (name, name_span, name_is_ident) = name_token_at_position(&tokens, position)?;
     let (program, mut ts, _imports, _import_diags) =
-        prepare_program_with_imports(uri, &program).ok()?;
+        prepare_program_with_imports(session, uri, &program).ok()?;
 
     let pos = lsp_to_rex_position(position);
 
@@ -98,29 +99,32 @@ pub(crate) fn hover_type_contents(
 }
 
 pub(crate) fn expected_type_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<String> {
-    expected_type_at_position_type(uri, text, position).map(|ty| ty.to_string())
+    expected_type_at_position_type(session, uri, text, position).map(|ty| ty.to_string())
 }
 
 pub(crate) fn inferred_type_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<String> {
-    inferred_type_at_position_type(uri, text, position).map(|ty| ty.to_string())
+    inferred_type_at_position_type(session, uri, text, position).map(|ty| ty.to_string())
 }
 
 pub(crate) fn expected_type_at_position_type(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<Type> {
-    let (_tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
+    let (_tokens, program) = session.tokenize_and_parse_cached(uri, text).ok()?;
     let (program, mut ts, _imports, _import_diags) =
-        prepare_program_with_imports(uri, &program).ok()?;
+        prepare_program_with_imports(session, uri, &program).ok()?;
 
     let pos = lsp_to_rex_position(position);
 
@@ -171,13 +175,14 @@ pub(crate) fn expected_type_at_position_type(
 }
 
 pub(crate) fn inferred_type_at_position_type(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<Type> {
-    let (_tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
+    let (_tokens, program) = session.tokenize_and_parse_cached(uri, text).ok()?;
     let (program, mut ts, _imports, _import_diags) =
-        prepare_program_with_imports(uri, &program).ok()?;
+        prepare_program_with_imports(session, uri, &program).ok()?;
 
     let pos = lsp_to_rex_position(position);
 
@@ -563,19 +568,20 @@ pub(crate) fn inferred_type_in_expr(
 }
 
 pub(crate) fn functions_producing_expected_type_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Vec<(String, String)> {
-    let Some(target_type) = expected_type_at_position_type(uri, text, position) else {
+    let Some(target_type) = expected_type_at_position_type(session, uri, text, position) else {
         return Vec::new();
     };
 
-    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+    let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return Vec::new();
     };
     let Ok((program, mut ts, _imports, _import_diags)) =
-        prepare_program_with_imports(uri, &program)
+        prepare_program_with_imports(session, uri, &program)
     else {
         return Vec::new();
     };
@@ -613,19 +619,20 @@ pub(crate) fn functions_producing_expected_type_at_position(
 }
 
 pub(crate) fn functions_accepting_inferred_type_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Vec<(String, String)> {
-    let Some(source_type) = inferred_type_at_position_type(uri, text, position) else {
+    let Some(source_type) = inferred_type_at_position_type(session, uri, text, position) else {
         return Vec::new();
     };
 
-    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+    let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return Vec::new();
     };
     let Ok((program, mut ts, _imports, _import_diags)) =
-        prepare_program_with_imports(uri, &program)
+        prepare_program_with_imports(session, uri, &program)
     else {
         return Vec::new();
     };
@@ -661,22 +668,23 @@ pub(crate) fn functions_accepting_inferred_type_at_position(
 }
 
 pub(crate) fn adapters_from_inferred_to_expected_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Vec<(String, String)> {
-    let Some(source_type) = inferred_type_at_position_type(uri, text, position) else {
+    let Some(source_type) = inferred_type_at_position_type(session, uri, text, position) else {
         return Vec::new();
     };
-    let Some(target_type) = expected_type_at_position_type(uri, text, position) else {
+    let Some(target_type) = expected_type_at_position_type(session, uri, text, position) else {
         return Vec::new();
     };
 
-    let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+    let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return Vec::new();
     };
     let Ok((program, mut ts, _imports, _import_diags)) =
-        prepare_program_with_imports(uri, &program)
+        prepare_program_with_imports(session, uri, &program)
     else {
         return Vec::new();
     };
@@ -713,18 +721,19 @@ pub(crate) fn adapters_from_inferred_to_expected_at_position(
 }
 
 pub(crate) fn functions_compatible_with_in_scope_values_at_position(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Vec<String> {
-    let produced = functions_producing_expected_type_at_position(uri, text, position);
+    let produced = functions_producing_expected_type_at_position(session, uri, text, position);
     let mut produced_by_name: HashMap<String, Vec<String>> = HashMap::new();
     for (name, typ) in produced {
         produced_by_name.entry(name).or_default().push(typ);
     }
 
     let mut out = Vec::new();
-    for (name, replacement) in hole_fill_candidates_at_position(uri, text, position) {
+    for (name, replacement) in hole_fill_candidates_at_position(session, uri, text, position) {
         if replacement.contains('?') {
             continue;
         }
@@ -745,36 +754,39 @@ pub(crate) fn functions_compatible_with_in_scope_values_at_position(
 }
 
 pub fn execute_query_command_for_document(
+    session: &AnalysisSession,
     command: &str,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<Value> {
     match command {
-        CMD_EXPECTED_TYPE_AT => Some(match expected_type_at_position(uri, text, position) {
-            Some(typ) => json!({ "expectedType": typ }),
-            None => Value::Null,
-        }),
+        CMD_EXPECTED_TYPE_AT => Some(
+            match expected_type_at_position(session, uri, text, position) {
+                Some(typ) => json!({ "expectedType": typ }),
+                None => Value::Null,
+            },
+        ),
         CMD_FUNCTIONS_ACCEPTING_INFERRED_TYPE_AT => Some(json!({
-            "inferredType": inferred_type_at_position(uri, text, position),
-            "items": functions_accepting_inferred_type_at_position(uri, text, position)
+            "inferredType": inferred_type_at_position(session, uri, text, position),
+            "items": functions_accepting_inferred_type_at_position(session, uri, text, position)
                 .into_iter()
                 .map(|(name, typ)| format!("{name} : {typ}"))
                 .collect::<Vec<_>>()
         })),
         CMD_ADAPTERS_FROM_INFERRED_TO_EXPECTED_AT => Some(json!({
-            "inferredType": inferred_type_at_position(uri, text, position),
-            "expectedType": expected_type_at_position(uri, text, position),
-            "items": adapters_from_inferred_to_expected_at_position(uri, text, position)
+            "inferredType": inferred_type_at_position(session, uri, text, position),
+            "expectedType": expected_type_at_position(session, uri, text, position),
+            "items": adapters_from_inferred_to_expected_at_position(session, uri, text, position)
                 .into_iter()
                 .map(|(name, typ)| format!("{name} : {typ}"))
                 .collect::<Vec<_>>()
         })),
         CMD_FUNCTIONS_COMPATIBLE_WITH_IN_SCOPE_VALUES_AT => Some(json!({
-            "items": functions_compatible_with_in_scope_values_at_position(uri, text, position)
+            "items": functions_compatible_with_in_scope_values_at_position(session, uri, text, position)
         })),
         CMD_FUNCTIONS_PRODUCING_EXPECTED_TYPE_AT => {
-            let items = functions_producing_expected_type_at_position(uri, text, position)
+            let items = functions_producing_expected_type_at_position(session, uri, text, position)
                 .into_iter()
                 .map(|(name, typ)| format!("{name} : {typ}"))
                 .collect::<Vec<_>>();
@@ -785,13 +797,14 @@ pub fn execute_query_command_for_document(
 }
 
 pub fn execute_query_command_for_document_without_position(
+    session: &AnalysisSession,
     command: &str,
     uri: &Url,
     text: &str,
 ) -> Option<Value> {
     match command {
         CMD_HOLES_EXPECTED_TYPES => Some(json!({
-            "holes": hole_expected_types_for_document(uri, text)
+            "holes": hole_expected_types_for_document(session, uri, text)
         })),
         _ => None,
     }
@@ -834,12 +847,13 @@ pub(crate) fn workspace_edit_fingerprint(edit: &WorkspaceEdit) -> String {
 }
 
 pub(crate) fn semantic_quick_fixes_for_range(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     cursor_range: Range,
     diagnostics: &[Diagnostic],
 ) -> Vec<Value> {
-    let mut out = code_actions_for_source(uri, text, cursor_range, diagnostics)
+    let mut out = code_actions_for_source(session, uri, text, cursor_range, diagnostics)
         .into_iter()
         .filter_map(|action| match action {
             CodeActionOrCommand::CodeAction(action) => Some(action),
@@ -881,12 +895,17 @@ pub(crate) fn semantic_quick_fixes_for_range(
     out
 }
 
-pub fn execute_semantic_loop_step(uri: &Url, text: &str, position: Position) -> Option<Value> {
-    let expected_type = expected_type_at_position(uri, text, position)
-        .or_else(|| expected_type_from_syntax_context(uri, text, position));
-    let inferred_type = inferred_type_at_position(uri, text, position);
+pub fn execute_semantic_loop_step(
+    session: &AnalysisSession,
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Option<Value> {
+    let expected_type = expected_type_at_position(session, uri, text, position)
+        .or_else(|| expected_type_from_syntax_context(session, uri, text, position));
+    let inferred_type = inferred_type_at_position(session, uri, text, position);
 
-    let mut in_scope_values = in_scope_value_types_at_position(uri, text, position)
+    let mut in_scope_values = in_scope_value_types_at_position(session, uri, text, position)
         .into_iter()
         .filter(|(name, _)| is_ident_like(name))
         .map(|(name, typ)| format!("{name} : {typ}"))
@@ -897,33 +916,34 @@ pub fn execute_semantic_loop_step(uri: &Url, text: &str, position: Position) -> 
         in_scope_values.truncate(MAX_SEMANTIC_IN_SCOPE_VALUES);
     }
 
-    let function_candidates = functions_producing_expected_type_at_position(uri, text, position)
-        .into_iter()
-        .map(|(name, typ)| format!("{name} : {typ}"))
-        .collect::<Vec<_>>();
+    let function_candidates =
+        functions_producing_expected_type_at_position(session, uri, text, position)
+            .into_iter()
+            .map(|(name, typ)| format!("{name} : {typ}"))
+            .collect::<Vec<_>>();
 
-    let hole_fill_candidates = hole_fill_candidates_at_position(uri, text, position)
+    let hole_fill_candidates = hole_fill_candidates_at_position(session, uri, text, position)
         .into_iter()
         .map(|(name, replacement)| json!({ "name": name, "replacement": replacement }))
         .collect::<Vec<_>>();
     let functions_accepting_inferred_type =
-        functions_accepting_inferred_type_at_position(uri, text, position)
+        functions_accepting_inferred_type_at_position(session, uri, text, position)
             .into_iter()
             .map(|(name, typ)| format!("{name} : {typ}"))
             .collect::<Vec<_>>();
     let adapters_from_inferred_to_expected =
-        adapters_from_inferred_to_expected_at_position(uri, text, position)
+        adapters_from_inferred_to_expected_at_position(session, uri, text, position)
             .into_iter()
             .map(|(name, typ)| format!("{name} : {typ}"))
             .collect::<Vec<_>>();
     let compatible_with_in_scope_values =
-        functions_compatible_with_in_scope_values_at_position(uri, text, position);
+        functions_compatible_with_in_scope_values_at_position(session, uri, text, position);
 
     let cursor_range = Range {
         start: position,
         end: position,
     };
-    let mut local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(uri, text)
+    let mut local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(session, uri, text)
         .into_iter()
         .filter(|diag| ranges_overlap(diag.range, cursor_range))
         .collect();
@@ -937,7 +957,8 @@ pub fn execute_semantic_loop_step(uri: &Url, text: &str, position: Position) -> 
         )
     });
 
-    let quick_fixes = semantic_quick_fixes_for_range(uri, text, cursor_range, &local_diagnostics);
+    let quick_fixes =
+        semantic_quick_fixes_for_range(session, uri, text, cursor_range, &local_diagnostics);
     let mut quick_fix_titles = quick_fixes
         .iter()
         .filter_map(|item| item.get("title").and_then(Value::as_str))
@@ -964,11 +985,12 @@ pub fn execute_semantic_loop_step(uri: &Url, text: &str, position: Position) -> 
         }).collect::<Vec<_>>(),
         "quickFixes": quick_fixes,
         "quickFixTitles": quick_fix_titles,
-        "holes": hole_expected_types_for_document(uri, text),
+        "holes": hole_expected_types_for_document(session, uri, text),
     }))
 }
 
 pub fn execute_semantic_loop_apply_quick_fix(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
@@ -978,11 +1000,12 @@ pub fn execute_semantic_loop_apply_quick_fix(
         start: position,
         end: position,
     };
-    let local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(uri, text)
+    let local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(session, uri, text)
         .into_iter()
         .filter(|diag| ranges_overlap(diag.range, cursor_range))
         .collect();
-    let quick_fixes = semantic_quick_fixes_for_range(uri, text, cursor_range, &local_diagnostics);
+    let quick_fixes =
+        semantic_quick_fixes_for_range(session, uri, text, cursor_range, &local_diagnostics);
     let quick_fix = quick_fixes.into_iter().find(|item| {
         item.get("id")
             .and_then(Value::as_str)
@@ -1070,6 +1093,7 @@ pub fn next_no_improvement_streak(streak: usize, diagnostics_delta: i64) -> usiz
 }
 
 pub fn execute_semantic_loop_apply_best_quick_fixes(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
@@ -1092,7 +1116,7 @@ pub fn execute_semantic_loop_apply_best_quick_fixes(
     seen_states.insert(text_state_hash(&current_text));
 
     for step_index in 0..max_steps {
-        let local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(uri, &current_text)
+        let local_diagnostics: Vec<Diagnostic> = diagnostics_from_text(session, uri, &current_text)
             .into_iter()
             .filter(|diag| ranges_overlap(diag.range, cursor_range))
             .collect();
@@ -1106,8 +1130,13 @@ pub fn execute_semantic_loop_apply_best_quick_fixes(
                 })
             })
             .collect::<Vec<_>>();
-        let quick_fixes =
-            semantic_quick_fixes_for_range(uri, &current_text, cursor_range, &local_diagnostics);
+        let quick_fixes = semantic_quick_fixes_for_range(
+            session,
+            uri,
+            &current_text,
+            cursor_range,
+            &local_diagnostics,
+        );
         let Some(best) = best_quick_fix_from_candidates(&quick_fixes, strategy) else {
             stopped_reason = "noQuickFix".to_string();
             stopped_reason_detail = "no candidate quick-fix was available".to_string();
@@ -1135,7 +1164,7 @@ pub fn execute_semantic_loop_apply_best_quick_fixes(
             stopped_reason_detail = "next text state already seen in this run".to_string();
             break;
         }
-        let diagnostics_after_step: Vec<Value> = diagnostics_from_text(uri, &next_text)
+        let diagnostics_after_step: Vec<Value> = diagnostics_from_text(session, uri, &next_text)
             .into_iter()
             .filter(|diag| ranges_overlap(diag.range, cursor_range))
             .map(|diag| {
@@ -1175,7 +1204,7 @@ pub fn execute_semantic_loop_apply_best_quick_fixes(
         stopped_reason_detail = format!("reached maxSteps={max_steps}");
     }
 
-    let diagnostics_after: Vec<Value> = diagnostics_from_text(uri, &current_text)
+    let diagnostics_after: Vec<Value> = diagnostics_from_text(session, uri, &current_text)
         .into_iter()
         .filter(|diag| ranges_overlap(diag.range, cursor_range))
         .map(|diag| {
@@ -1203,19 +1232,23 @@ pub fn execute_semantic_loop_apply_best_quick_fixes(
     }))
 }
 
-pub fn hole_expected_types_for_document(uri: &Url, text: &str) -> Vec<Value> {
+pub fn hole_expected_types_for_document(
+    session: &AnalysisSession,
+    uri: &Url,
+    text: &str,
+) -> Vec<Value> {
     let mut holes = Vec::new();
 
     // First-class holes: parse `?` nodes directly.
-    if let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text)
+    if let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text)
         && let Some(body) = program.body_with_fns()
     {
         let mut spans = Vec::new();
         collect_hole_spans(body.as_ref(), &mut spans);
         for span in spans {
             let pos = span_to_range(span).start;
-            if let Some(expected_type) = expected_type_at_position(uri, text, pos)
-                .or_else(|| expected_type_from_syntax_context(uri, text, pos))
+            if let Some(expected_type) = expected_type_at_position(session, uri, text, pos)
+                .or_else(|| expected_type_from_syntax_context(session, uri, text, pos))
             {
                 holes.push(json!({
                     "name": "?",
@@ -1228,7 +1261,7 @@ pub fn hole_expected_types_for_document(uri: &Url, text: &str) -> Vec<Value> {
     }
 
     // Backward-compat fallback: `_foo` placeholder variables still treated as holes.
-    let diagnostics = diagnostics_from_text(uri, text);
+    let diagnostics = diagnostics_from_text(session, uri, text);
     for diag in diagnostics {
         let Some(name) = unknown_var_name_from_message(&diag.message) else {
             continue;
@@ -1240,8 +1273,8 @@ pub fn hole_expected_types_for_document(uri: &Url, text: &str) -> Vec<Value> {
             continue;
         }
         let pos = diag.range.start;
-        if let Some(expected_type) = expected_type_at_position(uri, text, pos)
-            .or_else(|| expected_type_from_syntax_context(uri, text, pos))
+        if let Some(expected_type) = expected_type_at_position(session, uri, text, pos)
+            .or_else(|| expected_type_from_syntax_context(session, uri, text, pos))
         {
             holes.push(json!({
                 "name": name,
@@ -1331,11 +1364,12 @@ pub(crate) fn collect_hole_spans(expr: &Expr, out: &mut Vec<Span>) {
 }
 
 pub(crate) fn expected_type_from_syntax_context(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<String> {
-    let (_tokens, program) = tokenize_and_parse_cached(uri, text).ok()?;
+    let (_tokens, program) = session.tokenize_and_parse_cached(uri, text).ok()?;
     let pos = lsp_to_rex_position(position);
 
     fn visit(expr: &Expr, pos: RexPosition) -> Option<String> {

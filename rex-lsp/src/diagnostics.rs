@@ -1,14 +1,14 @@
 use crate::prelude::*;
 use crate::{code_actions::*, completion::*, imports::*, queries::*, shared::*};
 
-pub fn diagnostics_from_text(uri: &Url, text: &str) -> Vec<Diagnostic> {
+pub fn diagnostics_from_text(session: &AnalysisSession, uri: &Url, text: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
-    match tokenize_and_parse_cached(uri, text) {
+    match session.tokenize_and_parse_cached(uri, text) {
         Ok((tokens, program)) => {
             push_comment_diagnostics(&tokens, &mut diagnostics);
             if diagnostics.len() < MAX_DIAGNOSTICS {
-                push_type_diagnostics(uri, text, &program, &mut diagnostics);
+                push_type_diagnostics(session, uri, text, &program, &mut diagnostics);
             }
         }
         Err(TokenizeOrParseError::Lex(err)) => {
@@ -127,6 +127,7 @@ pub(crate) fn diagnostic_for_span(span: Span, message: impl Into<String>) -> Dia
 }
 
 pub(crate) fn push_type_diagnostics(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     compilation_unit: &CompilationUnit,
@@ -148,7 +149,7 @@ pub(crate) fn push_type_diagnostics(
     };
 
     let result = if let Some(path) = uri_to_file_path(uri) {
-        engine.add_importer("lsp-modules", Arc::new(LspModuleService::current()));
+        engine.add_importer("lsp-modules", Arc::new(session.module_service()));
         let mut compiler = engine.into_compiler();
         futures::executor::block_on(compiler.infer_snippet(text, Some(path.as_path())))
     } else {

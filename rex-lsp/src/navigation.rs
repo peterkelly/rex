@@ -2,13 +2,14 @@ use crate::prelude::*;
 use crate::{completion::*, imports::*, shared::*};
 
 pub(crate) fn goto_definition_response(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
 ) -> Option<GotoDefinitionResponse> {
     // Parse on-demand. This keeps steady-state typing latency low; “go to
     // definition” is an explicit user action where a little work is fine.
-    let Ok((tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+    let Ok((tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return None;
     };
 
@@ -19,7 +20,8 @@ pub(crate) fn goto_definition_response(
     // If the cursor is on `alias.field` and `alias` is a local import, jump
     // to the exported declaration in the imported module.
     if let Some((alias, field)) = imported_projection
-        && let Ok((_rewritten, _ts, imports, _diags)) = prepare_program_with_imports(uri, &program)
+        && let Ok((_rewritten, _ts, imports, _diags)) =
+            prepare_program_with_imports(session, uri, &program)
     {
         let alias_sym = Symbol::intern(&alias);
         if let Some(info) = imports.get(&alias_sym)
@@ -284,19 +286,20 @@ pub(crate) fn collect_references_in_expr(
 }
 
 pub(crate) fn references_for_source(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
     include_declaration: bool,
 ) -> Vec<Location> {
-    let Ok((tokens, program)) = tokenize_and_parse_cached(uri, text) else {
+    let Ok((tokens, program)) = session.tokenize_and_parse_cached(uri, text) else {
         return Vec::new();
     };
     let Some((ident, _token_span)) = ident_token_at_position(&tokens, position) else {
         return Vec::new();
     };
 
-    let Some(def_response) = goto_definition_response(uri, text, position) else {
+    let Some(def_response) = goto_definition_response(session, uri, text, position) else {
         return Vec::new();
     };
     let GotoDefinitionResponse::Scalar(def_location) = def_response else {
@@ -339,6 +342,7 @@ pub(crate) fn references_for_source(
 }
 
 pub(crate) fn rename_for_source(
+    session: &AnalysisSession,
     uri: &Url,
     text: &str,
     position: Position,
@@ -347,7 +351,7 @@ pub(crate) fn rename_for_source(
     if !is_ident_like(new_name) {
         return None;
     }
-    let refs = references_for_source(uri, text, position, true);
+    let refs = references_for_source(session, uri, text, position, true);
     if refs.is_empty() {
         return None;
     }

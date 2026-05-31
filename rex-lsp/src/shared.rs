@@ -36,15 +36,91 @@ pub(crate) struct CachedParse {
     program: CompilationUnit,
 }
 
+#[derive(Clone, Default)]
+pub struct AnalysisState {
+    parse_cache: Arc<Mutex<HashMap<Url, CachedParse>>>,
+}
+
+#[derive(Clone)]
+pub struct AnalysisSession {
+    parse_cache: Arc<Mutex<HashMap<Url, CachedParse>>>,
+    open_documents: Arc<HashMap<Url, String>>,
+}
+
+impl AnalysisState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn session(&self, open_documents: HashMap<Url, String>) -> AnalysisSession {
+        AnalysisSession {
+            parse_cache: self.parse_cache.clone(),
+            open_documents: Arc::new(open_documents),
+        }
+    }
+
+    pub fn empty_session(&self) -> AnalysisSession {
+        AnalysisSession {
+            parse_cache: self.parse_cache.clone(),
+            open_documents: Arc::new(HashMap::new()),
+        }
+    }
+
+    pub fn clear_parse_cache(&self, uri: &Url) {
+        let Ok(mut cache) = self.parse_cache.lock() else {
+            return;
+        };
+        cache.remove(uri);
+    }
+}
+
+impl AnalysisSession {
+    pub fn isolated() -> Self {
+        AnalysisState::new().empty_session()
+    }
+
+    pub fn from_open_documents(open_documents: HashMap<Url, String>) -> Self {
+        AnalysisState::new().session(open_documents)
+    }
+
+    pub(crate) fn module_service(&self) -> LspModuleService {
+        LspModuleService {
+            open_documents: self.open_documents.clone(),
+        }
+    }
+
+    pub(crate) fn tokenize_and_parse_cached(
+        &self,
+        uri: &Url,
+        text: &str,
+    ) -> std::result::Result<(Tokens, CompilationUnit), TokenizeOrParseError> {
+        let hash = text_hash(text);
+        if let Ok(cache) = self.parse_cache.lock()
+            && let Some(cached) = cache.get(uri)
+            && cached.hash == hash
+        {
+            return Ok((cached.tokens.clone(), cached.program.clone()));
+        }
+
+        let (tokens, program) = tokenize_and_parse(text)?;
+        if let Ok(mut cache) = self.parse_cache.lock() {
+            cache.insert(
+                uri.clone(),
+                CachedParse {
+                    hash,
+                    tokens: tokens.clone(),
+                    program: program.clone(),
+                },
+            );
+        }
+        Ok((tokens, program))
+    }
+}
+
 pub(crate) fn text_hash(text: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut hasher);
     hasher.finish()
-}
-
-pub(crate) fn parse_cache() -> &'static Mutex<HashMap<Url, CachedParse>> {
-    static CACHE: OnceLock<Mutex<HashMap<Url, CachedParse>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub(crate) fn semantic_candidate_values(ts: &TypeSystem) -> Vec<(Symbol, Vec<Scheme>)> {
@@ -63,13 +139,6 @@ pub(crate) fn semantic_candidate_values(ts: &TypeSystem) -> Vec<(Symbol, Vec<Sch
         out.push((name.clone(), kept));
     }
     out
-}
-
-pub fn clear_parse_cache(uri: &Url) {
-    let Ok(mut cache) = parse_cache().lock() else {
-        return;
-    };
-    cache.remove(uri);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -92,38 +161,6 @@ pub(crate) fn url_from_file_path(_path: &std::path::Path) -> Option<Url> {
     None
 }
 
-thread_local! {
-    static OPEN_DOCUMENTS: RefCell<Option<Arc<HashMap<Url, String>>>> = const { RefCell::new(None) };
-}
-
-pub(crate) struct OpenDocumentsReset(Option<Arc<HashMap<Url, String>>>);
-
-impl Drop for OpenDocumentsReset {
-    fn drop(&mut self) {
-        OPEN_DOCUMENTS.with(|slot| {
-            slot.replace(self.0.take());
-        });
-    }
-}
-
-pub fn with_open_documents<R>(documents: HashMap<Url, String>, f: impl FnOnce() -> R) -> R {
-    let documents = Arc::new(documents);
-    OPEN_DOCUMENTS.with(|slot| {
-        let previous = slot.replace(Some(documents));
-        let _reset = OpenDocumentsReset(previous);
-        f()
-    })
-}
-
-pub(crate) fn current_open_documents() -> Arc<HashMap<Url, String>> {
-    OPEN_DOCUMENTS.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| Arc::new(HashMap::new()))
-    })
-}
-
 #[derive(Clone, Default)]
 pub(crate) struct LspModuleService {
     pub(crate) open_documents: Arc<HashMap<Url, String>>,
@@ -140,12 +177,6 @@ pub(crate) struct LspLoadedModule {
 }
 
 impl LspModuleService {
-    pub(crate) fn current() -> Self {
-        Self {
-            open_documents: current_open_documents(),
-        }
-    }
-
     fn import_specifier(path: &ImportPath) -> Option<String> {
         match path {
             ImportPath::Local { segments, sha } => {
@@ -380,32 +411,6 @@ pub(crate) fn tokenize_and_parse(
 ) -> std::result::Result<(Tokens, CompilationUnit), TokenizeOrParseError> {
     let tokens = Token::tokenize(text).map_err(TokenizeOrParseError::Lex)?;
     let program = parse_with_tokens(tokens.clone()).map_err(TokenizeOrParseError::Parse)?;
-    Ok((tokens, program))
-}
-
-pub(crate) fn tokenize_and_parse_cached(
-    uri: &Url,
-    text: &str,
-) -> std::result::Result<(Tokens, CompilationUnit), TokenizeOrParseError> {
-    let hash = text_hash(text);
-    if let Ok(cache) = parse_cache().lock()
-        && let Some(cached) = cache.get(uri)
-        && cached.hash == hash
-    {
-        return Ok((cached.tokens.clone(), cached.program.clone()));
-    }
-
-    let (tokens, program) = tokenize_and_parse(text)?;
-    if let Ok(mut cache) = parse_cache().lock() {
-        cache.insert(
-            uri.clone(),
-            CachedParse {
-                hash,
-                tokens: tokens.clone(),
-                program: program.clone(),
-            },
-        );
-    }
     Ok((tokens, program))
 }
 

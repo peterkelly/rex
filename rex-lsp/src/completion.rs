@@ -119,15 +119,21 @@ pub(crate) fn value_doc(word: &str) -> Option<&'static str> {
     }
 }
 
-pub(crate) fn completion_items(uri: &Url, text: &str, position: Position) -> Vec<CompletionItem> {
+pub(crate) fn completion_items(
+    session: &AnalysisSession,
+    uri: &Url,
+    text: &str,
+    position: Position,
+) -> Vec<CompletionItem> {
     let field_mode = is_field_completion(text, position);
     let base_ident = if field_mode {
         field_base_ident(text, position)
     } else {
         None
     };
-    if let Ok((_tokens, program)) = tokenize_and_parse_cached(uri, text) {
+    if let Ok((_tokens, program)) = session.tokenize_and_parse_cached(uri, text) {
         return completion_items_from_program(
+            session,
             &program,
             position,
             field_mode,
@@ -140,6 +146,7 @@ pub(crate) fn completion_items(uri: &Url, text: &str, position: Position) -> Vec
 }
 
 pub(crate) fn completion_items_from_program(
+    session: &AnalysisSession,
     compilation_unit: &CompilationUnit,
     position: Position,
     field_mode: bool,
@@ -149,7 +156,7 @@ pub(crate) fn completion_items_from_program(
     if field_mode {
         if let Some(base_ident) = base_ident
             && let Ok(exports) =
-                completion_exports_for_module_alias(uri, compilation_unit, base_ident)
+                completion_exports_for_module_alias(session, uri, compilation_unit, base_ident)
             && !exports.is_empty()
         {
             return exports
