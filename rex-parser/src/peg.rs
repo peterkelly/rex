@@ -7,10 +7,10 @@ use rex_ast::{Span, Spanned};
 use crate::lexer::{Token, Tokens};
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct Pos(pub usize);
+pub(crate) struct TokenIndex(pub usize);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Mark(Pos);
+pub(crate) struct Mark(TokenIndex);
 
 #[derive(Clone, Debug)]
 pub(crate) struct Input {
@@ -61,14 +61,14 @@ fn strip_comments(mut tokens: Vec<Token>) -> Vec<Token> {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Failure {
-    pub(crate) pos: Pos,
+    pub(crate) pos: TokenIndex,
     pub(crate) span: Span,
     pub(crate) expected: BTreeSet<String>,
     pub(crate) committed: bool,
 }
 
 impl Failure {
-    fn new(pos: Pos, span: Span, expected: impl Into<String>) -> Self {
+    fn new(pos: TokenIndex, span: Span, expected: impl Into<String>) -> Self {
         let mut labels = BTreeSet::new();
         labels.insert(expected.into());
         Self {
@@ -101,7 +101,7 @@ pub(crate) struct FailureTracker {
 
 impl FailureTracker {
     pub(crate) fn record(&mut self, pos: usize, span: Span, expected: impl Into<String>) {
-        let failure = Failure::new(Pos(pos), span, expected);
+        let failure = Failure::new(TokenIndex(pos), span, expected);
         self.record_failure(failure);
     }
 
@@ -121,7 +121,7 @@ impl FailureTracker {
 pub(crate) type PegResult<T> = Result<T, Failure>;
 
 #[allow(dead_code)]
-pub(crate) type ParseResult<T> = Result<(T, Pos), Failure>;
+pub(crate) type ParseResult<T> = Result<(T, TokenIndex), Failure>;
 
 // The cursor/failure engine is deliberately token-agnostic. Rex source and
 // checked `.peg` grammar files have different lexers, but packrat bookkeeping
@@ -136,7 +136,7 @@ where
 {
     tokens: &'input [T],
     eof: T,
-    cursor: Pos,
+    cursor: TokenIndex,
     failures: FailureTracker,
 }
 
@@ -148,12 +148,12 @@ where
         Self {
             tokens,
             eof,
-            cursor: Pos(0),
+            cursor: TokenIndex(0),
             failures: FailureTracker::default(),
         }
     }
 
-    pub(crate) fn pos(&self) -> Pos {
+    pub(crate) fn pos(&self) -> TokenIndex {
         self.cursor
     }
 
@@ -173,7 +173,7 @@ where
         self.cursor = mark.0;
     }
 
-    pub(crate) fn restore_pos(&mut self, pos: Pos) {
+    pub(crate) fn restore_pos(&mut self, pos: TokenIndex) {
         self.cursor = pos;
     }
 
@@ -444,13 +444,13 @@ pub(crate) struct RuleId(pub(crate) &'static str);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum MemoEntry<T> {
-    Success { value: T, next: Pos },
+    Success { value: T, next: TokenIndex },
     Failure(Failure),
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct MemoCache<K, T> {
-    entries: BTreeMap<(K, Pos), MemoEntry<T>>,
+    entries: BTreeMap<(K, TokenIndex), MemoEntry<T>>,
     stats: BTreeMap<K, RuleStats>,
 }
 
@@ -575,7 +575,7 @@ mod tests {
         tracker.record(2, span(2), "`;`");
 
         let failure = tracker.farthest().expect("expected failure");
-        assert_eq!(failure.pos, Pos(2));
+        assert_eq!(failure.pos, TokenIndex(2));
         assert!(failure.expected.contains("expression"));
         assert!(failure.expected.contains("`;`"));
         assert!(!failure.expected.contains("identifier"));
@@ -616,9 +616,9 @@ mod tests {
         });
 
         assert!(result.is_err());
-        assert_eq!(engine.pos(), Pos(0));
+        assert_eq!(engine.pos(), TokenIndex(0));
         let failure = engine.farthest_failure().expect("expected failure");
-        assert_eq!(failure.pos, Pos(1));
+        assert_eq!(failure.pos, TokenIndex(1));
         assert!(failure.expected.contains("boolean"));
     }
 
@@ -635,7 +635,7 @@ mod tests {
             .expect("expected second alternative to match");
 
         assert_eq!(parsed, "int");
-        assert_eq!(engine.pos(), Pos(1));
+        assert_eq!(engine.pos(), TokenIndex(1));
         assert!(engine.farthest_failure().is_none());
     }
 
@@ -650,12 +650,12 @@ mod tests {
 
         let missing = engine.optional(ident_value).expect("optional succeeds");
         assert_eq!(missing, None);
-        assert_eq!(engine.pos(), Pos(0));
+        assert_eq!(engine.pos(), TokenIndex(0));
         assert!(engine.farthest_failure().is_none());
 
         let ints = engine.repeat(int_value);
         assert_eq!(ints, vec![1, 2]);
-        assert_eq!(engine.pos(), Pos(2));
+        assert_eq!(engine.pos(), TokenIndex(2));
         assert!(engine.farthest_failure().is_none());
     }
 
@@ -667,15 +667,15 @@ mod tests {
         engine
             .and_predicate("identifier", ident_value)
             .expect("positive lookahead");
-        assert_eq!(engine.pos(), Pos(0));
+        assert_eq!(engine.pos(), TokenIndex(0));
 
         engine
             .not_predicate("not integer", int_value)
             .expect("negative lookahead");
-        assert_eq!(engine.pos(), Pos(0));
+        assert_eq!(engine.pos(), TokenIndex(0));
 
         assert_eq!(ident_value(&mut engine).expect("identifier"), "x");
-        assert_eq!(engine.pos(), Pos(1));
+        assert_eq!(engine.pos(), TokenIndex(1));
     }
 
     #[test]
@@ -692,7 +692,7 @@ mod tests {
                 int_value(engine)
             })
             .expect("first parse");
-        engine.restore(Mark(Pos(0)));
+        engine.restore(Mark(TokenIndex(0)));
         let second = memo
             .rule(&mut engine, rule, |engine| {
                 calls.set(calls.get() + 1);
@@ -702,7 +702,7 @@ mod tests {
 
         assert_eq!((first, second), (42, 42));
         assert_eq!(calls.get(), 1);
-        assert_eq!(engine.pos(), Pos(1));
+        assert_eq!(engine.pos(), TokenIndex(1));
         assert_eq!(
             memo.stats(rule),
             RuleStats {

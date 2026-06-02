@@ -7,24 +7,12 @@
 
 use std::{collections::BTreeSet, fmt};
 
-use rex_ast::{Span as RexSpan, Spanned};
+use rex_ast::{Position, Span, Spanned};
 
 use crate::{
     grammar::{Cst, CstNode, Grammar, GrammarParser, Item as GrammarItem, Peg, Terminal},
     peg::{Engine, EngineToken, Failure},
 };
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Span {
-    pub(crate) start: usize,
-    pub(crate) end: usize,
-}
-
-impl Span {
-    fn new(start: usize, end: usize) -> Self {
-        Self { start, end }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Token {
@@ -39,8 +27,8 @@ impl EngineToken for Token {
 }
 
 impl Spanned for Token {
-    fn span(&self) -> RexSpan {
-        RexSpan::new(0, self.span.start, 0, self.span.end)
+    fn span(&self) -> Span {
+        self.span
     }
 }
 
@@ -943,10 +931,7 @@ fn parse_error_from_failure(failure: Failure) -> ParseError {
         )
     };
 
-    ParseError::new(
-        Span::new(failure.span.begin.column, failure.span.end.column),
-        message,
-    )
+    ParseError::new(failure.span, message)
 }
 
 fn is_expression_start_failure(failure: &Failure) -> bool {
@@ -962,6 +947,7 @@ fn is_expression_start_failure(failure: &Failure) -> bool {
 struct Lexer<'source> {
     source: &'source str,
     cursor: usize,
+    position: Position,
     line_has_code: bool,
     tokens: Vec<Token>,
 }
@@ -971,27 +957,28 @@ impl<'source> Lexer<'source> {
         Self {
             source,
             cursor: 0,
+            position: Position::new(1, 1),
             line_has_code: false,
             tokens: Vec::new(),
         }
     }
 
     fn lex(mut self) -> Result<Vec<Token>, LexError> {
-        while let Some((start, ch)) = self.peek() {
+        while let Some((start_byte, start_position, ch)) = self.peek() {
             match ch {
                 ' ' | '\t' => {
                     self.bump();
                 }
                 '\r' | '\n' => {
                     let end = self.bump_newline();
-                    self.push(TokenKind::Newline, start, end);
+                    self.push(TokenKind::Newline, start_position, end);
                     self.line_has_code = false;
                 }
                 '#' => {
                     if self.line_has_code {
                         self.skip_comment();
                     } else {
-                        let token = self.comment(start);
+                        let token = self.comment(start_position);
                         self.tokens.push(token);
                         self.line_has_code = true;
                     }
@@ -999,91 +986,91 @@ impl<'source> Lexer<'source> {
                 '<' => {
                     self.bump();
                     if self.consume('-') {
-                        self.push(TokenKind::Arrow, start, self.cursor);
+                        self.push(TokenKind::Arrow, start_position, self.position);
                     } else {
                         return Err(LexError::new(
-                            Span::new(start, self.cursor),
+                            Span::from_begin_end(start_position, self.position),
                             "expected `<-`",
                         ));
                     }
                 }
                 '/' => {
                     self.bump();
-                    self.push(TokenKind::Slash, start, self.cursor);
+                    self.push(TokenKind::Slash, start_position, self.position);
                 }
                 '*' => {
                     self.bump();
-                    self.push(TokenKind::Star, start, self.cursor);
+                    self.push(TokenKind::Star, start_position, self.position);
                 }
                 '+' => {
                     self.bump();
-                    self.push(TokenKind::Plus, start, self.cursor);
+                    self.push(TokenKind::Plus, start_position, self.position);
                 }
                 '?' => {
                     self.bump();
-                    self.push(TokenKind::Question, start, self.cursor);
+                    self.push(TokenKind::Question, start_position, self.position);
                 }
                 '&' => {
                     self.bump();
-                    self.push(TokenKind::Amp, start, self.cursor);
+                    self.push(TokenKind::Amp, start_position, self.position);
                 }
                 '!' => {
                     self.bump();
-                    self.push(TokenKind::Bang, start, self.cursor);
+                    self.push(TokenKind::Bang, start_position, self.position);
                 }
                 '(' => {
                     self.bump();
-                    self.push(TokenKind::ParenL, start, self.cursor);
+                    self.push(TokenKind::ParenL, start_position, self.position);
                 }
                 ')' => {
                     self.bump();
-                    self.push(TokenKind::ParenR, start, self.cursor);
+                    self.push(TokenKind::ParenR, start_position, self.position);
                 }
                 ',' => {
                     self.bump();
-                    self.push(TokenKind::Comma, start, self.cursor);
+                    self.push(TokenKind::Comma, start_position, self.position);
                 }
                 '"' => {
-                    let token = self.string_literal(start)?;
+                    let token = self.string_literal(start_position)?;
                     self.tokens.push(token);
                 }
                 _ if is_ident_start(ch) => {
-                    let token = self.identifier(start);
+                    let token = self.identifier(start_byte, start_position);
                     self.tokens.push(token);
                 }
                 _ => {
                     self.bump();
                     return Err(LexError::new(
-                        Span::new(start, self.cursor),
+                        Span::from_begin_end(start_position, self.position),
                         format!("unexpected character {ch:?}"),
                     ));
                 }
             }
         }
 
-        self.push(TokenKind::Eof, self.cursor, self.cursor);
+        self.push(TokenKind::Eof, self.position, self.position);
         Ok(self.tokens)
     }
 
-    fn push(&mut self, kind: TokenKind, start: usize, end: usize) {
+    fn push(&mut self, kind: TokenKind, start: Position, end: Position) {
         if !matches!(kind, TokenKind::Newline) {
             self.line_has_code = true;
         }
         self.tokens.push(Token {
             kind,
-            span: Span::new(start, end),
+            span: Span::from_begin_end(start, end),
         });
     }
 
-    fn identifier(&mut self, start: usize) -> Token {
+    fn identifier(&mut self, start_byte: usize, start_position: Position) -> Token {
         self.bump();
-        while let Some((_, ch)) = self.peek()
+        while let Some((_, _, ch)) = self.peek()
             && is_ident_continue(ch)
         {
             self.bump();
         }
 
-        let text = &self.source[start..self.cursor];
+        let text = &self.source[start_byte..self.cursor];
         // These are PEG syntax constructors, not grammar symbols. Reserving
         // them lets `peg.peg` describe function forms with ordinary tokens
         // instead of relying on parser-side string comparisons.
@@ -1095,20 +1082,20 @@ impl<'source> Lexer<'source> {
 
         Token {
             kind,
-            span: Span::new(start, self.cursor),
+            span: Span::from_begin_end(start_position, self.position),
         }
     }
 
-    fn comment(&mut self, start: usize) -> Token {
+    fn comment(&mut self, start_position: Position) -> Token {
         self.bump();
-        let text_start = if self.peek().is_some_and(|(_, ch)| ch == ' ') {
+        let text_start = if self.peek().is_some_and(|(_, _, ch)| ch == ' ') {
             self.bump();
             self.cursor
         } else {
             self.cursor
         };
 
-        while let Some((_, ch)) = self.peek() {
+        while let Some((_, _, ch)) = self.peek() {
             if ch == '\r' || ch == '\n' {
                 break;
             }
@@ -1117,18 +1104,18 @@ impl<'source> Lexer<'source> {
 
         Token {
             kind: TokenKind::Comment(self.source[text_start..self.cursor].to_string()),
-            span: Span::new(start, self.cursor),
+            span: Span::from_begin_end(start_position, self.position),
         }
     }
 
-    fn string_literal(&mut self, start: usize) -> Result<Token, LexError> {
+    fn string_literal(&mut self, start_position: Position) -> Result<Token, LexError> {
         self.bump();
         let mut value = String::new();
 
         loop {
-            let Some((ch_start, ch)) = self.peek() else {
+            let Some((_, ch_start_position, ch)) = self.peek() else {
                 return Err(LexError::new(
-                    Span::new(start, self.cursor),
+                    Span::from_begin_end(start_position, self.position),
                     "unterminated string literal",
                 ));
             };
@@ -1138,23 +1125,23 @@ impl<'source> Lexer<'source> {
                     self.bump();
                     return Ok(Token {
                         kind: TokenKind::String(value),
-                        span: Span::new(start, self.cursor),
+                        span: Span::from_begin_end(start_position, self.position),
                     });
                 }
                 '\\' => {
-                    self.bump();
-                    value.push(self.escape_sequence(ch_start)?);
+                    let (_, slash_position, _) = self.bump().expect("peeked slash");
+                    value.push(self.escape_sequence(slash_position)?);
                 }
                 '\r' | '\n' => {
                     return Err(LexError::new(
-                        Span::new(start, ch_start),
+                        Span::from_begin_end(start_position, ch_start_position),
                         "unterminated string literal",
                     ));
                 }
                 _ if ch.is_control() => {
                     self.bump();
                     return Err(LexError::new(
-                        Span::new(ch_start, self.cursor),
+                        Span::from_begin_end(ch_start_position, self.position),
                         "control character in string literal",
                     ));
                 }
@@ -1166,10 +1153,10 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn escape_sequence(&mut self, slash_start: usize) -> Result<char, LexError> {
-        let Some((escape_start, ch)) = self.peek() else {
+    fn escape_sequence(&mut self, slash_start: Position) -> Result<char, LexError> {
+        let Some((_, escape_start, ch)) = self.peek() else {
             return Err(LexError::new(
-                Span::new(slash_start, self.cursor),
+                Span::from_begin_end(slash_start, self.position),
                 "unterminated escape sequence",
             ));
         };
@@ -1184,25 +1171,25 @@ impl<'source> Lexer<'source> {
             '0' => Ok('\0'),
             'u' => self.unicode_escape(slash_start),
             _ => Err(LexError::new(
-                Span::new(escape_start, self.cursor),
+                Span::from_begin_end(escape_start, self.position),
                 format!("unsupported escape sequence `\\{ch}`"),
             )),
         }
     }
 
-    fn unicode_escape(&mut self, slash_start: usize) -> Result<char, LexError> {
+    fn unicode_escape(&mut self, slash_start: Position) -> Result<char, LexError> {
         if !self.consume('{') {
             return Err(LexError::new(
-                Span::new(slash_start, self.cursor),
+                Span::from_begin_end(slash_start, self.position),
                 "expected `{` after `\\u`",
             ));
         }
 
-        let digits_start = self.cursor;
+        let digits_start = self.position;
         let mut value = 0_u32;
         let mut digits = 0;
 
-        while let Some((_, ch)) = self.peek() {
+        while let Some((_, _, ch)) = self.peek() {
             if ch == '}' {
                 break;
             }
@@ -1210,7 +1197,7 @@ impl<'source> Lexer<'source> {
             let Some(digit) = ch.to_digit(16) else {
                 self.bump();
                 return Err(LexError::new(
-                    Span::new(digits_start, self.cursor),
+                    Span::from_begin_end(digits_start, self.position),
                     "expected hexadecimal digit in unicode escape",
                 ));
             };
@@ -1219,7 +1206,7 @@ impl<'source> Lexer<'source> {
             if digits > 6 {
                 self.bump();
                 return Err(LexError::new(
-                    Span::new(digits_start, self.cursor),
+                    Span::from_begin_end(digits_start, self.position),
                     "unicode escape has more than 6 digits",
                 ));
             }
@@ -1230,28 +1217,28 @@ impl<'source> Lexer<'source> {
 
         if digits == 0 {
             return Err(LexError::new(
-                Span::new(digits_start, self.cursor),
+                Span::from_begin_end(digits_start, self.position),
                 "unicode escape requires at least one digit",
             ));
         }
 
         if !self.consume('}') {
             return Err(LexError::new(
-                Span::new(slash_start, self.cursor),
+                Span::from_begin_end(slash_start, self.position),
                 "unterminated unicode escape",
             ));
         }
 
         char::from_u32(value).ok_or_else(|| {
             LexError::new(
-                Span::new(slash_start, self.cursor),
+                Span::from_begin_end(slash_start, self.position),
                 "unicode escape is not a valid scalar value",
             )
         })
     }
 
     fn skip_comment(&mut self) {
-        while let Some((_, ch)) = self.peek() {
+        while let Some((_, _, ch)) = self.peek() {
             if ch == '\r' || ch == '\n' {
                 break;
             }
@@ -1259,20 +1246,22 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn bump_newline(&mut self) -> usize {
-        let Some((_, ch)) = self.peek() else {
-            return self.cursor;
+    fn bump_newline(&mut self) -> Position {
+        let Some((_, _, ch)) = self.peek() else {
+            return self.position;
         };
 
-        self.bump();
-        if ch == '\r' {
-            self.consume('\n');
+        self.cursor += ch.len_utf8();
+        if ch == '\r' && self.source[self.cursor..].starts_with('\n') {
+            self.cursor += '\n'.len_utf8();
         }
-        self.cursor
+        self.position.line += 1;
+        self.position.column = 1;
+        self.position
     }
 
     fn consume(&mut self, expected: char) -> bool {
-        if self.peek().is_some_and(|(_, ch)| ch == expected) {
+        if self.peek().is_some_and(|(_, _, ch)| ch == expected) {
             self.bump();
             true
         } else {
@@ -1280,17 +1269,24 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    fn peek(&self) -> Option<(usize, char)> {
+    fn peek(&self) -> Option<(usize, Position, char)> {
         self.source[self.cursor..]
             .chars()
             .next()
-            .map(|ch| (self.cursor, ch))
+            .map(|ch| (self.cursor, self.position, ch))
     }
 
-    fn bump(&mut self) -> Option<(usize, char)> {
-        let (start, ch) = self.peek()?;
+    fn bump(&mut self) -> Option<(usize, Position, char)> {
+        let (start, position, ch) = self.peek()?;
         self.cursor += ch.len_utf8();
-        Some((start, ch))
+        match ch {
+            '\r' | '\n' => {
+                self.position.line += 1;
+                self.position.column = 1;
+            }
+            _ => self.position.column += 1,
+        }
+        Some((start, position, ch))
     }
 }
 
@@ -1401,7 +1397,7 @@ mod tests {
     fn reports_bad_characters() {
         let err = lex("A <- 'bad'").unwrap_err();
 
-        assert_eq!(err.span, Span::new(5, 6));
+        assert_eq!(err.span, Span::new(1, 6, 1, 7));
         assert!(err.message.contains("unexpected character"));
     }
 
@@ -1409,8 +1405,16 @@ mod tests {
     fn reports_unterminated_strings() {
         let err = lex("A <- \"bad").unwrap_err();
 
-        assert_eq!(err.span, Span::new(5, 9));
+        assert_eq!(err.span, Span::new(1, 6, 1, 10));
         assert_eq!(err.message, "unterminated string literal");
+    }
+
+    #[test]
+    fn reports_spans_after_newlines_as_line_columns() {
+        let err = lex("A <- B\nC <- 'bad'").unwrap_err();
+
+        assert_eq!(err.span, Span::new(2, 6, 2, 7));
+        assert!(err.message.contains("unexpected character"));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use rex_ast::Span;
 
 use crate::{
     lexer::Token,
-    peg::{Engine, EngineToken, Failure, FailureTracker, Mark, MemoEntry, Pos, span_at},
+    peg::{Engine, EngineToken, Failure, FailureTracker, Mark, MemoEntry, TokenIndex, span_at},
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -448,7 +448,7 @@ enum Work<'peg, R, K, T> {
 enum Frame<'peg, R, K, T> {
     Rule {
         rule: R,
-        start: Pos,
+        start: TokenIndex,
         mark: Mark,
     },
     Seq {
@@ -471,7 +471,7 @@ enum Frame<'peg, R, K, T> {
     Repeat {
         item: &'peg Peg<R, K>,
         children: Vec<Cst<R, T>>,
-        start: Pos,
+        start: TokenIndex,
         mark: Mark,
         failures: FailureTracker,
     },
@@ -492,7 +492,7 @@ enum Frame<'peg, R, K, T> {
     Cut,
 }
 
-type CstMemo<R, T> = BTreeMap<(R, Pos), MemoEntry<Arc<CstNode<R, T>>>>;
+type CstMemo<R, T> = BTreeMap<(R, TokenIndex), MemoEntry<Arc<CstNode<R, T>>>>;
 
 pub(crate) struct GrammarParser<'grammar, 'engine, 'input, R, K = TokenKind, T = Token>
 where
@@ -848,7 +848,7 @@ where
         }
     }
 
-    fn span_from_positions(&self, start: Pos, end: Pos) -> Span {
+    fn span_from_positions(&self, start: TokenIndex, end: TokenIndex) -> Span {
         if start.0 < end.0 {
             let begin = span_at(self.engine.tokens(), self.engine.eof_span(), start.0).begin;
             let end = span_at(self.engine.tokens(), self.engine.eof_span(), end.0 - 1).end;
