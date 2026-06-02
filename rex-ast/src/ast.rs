@@ -738,32 +738,6 @@ impl Expr {
         }
     }
 
-    pub fn span_mut(&mut self) -> &mut Span {
-        match self {
-            Self::Bool(span, ..)
-            | Self::Uint(span, ..)
-            | Self::Int(span, ..)
-            | Self::Float(span, ..)
-            | Self::String(span, ..)
-            | Self::Uuid(span, ..)
-            | Self::DateTime(span, ..)
-            | Self::Hole(span, ..)
-            | Self::Tuple(span, ..)
-            | Self::List(span, ..)
-            | Self::Dict(span, ..)
-            | Self::RecordUpdate(span, ..)
-            | Self::Var(Var { span, .. })
-            | Self::App(span, ..)
-            | Self::Project(span, ..)
-            | Self::Lam(span, ..)
-            | Self::Let(span, ..)
-            | Self::LetRec(span, ..)
-            | Self::Ite(span, ..)
-            | Self::Match(span, ..)
-            | Self::Ann(span, ..) => span,
-        }
-    }
-
     pub fn with_span_begin_end(&self, begin: Position, end: Position) -> Expr {
         self.with_span(Span::from_begin_end(begin, end))
     }

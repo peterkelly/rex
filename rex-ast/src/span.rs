@@ -121,12 +121,5 @@ impl Display for Span {
 }
 
 pub trait Spanned {
-    fn set_span_begin(&mut self, begin: Position) {
-        self.span_mut().begin = begin;
-    }
-    fn set_span_end(&mut self, end: Position) {
-        self.span_mut().end = end;
-    }
-    fn span(&self) -> &Span;
-    fn span_mut(&mut self) -> &mut Span;
+    fn span(&self) -> Span;
 }

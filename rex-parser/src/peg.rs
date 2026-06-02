@@ -126,19 +126,8 @@ pub(crate) type ParseResult<T> = Result<(T, Pos), Failure>;
 // The cursor/failure engine is deliberately token-agnostic. Rex source and
 // checked `.peg` grammar files have different lexers, but packrat bookkeeping
 // only needs to clone tokens, recognize EOF, and map positions back to spans.
-pub(crate) trait EngineToken: Clone {
+pub(crate) trait EngineToken: Clone + Spanned {
     fn is_eof(&self) -> bool;
-    fn span(&self) -> Span;
-}
-
-impl EngineToken for Token {
-    fn is_eof(&self) -> bool {
-        matches!(self, Token::Eof(..))
-    }
-
-    fn span(&self) -> Span {
-        *Spanned::span(self)
-    }
 }
 
 pub(crate) struct Engine<'input, T = Token>
@@ -544,9 +533,9 @@ pub(crate) struct RuleStats {
 
 pub(crate) fn span_at<T>(tokens: &[T], eof: Span, pos: usize) -> Span
 where
-    T: EngineToken,
+    T: Spanned,
 {
-    tokens.get(pos).map(EngineToken::span).unwrap_or(eof)
+    tokens.get(pos).map(Spanned::span).unwrap_or(eof)
 }
 
 #[cfg(test)]

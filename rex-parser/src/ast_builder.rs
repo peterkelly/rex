@@ -59,7 +59,7 @@ impl PegParser {
         if !matches!(engine.current_token(), Token::Eof(..)) {
             let token = engine.current_token();
             return Err(vec![ParseError::new(
-                *token.span(),
+                token.span(),
                 format!("unexpected {}", token),
             )]);
         }
@@ -303,7 +303,7 @@ impl AstBuilder {
 
     fn fn_decl(&mut self, node: &CstNode<RexRule>, is_pub: bool) -> Result<FnDecl, ParseError> {
         let name_token = expect_token(node, TokenKind::Ident)?;
-        let name = Var::with_span(*name_token.span(), ident_text(name_token)?);
+        let name = Var::with_span(name_token.span(), ident_text(name_token)?);
         let type_params = self.generic_params_opt(node)?;
 
         if let Some(sig) = first_rule(node, RexRule::FnSignatureDecl) {
@@ -359,7 +359,7 @@ impl AstBuilder {
         is_pub: bool,
     ) -> Result<DeclareFnDecl, ParseError> {
         let name_token = expect_token(node, TokenKind::Ident)?;
-        let name = Var::with_span(*name_token.span(), ident_text(name_token)?);
+        let name = Var::with_span(name_token.span(), ident_text(name_token)?);
         let type_params = self.generic_params_opt(node)?;
 
         let (params, ret, constraints) =
@@ -505,21 +505,21 @@ impl AstBuilder {
 
     fn named_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
-        let var = Var::with_span(*token.span(), ident_text(token)?);
+        let var = Var::with_span(token.span(), ident_text(token)?);
         let ann = self.type_app(expect_rule(node, RexRule::TypeApp)?)?;
         Ok((var, ann))
     }
 
     fn paren_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
-        let var = Var::with_span(*token.span(), ident_text(token)?);
+        let var = Var::with_span(token.span(), ident_text(token)?);
         let ann = self.type_expr(expect_rule(node, RexRule::TypeExpr)?)?;
         Ok((var, ann))
     }
 
     fn legacy_param(&mut self, node: &CstNode<RexRule>) -> Result<(Var, TypeExpr), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
-        let var = Var::with_span(*token.span(), ident_text(token)?);
+        let var = Var::with_span(token.span(), ident_text(token)?);
         let ann = self.type_expr(expect_rule(node, RexRule::TypeExpr)?)?;
         Ok((var, ann))
     }
@@ -761,7 +761,7 @@ impl AstBuilder {
             Token::Ident(name, span, ..) => Ok((Symbol::intern(name), span.end)),
             Token::Int(value, span) => Ok((Symbol::intern(&value.to_string()), span.end)),
             _ => Err(ParseError::new(
-                *token.span(),
+                token.span(),
                 "expected field name after `.`",
             )),
         }
@@ -792,7 +792,7 @@ impl AstBuilder {
         }
         if let Some(ident) = first_rule(node, RexRule::IdentExpr) {
             let token = expect_token(ident, TokenKind::Ident)?;
-            return Ok(Expr::Var(Var::with_span(*token.span(), ident_text(token)?)));
+            return Ok(Expr::Var(Var::with_span(token.span(), ident_text(token)?)));
         }
         if let Some(lambda) = first_rule(node, RexRule::LambdaExpr) {
             return self.lambda_expr(lambda);
@@ -818,7 +818,7 @@ impl AstBuilder {
                 .next()
                 .ok_or_else(|| internal_err(operator.span, "expected parenthesized operator"))?;
             let name = operator_token_name(token)
-                .ok_or_else(|| internal_err(*token.span(), "expected operator"))?;
+                .ok_or_else(|| internal_err(token.span(), "expected operator"))?;
             return Ok(Expr::Var(Var::with_span(operator.span, name)));
         }
         if let Some(tuple) = first_rule(node, RexRule::TupleExpr) {
@@ -858,7 +858,7 @@ impl AstBuilder {
                 }
                 Cst::Node(item) if item.rule == RexRule::BadDictItem => {
                     let span = next_token_after(node, idx)
-                        .map(|token| *token.span())
+                        .map(|token| token.span())
                         .unwrap_or(item.span);
                     self.errors.push(ParseError::new(span, "expected `=`"));
                 }
@@ -883,7 +883,7 @@ impl AstBuilder {
         let expr = self.expr(expect_rule(node, RexRule::Expr)?)?;
         Ok(Expr::App(
             node.span,
-            Arc::new(Expr::Var(Var::with_span(*op.span(), "negate"))),
+            Arc::new(Expr::Var(Var::with_span(op.span(), "negate"))),
             Arc::new(expr),
         ))
     }
@@ -926,7 +926,7 @@ impl AstBuilder {
         node: &CstNode<RexRule>,
     ) -> Result<(Span, Var, Option<TypeExpr>), ParseError> {
         let token = expect_token(node, TokenKind::Ident)?;
-        let var = Var::with_span(*token.span(), ident_text(token)?);
+        let var = Var::with_span(token.span(), ident_text(token)?);
         let ann = first_rule(node, RexRule::TypeExpr)
             .map(|node| self.type_expr(node))
             .transpose()?;
@@ -1150,7 +1150,7 @@ impl AstBuilder {
         let pat = first_rule(node, RexRule::Pattern)
             .map(|node| self.pattern(node))
             .transpose()?
-            .unwrap_or_else(|| Pattern::Var(Var::with_span(*token.span(), name)));
+            .unwrap_or_else(|| Pattern::Var(Var::with_span(token.span(), name)));
         Ok((key, pat))
     }
 
@@ -1184,7 +1184,7 @@ impl AstBuilder {
             return Ok(Symbol::intern(&name));
         }
         let name = operator_token_name(token)
-            .ok_or_else(|| ParseError::new(*token.span(), "expected name"))?;
+            .ok_or_else(|| ParseError::new(token.span(), "expected name"))?;
         Ok(Symbol::intern(name))
     }
 
@@ -1257,7 +1257,7 @@ fn fold_binary_from(lhs: Expr, parts: &[(Token, Expr)], index: &mut usize) -> Ex
 fn make_binary_expr(lhs: Expr, operator: &Token, rhs: Expr) -> Expr {
     let lhs_span = *lhs.span();
     let rhs_end = rhs.span().end;
-    let op_span = *operator.span();
+    let op_span = operator.span();
     if matches!(operator, Token::ColonColon(..)) {
         let cons_span = Span::from_begin_end(lhs_span.begin, op_span.end);
         let outer_span = Span::from_begin_end(lhs_span.begin, rhs_end);
@@ -1426,7 +1426,7 @@ fn next_token_after(node: &CstNode<RexRule>, index: usize) -> Option<&Token> {
 fn ident_text(token: &Token) -> Result<String, ParseError> {
     match token {
         Token::Ident(name, ..) => Ok(name.clone()),
-        _ => Err(ParseError::new(*token.span(), "expected identifier")),
+        _ => Err(ParseError::new(token.span(), "expected identifier")),
     }
 }
 

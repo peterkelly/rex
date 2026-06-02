@@ -1126,7 +1126,7 @@ pub(crate) fn index_decl_spans(
                 let mut expect_ctor_name = false;
 
                 for token in &tokens.items {
-                    let token_span = *token.span();
+                    let token_span = token.span();
                     if !span_contains_span(decl_span, token_span) {
                         continue;
                     }
@@ -1156,7 +1156,7 @@ pub(crate) fn index_decl_spans(
                 let mut expect_class_name = false;
                 for i in 0..tokens.items.len() {
                     let token = &tokens.items[i];
-                    let token_span = *token.span();
+                    let token_span = token.span();
                     if !span_contains_span(decl_span, token_span) {
                         continue;
                     }
@@ -1182,7 +1182,7 @@ pub(crate) fn index_decl_spans(
                 let mut methods = HashMap::new();
                 for i in 0..tokens.items.len() {
                     let token = &tokens.items[i];
-                    let token_span = *token.span();
+                    let token_span = token.span();
                     if !span_contains_span(decl_span, token_span) {
                         continue;
                     }

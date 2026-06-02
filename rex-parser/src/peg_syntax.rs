@@ -7,7 +7,7 @@
 
 use std::{collections::BTreeSet, fmt};
 
-use rex_ast::Span as RexSpan;
+use rex_ast::{Span as RexSpan, Spanned};
 
 use crate::{
     grammar::{Cst, CstNode, Grammar, GrammarParser, Item as GrammarItem, Peg, Terminal},
@@ -36,7 +36,9 @@ impl EngineToken for Token {
     fn is_eof(&self) -> bool {
         matches!(self.kind, TokenKind::Eof)
     }
+}
 
+impl Spanned for Token {
     fn span(&self) -> RexSpan {
         RexSpan::new(0, self.span.start, 0, self.span.end)
     }

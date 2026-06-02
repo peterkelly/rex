@@ -5,6 +5,7 @@ use std::iter::Peekable;
 use std::str::{Chars, FromStr};
 use std::sync::OnceLock;
 
+use crate::peg::EngineToken;
 use rex_ast::{Span, Spanned};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -638,168 +639,92 @@ impl Token {
     }
 }
 
-impl Spanned for Token {
-    fn span(&self) -> &Span {
-        use Token::*;
-
-        match self {
-            // Reserved keywords
-            As(span, ..) => span,
-            Case(span, ..) => span,
-            Class(span, ..) => span,
-            Declare(span, ..) => span,
-            Else(span, ..) => span,
-            Fn(span, ..) => span,
-            For(span, ..) => span,
-            If(span, ..) => span,
-            Import(span, ..) => span,
-            Is(span, ..) => span,
-            Instance(span, ..) => span,
-            Match(span, ..) => span,
-            Pub(span, ..) => span,
-            Type(span, ..) => span,
-            When(span, ..) => span,
-            Then(span, ..) => span,
-            With(span, ..) => span,
-            Where(span, ..) => span,
-
-            // Symbols
-            ArrowL(span, ..) => span,
-            ArrowR(span, ..) => span,
-            Assign(span, ..) => span,
-            BackSlash(span, ..) => span,
-            BraceL(span, ..) => span,
-            BraceR(span, ..) => span,
-            BracketL(span, ..) => span,
-            BracketR(span, ..) => span,
-            Colon(span, ..) => span,
-            ColonColon(span, ..) => span,
-            Comma(span, ..) => span,
-            CommentL(span, ..) => span,
-            CommentR(span, ..) => span,
-            Dot(span, ..) => span,
-            DotDot(span, ..) => span,
-            HashTag(span, ..) => span,
-            In(span, ..) => span,
-            Let(span, ..) => span,
-            Rec(span, ..) => span,
-            ParenL(span, ..) => span,
-            ParenR(span, ..) => span,
-            Pipe(span, ..) => span,
-            Question(span, ..) => span,
-            SemiColon(span, ..) => span,
-
-            // Operators
-            Add(span, ..) => span,
-            And(span, ..) => span,
-            Concat(span, ..) => span,
-            Div(span, ..) => span,
-            Eq(span, ..) => span,
-            Ne(span, ..) => span,
-            Ge(span, ..) => span,
-            Gt(span, ..) => span,
-            Le(span, ..) => span,
-            Lt(span, ..) => span,
-            Mod(span, ..) => span,
-            Mul(span, ..) => span,
-            Or(span, ..) => span,
-            Sub(span, ..) => span,
-
-            // Literals
-            Bool(_, span, ..) => span,
-            Float(_, span, ..) => span,
-            Int(_, span, ..) => span,
-            Null(span, ..) => span,
-            String(_, span, ..) => span,
-
-            // Idents
-            HttpsUrl(_, span, ..) => span,
-            Ident(_, span, ..) => span,
-
-            // Eof
-            Eof(span) => span,
-        }
+impl EngineToken for Token {
+    fn is_eof(&self) -> bool {
+        matches!(self, Token::Eof(..))
     }
+}
 
-    fn span_mut(&mut self) -> &mut Span {
+impl Spanned for Token {
+    fn span(&self) -> Span {
         use Token::*;
 
         match self {
             // Reserved keywords
-            As(span, ..) => span,
-            Case(span, ..) => span,
-            Class(span, ..) => span,
-            Declare(span, ..) => span,
-            Else(span, ..) => span,
-            Fn(span, ..) => span,
-            For(span, ..) => span,
-            If(span, ..) => span,
-            Import(span, ..) => span,
-            Is(span, ..) => span,
-            Instance(span, ..) => span,
-            Match(span, ..) => span,
-            Pub(span, ..) => span,
-            Type(span, ..) => span,
-            When(span, ..) => span,
-            Then(span, ..) => span,
-            With(span, ..) => span,
-            Where(span, ..) => span,
+            As(span, ..) => *span,
+            Case(span, ..) => *span,
+            Class(span, ..) => *span,
+            Declare(span, ..) => *span,
+            Else(span, ..) => *span,
+            Fn(span, ..) => *span,
+            For(span, ..) => *span,
+            If(span, ..) => *span,
+            Import(span, ..) => *span,
+            Is(span, ..) => *span,
+            Instance(span, ..) => *span,
+            Match(span, ..) => *span,
+            Pub(span, ..) => *span,
+            Type(span, ..) => *span,
+            When(span, ..) => *span,
+            Then(span, ..) => *span,
+            With(span, ..) => *span,
+            Where(span, ..) => *span,
 
             // Symbols
-            ArrowL(span, ..) => span,
-            ArrowR(span, ..) => span,
-            Assign(span, ..) => span,
-            BackSlash(span, ..) => span,
-            BraceL(span, ..) => span,
-            BraceR(span, ..) => span,
-            BracketL(span, ..) => span,
-            BracketR(span, ..) => span,
-            Colon(span, ..) => span,
-            ColonColon(span, ..) => span,
-            Comma(span, ..) => span,
-            CommentL(span, ..) => span,
-            CommentR(span, ..) => span,
-            Dot(span, ..) => span,
-            DotDot(span, ..) => span,
-            HashTag(span, ..) => span,
-            In(span, ..) => span,
-            Let(span, ..) => span,
-            Rec(span, ..) => span,
-            ParenL(span, ..) => span,
-            ParenR(span, ..) => span,
-            Pipe(span, ..) => span,
-            Question(span, ..) => span,
-            SemiColon(span, ..) => span,
+            ArrowL(span, ..) => *span,
+            ArrowR(span, ..) => *span,
+            Assign(span, ..) => *span,
+            BackSlash(span, ..) => *span,
+            BraceL(span, ..) => *span,
+            BraceR(span, ..) => *span,
+            BracketL(span, ..) => *span,
+            BracketR(span, ..) => *span,
+            Colon(span, ..) => *span,
+            ColonColon(span, ..) => *span,
+            Comma(span, ..) => *span,
+            CommentL(span, ..) => *span,
+            CommentR(span, ..) => *span,
+            Dot(span, ..) => *span,
+            DotDot(span, ..) => *span,
+            HashTag(span, ..) => *span,
+            In(span, ..) => *span,
+            Let(span, ..) => *span,
+            Rec(span, ..) => *span,
+            ParenL(span, ..) => *span,
+            ParenR(span, ..) => *span,
+            Pipe(span, ..) => *span,
+            Question(span, ..) => *span,
+            SemiColon(span, ..) => *span,
 
             // Operators
-            Add(span, ..) => span,
-            And(span, ..) => span,
-            Concat(span, ..) => span,
-            Div(span, ..) => span,
-            Eq(span, ..) => span,
-            Ne(span, ..) => span,
-            Ge(span, ..) => span,
-            Gt(span, ..) => span,
-            Le(span, ..) => span,
-            Lt(span, ..) => span,
-            Mod(span, ..) => span,
-            Mul(span, ..) => span,
-            Or(span, ..) => span,
-            Sub(span, ..) => span,
+            Add(span, ..) => *span,
+            And(span, ..) => *span,
+            Concat(span, ..) => *span,
+            Div(span, ..) => *span,
+            Eq(span, ..) => *span,
+            Ne(span, ..) => *span,
+            Ge(span, ..) => *span,
+            Gt(span, ..) => *span,
+            Le(span, ..) => *span,
+            Lt(span, ..) => *span,
+            Mod(span, ..) => *span,
+            Mul(span, ..) => *span,
+            Or(span, ..) => *span,
+            Sub(span, ..) => *span,
 
             // Literals
-            Bool(_, span, ..) => span,
-            Float(_, span, ..) => span,
-            Int(_, span, ..) => span,
-            Null(span, ..) => span,
-            String(_, span, ..) => span,
+            Bool(_, span, ..) => *span,
+            Float(_, span, ..) => *span,
+            Int(_, span, ..) => *span,
+            Null(span, ..) => *span,
+            String(_, span, ..) => *span,
 
             // Idents
-            HttpsUrl(_, span, ..) => span,
-            Ident(_, span, ..) => span,
+            HttpsUrl(_, span, ..) => *span,
+            Ident(_, span, ..) => *span,
 
             // Eof
-            Eof(span) => span,
+            Eof(span) => *span,
         }
     }
 }
