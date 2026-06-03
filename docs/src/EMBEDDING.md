@@ -548,12 +548,12 @@ match (to_list bytes) with {
 ```rust,ignore
 use rex::{
     parser::parse,
-    typesystem::{TypeSystem, infer},
+    typesystem::{infer, standard_type_system},
 };
 
 let program = parse("map (\\x -> x) [1, 2, 3]").map_err(|errs| format!("{errs:?}"))?;
 
-let mut ts = TypeSystem::new_with_prelude()?;
+let mut ts = standard_type_system()?;
 for decl in &program.decls {
     match decl {
         rex_ast::Decl::Type(d) => ts.register_type_decl(d)?,
@@ -595,7 +595,7 @@ Users can declare new type classes and instances directly in Rex source. As the 
 ```rust,ignore
 use rex::{
     parser::parse,
-    typesystem::{TypeSystem, infer},
+    typesystem::{infer, standard_type_system},
 };
 
 let code = r#"
@@ -614,7 +614,7 @@ size [1, 2, 3]
 
 let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 
-let mut ts = TypeSystem::new_with_prelude()?;
+let mut ts = standard_type_system()?;
 for decl in &program.decls {
     match decl {
         rex_ast::Decl::Type(d) => ts.register_type_decl(d)?,

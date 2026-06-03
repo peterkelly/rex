@@ -5,17 +5,14 @@ use std::borrow::Cow;
 
 use futures::executor::block_on;
 use rex_ast::CompilationUnit;
-use rex_engine::{CompileOptions, Engine, ValueDisplayOptions};
+use rex_engine::{CompileOptions, Engine, ValueDisplayOptions, standard_type_system};
 use rex_lsp::public::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,
     document_symbols_for_source_public, format_for_source_public, goto_definition_for_source,
     hover_for_source, references_for_source_public, rename_for_source_public,
 };
 use rex_parser::{error::ParseError, parse};
-use rex_typesystem::{
-    inference::infer,
-    typesystem::{TypeSystem, TypeSystemLimits},
-};
+use rex_typesystem::{inference::infer, typesystem::TypeSystemLimits};
 use wasm_bindgen::prelude::*;
 
 fn parse_program(source: &str) -> Result<CompilationUnit, String> {
@@ -52,7 +49,7 @@ pub fn infer_to_json(source: &str) -> Result<String, String> {
     let source = source_with_docs_body(source)?;
     let program = parse_program(source.as_ref())?;
 
-    let mut ts = TypeSystem::new_with_prelude().map_err(|e| format!("type system error: {e}"))?;
+    let mut ts = standard_type_system().map_err(|e| format!("type system error: {e}"))?;
     ts.set_limits(TypeSystemLimits::safe_defaults());
     ts.register_decls(&program.decls)
         .map_err(|e| format!("type declaration error: {e}"))?;

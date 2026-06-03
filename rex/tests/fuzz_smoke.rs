@@ -4,7 +4,7 @@ use rex::{
     ast::CompilationUnit,
     engine::{Engine, Module},
     parser::parse,
-    typesystem::{TypeSystem, infer},
+    typesystem::{infer, standard_type_system},
 };
 
 #[derive(Clone)]
@@ -60,7 +60,7 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
             Err(_) => continue,
         };
 
-        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        let mut ts = standard_type_system().unwrap();
         let _ = ts.register_decls(&program.decls);
         let Some(body) = program.body.as_ref() else {
             continue;

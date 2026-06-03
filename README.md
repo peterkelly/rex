@@ -143,9 +143,9 @@ operations, equality/ordering, and container abstractions).
 
 The prelude surface definitions and type-class wiring live primarily in:
 
-- `rex-typesystem/src/prelude_typeclasses.rex`
-- `rex-typesystem/src/prelude.rs`
-- `rex-engine/src/prelude.rs`
+- `rex-engine/src/prelude/typeclasses.rex`: Rex source for standard classes and instances.
+- `rex-engine/src/prelude/type_system.rs`: standard `TypeSystem` construction and primop schemes.
+- `rex-engine/src/prelude/mod.rs`: parsing, runtime builtin wiring, and `standard_type_system()`.
 
 For full details and usage patterns, see the [docs](https://peterkelly.github.io/rex/):
 

@@ -10,6 +10,7 @@ use rex::{
     ast::{CompilationUnit, Decl, Symbol},
     typesystem::{
         Instance, Predicate, Scheme, Type, TypeKind, TypeSystem, prelude_typeclasses_program,
+        standard_type_system,
     },
 };
 
@@ -48,7 +49,7 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let descriptions = load_descriptions(Path::new(DESCRIPTIONS_PATH))?;
-    let ts = TypeSystem::new_with_prelude().map_err(|e| format!("{e}"))?;
+    let ts = standard_type_system().map_err(|e| format!("{e}"))?;
     let program = prelude_typeclasses_program().map_err(|e| format!("{e}"))?;
 
     let mut type_arity = BTreeMap::<String, usize>::new();

@@ -421,7 +421,7 @@ pub(crate) fn is_ident_like(name: &str) -> bool {
 pub(crate) fn prelude_completion_values() -> &'static Vec<(String, CompletionItemKind)> {
     static PRELUDE_VALUES: OnceLock<Vec<(String, CompletionItemKind)>> = OnceLock::new();
     PRELUDE_VALUES.get_or_init(|| {
-        let ts = match TypeSystem::new_with_prelude() {
+        let ts = match standard_type_system() {
             Ok(ts) => ts,
             Err(e) => {
                 eprintln!("rex-lsp: failed to build prelude for completions: {e}");

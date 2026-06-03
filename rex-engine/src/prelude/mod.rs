@@ -1,12 +1,19 @@
 //! Prelude injection helpers for Rex.
 
-use std::{collections::BTreeMap, sync::Arc};
+mod type_system;
+
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 
 use chrono::{DateTime, Utc};
 use rex_ast::{CompilationUnit, Decl, Symbol};
+use rex_parser::parse;
 use rex_typesystem::{
-    prelude::prelude_typeclasses_program,
+    error::TypeError,
     types::{BuiltinTypeId, Scheme, Type, TypeKind, Types},
+    typesystem::TypeSystem,
     unification::unify,
 };
 use uuid::Uuid;
@@ -32,6 +39,34 @@ use crate::{
     util::split_fun,
     value::{Cell, Handle, Heap, HeapAccess, Pointer},
 };
+
+pub fn prelude_typeclasses_program() -> Result<&'static CompilationUnit, EngineError> {
+    static PROGRAM: OnceLock<Result<CompilationUnit, String>> = OnceLock::new();
+    let parsed = PROGRAM.get_or_init(|| {
+        let source = include_str!("typeclasses.rex");
+        match parse(source) {
+            Ok(program) => Ok(program),
+            Err(errs) => {
+                let mut out = String::from("prelude typeclasses: parse error:");
+                for err in errs {
+                    out.push_str(&format!("\n  {err}"));
+                }
+                Err(out)
+            }
+        }
+    });
+    match parsed {
+        Ok(program) => Ok(program),
+        Err(msg) => Err(EngineError::Type(TypeError::Internal(msg.clone()))),
+    }
+}
+
+pub fn standard_type_system() -> Result<TypeSystem, EngineError> {
+    let program = prelude_typeclasses_program()?;
+    let mut ts = TypeSystem::new();
+    type_system::inject_standard_prelude(&mut ts, &program.decls)?;
+    Ok(ts)
+}
 
 pub(crate) fn inject_prelude<State>(engine: &mut Engine<State>) -> Result<(), EngineError>
 where
@@ -59,7 +94,7 @@ where
     // The type system prelude injects the *heads* of the standard instances.
     // The evaluator also needs the *method bodies* so class method lookup can
     // produce actual values at runtime.
-    let program = prelude_typeclasses_program().map_err(EngineError::Type)?;
+    let program = prelude_typeclasses_program()?;
     for decl in program.decls.iter() {
         let Decl::Instance(inst_decl) = decl else {
             continue;
@@ -3375,4 +3410,249 @@ fn binary_arg_types(typ: &Type) -> Result<(Type, Type), EngineError> {
         got: typ.to_string(),
     })?;
     Ok((lhs, rhs))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
+
+    use rex_ast::{Decl, Expr, Symbol};
+    use rex_typesystem::{
+        types::{Predicate, Scheme, Type, Types},
+        typesystem::{TypeVarSupply, entails, instantiate},
+        unification::unify,
+    };
+
+    use super::*;
+
+    fn is_primitive_name(name: &Symbol) -> bool {
+        name.as_ref().starts_with("prim_")
+    }
+
+    // TODO: Consider adding a generic visitor function to `Expr` so callers do
+    // not need to hand-roll recursive AST walks like this.
+    fn collect_primitive_expr_refs(expr: &Arc<Expr>, out: &mut BTreeSet<Symbol>) {
+        match expr.as_ref() {
+            Expr::Var(var) => {
+                if is_primitive_name(&var.name) {
+                    out.insert(var.name.clone());
+                }
+            }
+            Expr::Tuple(_, elems) | Expr::List(_, elems) => {
+                for elem in elems {
+                    collect_primitive_expr_refs(elem, out);
+                }
+            }
+            Expr::Dict(_, fields) => {
+                for value in fields.values() {
+                    collect_primitive_expr_refs(value, out);
+                }
+            }
+            Expr::RecordUpdate(_, base, updates) => {
+                collect_primitive_expr_refs(base, out);
+                for value in updates.values() {
+                    collect_primitive_expr_refs(value, out);
+                }
+            }
+            Expr::App(_, f, x) => {
+                collect_primitive_expr_refs(f, out);
+                collect_primitive_expr_refs(x, out);
+            }
+            Expr::Project(_, base, _) | Expr::Ann(_, base, _) => {
+                collect_primitive_expr_refs(base, out);
+            }
+            Expr::Lam(_, scope, _, _, _, body) => {
+                for captured in scope.values() {
+                    collect_primitive_expr_refs(captured, out);
+                }
+                collect_primitive_expr_refs(body, out);
+            }
+            Expr::Let(_, _, _, _, def, body) => {
+                collect_primitive_expr_refs(def, out);
+                collect_primitive_expr_refs(body, out);
+            }
+            Expr::LetRec(_, bindings, body) => {
+                for (_, _, _, def) in bindings {
+                    collect_primitive_expr_refs(def, out);
+                }
+                collect_primitive_expr_refs(body, out);
+            }
+            Expr::Ite(_, cond, then_expr, else_expr) => {
+                collect_primitive_expr_refs(cond, out);
+                collect_primitive_expr_refs(then_expr, out);
+                collect_primitive_expr_refs(else_expr, out);
+            }
+            Expr::Match(_, scrutinee, arms) => {
+                collect_primitive_expr_refs(scrutinee, out);
+                for (_, arm) in arms {
+                    collect_primitive_expr_refs(arm, out);
+                }
+            }
+            Expr::Bool(..)
+            | Expr::Uint(..)
+            | Expr::Int(..)
+            | Expr::Float(..)
+            | Expr::String(..)
+            | Expr::Uuid(..)
+            | Expr::DateTime(..)
+            | Expr::Hole(..) => {}
+        }
+    }
+
+    fn primitive_refs_in_prelude_source() -> BTreeSet<Symbol> {
+        let mut refs = BTreeSet::new();
+        let program = prelude_typeclasses_program().unwrap();
+        for decl in &program.decls {
+            match decl {
+                Decl::Fn(fd) => collect_primitive_expr_refs(&fd.body, &mut refs),
+                Decl::Instance(inst) => {
+                    for method in &inst.methods {
+                        collect_primitive_expr_refs(&method.body, &mut refs);
+                    }
+                }
+                Decl::Type(..) | Decl::Class(..) | Decl::DeclareFn(..) | Decl::Import(..) => {}
+            }
+        }
+        refs
+    }
+
+    fn primitive_schemes_in_standard_type_system() -> BTreeMap<Symbol, Vec<Scheme>> {
+        let ts = standard_type_system().unwrap();
+        ts.env
+            .values
+            .iter()
+            .filter(|(name, _)| is_primitive_name(name))
+            .map(|(name, schemes)| (name.clone(), schemes.clone()))
+            .collect()
+    }
+
+    fn primitive_schemes_in_runtime() -> BTreeMap<Symbol, Vec<Scheme>> {
+        let engine = Engine::with_prelude(()).unwrap();
+        engine
+            .natives
+            .entries
+            .iter()
+            .filter(|(name, _)| is_primitive_name(name))
+            .map(|(name, impls)| {
+                (
+                    name.clone(),
+                    impls.iter().map(|imp| imp.scheme.clone()).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn scheme_accepts(
+        classes: &rex_typesystem::types::ClassEnv,
+        scheme: &Scheme,
+        typ: &Type,
+    ) -> bool {
+        let mut supply = TypeVarSupply::new();
+        let (preds, scheme_ty) = instantiate(scheme, &mut supply);
+        let Ok(subst) = unify(&scheme_ty, typ) else {
+            return false;
+        };
+        let preds: Vec<Predicate> = preds.apply(&subst);
+        for pred in preds {
+            if pred.typ.ftv().is_empty() && !entails(classes, &[], &pred).unwrap() {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn has_compatible_scheme(
+        classes: &rex_typesystem::types::ClassEnv,
+        candidates: &[Scheme],
+        scheme: &Scheme,
+    ) -> bool {
+        candidates
+            .iter()
+            .any(|candidate| scheme_accepts(classes, candidate, &scheme.typ))
+    }
+
+    #[test]
+    fn prelude_primitive_names_are_consistent_across_source_types_and_runtime() {
+        let source_refs = primitive_refs_in_prelude_source();
+        let typed = primitive_schemes_in_standard_type_system();
+        let runtime = primitive_schemes_in_runtime();
+
+        assert!(
+            !source_refs.is_empty(),
+            "expected the prelude source to reference rust-backed primitives"
+        );
+
+        let typed_names = typed.keys().cloned().collect::<BTreeSet<_>>();
+        let runtime_names = runtime.keys().cloned().collect::<BTreeSet<_>>();
+
+        let missing_from_types = source_refs
+            .difference(&typed_names)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            missing_from_types.is_empty(),
+            "prelude source references primitives with no standard type schemes: {missing_from_types:?}"
+        );
+
+        let missing_from_runtime = source_refs
+            .difference(&runtime_names)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            missing_from_runtime.is_empty(),
+            "prelude source references primitives with no runtime implementation: {missing_from_runtime:?}"
+        );
+
+        let typed_only = typed_names
+            .difference(&runtime_names)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            typed_only.is_empty(),
+            "standard type system contains primitives with no runtime implementation: {typed_only:?}"
+        );
+
+        let runtime_only = runtime_names
+            .difference(&typed_names)
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            runtime_only.is_empty(),
+            "runtime registers primitives with no standard type scheme: {runtime_only:?}"
+        );
+    }
+
+    #[test]
+    fn prelude_primitive_schemes_are_compatible_between_types_and_runtime() {
+        let ts = standard_type_system().unwrap();
+        let typed = primitive_schemes_in_standard_type_system();
+        let runtime = primitive_schemes_in_runtime();
+
+        for (name, runtime_schemes) in &runtime {
+            let typed_schemes = typed
+                .get(name)
+                .unwrap_or_else(|| panic!("missing standard type schemes for primitive `{name}`"));
+            for runtime_scheme in runtime_schemes {
+                assert!(
+                    has_compatible_scheme(&ts.classes, typed_schemes, runtime_scheme),
+                    "runtime primitive `{name}` has scheme `{runtime_scheme:?}` not accepted by the standard type system"
+                );
+            }
+        }
+
+        for (name, typed_schemes) in &typed {
+            let runtime_schemes = runtime
+                .get(name)
+                .unwrap_or_else(|| panic!("missing runtime schemes for primitive `{name}`"));
+            for typed_scheme in typed_schemes {
+                assert!(
+                    has_compatible_scheme(&ts.classes, runtime_schemes, typed_scheme),
+                    "standard primitive `{name}` has scheme `{typed_scheme:?}` not covered by runtime registration"
+                );
+            }
+        }
+    }
 }

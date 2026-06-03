@@ -696,6 +696,9 @@ fn apply_typed_app_arg(
             let list_ty = Type::list(elem_ty.clone());
             let array_ty = Type::array(elem_ty);
             let coercion_ty = Type::fun(list_ty, array_ty.clone());
+            // FIXME: This hardcodes a standard-prelude primitive into the
+            // generic type system. Replace it with a structured typed coercion
+            // or an explicit host-configured coercion hook.
             let coercion_fn = TypedExpr::new(
                 coercion_ty,
                 TypedExprKind::Var {

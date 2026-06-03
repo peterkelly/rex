@@ -1006,7 +1006,6 @@ version = "3.9.13"
 dependencies = [
  "chrono",
  "rex-ast",
- "rex-parser",
  "rex-util",
  "rpds",
  "serde",

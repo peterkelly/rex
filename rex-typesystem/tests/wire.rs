@@ -724,7 +724,7 @@ fn empty_type_bundle_serializes_only_schema_version() {
 
 #[test]
 fn bundle_with_monomorphic_types_serializes_type_map_without_adts() {
-    let type_system = TypeSystem::new_with_prelude().expect("prelude");
+    let type_system = TypeSystem::new();
     let bundle = TypeBundle::from_schemes(
         [
             (
@@ -758,7 +758,7 @@ fn bundle_with_monomorphic_types_serializes_type_map_without_adts() {
 
 #[test]
 fn bundle_includes_transitive_adt_declarations() {
-    let mut type_system = TypeSystem::new_with_prelude().expect("prelude");
+    let mut type_system = TypeSystem::new();
     let mut supply = TypeVarSupply::new();
 
     let mut inner = AdtDecl::new(&Symbol::intern("Inner"), &[], &mut supply);
@@ -898,7 +898,7 @@ fn bundle_register_into_installs_adts_and_returns_schemes() {
         }),
     );
 
-    let mut type_system = TypeSystem::new_with_prelude().expect("prelude");
+    let mut type_system = TypeSystem::new();
     let schemes = serde_json::from_value::<TypeBundle>(json)
         .expect("deserialize bundle")
         .register_into(&mut type_system)
@@ -912,7 +912,7 @@ fn bundle_register_into_installs_adts_and_returns_schemes() {
 
 #[test]
 fn bundle_rejects_missing_referenced_adt() {
-    let type_system = TypeSystem::new_with_prelude().expect("prelude");
+    let type_system = TypeSystem::new();
     let scheme = Scheme::new(vec![], vec![], Type::user_con("Missing", 0));
     let wire_scheme = WireScheme::try_from_scheme(&scheme).expect("encode scheme");
 

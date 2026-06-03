@@ -7,12 +7,13 @@
 //! - Type variables, type constructors, function and tuple types.
 //! - Schemes with quantified variables and class constraints.
 //! - Type classes with superclass relationships and instance resolution.
-//! - Basic ADTs (List, Result, Option) and numeric/string primitives in the prelude.
-//! - Utilities to register additional function/type declarations (e.g. `(-)`, `(/)`).
+//! - Utilities to register function/type declarations, ADTs, classes, and instances.
+//!
+//! The standard Rex prelude is owned by `rex-engine`, which builds a prelude-enabled
+//! `TypeSystem` from parsed Rex declarations and engine-native primitive schemes.
 
 pub mod error;
 pub mod inference;
-pub mod prelude;
 pub mod types;
 pub mod typesystem;
 pub mod unification;

@@ -8,8 +8,6 @@ use rex_ast::{
     Scope, Span, Symbol, TypeConstraint, TypeDecl, TypeExpr,
 };
 
-use crate::prelude;
-
 pub use crate::unification::{Subst, compose_subst, unify};
 
 use crate::{
@@ -359,12 +357,6 @@ impl TypeSystem {
 
     pub fn set_limits(&mut self, limits: TypeSystemLimits) {
         self.limits = limits;
-    }
-
-    pub fn new_with_prelude() -> Result<Self, TypeError> {
-        let mut ts = TypeSystem::new();
-        prelude::build_prelude(&mut ts)?;
-        Ok(ts)
     }
 
     fn register_decl(&mut self, decl: &Decl) -> Result<(), TypeError> {

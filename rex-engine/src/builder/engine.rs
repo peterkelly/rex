@@ -29,7 +29,7 @@ use crate::{
         ResolvedModule, ResolvedModuleContent, StdlibImporter, VirtualModule,
         interface_decls_from_program, prefix_for_module, virtual_export_name,
     },
-    prelude::{inject_prelude, inject_prelude_virtual_module},
+    prelude::{inject_prelude, inject_prelude_virtual_module, standard_type_system},
     util::{
         adt_family_error_to_engine, normalize_name, split_fun, type_arity,
         validate_native_export_scheme,
@@ -193,7 +193,7 @@ where
 
     pub fn with_options(state: State, options: EngineOptions) -> Result<Self, EngineError> {
         let type_system = match options.prelude {
-            PreludeMode::Enabled => TypeSystem::new_with_prelude()?,
+            PreludeMode::Enabled => standard_type_system()?,
             PreludeMode::Disabled => TypeSystem::new(),
         };
         let mut engine = Engine {

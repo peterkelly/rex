@@ -22,6 +22,7 @@ pub(crate) use rex_engine::{
         decl_type_names, decl_value_names, exports_from_program, load_import_for_tooling,
         prefix_for_module, rewrite_import_uses, validate_import_uses_with_spans,
     },
+    standard_type_system,
 };
 pub(crate) use rex_parser::{
     error::ParseError,

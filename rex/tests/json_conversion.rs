@@ -6,7 +6,7 @@ use rex::{
     engine::{CompileOptions, Engine, Handle, Heap, Value},
     json::{json_to_rex, rex_to_json},
     parser::parse as parse_rex,
-    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
+    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply, standard_type_system},
 };
 use serde::Serialize;
 use serde_json::json;
@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 fn mk_type_system() -> TypeSystem {
-    TypeSystem::new_with_prelude().unwrap()
+    standard_type_system().unwrap()
 }
 
 fn mk_unit_enum(name: &str, variants: &[&str]) -> AdtDecl {

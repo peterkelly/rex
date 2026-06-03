@@ -1,6 +1,6 @@
 // prelude typeclasses and instances
 //
-// this file is parsed and injected by typesystem with_prelude
+// this file is parsed by rex-engine; rex-typesystem consumes the parsed declarations
 //
 // design note:
 // - class methods define the public surface (the names users call)

@@ -15,12 +15,13 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - `rex-parser`: source parser. Entry point: `rex_parser::parse`.
   - Parsing enforces a fixed cap on AST nesting.
 - `rex-typesystem`: type system. Entry points:
-  - `TypeSystem::new_with_prelude()?` to create a typing environment with standard types/classes.
+  - `TypeSystem::new()` to create an explicit typing environment.
   - `infer_typed(&mut ts, expr)` / `infer(&mut ts, expr)` for type inference.
   - The inference implementation itself lives in `rex-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
   - For untrusted code, set `rex_typesystem::TypeSystemLimits::safe_defaults()` before inference.
 - `rex-engine`: host environment builder, compiler, and runtime evaluator. Entry points:
   - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
+  - `standard_type_system()?` to create a typing environment with the engine-owned standard prelude.
   - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
   - `Engine::into_evaluator()` / `Compiler::into_evaluator()` to consume preparation state into an evaluator.
   - `Compiler::compile_program` to prepare a parsed program entry point into `CompiledProgram`;
@@ -59,9 +60,12 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - **Same-lineage runtime model**: a `CompiledProgram` is intended to run on the evaluator produced
   from the same compiler. Rex programs are supplied as source and compiled per run, so the engine
   does not expose a portable compiled-artifact or cross-runtime linking model.
-- **Prelude split**: The type system prelude is a combination of:
-  - ADT/typeclass *heads* injected by `TypeSystem::new_with_prelude()?`
-  - typeclass method *bodies* (written in Rex) loaded from `rex-typesystem/src/prelude_typeclasses.rex` and injected by `Engine::with_prelude(state)?` (`state` can be `()`)
+- **Prelude ownership**: `rex-engine` owns the standard prelude source, standard typing
+  environment, and runtime contract. The split is:
+  - typeclass and instance declarations written in Rex at `rex-engine/src/prelude/typeclasses.rex`
+  - `rex-engine/src/prelude/type_system.rs` builds the prelude-enabled `TypeSystem`, including ADTs, parsed declarations, and primop schemes
+  - `rex-engine/src/prelude/mod.rs` parses the Rex source and injects runtime method bodies/native implementations for `Engine::with_prelude(state)?`
+  - `rex-typesystem` exposes generic registration/inference APIs and does not own the standard prelude
 - **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). The parser enforces a fixed AST-depth cap, and the typechecker-limit API provides bounded recursion for production/untrusted workloads.
 - **Import-use rewrite/validation**: module processing resolves import aliases across expression
   vars, constructor patterns, type references, and class references; unresolved qualified alias

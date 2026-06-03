@@ -2,10 +2,10 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use rex_ast::CompilationUnit;
-use rex_engine::{Engine, Module};
+use rex_engine::{Engine, Module, standard_type_system};
 use rex_fuzz::{FuzzError, fuzz_source_input, read_stdin_bytes};
 use rex_parser::parse;
-use rex_typesystem::{inference::infer, typesystem::TypeSystem};
+use rex_typesystem::inference::infer;
 
 async fn run_one(input: &[u8]) {
     let source = fuzz_source_input(input);
@@ -14,7 +14,7 @@ async fn run_one(input: &[u8]) {
         Err(_) => return,
     };
 
-    let Ok(mut ts) = TypeSystem::new_with_prelude() else {
+    let Ok(mut ts) = standard_type_system() else {
         return;
     };
     if ts.register_decls(&program.decls).is_err() {

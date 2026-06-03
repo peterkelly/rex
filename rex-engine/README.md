@@ -83,6 +83,10 @@ Pointer-level APIs (`export_native*`) receive `Context<State>` so they can acces
 `Engine::with_prelude(())?` injects the standard runtime helpers. If you need host state, pass
 your state value instead: `Engine::with_prelude(state)?`.
 
+The standard prelude source lives in `src/prelude/typeclasses.rex`. `src/prelude/type_system.rs`
+builds the prelude-enabled `TypeSystem`, while `src/prelude/mod.rs` parses the source, exposes
+`standard_type_system()`, and wires the corresponding runtime/native helpers.
+
 For explicit control, use:
 
 - `Engine::with_options(state, EngineOptions { ... })`

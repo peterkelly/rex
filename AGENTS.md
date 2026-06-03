@@ -23,8 +23,8 @@ computations and data manipulation.
 - `rex`: Crate acting as entry point for embedding in other Rust programs, CLI tool for testing. Also contains examples and integration tests.
 - `rex-ast`: shared AST types (`Expr`, `Pattern`, `Decl`, `CompilationUnit`, symbols, spans).
 - `rex-parser`: source parser producing `CompilationUnit { decls, body }`.
-- `rex-typesystem`: Hindley–Milner inference + ADTs + type classes; prelude typeclasses live here.
-- `rex-engine`: typed evaluation and runtime intrinsics.
+- `rex-typesystem`: Hindley–Milner inference + ADTs + type classes.
+- `rex-engine`: typed evaluation, runtime intrinsics, and the standard prelude source.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge between Rust types and Rex values.
 - `rex-fuzz`: stdin-driven fuzz harness binaries.
 - `rex-lsp`: language server (used by the VS Code extension).
@@ -35,9 +35,9 @@ computations and data manipulation.
 - `docs/src/ARCHITECTURE.md`: crate pipeline overview.
 - `docs/src/SPEC.md`: locked semantics; keep in sync with regression tests.
 - `docs/src/EMBEDDING.md`: embedding patterns and untrusted-code checklist.
-- `rex-typesystem/src/prelude_typeclasses.rex`: Rex implementations of typeclass methods.
-- `rex-typesystem/src/prelude.rs`: typeclass/instance injection + primop types.
-- `rex-engine/src/prelude.rs`: runtime implementations of primops and builtins.
+- `rex-engine/src/prelude/typeclasses.rex`: Rex implementations of standard typeclass methods.
+- `rex-engine/src/prelude/type_system.rs`: standard `TypeSystem` construction and primop schemes.
+- `rex-engine/src/prelude/mod.rs`: standard prelude parsing and runtime builtin injection.
 
 ## Build, Test, Lint
 

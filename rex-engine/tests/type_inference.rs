@@ -1,4 +1,5 @@
 use rex_ast::{CompilationUnit, Decl, Expr, Span, Symbol};
+use rex_engine::standard_type_system;
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -55,7 +56,7 @@ fn instantiate_and_generalize_round_trip() {
 
 #[test]
 fn entail_superclasses() {
-    let ts = TypeSystem::new_with_prelude().unwrap();
+    let ts = standard_type_system().unwrap();
     let pred = Predicate::new("Semiring", Type::builtin(BuiltinTypeId::I32));
     let given = [Predicate::new(
         "AdditiveGroup",
@@ -66,7 +67,7 @@ fn entail_superclasses() {
 
 #[test]
 fn entail_instances() {
-    let ts = TypeSystem::new_with_prelude().unwrap();
+    let ts = standard_type_system().unwrap();
     let pred = Predicate::new("Field", Type::builtin(BuiltinTypeId::F32));
     assert!(entails(&ts.classes, &[], &pred).unwrap());
 
@@ -82,7 +83,7 @@ fn entail_instances() {
 
 #[test]
 fn prelude_injects_functions() {
-    let ts = TypeSystem::new_with_prelude().unwrap();
+    let ts = standard_type_system().unwrap();
     let minus = ts.env.lookup(&Symbol::intern("-")).expect("minus in env");
     let div = ts.env.lookup(&Symbol::intern("/")).expect("div in env");
     assert_eq!(minus.len(), 1);
@@ -99,7 +100,7 @@ fn prelude_injects_functions() {
 
 #[test]
 fn adt_constructors_are_present() {
-    let ts = TypeSystem::new_with_prelude().unwrap();
+    let ts = standard_type_system().unwrap();
     assert!(ts.env.lookup(&Symbol::intern("Empty")).is_some());
     assert!(ts.env.lookup(&Symbol::intern("Cons")).is_some());
     assert!(ts.env.lookup(&Symbol::intern("Ok")).is_some());
@@ -137,7 +138,7 @@ fn infer_deep_list_does_not_overflow() {
         .unwrap();
     let program = parse_handle.join().unwrap().unwrap();
     let expr = program.body.unwrap();
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(
         ty,
@@ -194,7 +195,7 @@ fn infer_depth_limit_is_enforced() {
     code.push_str(" in xs");
 
     let program = parse_program(&code);
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.set_limits(TypeSystemLimits {
         max_infer_depth: Some(8),
     });
@@ -214,7 +215,7 @@ fn declare_fn_injects_scheme_for_use_sites() {
             id 1
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.register_decls(&program.decls).unwrap();
     let (preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert!(
@@ -229,7 +230,7 @@ fn declare_fn_injects_scheme_for_use_sites() {
 
 #[test]
 fn declare_fn_is_noop_when_matching_existing_scheme() {
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.add_value(
         "foo",
         Scheme::new(
@@ -262,7 +263,7 @@ fn unit_type_parses_and_infers() {
             unit_id ()
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.register_decls(&program.decls).unwrap();
     let (preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert!(preds.is_empty());
@@ -279,7 +280,7 @@ fn strip_span(mut err: TypeError) -> TypeError {
 #[test]
 fn type_errors_include_span() {
     let expr = parse_expr("missing");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = infer(&mut ts, expr.as_ref()).unwrap_err();
     match err {
         TypeError::Spanned { span, error } => {
@@ -296,7 +297,7 @@ fn type_errors_include_span() {
 #[test]
 fn reject_user_redefinition_of_primitive_type_name() {
     let program = parse_program("type i32 = I32Wrap i32;");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
     };
@@ -310,7 +311,7 @@ fn reject_user_redefinition_of_primitive_type_name() {
 #[test]
 fn reject_user_redefinition_of_prelude_adt_name() {
     let program = parse_program("type Result e a = Nope e a;");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
     };
@@ -324,7 +325,7 @@ fn reject_user_redefinition_of_prelude_adt_name() {
 #[test]
 fn reject_user_redefinition_of_promise_type_name() {
     let program = parse_program("type Promise a = PromiseWrap a;");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let Decl::Type(decl) = &program.decls[0] else {
         panic!("expected type decl");
     };
@@ -345,7 +346,7 @@ fn infer_polymorphic_id_tuple() {
                 id (id 420, id 6.9, id "str")
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     let expected = Type::tuple(vec![
         Type::builtin(BuiltinTypeId::I32),
@@ -358,7 +359,7 @@ fn infer_polymorphic_id_tuple() {
 #[test]
 fn infer_type_annotation_ok() {
     let expr = parse_expr("let x: i32 = 42 in x");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -366,7 +367,7 @@ fn infer_type_annotation_ok() {
 #[test]
 fn infer_float_literal_specializes_to_f64_annotation() {
     let expr = parse_expr("let x: f64 = 3.14 in x");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::F64));
 }
@@ -394,7 +395,7 @@ fn infer_float_literals_specialize_to_annotated_function_args() {
         ),
     ] {
         let expr = parse_expr(source);
-        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        let mut ts = standard_type_system().unwrap();
         let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
         assert_eq!(ty, Type::builtin(expected), "{source}");
     }
@@ -403,7 +404,7 @@ fn infer_float_literals_specialize_to_annotated_function_args() {
 #[test]
 fn infer_type_annotation_lambda_param() {
     let expr = parse_expr("\\ (a : f32) -> a");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(
         ty,
@@ -417,7 +418,7 @@ fn infer_type_annotation_lambda_param() {
 #[test]
 fn infer_type_annotation_is_alias() {
     let expr = parse_expr("\"hi\" is str");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
 }
@@ -425,7 +426,7 @@ fn infer_type_annotation_is_alias() {
 #[test]
 fn infer_type_annotation_with_promise_constructor() {
     let expr = parse_expr("\\(x: Promise i32) -> x");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     let promise_i32 = Type::promise(Type::builtin(BuiltinTypeId::I32));
     assert_eq!(ty, Type::fun(promise_i32.clone(), promise_i32));
@@ -434,7 +435,7 @@ fn infer_type_annotation_with_promise_constructor() {
 #[test]
 fn infer_type_annotation_mismatch_error() {
     let expr = parse_expr("let x: i32 = 3.14 in x");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
 }
@@ -450,7 +451,7 @@ fn infer_project_single_variant_let() {
                 (x.field1, x.field2)
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     for decl in &program.decls {
         if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
@@ -475,7 +476,7 @@ fn infer_project_known_variant_let() {
                 x.field1
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     for decl in &program.decls {
         if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
@@ -496,7 +497,7 @@ fn infer_project_unknown_variant_error() {
                 x.field1
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     for decl in &program.decls {
         if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
@@ -517,7 +518,7 @@ fn infer_project_lambda_param_single_variant() {
                 f (Boxed { value = 1 })
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     for decl in &program.decls {
         if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
@@ -541,7 +542,7 @@ fn infer_project_in_match_arm() {
                 }
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     for decl in &program.decls {
         if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
@@ -570,7 +571,7 @@ fn infer_nested_let_lambda_match_option() {
                 }
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -587,7 +588,7 @@ fn infer_polymorphic_apply_in_tuple() {
                 (apply id 1, apply id "hi", apply wrap true)
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     let expected = Type::tuple(vec![
         Type::builtin(BuiltinTypeId::I32),
@@ -615,7 +616,7 @@ fn infer_nested_result_option_match() {
                 unwrap (Ok (Some 5))
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -634,7 +635,7 @@ fn infer_head_or_list_match() {
                 (head_or 0 [1, 2, 3], head_or 0 [])
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     let expected = Type::tuple(vec![
         Type::builtin(BuiltinTypeId::I32),
@@ -657,7 +658,7 @@ fn infer_head_or_list_match_cons_constructor_form() {
                 (head_or 0 (Cons 1 (Cons 2 Empty)), head_or 0 Empty)
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     let expected = Type::tuple(vec![
         Type::builtin(BuiltinTypeId::I32),
@@ -680,7 +681,7 @@ fn infer_record_pattern_in_lambda() {
                 sum (Pair { left = 1, right = 2 })
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     for decl in &program.decls {
         if let Decl::Type(decl) = decl {
             ts.register_type_decl(decl).unwrap();
@@ -698,7 +699,7 @@ fn infer_fn_decl_simple() {
             add 1 2
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let expr = program.body_with_fns().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -712,7 +713,7 @@ fn infer_fn_decl_signature_form() {
             add 1 2
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let expr = program.body_with_fns().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
@@ -726,7 +727,7 @@ fn infer_fn_decl_polymorphic_where_constraints() {
             (my_add 1 2, my_add 1.0 2.0)
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let expr = program.body_with_fns().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(
@@ -741,7 +742,7 @@ fn infer_fn_decl_polymorphic_where_constraints() {
 #[test]
 fn infer_additive_monoid_constraint() {
     let expr = parse_expr("\\x y -> x + y");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(preds.len(), 1);
     assert_eq!(preds[0].class.as_ref(), "AdditiveMonoid");
@@ -760,7 +761,7 @@ fn infer_additive_monoid_constraint() {
 #[test]
 fn infer_multiplicative_monoid_constraint() {
     let expr = parse_expr("\\x y -> x * y");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(preds.len(), 1);
     assert_eq!(preds[0].class.as_ref(), "MultiplicativeMonoid");
@@ -779,7 +780,7 @@ fn infer_multiplicative_monoid_constraint() {
 #[test]
 fn infer_subtractive_constraint() {
     let expr = parse_expr("\\x y -> x - y");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(preds.len(), 1);
     assert_eq!(preds[0].class.as_ref(), "Subtractive");
@@ -798,7 +799,7 @@ fn infer_subtractive_constraint() {
 #[test]
 fn infer_integral_constraint() {
     let expr = parse_expr("\\x y -> x % y");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(preds.len(), 1);
     assert_eq!(preds[0].class.as_ref(), "Integral");
@@ -817,7 +818,7 @@ fn infer_integral_constraint() {
 #[test]
 fn infer_literal_addition_defaults() {
     let expr = parse_expr("1 + 2");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(preds.len(), 2);
@@ -833,7 +834,7 @@ fn infer_literal_addition_defaults() {
 #[test]
 fn infer_mod_defaults() {
     let expr = parse_expr("1 % 2");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(preds.len(), 1);
@@ -844,7 +845,7 @@ fn infer_mod_defaults() {
 #[test]
 fn infer_get_list_type() {
     let expr = parse_expr("get 1 [1, 2, 3]");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert!(preds.iter().any(|p| p.class.as_ref() == "Indexable"));
@@ -860,19 +861,19 @@ fn infer_get_list_type() {
 #[test]
 fn infer_get_tuple_type() {
     let expr = parse_expr("(1, 'Hello', true).0");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
     let expr = parse_expr("(1, 'Hello', true).1");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
 
     let expr = parse_expr("(1, 'Hello', true).2");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::Bool));
     assert!(preds.is_empty() || preds.iter().all(|p| p.class.as_ref() == "Integral"));
@@ -881,7 +882,7 @@ fn infer_get_tuple_type() {
 #[test]
 fn infer_division_defaults() {
     let expr = parse_expr("1.0 / 2.0");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::F32));
     assert_eq!(preds.len(), 2);
@@ -900,7 +901,7 @@ fn infer_division_defaults() {
 #[test]
 fn infer_integer_division_defaults() {
     let expr = parse_expr("1 / 2");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(preds.len(), 2);
@@ -916,7 +917,7 @@ fn infer_integer_division_defaults() {
 #[test]
 fn infer_unbound_variable_error() {
     let expr = parse_expr("missing");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(
         err,
@@ -927,7 +928,7 @@ fn infer_unbound_variable_error() {
 #[test]
 fn infer_if_branch_type_mismatch_error() {
     let expr = parse_expr(r#"if true then 1 else "no""#);
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
@@ -941,7 +942,7 @@ fn infer_if_branch_type_mismatch_error() {
 #[test]
 fn infer_unknown_pattern_constructor_error() {
     let expr = parse_expr("match 1 with { case Nope -> 1; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(
         err,
@@ -969,7 +970,7 @@ fn infer_ambiguous_overload_error() {
 #[test]
 fn infer_if_cond_not_bool_error() {
     let expr = parse_expr("if 1 then 2 else 3");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
@@ -983,7 +984,7 @@ fn infer_if_cond_not_bool_error() {
 #[test]
 fn infer_apply_non_function_error() {
     let expr = parse_expr("1 2");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
 }
@@ -991,7 +992,7 @@ fn infer_apply_non_function_error() {
 #[test]
 fn infer_list_element_mismatch_error() {
     let expr = parse_expr("[1, true]");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
@@ -1005,7 +1006,7 @@ fn infer_list_element_mismatch_error() {
 #[test]
 fn infer_dict_value_mismatch_error() {
     let expr = parse_expr("{a = 1, b = true}");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
@@ -1019,14 +1020,14 @@ fn infer_dict_value_mismatch_error() {
 #[test]
 fn infer_match_list_on_non_list_error() {
     let expr = parse_expr("match 1 with { case [x] -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     assert!(infer(&mut ts, expr.as_ref()).is_err());
 }
 
 #[test]
 fn infer_pattern_constructor_arity_error() {
     let expr = parse_expr("match (Ok 1) with { case Ok x y -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(
         err,
@@ -1037,7 +1038,7 @@ fn infer_pattern_constructor_arity_error() {
 #[test]
 fn infer_match_arm_type_mismatch_error() {
     let expr = parse_expr(r#"match 1 with { case _ -> 1; case _ -> "no"; }"#);
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::Unification(a, b) => {
@@ -1051,14 +1052,14 @@ fn infer_match_arm_type_mismatch_error() {
 #[test]
 fn infer_match_option_on_non_option_error() {
     let expr = parse_expr("match 1 with { case Some x -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     assert!(infer(&mut ts, expr.as_ref()).is_err());
 }
 
 #[test]
 fn infer_dict_pattern_on_non_dict_error() {
     let expr = parse_expr("match 1 with { case {a} -> a; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
 }
@@ -1066,14 +1067,14 @@ fn infer_dict_pattern_on_non_dict_error() {
 #[test]
 fn infer_cons_pattern_on_non_list_error() {
     let expr = parse_expr("match 1 with { case x::xs -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     assert!(infer(&mut ts, expr.as_ref()).is_err());
 }
 
 #[test]
 fn infer_apply_wrong_arg_type_error() {
     let expr = parse_expr("(\\x -> x + 1) true");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
 }
@@ -1081,7 +1082,7 @@ fn infer_apply_wrong_arg_type_error() {
 #[test]
 fn infer_self_application_occurs_error() {
     let expr = parse_expr("\\x -> x x");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Occurs(_, _)));
 }
@@ -1089,7 +1090,7 @@ fn infer_self_application_occurs_error() {
 #[test]
 fn infer_apply_constructor_too_many_args_error() {
     let expr = parse_expr("Some 1 2");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
 }
@@ -1097,7 +1098,7 @@ fn infer_apply_constructor_too_many_args_error() {
 #[test]
 fn infer_operator_type_mismatch_error() {
     let expr = parse_expr("1 + true");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
 }
@@ -1105,7 +1106,7 @@ fn infer_operator_type_mismatch_error() {
 #[test]
 fn infer_non_exhaustive_match_is_error() {
     let expr = parse_expr("match (Ok 1) with { case Ok x -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
 }
@@ -1113,7 +1114,7 @@ fn infer_non_exhaustive_match_is_error() {
 #[test]
 fn infer_non_exhaustive_match_on_bound_var_error() {
     let expr = parse_expr("let x = Ok 1 in match x with { case Ok y -> y; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
 }
@@ -1121,7 +1122,7 @@ fn infer_non_exhaustive_match_on_bound_var_error() {
 #[test]
 fn infer_non_exhaustive_match_in_lambda_error() {
     let expr = parse_expr("\\x -> match x with { case Ok y -> y; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
 }
@@ -1129,7 +1130,7 @@ fn infer_non_exhaustive_match_in_lambda_error() {
 #[test]
 fn infer_non_exhaustive_option_match_error() {
     let expr = parse_expr("match (Some 1) with { case Some x -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -1142,7 +1143,7 @@ fn infer_non_exhaustive_option_match_error() {
 #[test]
 fn infer_non_exhaustive_result_match_error() {
     let expr = parse_expr("match (Err 1) with { case Ok x -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -1155,7 +1156,7 @@ fn infer_non_exhaustive_result_match_error() {
 #[test]
 fn infer_non_exhaustive_list_missing_empty_error() {
     let expr = parse_expr("match [1, 2] with { case x::xs -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -1168,7 +1169,7 @@ fn infer_non_exhaustive_list_missing_empty_error() {
 #[test]
 fn infer_non_exhaustive_list_match_on_bound_var_error() {
     let expr = parse_expr("let xs = [1, 2] in match xs with { case x::xs -> x; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::NonExhaustiveMatch { .. }));
 }
@@ -1176,7 +1177,7 @@ fn infer_non_exhaustive_list_match_on_bound_var_error() {
 #[test]
 fn infer_non_exhaustive_list_missing_cons_error() {
     let expr = parse_expr("match [1] with { case [] -> 0; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     match err {
         TypeError::NonExhaustiveMatch { missing, .. } => {
@@ -1189,7 +1190,7 @@ fn infer_non_exhaustive_list_missing_cons_error() {
 #[test]
 fn infer_match_list_patterns_on_result_error() {
     let expr = parse_expr("match (Ok 1) with { case [] -> 0; case x::xs -> 1; }");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)));
 }
@@ -1209,7 +1210,7 @@ fn infer_missing_instances_produce_unsatisfied_predicates() {
         };
 
         let expr = parse_expr(code);
-        let mut ts = TypeSystem::new_with_prelude().unwrap();
+        let mut ts = standard_type_system().unwrap();
         let (preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
         if let Some(expected) = expected_ty {
             assert_eq!(ty, expected, "{name}");
@@ -1235,7 +1236,7 @@ fn record_update_single_variant_adt_infers() {
               bar
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.register_decls(&program.decls).unwrap();
     let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(typ.to_string(), "Foo");
@@ -1252,7 +1253,7 @@ fn record_update_unknown_field_errors() {
               { foo with { y = 2 } }
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.register_decls(&program.decls).unwrap();
     let err = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap_err();
     let err = strip_span(err);
@@ -1270,7 +1271,7 @@ fn record_update_requires_refined_variant_for_sum_types() {
               f (Bar { x = 1 })
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.register_decls(&program.decls).unwrap();
     let err = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap_err();
     let err = strip_span(err);
@@ -1292,7 +1293,7 @@ fn record_update_allowed_after_match_refines_variant() {
               f (Bar { x = 1 })
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.register_decls(&program.decls).unwrap();
     let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(typ.to_string(), "Foo");
@@ -1308,7 +1309,7 @@ fn record_update_plain_record_type() {
               f { x = 1, y = 2 }
             "#,
     );
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     ts.register_decls(&program.decls).unwrap();
     let (_preds, typ) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert_eq!(typ.to_string(), "{x: i32, y: i32}");
@@ -1317,7 +1318,7 @@ fn record_update_plain_record_type() {
 #[test]
 fn infer_typed_hole_expr_is_hole_kind() {
     let expr = parse_expr("?");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (typed, _preds, _ty) = infer_typed(&mut ts, expr.as_ref()).unwrap();
     assert!(
         matches!(typed.kind.as_ref(), TypedExprKind::Hole),
@@ -1328,7 +1329,7 @@ fn infer_typed_hole_expr_is_hole_kind() {
 #[test]
 fn infer_hole_with_annotation_unifies_to_annotation() {
     let expr = parse_expr("let x : i32 = ? in x");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -1336,7 +1337,7 @@ fn infer_hole_with_annotation_unifies_to_annotation() {
 #[test]
 fn infer_hole_in_if_condition_is_bool_constrained() {
     let expr = parse_expr("if ? then 1 else 2");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -1344,7 +1345,7 @@ fn infer_hole_in_if_condition_is_bool_constrained() {
 #[test]
 fn infer_hole_in_arithmetic_is_numeric_constrained() {
     let expr = parse_expr("? + 1");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let (_preds, ty) = infer(&mut ts, expr.as_ref()).unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
 }
@@ -1352,7 +1353,7 @@ fn infer_hole_in_arithmetic_is_numeric_constrained() {
 #[test]
 fn infer_hole_arithmetic_conflicting_annotation_failure() {
     let expr = parse_expr("let x : string = (? + 1) in x");
-    let mut ts = TypeSystem::new_with_prelude().unwrap();
+    let mut ts = standard_type_system().unwrap();
     let err = strip_span(infer(&mut ts, expr.as_ref()).unwrap_err());
     assert!(matches!(err, TypeError::Unification(_, _)), "err={err:#?}");
 }

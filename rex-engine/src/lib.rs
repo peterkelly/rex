@@ -45,5 +45,6 @@ pub use modules::{
     ModuleInstance, ModuleKey, PRELUDE_MODULE_NAME, ROOT_MODULE_NAME, ResolvedModule,
     ResolvedModuleContent, StdlibImporter, SymbolKind, virtual_export_name,
 };
+pub use prelude::{prelude_typeclasses_program, standard_type_system};
 pub use util::collect_adts_error_to_engine;
 pub use value::{FromRex, Handle, Heap, IntoRex, Value, ValueDisplayOptions};

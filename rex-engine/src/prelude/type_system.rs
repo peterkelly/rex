@@ -1,17 +1,15 @@
-use std::sync::OnceLock;
-
-use rex_ast::{CompilationUnit, Decl, Symbol};
-use rex_parser::parse;
-
-use crate::{
+use rex_ast::{Decl, Symbol};
+use rex_typesystem::{
     error::TypeError,
     types::{AdtDecl, BuiltinTypeId, Predicate, Scheme, Type},
     typesystem::TypeSystem,
 };
 
-fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeError> {
-    let program = prelude_typeclasses_program()?;
-    for decl in &program.decls {
+fn inject_prelude_classes_and_instances(
+    ts: &mut TypeSystem,
+    decls: &[Decl],
+) -> Result<(), TypeError> {
+    for decl in decls {
         match decl {
             Decl::Class(class_decl) => ts.register_class_decl(class_decl)?,
             Decl::Instance(inst_decl) => {
@@ -23,29 +21,8 @@ fn inject_prelude_classes_and_instances(ts: &mut TypeSystem) -> Result<(), TypeE
     Ok(())
 }
 
-pub fn prelude_typeclasses_program() -> Result<&'static CompilationUnit, TypeError> {
-    static PROGRAM: OnceLock<Result<CompilationUnit, String>> = OnceLock::new();
-    let parsed = PROGRAM.get_or_init(|| {
-        let source = include_str!("prelude_typeclasses.rex");
-        match parse(source) {
-            Ok(program) => Ok(program),
-            Err(errs) => {
-                let mut out = String::from("prelude_typeclasses: parse error:");
-                for err in errs {
-                    out.push_str(&format!("\n  {err}"));
-                }
-                Err(out)
-            }
-        }
-    });
-    match parsed {
-        Ok(program) => Ok(program),
-        Err(msg) => Err(TypeError::Internal(msg.clone())),
-    }
-}
-
 fn inject_prelude_primops(ts: &mut TypeSystem) {
-    // Rust-backed intrinsics used by `rex-typesystem/src/prelude_typeclasses.rex`.
+    // Rust-backed intrinsics used by the engine-owned prelude typeclass definitions.
     //
     // These intentionally carry no typeclass predicates. An instance method
     // body should not need to assume the class it is defining.
@@ -823,7 +800,10 @@ fn inject_prelude_primops(ts: &mut TypeSystem) {
     }
 }
 
-pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
+pub(super) fn inject_standard_prelude(
+    ts: &mut TypeSystem,
+    decls: &[Decl],
+) -> Result<(), TypeError> {
     // Primitive type constructors
     let prims = [
         BuiltinTypeId::U8,
@@ -896,7 +876,7 @@ pub(crate) fn build_prelude(ts: &mut TypeSystem) -> Result<(), TypeError> {
     }
 
     inject_prelude_primops(ts);
-    inject_prelude_classes_and_instances(ts)?;
+    inject_prelude_classes_and_instances(ts, decls)?;
 
     // Helper constructors used to describe prelude schemes below.
     let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(Symbol::intern(name)));

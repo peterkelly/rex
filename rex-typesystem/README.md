@@ -4,30 +4,30 @@ This crate implements a Hindley-Milner style type system with parametric polymor
 
 ## Features
 
-- **Types**: primitives (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `uuid`, `datetime`), tuples, functions, dictionaries (`Dict a`), and user constructors (`List`, `Result`, `Option`).
+- **Types**: primitives (`u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `string`, `uuid`, `datetime`), tuples, functions, dictionaries (`Dict a`), arrays, and registered user constructors.
 - **Arrays**: host-native `Array a` values intended for performance and supported by the same collection combinators via type classes.
 - **Schemes**: quantified types with class constraints.
 - **Type classes**: class hierarchy for additive/multiplicative monoids, semiring, additive group, ring, and field, plus instance resolution with superclass propagation.
-- **Prelude**: ADT constructors (`Empty`, `Cons`, `Ok`, `Err`, `Some`, `None`) and constrained function declarations for numeric, equality, list, option, and result operations.
 - **Utilities**: substitution, unification (with occurs check), instantiation, and generalization helpers.
+
+`rex-typesystem` does not parse or own the standard Rex prelude. The engine owns
+`rex-engine/src/prelude/typeclasses.rex`, the standard primop schemes, and
+`rex_engine::standard_type_system()`. The `rex` crate re-exports that constructor as
+`rex::typesystem::standard_type_system()`.
 
 ## Quickstart
 
 ```rust
 use rex_ast::Symbol;
-use rex_ts::{BuiltinTypeId, Predicate, Type, TypeSystem};
+use rex_ts::{Type, TypeSystem};
 
 fn main() -> Result<(), rex_ts::TypeError> {
-    let mut ts = TypeSystem::new_with_prelude()?;
+    let mut ts = TypeSystem::new();
 
     // Register an additional function: id :: a -> a
     let a = Type::var(ts.supply.fresh(Some(Symbol::intern("a"))));
     let scheme = rex_ts::generalize(&ts.env, vec![], Type::fun(a.clone(), a));
     ts.add_value("id", scheme);
-
-    // Ask whether a class constraint is satisfiable in the prelude
-    let field_f32 = Predicate::new("Field", Type::builtin(BuiltinTypeId::F32));
-    assert!(rex_ts::entails(&ts.classes, &[], &field_f32)?);
     Ok(())
 }
 ```
@@ -54,7 +54,10 @@ This infers to the tuple type `(i32, f32, string)`.
 
 The current inference implementation covers variables, application, lambdas, let-in, if-then-else, tuples, lists, dicts, named constructors, literals, and `match`.
 
-## Prelude Summary
+## Engine-Owned Standard Prelude
+
+The standard Rex prelude is built by `rex-engine`, not by this crate. In that standard
+environment, the engine registers these classes and operators before running inference:
 
 ### Classes
 

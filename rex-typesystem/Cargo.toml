@@ -10,7 +10,6 @@ version.workspace = true
 [dependencies]
 thiserror = { workspace = true }
 rex-ast = { path = "../rex-ast", version = "3.9.13" }
-rex-parser = { path = "../rex-parser", version = "3.9.13" }
 chrono = { workspace = true }
 uuid = { workspace = true }
 rpds = { workspace = true }
@@ -21,5 +20,4 @@ serde = { workspace = true }
 workspace = true
 
 [dev-dependencies]
-rex-parser = { path = "../rex-parser", version = "3.9.13" }
 serde_json = { workspace = true }
