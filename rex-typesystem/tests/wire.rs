@@ -236,7 +236,7 @@ fn tuple_type_serializes_items_in_order() {
 
 #[test]
 fn unit_type_serializes_as_empty_tuple() {
-    let typ = Type::tuple(vec![]);
+    let typ = Type::tuple(Vec::<Type>::new());
     let wire = WireType::from_type(&typ);
 
     assert_serialized(&wire, json!({ "kind": "tuple", "items": [] }));

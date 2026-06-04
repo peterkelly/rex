@@ -667,12 +667,11 @@ fn instantiate_type(t: &Type, subst: &BTreeMap<usize, Type>) -> Type {
         TypeKind::Con(_) => t.clone(),
         TypeKind::App(f, a) => Type::app(instantiate_type(f, subst), instantiate_type(a, subst)),
         TypeKind::Fun(a, b) => Type::fun(instantiate_type(a, subst), instantiate_type(b, subst)),
-        TypeKind::Tuple(xs) => Type::tuple(xs.iter().map(|x| instantiate_type(x, subst)).collect()),
+        TypeKind::Tuple(xs) => Type::tuple(xs.iter().map(|x| instantiate_type(x, subst))),
         TypeKind::Record(fields) => Type::record(
             fields
                 .iter()
-                .map(|(k, v)| (k.clone(), instantiate_type(v, subst)))
-                .collect(),
+                .map(|(k, v)| (k.clone(), instantiate_type(v, subst))),
         ),
     }
 }

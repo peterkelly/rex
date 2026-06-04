@@ -1123,8 +1123,7 @@ fn qualify_module_type_refs(
         TypeKind::Tuple(elems) => Type::tuple(
             elems
                 .iter()
-                .map(|t| qualify_module_type_refs(t, module_name, local_type_names))
-                .collect(),
+                .map(|t| qualify_module_type_refs(t, module_name, local_type_names)),
         ),
         TypeKind::Record(fields) => Type::new(TypeKind::Record(
             fields

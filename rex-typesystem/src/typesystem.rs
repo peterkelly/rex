@@ -494,7 +494,7 @@ impl TypeSystem {
                     typ: if param_tvs.len() == 1 {
                         Type::var(param_tvs[0].clone())
                     } else {
-                        Type::tuple(param_tvs.into_iter().map(Type::var).collect())
+                        Type::tuple(param_tvs.into_iter().map(Type::var))
                     },
                 };
                 let scheme = Scheme::new(scheme_vars, vec![class_pred], ty);

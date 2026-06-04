@@ -822,15 +822,9 @@ pub(super) fn inject_standard_prelude(
         BuiltinTypeId::DateTime,
     ];
     for prim in prims {
-        ts.env.extend(
-            prim.as_symbol(),
-            Scheme::new(vec![], vec![], Type::builtin(prim)),
-        );
+        ts.env
+            .extend(prim.as_symbol(), scheme!(Type::builtin(prim)));
     }
-
-    // Type constructors for ADTs used in prelude schemes.
-    let result_con = Type::builtin(BuiltinTypeId::Result);
-    let option_con = Type::builtin(BuiltinTypeId::Option);
 
     // Register ADT constructors as value-level functions.
     {
@@ -878,157 +872,66 @@ pub(super) fn inject_standard_prelude(
     inject_prelude_primops(ts);
     inject_prelude_classes_and_instances(ts, decls)?;
 
-    // Helper constructors used to describe prelude schemes below.
-    let fresh_tv = |ts: &mut TypeSystem, name: &str| ts.supply.fresh(Some(Symbol::intern(name)));
-    let option_of = |t: Type| Type::app(option_con.clone(), t);
-    let result_of = |t: Type, e: Type| Type::app(Type::app(result_con.clone(), e), t);
-
     // Inject provided function declarations and schemes.
 
     // Boolean operators
     let bool_ty = Type::builtin(BuiltinTypeId::Bool);
     ts.add_value(
         "&&",
-        Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(bool_ty.clone(), Type::fun(bool_ty.clone(), bool_ty.clone())),
-        ),
+        scheme!(Type::fun(&bool_ty, Type::fun(&bool_ty, &bool_ty))),
     );
     ts.add_value(
         "||",
-        Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(bool_ty.clone(), Type::fun(bool_ty.clone(), bool_ty.clone())),
-        ),
+        scheme!(Type::fun(&bool_ty, Type::fun(&bool_ty, &bool_ty))),
     );
 
     // Collection helpers (type class based)
-    {
-        let f_tv = fresh_tv(ts, "f");
-        let a_tv = fresh_tv(ts, "a");
-        let f = Type::var(f_tv.clone());
-        let a = Type::var(a_tv.clone());
-        let fa = Type::app(f.clone(), a.clone());
-
-        ts.add_value(
-            "sum",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("AdditiveMonoid", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-        ts.add_value(
-            "mean",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("Field", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-        ts.add_value(
-            "count",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![Predicate::new("Foldable", f.clone())],
-                Type::fun(fa.clone(), Type::builtin(BuiltinTypeId::I32)),
-            ),
-        );
-        ts.add_value(
-            "min",
-            Scheme::new(
-                vec![f_tv.clone(), a_tv.clone()],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("Ord", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-        ts.add_value(
-            "max",
-            Scheme::new(
-                vec![f_tv, a_tv],
-                vec![
-                    Predicate::new("Foldable", f.clone()),
-                    Predicate::new("Ord", a.clone()),
-                ],
-                Type::fun(fa.clone(), a.clone()),
-            ),
-        );
-    }
+    let sum_scheme = scheme!(&mut ts.supply; forall [f, a]
+        where [Foldable(f), AdditiveMonoid(a)]
+        => Type::fun(Type::app(f, a), a)
+    );
+    ts.add_value("sum", sum_scheme);
+    let mean_scheme = scheme!(&mut ts.supply; forall [f, a]
+        where [Foldable(f), Field(a)]
+        => Type::fun(Type::app(f, a), a)
+    );
+    ts.add_value("mean", mean_scheme);
+    let count_scheme = scheme!(&mut ts.supply; forall [f, a]
+        where [Foldable(f)]
+        => Type::fun(Type::app(f, a), Type::builtin(BuiltinTypeId::I32))
+    );
+    ts.add_value("count", count_scheme);
+    let min_scheme = scheme!(&mut ts.supply; forall [f, a]
+        where [Foldable(f), Ord(a)]
+        => Type::fun(Type::app(f, a), a)
+    );
+    ts.add_value("min", min_scheme);
+    let max_scheme = scheme!(&mut ts.supply; forall [f, a]
+        where [Foldable(f), Ord(a)]
+        => Type::fun(Type::app(f, a), a)
+    );
+    ts.add_value("max", max_scheme);
 
     // Option helpers
-    {
-        let a_tv = fresh_tv(ts, "a");
-        let a = Type::var(a_tv.clone());
-        let opt_a = option_of(a.clone());
-        ts.add_value(
-            "unwrap",
-            Scheme::new(
-                vec![a_tv.clone()],
-                vec![],
-                Type::fun(opt_a.clone(), a.clone()),
-            ),
-        );
-        ts.add_value(
-            "is_some",
-            Scheme::new(
-                vec![a_tv.clone()],
-                vec![],
-                Type::fun(opt_a.clone(), bool_ty.clone()),
-            ),
-        );
-        ts.add_value(
-            "is_none",
-            Scheme::new(
-                vec![a_tv.clone()],
-                vec![],
-                Type::fun(opt_a.clone(), bool_ty.clone()),
-            ),
-        );
-    }
+    let unwrap_option_scheme = scheme!(&mut ts.supply; forall [a] => Type::fun(Type::option(a), a));
+    ts.add_value("unwrap", unwrap_option_scheme);
+    let is_some_scheme =
+        scheme!(&mut ts.supply; forall [a] => Type::fun(Type::option(a), &bool_ty));
+    ts.add_value("is_some", is_some_scheme);
+    let is_none_scheme =
+        scheme!(&mut ts.supply; forall [a] => Type::fun(Type::option(a), &bool_ty));
+    ts.add_value("is_none", is_none_scheme);
 
     // Result helpers
-    {
-        let t_tv = fresh_tv(ts, "t");
-        let e_tv = fresh_tv(ts, "e");
-        let t = Type::var(t_tv.clone());
-        let e = Type::var(e_tv.clone());
-        let res_te = result_of(t.clone(), e.clone());
-        ts.add_overload(
-            "unwrap",
-            Scheme::new(
-                vec![t_tv.clone(), e_tv.clone()],
-                vec![],
-                Type::fun(res_te.clone(), t.clone()),
-            ),
-        );
-        ts.add_value(
-            "is_ok",
-            Scheme::new(
-                vec![t_tv.clone(), e_tv.clone()],
-                vec![],
-                Type::fun(res_te.clone(), bool_ty.clone()),
-            ),
-        );
-        ts.add_value(
-            "is_err",
-            Scheme::new(
-                vec![t_tv.clone(), e_tv.clone()],
-                vec![],
-                Type::fun(res_te.clone(), bool_ty.clone()),
-            ),
-        );
-    }
+    let unwrap_result_scheme =
+        scheme!(&mut ts.supply; forall [t, e] => Type::fun(Type::result(t, e), t));
+    ts.add_overload("unwrap", unwrap_result_scheme);
+    let is_ok_scheme =
+        scheme!(&mut ts.supply; forall [t, e] => Type::fun(Type::result(t, e), &bool_ty));
+    ts.add_value("is_ok", is_ok_scheme);
+    let is_err_scheme =
+        scheme!(&mut ts.supply; forall [t, e] => Type::fun(Type::result(t, e), &bool_ty));
+    ts.add_value("is_err", is_err_scheme);
 
     Ok(())
 }

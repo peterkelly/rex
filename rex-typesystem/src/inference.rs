@@ -551,8 +551,7 @@ fn infer_app_arg_type(
             let record_ty = Type::record(
                 fields
                     .iter()
-                    .map(|(k, v)| (k.clone(), unifier.apply_type(v)))
-                    .collect(),
+                    .map(|(k, v)| (k.clone(), unifier.apply_type(v))),
             );
             Ok((preds, record_ty))
         }
@@ -616,8 +615,7 @@ fn infer_app_arg_typed(
             let record_ty = Type::record(
                 fields
                     .iter()
-                    .map(|(k, v)| (k.clone(), unifier.apply_type(v)))
-                    .collect(),
+                    .map(|(k, v)| (k.clone(), unifier.apply_type(v))),
             );
             let typed = TypedExpr::new(record_ty.clone(), TypedExprKind::Dict(typed_kvs));
             Ok((preds, record_ty, typed))

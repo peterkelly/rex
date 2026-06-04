@@ -267,7 +267,7 @@ fn unit_type_parses_and_infers() {
     ts.register_decls(&program.decls).unwrap();
     let (preds, ty) = infer(&mut ts, program.body.as_ref().unwrap().as_ref()).unwrap();
     assert!(preds.is_empty());
-    assert_eq!(ty, Type::tuple(vec![]));
+    assert_eq!(ty, Type::tuple(Vec::<Type>::new()));
 }
 
 fn strip_span(mut err: TypeError) -> TypeError {

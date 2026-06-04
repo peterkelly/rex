@@ -1,5 +1,57 @@
 //! Prelude injection helpers for Rex.
 
+macro_rules! scheme_class_name {
+    ($class:ident) => {
+        stringify!($class)
+    };
+    ($class:literal) => {
+        $class
+    };
+}
+
+macro_rules! scheme_pred {
+    ($class:tt($typ:expr)) => {
+        Predicate::new(scheme_class_name!($class), $typ)
+    };
+    ($class:tt($first:expr, $($rest:expr),+ $(,)?)) => {
+        Predicate::new(
+            scheme_class_name!($class),
+            Type::tuple(vec![Into::<Type>::into($first), $(Into::<Type>::into($rest)),+]),
+        )
+    };
+}
+
+macro_rules! scheme {
+    ($typ:expr $(,)?) => {
+        Scheme::new(vec![], vec![], $typ)
+    };
+    ($supply:expr; forall [$($v:ident),* $(,)?] => $typ:expr $(,)?) => {{
+        let mut vars = Vec::new();
+        $(
+            let tv = ($supply).fresh(Some(Symbol::intern(stringify!($v))));
+            let $v = &Type::var(tv.clone());
+            vars.push(tv);
+        )*
+        Scheme::new(vars, vec![], $typ)
+    }};
+    ($supply:expr; forall [$($v:ident),* $(,)?]
+        where [$($class:tt($($arg:expr),+)),* $(,)?]
+        => $typ:expr $(,)?
+    ) => {{
+        let mut vars = Vec::new();
+        $(
+            let tv = ($supply).fresh(Some(Symbol::intern(stringify!($v))));
+            let $v = &Type::var(tv.clone());
+            vars.push(tv);
+        )*
+        Scheme::new(
+            vars,
+            vec![$(scheme_pred!($class($($arg),+))),*],
+            $typ,
+        )
+    }};
+}
+
 mod type_system;
 
 use std::{
@@ -710,14 +762,9 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
     // primitive, but we *can* express the element comparison: the primitive
     // calls `(==)` on each pair.
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::app(Type::builtin(BuiltinTypeId::Array), a);
         let bool_ty = Type::builtin(BuiltinTypeId::Bool);
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(array_a.clone(), Type::fun(array_a.clone(), bool_ty.clone())),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::array(a), Type::fun(Type::array(a), &bool_ty))
         );
         engine.export_native_scheduler(
             "prim_array_eq",
@@ -747,11 +794,6 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
             },
         )?;
 
-        let scheme = Scheme::new(
-            vec![a_tv],
-            vec![],
-            Type::fun(array_a.clone(), Type::fun(array_a, bool_ty.clone())),
-        );
         engine.export_native_scheduler("prim_array_ne", scheme, 2, |engine, call_type, args| {
             let (lhs_ty, rhs_ty) = binary_arg_types(&call_type)?;
             let subst = unify(&lhs_ty, &rhs_ty).map_err(|_| EngineError::NativeType {
@@ -869,16 +911,8 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
 
     let f32_ty = Type::builtin(BuiltinTypeId::F32);
-    let f32_bool = Scheme::new(
-        vec![],
-        vec![],
-        Type::fun(f32_ty.clone(), Type::fun(f32_ty.clone(), bool_ty.clone())),
-    );
-    let f32_cmp = Scheme::new(
-        vec![],
-        vec![],
-        Type::fun(f32_ty.clone(), Type::fun(f32_ty.clone(), i32_ty.clone())),
-    );
+    let f32_bool = scheme!(Type::fun(&f32_ty, Type::fun(&f32_ty, &bool_ty)));
+    let f32_cmp = scheme!(Type::fun(&f32_ty, Type::fun(&f32_ty, &i32_ty)));
     for (name, pred) in [
         (
             "prim_lt",
@@ -923,16 +957,8 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
     })?;
 
     let f64_ty = Type::builtin(BuiltinTypeId::F64);
-    let f64_bool = Scheme::new(
-        vec![],
-        vec![],
-        Type::fun(f64_ty.clone(), Type::fun(f64_ty.clone(), bool_ty.clone())),
-    );
-    let f64_cmp = Scheme::new(
-        vec![],
-        vec![],
-        Type::fun(f64_ty.clone(), Type::fun(f64_ty.clone(), i32_ty)),
-    );
+    let f64_bool = scheme!(Type::fun(&f64_ty, Type::fun(&f64_ty, &bool_ty)));
+    let f64_cmp = scheme!(Type::fun(&f64_ty, Type::fun(&f64_ty, &i32_ty)));
     for (name, pred) in [
         (
             "prim_lt",
@@ -1201,11 +1227,10 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
     {
         macro_rules! inject_f64_to {
             ($name:literal, $dst_ty:expr, $convert:expr) => {{
-                let scheme = Scheme::new(
-                    vec![],
-                    vec![],
-                    Type::fun(Type::builtin(BuiltinTypeId::F64), Type::option($dst_ty)),
-                );
+                let scheme = scheme!(Type::fun(
+                    Type::builtin(BuiltinTypeId::F64),
+                    Type::option($dst_ty),
+                ));
                 engine.export_native($name, scheme, 1, move |engine, _t, args| {
                     let x = args[0].as_f64()?;
                     let converted: Option<Handle> = $convert(&engine, x)?;
@@ -1329,15 +1354,8 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 ) -> Result<(), EngineError> {
     // List/Array conversion helpers.
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let array_a = Type::array(a);
-
-        let list_to_array_scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(list_a.clone(), array_a.clone()),
+        let list_to_array_scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(a), Type::array(a))
         );
         engine.export_native(
             "prim_array_from_list",
@@ -1353,7 +1371,9 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
             engine.heap().alloc_array(values)
         })?;
 
-        let array_to_list_scheme = Scheme::new(vec![a_tv], vec![], Type::fun(array_a, list_a));
+        let array_to_list_scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::array(a), Type::list(a))
+        );
         engine.export_native(
             "prim_list_from_array",
             array_to_list_scheme.clone(),
@@ -1371,19 +1391,11 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 
     // Dict mapping and traversal helpers (used by `std.json`).
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let dict_a = Type::dict(a.clone());
-        let dict_b = Type::dict(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), b.clone()),
-                Type::fun(dict_a.clone(), dict_b),
-            ),
+                Type::fun(a, b),
+                Type::fun(Type::dict(a), Type::dict(b)),
+            )
         );
         engine.export_native_scheduler("prim_dict_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -1406,21 +1418,11 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let e = Type::var(e_tv.clone());
-        let dict_a = Type::dict(a.clone());
-        let dict_b = Type::dict(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv, e_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b, e] =>
             Type::fun(
-                Type::fun(a.clone(), Type::result(b.clone(), e.clone())),
-                Type::fun(dict_a.clone(), Type::result(dict_b, e.clone())),
-            ),
+                Type::fun(a, Type::result(b, e)),
+                Type::fun(Type::dict(a), Type::result(Type::dict(b), e)),
+            )
         );
         engine.export_native_scheduler(
             "prim_dict_traverse_result",
@@ -1450,11 +1452,7 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     {
         let string_ty = Type::builtin(BuiltinTypeId::String);
         let uuid_ty = Type::builtin(BuiltinTypeId::Uuid);
-        let scheme = Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(string_ty.clone(), Type::option(uuid_ty)),
-        );
+        let scheme = scheme!(Type::fun(&string_ty, Type::option(uuid_ty)));
         engine.export_native("prim_parse_uuid", scheme, 1, |engine, _, args| {
             let s = args[0].as_string()?;
             let parsed = Uuid::parse_str(&s)
@@ -1468,11 +1466,7 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     {
         let string_ty = Type::builtin(BuiltinTypeId::String);
         let dt_ty = Type::builtin(BuiltinTypeId::DateTime);
-        let scheme = Scheme::new(
-            vec![],
-            vec![],
-            Type::fun(string_ty.clone(), Type::option(dt_ty)),
-        );
+        let scheme = scheme!(Type::fun(&string_ty, Type::option(dt_ty)));
         engine.export_native("prim_parse_datetime", scheme, 1, |engine, _, args| {
             let s = args[0].as_string()?;
             let parsed = DateTime::parse_from_rfc3339(&s)
@@ -1488,10 +1482,10 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     //
     // Used by `std.json` to implement `Show Value` (JSON-encoded string).
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
         let string_ty = Type::builtin(BuiltinTypeId::String);
-        let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, string_ty));
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(a, &string_ty)
+        );
 
         #[derive(Clone)]
         struct Tags {
@@ -1593,12 +1587,10 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
     // qualified `std.json.Value` type. It's a primop, so we keep it minimal and
     // let `std.json.parse/from_string` wrap the string error into `DecodeError`.
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
         let string_ty = Type::builtin(BuiltinTypeId::String);
-        let result_con = Type::builtin(BuiltinTypeId::Result);
-        let result_as = Type::app(Type::app(result_con, string_ty.clone()), a);
-        let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(string_ty.clone(), result_as));
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(&string_ty, Type::result(a, &string_ty))
+        );
 
         #[derive(Clone)]
         struct Tags {
@@ -1693,19 +1685,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     engine: &mut Engine<State>,
 ) -> Result<(), EngineError> {
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_a = Type::list(a.clone());
-        let list_b = Type::list(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), b.clone()),
-                Type::fun(list_a.clone(), list_b),
-            ),
+                Type::fun(a, b),
+                Type::fun(Type::list(a), Type::list(b)),
+            )
         );
         engine.export_native_scheduler("prim_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -1729,19 +1713,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_a = Type::array(a.clone());
-        let array_b = Type::array(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), b.clone()),
-                Type::fun(array_a.clone(), array_b),
-            ),
+                Type::fun(a, b),
+                Type::fun(Type::array(a), Type::array(b)),
+            )
         );
         engine.export_native_scheduler("prim_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -1765,29 +1741,20 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(vec![a_tv], vec![], Type::fun(a, array_a));
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(a, Type::array(a))
+        );
         engine.export_native("prim_array_singleton", scheme, 1, |engine, _, args| {
             engine.heap().alloc_array(vec![args[0].clone()])
         })?;
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let opt_b = Type::option(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), b.clone()),
-                Type::fun(opt_a.clone(), opt_b),
-            ),
+                Type::fun(a, b),
+                Type::fun(Type::option(a), Type::option(b)),
+            )
         );
         engine.export_native_scheduler("prim_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -1813,21 +1780,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let e = Type::var(e_tv.clone());
-        let result_a = Type::result(a.clone(), e.clone());
-        let result_b = Type::result(b.clone(), e.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv, e_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b, e] =>
             Type::fun(
-                Type::fun(a.clone(), b.clone()),
-                Type::fun(result_a.clone(), result_b),
-            ),
+                Type::fun(a, b),
+                Type::fun(Type::result(a, e), Type::result(b, e)),
+            )
         );
         engine.export_native_scheduler("prim_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -1853,18 +1810,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(list_a.clone(), b.clone())),
-            ),
+                Type::fun(b, Type::fun(a, b)),
+                Type::fun(b, Type::fun(Type::list(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_foldl", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -1895,18 +1845,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(array_a.clone(), b.clone())),
-            ),
+                Type::fun(b, Type::fun(a, b)),
+                Type::fun(b, Type::fun(Type::array(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_foldl", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -1937,18 +1880,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(opt_a.clone(), b.clone())),
-            ),
+                Type::fun(b, Type::fun(a, b)),
+                Type::fun(b, Type::fun(Type::option(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_foldl", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -1979,18 +1915,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), Type::fun(b.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(list_a.clone(), b.clone())),
-            ),
+                Type::fun(a, Type::fun(b, b)),
+                Type::fun(b, Type::fun(Type::list(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_foldr", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -2022,18 +1951,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), Type::fun(b.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(array_a.clone(), b.clone())),
-            ),
+                Type::fun(a, Type::fun(b, b)),
+                Type::fun(b, Type::fun(Type::array(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_foldr", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -2065,18 +1987,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), Type::fun(b.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(opt_a.clone(), b.clone())),
-            ),
+                Type::fun(a, Type::fun(b, b)),
+                Type::fun(b, Type::fun(Type::option(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_foldr", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -2107,18 +2022,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(list_a.clone(), b.clone())),
-            ),
+                Type::fun(b, Type::fun(a, b)),
+                Type::fun(b, Type::fun(Type::list(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_fold", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -2149,18 +2057,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(array_a.clone(), b.clone())),
-            ),
+                Type::fun(b, Type::fun(a, b)),
+                Type::fun(b, Type::fun(Type::array(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_fold", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -2191,18 +2092,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(b.clone(), Type::fun(a.clone(), b.clone())),
-                Type::fun(b.clone(), Type::fun(opt_a.clone(), b.clone())),
-            ),
+                Type::fun(b, Type::fun(a, b)),
+                Type::fun(b, Type::fun(Type::option(a), b)),
+            )
         );
         engine.export_native_scheduler("prim_fold", scheme, 3, |engine, call_type, args| {
             let (arg_tys, res_ty) = split_fun_chain(&call_type, 3)?;
@@ -2233,16 +2127,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::fun(a.clone(), Type::builtin(BuiltinTypeId::Bool)),
-                Type::fun(list_a.clone(), list_a),
-            ),
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::list(a), Type::list(a)),
+            )
         );
         engine.export_native_scheduler("prim_filter", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2266,16 +2155,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::fun(a.clone(), Type::builtin(BuiltinTypeId::Bool)),
-                Type::fun(array_a.clone(), array_a),
-            ),
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::array(a), Type::array(a)),
+            )
         );
         engine.export_native_scheduler("prim_filter", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2299,16 +2183,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::fun(a.clone(), Type::builtin(BuiltinTypeId::Bool)),
-                Type::fun(opt_a.clone(), opt_a),
-            ),
+                Type::fun(a, Type::builtin(BuiltinTypeId::Bool)),
+                Type::fun(Type::option(a), Type::option(a)),
+            )
         );
         engine.export_native_scheduler("prim_filter", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2334,19 +2213,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_a = Type::list(a.clone());
-        let list_b = Type::list(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), Type::option(b.clone())),
-                Type::fun(list_a.clone(), list_b),
-            ),
+                Type::fun(a, Type::option(b)),
+                Type::fun(Type::list(a), Type::list(b)),
+            )
         );
         engine.export_native_scheduler(
             "prim_filter_map",
@@ -2375,19 +2246,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_a = Type::array(a.clone());
-        let array_b = Type::array(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), Type::option(b.clone())),
-                Type::fun(array_a.clone(), array_b),
-            ),
+                Type::fun(a, Type::option(b)),
+                Type::fun(Type::array(a), Type::array(b)),
+            )
         );
         engine.export_native_scheduler(
             "prim_filter_map",
@@ -2416,19 +2279,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let opt_b = Type::option(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), Type::option(b.clone())),
-                Type::fun(opt_a.clone(), opt_b),
-            ),
+                Type::fun(a, Type::option(b)),
+                Type::fun(Type::option(a), Type::option(b)),
+            )
         );
         engine.export_native_scheduler(
             "prim_filter_map",
@@ -2458,19 +2313,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_a = Type::list(a.clone());
-        let list_b = Type::list(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), list_b.clone()),
-                Type::fun(list_a.clone(), list_b),
-            ),
+                Type::fun(a, Type::list(b)),
+                Type::fun(Type::list(a), Type::list(b)),
+            )
         );
         engine.export_native_scheduler("prim_flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2494,19 +2341,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_a = Type::array(a.clone());
-        let array_b = Type::array(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), array_b.clone()),
-                Type::fun(array_a.clone(), array_b),
-            ),
+                Type::fun(a, Type::array(b)),
+                Type::fun(Type::array(a), Type::array(b)),
+            )
         );
         engine.export_native_scheduler("prim_flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2530,19 +2369,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let opt_b = Type::option(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
             Type::fun(
-                Type::fun(a.clone(), opt_b.clone()),
-                Type::fun(opt_a.clone(), opt_b),
-            ),
+                Type::fun(a, Type::option(b)),
+                Type::fun(Type::option(a), Type::option(b)),
+            )
         );
         engine.export_native_scheduler("prim_flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2568,21 +2399,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let e = Type::var(e_tv.clone());
-        let result_a = Type::result(a.clone(), e.clone());
-        let result_b = Type::result(b.clone(), e.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv, e_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b, e] =>
             Type::fun(
-                Type::fun(a.clone(), result_b.clone()),
-                Type::fun(result_a.clone(), result_b),
-            ),
+                Type::fun(a, Type::result(b, e)),
+                Type::fun(Type::result(a, e), Type::result(b, e)),
+            )
         );
         engine.export_native_scheduler("prim_flat_map", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2608,16 +2429,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::fun(list_a.clone(), list_a.clone()),
-                Type::fun(list_a.clone(), list_a),
-            ),
+                Type::fun(Type::list(a), Type::list(a)),
+                Type::fun(Type::list(a), Type::list(a)),
+            )
         );
         engine.export_native_scheduler("prim_or_else", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2638,16 +2454,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::fun(array_a.clone(), array_a.clone()),
-                Type::fun(array_a.clone(), array_a),
-            ),
+                Type::fun(Type::array(a), Type::array(a)),
+                Type::fun(Type::array(a), Type::array(a)),
+            )
         );
         engine.export_native_scheduler("prim_or_else", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2668,16 +2479,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
-                Type::fun(opt_a.clone(), opt_a.clone()),
-                Type::fun(opt_a.clone(), opt_a),
-            ),
+                Type::fun(Type::option(a), Type::option(a)),
+                Type::fun(Type::option(a), Type::option(a)),
+            )
         );
         engine.export_native_scheduler("prim_or_else", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2698,18 +2504,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let e_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("e")));
-        let a = Type::var(a_tv.clone());
-        let e = Type::var(e_tv.clone());
-        let result_a = Type::result(a.clone(), e.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, e_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, e] =>
             Type::fun(
-                Type::fun(result_a.clone(), result_a.clone()),
-                Type::fun(result_a.clone(), result_a),
-            ),
+                Type::fun(Type::result(a, e), Type::result(a, e)),
+                Type::fun(Type::result(a, e), Type::result(a, e)),
+            )
         );
         engine.export_native_scheduler("prim_or_else", scheme, 2, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 2)?;
@@ -2730,13 +2529,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(list_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(a), a)
         );
         engine.export_native_scheduler("sum", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
@@ -2756,13 +2550,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(array_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::array(a), a)
         );
         engine.export_native_scheduler("sum", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
@@ -2782,13 +2571,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(opt_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::option(a), a)
         );
         engine.export_native_scheduler("sum", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
@@ -2808,13 +2592,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(list_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(a), a)
         );
         engine.export_native_scheduler("mean", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
@@ -2838,13 +2617,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(array_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::array(a), a)
         );
         engine.export_native_scheduler("mean", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
@@ -2868,13 +2642,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(opt_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::option(a), a)
         );
         engine.export_native_scheduler("mean", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(&call_type, 1)?;
@@ -2898,13 +2667,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(list_a.clone(), Type::builtin(BuiltinTypeId::I32)),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(a), Type::builtin(BuiltinTypeId::I32))
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine.heap().alloc_i32(args[0].as_list()?.len() as i32)
@@ -2912,13 +2676,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(array_a.clone(), Type::builtin(BuiltinTypeId::I32)),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::array(a), Type::builtin(BuiltinTypeId::I32))
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine.heap().alloc_i32(args[0].as_array()?.len() as i32)
@@ -2926,13 +2685,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(opt_a.clone(), Type::builtin(BuiltinTypeId::I32)),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::option(a), Type::builtin(BuiltinTypeId::I32))
         );
         engine.export_native("count", scheme, 1, |engine, _, args| {
             engine
@@ -2942,16 +2696,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
                 Type::builtin(BuiltinTypeId::I32),
-                Type::fun(list_a.clone(), list_a),
-            ),
+                Type::fun(Type::list(a), Type::list(a)),
+            )
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
@@ -2962,16 +2711,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
                 Type::builtin(BuiltinTypeId::I32),
-                Type::fun(array_a.clone(), array_a),
-            ),
+                Type::fun(Type::array(a), Type::array(a)),
+            )
         );
         engine.export_native("prim_take", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
@@ -2982,16 +2726,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
                 Type::builtin(BuiltinTypeId::I32),
-                Type::fun(list_a.clone(), list_a),
-            ),
+                Type::fun(Type::list(a), Type::list(a)),
+            )
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
@@ -3002,16 +2741,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
                 Type::builtin(BuiltinTypeId::I32),
-                Type::fun(array_a.clone(), array_a),
-            ),
+                Type::fun(Type::array(a), Type::array(a)),
+            )
         );
         engine.export_native("prim_skip", scheme, 2, |engine, _, args| {
             let n = args[0].as_i32()?;
@@ -3022,16 +2756,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
                 Type::builtin(BuiltinTypeId::I32),
-                Type::fun(list_a.clone(), a.clone()),
-            ),
+                Type::fun(Type::list(a), a),
+            )
         );
         engine.export_native("prim_get", scheme, 2, |_, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
@@ -3045,16 +2774,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
                 Type::builtin(BuiltinTypeId::I32),
-                Type::fun(array_a.clone(), a.clone()),
-            ),
+                Type::fun(Type::array(a), a),
+            )
         );
         engine.export_native("prim_get", scheme, 2, |_, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
@@ -3068,16 +2792,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     for size in 2..=32 {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let tuple = Type::tuple(vec![a.clone(); size]);
-        let scheme = Scheme::new(
-            vec![a_tv],
-            vec![],
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
             Type::fun(
                 Type::builtin(BuiltinTypeId::I32),
-                Type::fun(tuple.clone(), a.clone()),
-            ),
+                Type::fun(Type::tuple(vec![a; size]), a),
+            )
         );
         engine.export_native("prim_get", scheme, 2, move |_, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 2)?;
@@ -3097,17 +2816,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_a = Type::list(a.clone());
-        let list_b = Type::list(b.clone());
-        let list_pair = Type::list(Type::tuple(vec![a.clone(), b.clone()]));
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
-            Type::fun(list_a.clone(), Type::fun(list_b.clone(), list_pair)),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
+            Type::fun(
+                Type::list(a),
+                Type::fun(Type::list(b), Type::list(Type::tuple(vec![a, b]))),
+            )
         );
         engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
             let xs = args[0].as_list()?;
@@ -3118,17 +2831,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_a = Type::array(a.clone());
-        let array_b = Type::array(b.clone());
-        let array_pair = Type::array(Type::tuple(vec![a.clone(), b.clone()]));
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
-            Type::fun(array_a.clone(), Type::fun(array_b.clone(), array_pair)),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
+            Type::fun(
+                Type::array(a),
+                Type::fun(Type::array(b), Type::array(Type::tuple(vec![a, b]))),
+            )
         );
         engine.export_native("prim_zip", scheme, 2, |engine, _, args| {
             let xs = args[0].as_array()?;
@@ -3139,17 +2846,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let list_pair = Type::list(Type::tuple(vec![a.clone(), b.clone()]));
-        let list_a = Type::list(a.clone());
-        let list_b = Type::list(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
-            Type::fun(list_pair.clone(), Type::tuple(vec![list_a, list_b])),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
+            Type::fun(
+                Type::list(Type::tuple(vec![a, b])),
+                Type::tuple(vec![Type::list(a), Type::list(b)]),
+            )
         );
         engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
             let pairs = args[0].as_list()?;
@@ -3161,17 +2862,11 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let b_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("b")));
-        let a = Type::var(a_tv.clone());
-        let b = Type::var(b_tv.clone());
-        let array_pair = Type::array(Type::tuple(vec![a.clone(), b.clone()]));
-        let array_a = Type::array(a.clone());
-        let array_b = Type::array(b.clone());
-        let scheme = Scheme::new(
-            vec![a_tv, b_tv],
-            vec![],
-            Type::fun(array_pair.clone(), Type::tuple(vec![array_a, array_b])),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
+            Type::fun(
+                Type::array(Type::tuple(vec![a, b])),
+                Type::tuple(vec![Type::array(a), Type::array(b)]),
+            )
         );
         engine.export_native("prim_unzip", scheme, 1, |engine, _, args| {
             let pairs = args[0].as_array()?;
@@ -3183,13 +2878,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(list_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(a), a)
         );
         engine.export_native("min", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
@@ -3207,13 +2897,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(array_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::array(a), a)
         );
         engine.export_native("min", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
@@ -3231,13 +2916,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(opt_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::option(a), a)
         );
         engine.export_native("min", scheme, 1, |_, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
@@ -3251,13 +2931,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let list_a = Type::list(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(list_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::list(a), a)
         );
         engine.export_native("max", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
@@ -3275,13 +2950,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let array_a = Type::array(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(array_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::array(a), a)
         );
         engine.export_native("max", scheme, 1, |engine, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;
@@ -3299,13 +2969,8 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
     }
 
     {
-        let a_tv = engine.type_system.fresh_type_var(Some(Symbol::intern("a")));
-        let a = Type::var(a_tv.clone());
-        let opt_a = Type::option(a.clone());
-        let scheme = Scheme::new(
-            vec![a_tv.clone()],
-            vec![],
-            Type::fun(opt_a.clone(), a.clone()),
+        let scheme = scheme!(&mut engine.type_system.supply; forall [a] =>
+            Type::fun(Type::option(a), a)
         );
         engine.export_native("max", scheme, 1, |_, call_type, args| {
             let (arg_tys, _res_ty) = split_fun_chain(call_type, 1)?;

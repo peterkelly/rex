@@ -190,6 +190,12 @@ impl PartialOrd for TypeConst {
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Type(Arc<TypeKind>);
 
+impl From<&Type> for Type {
+    fn from(value: &Type) -> Self {
+        value.clone()
+    }
+}
+
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub enum TypeKind {
     Var(TypeVar),
@@ -233,46 +239,58 @@ impl Type {
         Type::new(TypeKind::Var(tv))
     }
 
-    pub fn fun(a: Type, b: Type) -> Self {
-        Type::new(TypeKind::Fun(a, b))
+    pub fn fun(a: impl Into<Type>, b: impl Into<Type>) -> Self {
+        Type::new(TypeKind::Fun(a.into(), b.into()))
     }
 
-    pub fn app(f: Type, arg: Type) -> Self {
-        Type::new(TypeKind::App(f, arg))
+    pub fn app(f: impl Into<Type>, arg: impl Into<Type>) -> Self {
+        Type::new(TypeKind::App(f.into(), arg.into()))
     }
 
-    pub fn tuple(elems: Vec<Type>) -> Self {
-        Type::new(TypeKind::Tuple(elems))
+    pub fn tuple<I, T>(elems: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<Type>,
+    {
+        Type::new(TypeKind::Tuple(elems.into_iter().map(Into::into).collect()))
     }
 
-    pub fn record(mut fields: Vec<(Symbol, Type)>) -> Self {
+    pub fn record<I, T>(fields: I) -> Self
+    where
+        I: IntoIterator<Item = (Symbol, T)>,
+        T: Into<Type>,
+    {
+        let mut fields: Vec<(Symbol, Type)> = fields
+            .into_iter()
+            .map(|(name, typ)| (name, typ.into()))
+            .collect();
         // Canonicalize records so downstream code can rely on “same shape means
         // same ordering”. (This is a correctness invariant, not a nicety.)
         fields.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
         Type::new(TypeKind::Record(fields))
     }
 
-    pub fn list(elem: Type) -> Type {
+    pub fn list(elem: impl Into<Type>) -> Type {
         Type::app(Type::builtin(BuiltinTypeId::List), elem)
     }
 
-    pub fn array(elem: Type) -> Type {
+    pub fn array(elem: impl Into<Type>) -> Type {
         Type::app(Type::builtin(BuiltinTypeId::Array), elem)
     }
 
-    pub fn dict(elem: Type) -> Type {
+    pub fn dict(elem: impl Into<Type>) -> Type {
         Type::app(Type::builtin(BuiltinTypeId::Dict), elem)
     }
 
-    pub fn option(elem: Type) -> Type {
+    pub fn option(elem: impl Into<Type>) -> Type {
         Type::app(Type::builtin(BuiltinTypeId::Option), elem)
     }
 
-    pub fn promise(elem: Type) -> Type {
+    pub fn promise(elem: impl Into<Type>) -> Type {
         Type::app(Type::builtin(BuiltinTypeId::Promise), elem)
     }
 
-    pub fn result(ok: Type, err: Type) -> Type {
+    pub fn result(ok: impl Into<Type>, err: impl Into<Type>) -> Type {
         Type::app(Type::app(Type::builtin(BuiltinTypeId::Result), err), ok)
     }
 
@@ -466,10 +484,10 @@ pub struct Predicate {
 }
 
 impl Predicate {
-    pub fn new(class: impl AsRef<str>, typ: Type) -> Self {
+    pub fn new(class: impl AsRef<str>, typ: impl Into<Type>) -> Self {
         Self {
             class: Symbol::intern(class.as_ref()),
-            typ,
+            typ: typ.into(),
         }
     }
 }
@@ -482,8 +500,12 @@ pub struct Scheme {
 }
 
 impl Scheme {
-    pub fn new(vars: Vec<TypeVar>, preds: Vec<Predicate>, typ: Type) -> Self {
-        Self { vars, preds, typ }
+    pub fn new(vars: Vec<TypeVar>, preds: Vec<Predicate>, typ: impl Into<Type>) -> Self {
+        Self {
+            vars,
+            preds,
+            typ: typ.into(),
+        }
     }
 }
 
@@ -627,7 +649,10 @@ fn collect_typed_tail_app_chain(
 }
 
 fn typed_drop_placeholder() -> Arc<TypedExpr> {
-    Arc::new(TypedExpr::new(Type::tuple(vec![]), TypedExprKind::Hole))
+    Arc::new(TypedExpr::new(
+        Type::tuple(Vec::<Type>::new()),
+        TypedExprKind::Hole,
+    ))
 }
 
 fn drain_typed_expr_kind(kind: &mut TypedExprKind, stack: &mut Vec<Arc<TypedExpr>>) {
@@ -1227,7 +1252,7 @@ impl<T: RexType, E: RexType> RexType for Result<T, E> {
 
 impl RexType for () {
     fn rex_type() -> Type {
-        Type::tuple(vec![])
+        Type::tuple(Vec::<Type>::new())
     }
 }
 
