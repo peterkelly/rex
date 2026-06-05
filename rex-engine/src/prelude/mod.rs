@@ -72,7 +72,7 @@ use uuid::Uuid;
 
 use crate::{
     Context, EngineError,
-    builder::engine::{Engine, StaticModuleImporter},
+    builder::core::{Builder, StaticModuleImporter},
     evaluator::{
         native_callable::SchedulerNativeResult,
         native_functions::{
@@ -120,7 +120,7 @@ pub fn standard_type_system() -> Result<TypeSystem, EngineError> {
     Ok(ts)
 }
 
-pub(crate) fn inject_prelude<State>(engine: &mut Engine<State>) -> Result<(), EngineError>
+pub(crate) fn inject_prelude<State>(engine: &mut Builder<State>) -> Result<(), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
@@ -138,7 +138,7 @@ where
 }
 
 fn register_prelude_typeclass_instances<State>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -164,12 +164,16 @@ where
 }
 
 pub(crate) fn inject_prelude_virtual_module<State>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    if engine.virtual_modules.contains_key(PRELUDE_MODULE_NAME) {
+    if engine
+        .module_loader
+        .virtual_modules
+        .contains_key(PRELUDE_MODULE_NAME)
+    {
         return Ok(());
     }
 
@@ -223,12 +227,14 @@ where
         body: None,
     };
     engine
+        .module_loader
         .module_exports_cache
         .insert(module_id.clone(), exports.clone());
     engine
+        .module_loader
         .module_interface_cache
         .insert(module_id.clone(), Vec::new());
-    engine.virtual_modules.insert(
+    engine.module_loader.virtual_modules.insert(
         PRELUDE_MODULE_NAME.to_string(),
         VirtualModule {
             exports,
@@ -237,7 +243,8 @@ where
         },
     );
     engine
-        .modules
+        .module_loader
+        .system
         .prepend_importer(Arc::new(StaticModuleImporter {
             module_name: PRELUDE_MODULE_NAME.to_string(),
             resolved: ResolvedModule {
@@ -678,7 +685,7 @@ fn cmp_cell_by_type(
 }
 
 fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     let mut list_adt = engine.adt_decl("List", &["a"]);
     let a_name = Symbol::intern("a");
@@ -715,7 +722,7 @@ fn inject_prelude_adts<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     // Equality primitives are monomorphic overloads (same name, different
     // concrete types), matching the numeric `prim_add` style.
@@ -822,7 +829,7 @@ fn inject_equality_ops<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_order_ops<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     fn cmp_to_i32(ord: std::cmp::Ordering) -> i32 {
         match ord {
@@ -1006,7 +1013,7 @@ fn inject_order_ops<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_show_ops<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     engine.export("prim_show", |_: &State, x: bool| Ok(x.to_string()))?;
     engine.export("prim_show", |_: &State, x: u8| Ok(x.to_string()))?;
@@ -1026,7 +1033,7 @@ fn inject_show_ops<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     engine.export("(&&)", |_: &State, a: bool, b: bool| Ok(a && b))?;
     engine.export("(||)", |_: &State, a: bool, b: bool| Ok(a || b))?;
@@ -1034,7 +1041,7 @@ fn inject_boolean_ops<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     macro_rules! export_checked_unsigned_add {
         ($ty:ty) => {
@@ -1350,7 +1357,7 @@ fn inject_numeric_ops<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_json_primops<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     // List/Array conversion helpers.
     {
@@ -1682,7 +1689,7 @@ fn inject_json_primops<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     {
         let scheme = scheme!(&mut engine.type_system.supply; forall [a, b] =>
@@ -2987,7 +2994,7 @@ fn inject_list_builtins<State: Clone + Send + Sync + 'static>(
 }
 
 fn inject_option_result_builtins<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    engine: &mut Builder<State>,
 ) -> Result<(), EngineError> {
     let unwrap = Symbol::intern("unwrap");
     let unwrap_schemes = engine
@@ -3195,8 +3202,9 @@ mod tests {
     }
 
     fn primitive_schemes_in_runtime() -> BTreeMap<Symbol, Vec<Scheme>> {
-        let engine = Engine::with_prelude(()).unwrap();
-        engine
+        let builder = Builder::with_prelude(()).unwrap();
+        builder
+            .runtime
             .natives
             .entries
             .iter()

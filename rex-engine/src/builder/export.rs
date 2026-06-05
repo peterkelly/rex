@@ -1,5 +1,5 @@
 use crate::{
-    builder::engine::{Engine, NativeRegistration},
+    builder::core::{Builder, NativeRegistration},
     error::EngineError,
     evaluator::{
         context::Context,
@@ -16,7 +16,7 @@ use rex_typesystem::types::{RexType, Scheme, Type};
 use std::sync::Arc;
 
 type ExportInjector<State> =
-    Box<dyn FnOnce(&mut Engine<State>, &str) -> Result<(), EngineError> + Send + 'static>;
+    Box<dyn FnOnce(&mut Builder<State>, &str) -> Result<(), EngineError> + Send + 'static>;
 
 pub struct Export<State: Clone + Send + Sync + 'static> {
     pub name: String,
@@ -166,7 +166,7 @@ pub trait HostFnSync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + '
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         Self::interface_decl(export_name)
     }
-    fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError>;
+    fn inject(self, engine: &mut Builder<State>, export_name: &str) -> Result<(), EngineError>;
 }
 
 pub trait HostFnAsync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
@@ -174,8 +174,11 @@ pub trait HostFnAsync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         Self::interface_decl(export_name)
     }
-    fn inject_async(self, engine: &mut Engine<State>, export_name: &str)
-    -> Result<(), EngineError>;
+    fn inject_async(
+        self,
+        engine: &mut Builder<State>,
+        export_name: &str,
+    ) -> Result<(), EngineError>;
 }
 
 pub type NativeFuture = BoxFuture<'static, Result<Handle, EngineError>>;

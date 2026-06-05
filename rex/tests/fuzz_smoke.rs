@@ -2,7 +2,7 @@ mod common;
 
 use rex::{
     ast::CompilationUnit,
-    engine::{Engine, Module},
+    engine::{Builder, Module},
     parser::parse,
     typesystem::{infer, standard_type_system},
 };
@@ -67,11 +67,11 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
         };
         let _ = infer(&mut ts, body.as_ref());
 
-        let mut engine = Engine::with_prelude(()).unwrap();
+        let mut builder = Builder::with_prelude(()).unwrap();
         let mut module = Module::global();
         module.add_decls(program.decls.clone());
-        let _ = engine.inject_module(module);
-        let mut compiler = engine.into_compiler();
+        let _ = builder.inject_module(module);
+        let mut compiler = builder.build_compiler();
         let body_program = CompilationUnit {
             decls: Vec::new(),
             body: Some(body.clone()),

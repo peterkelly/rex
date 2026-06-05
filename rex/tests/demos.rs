@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Engine, Handle, Heap, Value},
+    engine::{Builder, Handle, Heap, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type},
 };
@@ -40,9 +40,9 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                 .build()
                 .unwrap()
                 .block_on(async move {
-                    let engine = Engine::with_prelude(()).unwrap();
-                    let heap = engine.heap.clone();
-                    let mut compiler = engine.into_compiler();
+                    let builder = Builder::with_prelude(()).unwrap();
+                    let heap = builder.heap().clone();
+                    let mut compiler = builder.build_compiler();
                     let parsed = parse_rex(&source)
                         .unwrap_or_else(|errs| panic!("{name}: parse error before eval: {errs:?}"));
                     let program = compiler

@@ -8,14 +8,14 @@ use rex_typesystem::{
 use crate::{
     Context, EngineError, Handle, IntoRex,
     builder::{
-        engine::Engine,
+        core::Builder,
         export::{Export, HostFnAsync, HostFnSync, NativeFuture},
     },
     modules::ROOT_MODULE_NAME,
     util::{adt_family_error_to_engine, type_expr_from_type},
 };
 
-/// A staged host module that you build up in Rust and later inject into an [`Engine`].
+/// A staged host module that you build up in Rust and later inject into a [`Builder`].
 ///
 /// `Module` is the host-side representation of a Rex module. It lets embedders collect:
 ///
@@ -24,7 +24,7 @@ use crate::{
 /// - handle-based dynamic native handlers via [`Module::export_native`] /
 ///   [`Module::export_native_async`]
 ///
-/// Once the module is assembled, pass it to [`Engine::inject_module`] to make it importable
+/// Once the module is assembled, pass it to [`Builder::inject_module`] to make it importable
 /// from Rex code.
 ///
 /// This type is intentionally mutable and staged: you can build it incrementally, inspect its
@@ -34,14 +34,14 @@ use crate::{
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rex_engine::{Engine, Module};
+/// use rex_engine::{Builder, Module};
 ///
-/// let mut engine = Engine::with_prelude(()).unwrap();
+/// let mut builder = Builder::with_prelude(()).unwrap();
 ///
 /// let mut math = Module::new("acme.math");
 /// math.export("inc", |_state: &(), x: i32| Ok(x + 1)).unwrap();
 ///
-/// engine.inject_module(math).unwrap();
+/// builder.inject_module(math).unwrap();
 /// ```
 pub struct Module<State: Clone + Send + Sync + 'static> {
     /// The module name Rex code will import.
@@ -49,7 +49,7 @@ pub struct Module<State: Clone + Send + Sync + 'static> {
     /// This should be the fully-qualified module path you want users to write in `import`
     /// declarations, such as `acme.math` or `sample`.
     ///
-    /// [`Engine::inject_module`] validates and reserves this name when the module is injected.
+    /// [`Builder::inject_module`] validates and reserves this name when the module is injected.
     ///
     /// # Examples
     ///
@@ -115,7 +115,7 @@ where
     /// Create an empty staged module with the given import name.
     ///
     /// The returned module contains no declarations and no exports yet. Add those with the
-    /// helper methods on `Module`, then pass it to [`Engine::inject_module`].
+    /// helper methods on `Module`, then pass it to [`Builder::inject_module`].
     ///
     /// # Examples
     ///
@@ -151,11 +151,11 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Engine, Module};
+    /// use rex_engine::{Builder, Module};
     ///
-    /// let mut engine = Engine::with_prelude(()).unwrap();
+    /// let mut builder = Builder::with_prelude(()).unwrap();
     /// let mut module = Module::new("acme.types");
-    /// let adt = engine.adt_decl_from_type(&rex_typesystem::Type::user_con("Thing", 0)).unwrap();
+    /// let adt = builder.adt_decl_from_type(&rex_typesystem::Type::user_con("Thing", 0)).unwrap();
     ///
     /// module.add_adt_decl(adt).unwrap();
     /// ```
@@ -198,7 +198,7 @@ where
     ///
     /// - walks the provided types recursively
     /// - deduplicates repeated ADTs
-    /// - asks the engine to materialize each discovered ADT declaration
+    /// - asks the builder to materialize each discovered ADT declaration
     /// - appends the resulting structured declarations to this module
     ///
     /// If conflicting ADT definitions are found for the same type constructor name, this returns
@@ -207,26 +207,26 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Engine, Module};
+    /// use rex_engine::{Builder, Module};
     /// use rex_typesystem::{BuiltinTypeId, Type};
     ///
-    /// let mut engine = Engine::with_prelude(()).unwrap();
+    /// let mut builder = Builder::with_prelude(()).unwrap();
     /// let mut module = Module::new("acme.types");
     /// let types = vec![
     ///     Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
     ///     Type::user_con("Bar", 0),
     /// ];
     ///
-    /// module.add_adt_decls_from_types(&mut engine, types).unwrap();
+    /// module.add_adt_decls_from_types(&mut builder, types).unwrap();
     /// ```
     pub fn add_adt_decls_from_types(
         &mut self,
-        engine: &mut Engine<State>,
+        builder: &mut Builder<State>,
         types: Vec<Type>,
     ) -> Result<(), EngineError> {
         let adts = collect_adts_in_types(types).map_err(crate::collect_adts_error_to_engine)?;
         for typ in adts {
-            let adt = engine.adt_decl_from_type(&typ)?;
+            let adt = builder.adt_decl_from_type(&typ)?;
             self.add_adt_decl(adt)?;
         }
         Ok(())
@@ -244,14 +244,14 @@ where
     /// # Examples
     ///
     /// ```rust,ignore
-    /// use rex_engine::{Engine, Module};
+    /// use rex_engine::{Builder, Module};
     ///
     /// #[derive(rex::Rex)]
     /// struct Label {
     ///     text: String,
     /// }
     ///
-    /// let mut engine = Engine::with_prelude(()).unwrap();
+    /// let mut builder = Builder::with_prelude(()).unwrap();
     /// let mut module = Module::new("sample");
     /// module.add_rex_adt::<Label>().unwrap();
     /// ```
@@ -287,7 +287,7 @@ where
     /// This is the most convenient API for exporting ordinary Rust functions or closures into a
     /// module. The handler's argument and return types drive the Rex signature automatically.
     ///
-    /// The staged export becomes available to Rex code after [`Engine::inject_module`] is called.
+    /// The staged export becomes available to Rex code after [`Builder::inject_module`] is called.
     ///
     /// # Examples
     ///
@@ -424,7 +424,7 @@ where
     where
         V: IntoRex + RexType + Clone + Send + Sync + 'static,
     {
-        self.exports.push(Export::from_value(name, value)?);
+        self.exports.push(Export::<State>::from_value(name, value)?);
         Ok(())
     }
 }

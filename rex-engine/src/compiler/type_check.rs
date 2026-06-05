@@ -1,18 +1,20 @@
 use crate::{
-    builder::engine::Engine, error::EngineError, modules::collect_pattern_bindings,
-    util::impl_matches_type,
+    builder::registry::NativeRegistry, env::RootedEnvironment, error::EngineError,
+    modules::collect_pattern_bindings, util::impl_matches_type,
 };
 use rex_ast::{Expr, Span, Symbol};
 use rex_typesystem::{
     error::TypeError,
     inference::infer_typed,
     types::{BuiltinTypeId, Predicate, Type, TypeKind, TypedExpr, TypedExprKind, Types},
-    typesystem::entails,
+    typesystem::{TypeSystem, entails},
     unification::{Subst, compose_subst, unify},
 };
 
 pub(crate) fn type_check_engine<State>(
-    engine: &mut Engine<State>,
+    type_system: &mut TypeSystem,
+    env: &RootedEnvironment,
+    natives: &NativeRegistry<State>,
     expr: &Expr,
 ) -> Result<TypedExpr, EngineError>
 where
@@ -26,23 +28,17 @@ where
             )),
         }));
     }
-    let (typed, preds, _ty) = infer_typed(&mut engine.type_system, expr)?;
-    let (typed, preds) = default_ambiguous_types(engine, typed, preds)?;
-    check_predicates_in_engine(engine, &preds)?;
-    check_natives_in_engine(engine, &typed)?;
+    let (typed, preds, _ty) = infer_typed(type_system, expr)?;
+    let (typed, preds) = default_ambiguous_types(type_system, typed, preds)?;
+    check_predicates(type_system, &preds)?;
+    check_natives(type_system, env, natives, &typed)?;
     Ok(typed)
 }
 
-fn check_predicates_in_engine<State>(
-    engine: &Engine<State>,
-    preds: &[Predicate],
-) -> Result<(), EngineError>
-where
-    State: Clone + Send + Sync + 'static,
-{
+fn check_predicates(type_system: &TypeSystem, preds: &[Predicate]) -> Result<(), EngineError> {
     for pred in preds {
         if pred.typ.ftv().is_empty() {
-            let ok = entails(&engine.type_system.classes, &[], pred)?;
+            let ok = entails(&type_system.classes, &[], pred)?;
             if !ok {
                 return Err(EngineError::Type(TypeError::NoInstance(
                     pred.class.clone(),
@@ -54,8 +50,10 @@ where
     Ok(())
 }
 
-pub(crate) fn check_natives_in_engine<State>(
-    engine: &Engine<State>,
+pub(crate) fn check_natives<State>(
+    type_system: &TypeSystem,
+    env: &RootedEnvironment,
+    natives: &NativeRegistry<State>,
     expr: &TypedExpr,
 ) -> Result<(), EngineError>
 where
@@ -77,11 +75,11 @@ where
                     if bound.iter().any(|n| n == name) {
                         continue;
                     }
-                    if !engine.natives.has_name(name) {
-                        if engine.env.get(name).is_some() {
+                    if !natives.has_name(name) {
+                        if env.contains(name) {
                             continue;
                         }
-                        if engine.type_system.class_methods.contains_key(name) {
+                        if type_system.class_methods.contains_key(name) {
                             continue;
                         }
                         return Err(EngineError::UnknownVar(name.clone()));
@@ -95,9 +93,7 @@ where
                             typ: expr.typ.to_string(),
                         });
                     }
-                    if expr.typ.ftv().is_empty()
-                        && !has_native_impl_in_engine(engine, name.as_ref(), &expr.typ)
-                    {
+                    if expr.typ.ftv().is_empty() && !has_native_impl(natives, name, &expr.typ) {
                         return Err(EngineError::MissingImpl {
                             name: name.clone(),
                             typ: expr.typ.to_string(),
@@ -191,14 +187,12 @@ where
     Ok(())
 }
 
-fn has_native_impl_in_engine<State>(engine: &Engine<State>, name: &str, typ: &Type) -> bool
+fn has_native_impl<State>(natives: &NativeRegistry<State>, name: &Symbol, typ: &Type) -> bool
 where
     State: Clone + Send + Sync + 'static,
 {
-    let sym_name = Symbol::intern(name);
-    engine
-        .natives
-        .get(&sym_name)
+    natives
+        .get(name)
         .map(|impls| impls.iter().any(|imp| impl_matches_type(imp, typ)))
         .unwrap_or(false)
 }
@@ -264,8 +258,8 @@ fn first_hole_span(expr: &Expr) -> Option<Span> {
     None
 }
 
-fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+fn default_ambiguous_types(
+    type_system: &TypeSystem,
     typed: TypedExpr,
     mut preds: Vec<Predicate>,
 ) -> Result<(TypedExpr, Vec<Predicate>), EngineError> {
@@ -303,7 +297,7 @@ fn default_ambiguous_types<State: Clone + Send + Sync + 'static>(
             if !simple || !predicates_are_defaultable(&relevant) {
                 continue;
             }
-            if let Some(choice) = choose_default_type(engine, &relevant, &candidates)? {
+            if let Some(choice) = choose_default_type(type_system, &relevant, &candidates)? {
                 let mut next = Subst::new_sync();
                 next = next.insert(tv, choice.clone());
                 preds = preds.apply(&next);
@@ -405,8 +399,8 @@ fn predicates_are_defaultable(preds: &[Predicate]) -> bool {
         })
 }
 
-fn choose_default_type<State: Clone + Send + Sync + 'static>(
-    engine: &Engine<State>,
+fn choose_default_type(
+    type_system: &TypeSystem,
     preds: &[Predicate],
     candidates: &[Type],
 ) -> Result<Option<Type>, EngineError> {
@@ -414,7 +408,7 @@ fn choose_default_type<State: Clone + Send + Sync + 'static>(
         let mut ok = true;
         for pred in preds {
             let test = Predicate::new(pred.class.clone(), candidate.clone());
-            if !entails(&engine.type_system.classes, &[], &test)? {
+            if !entails(&type_system.classes, &[], &test)? {
                 ok = false;
                 break;
             }

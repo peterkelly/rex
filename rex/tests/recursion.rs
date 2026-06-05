@@ -1,12 +1,12 @@
 mod common;
 
 use rex::{
-    engine::Engine,
+    engine::Builder,
     typesystem::{BuiltinTypeId, Type},
 };
 
 async fn assert_i32_result(source: &str, expected: i32) {
-    let (heap, handle, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), source)
+    let (heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
         .await
         .unwrap();
     common::assert_i32_or_var(&ty);
@@ -22,7 +22,7 @@ async fn assert_even_odd_tuple(source: &str) {
         bool_ty.clone(),
         bool_ty,
     ]);
-    let (heap, handle, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), source)
+    let (heap, handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
         .await
         .unwrap();
     assert_eq!(

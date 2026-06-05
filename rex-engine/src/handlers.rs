@@ -1,6 +1,6 @@
 use crate::{
     builder::{
-        engine::{Engine, NativeRegistration},
+        core::{Builder, NativeRegistration},
         export::{HostFnAsync, HostFnSync, NativeFuture},
     },
     error::EngineError,
@@ -104,7 +104,7 @@ macro_rules! define_handler_impl {
 
             fn inject(
                 self,
-                engine: &mut Engine<State>,
+                engine: &mut Builder<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
@@ -144,7 +144,7 @@ macro_rules! define_handler_impl {
 
             fn inject(
                 self,
-                engine: &mut Engine<State>,
+                engine: &mut Builder<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let name_sym = normalize_name(export_name);
@@ -189,7 +189,7 @@ where
         declare_fn_decl_from_scheme(export_name, scheme)
     }
 
-    fn inject(self, engine: &mut Engine<State>, export_name: &str) -> Result<(), EngineError> {
+    fn inject(self, engine: &mut Builder<State>, export_name: &str) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;
         validate_native_export_scheme(&scheme, arity)?;
         let pointer_func: SyncNativePointerCallable<State> =
@@ -219,7 +219,7 @@ macro_rules! define_async_handler_impl {
 
             fn inject_async(
                 self,
-                engine: &mut Engine<State>,
+                engine: &mut Builder<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
@@ -269,7 +269,7 @@ macro_rules! define_async_handler_impl {
 
             fn inject_async(
                 self,
-                engine: &mut Engine<State>,
+                engine: &mut Builder<State>,
                 export_name: &str,
             ) -> Result<(), EngineError> {
                 let f = Arc::new(self);
@@ -331,7 +331,7 @@ where
 
     fn inject_async(
         self,
-        engine: &mut Engine<State>,
+        engine: &mut Builder<State>,
         export_name: &str,
     ) -> Result<(), EngineError> {
         let (scheme, arity, func) = self;

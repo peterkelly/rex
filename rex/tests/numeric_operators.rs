@@ -3,7 +3,7 @@ mod common;
 use std::fmt::Debug;
 
 use rex::{
-    engine::{Engine, EngineError, FromRex},
+    engine::{Builder, EngineError, FromRex},
     typesystem::{BuiltinTypeId, Type, TypeError},
 };
 
@@ -11,7 +11,7 @@ async fn assert_value<T>(source: &str, expected: T, expected_ty: BuiltinTypeId)
 where
     T: FromRex + PartialEq + Debug,
 {
-    let (_heap, value, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), source)
+    let (_heap, value, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), source)
         .await
         .unwrap();
     assert_eq!(ty, Type::builtin(expected_ty), "{source}");
@@ -19,7 +19,7 @@ where
 }
 
 async fn assert_runtime_error(source: &str, expected: &str) {
-    let err = match common::eval_source(Engine::with_prelude(()).unwrap(), source).await {
+    let err = match common::eval_source(Builder::with_prelude(()).unwrap(), source).await {
         Ok(_) => panic!("expected error for {source}"),
         Err(err) => err,
     };
@@ -202,7 +202,7 @@ sub_unsigned 5 3
 
 #[tokio::test]
 async fn unsigned_subtraction_does_not_enable_negative_literals() {
-    let err = match common::eval_source(Engine::with_prelude(()).unwrap(), "let x: u32 = -3 in x")
+    let err = match common::eval_source(Builder::with_prelude(()).unwrap(), "let x: u32 = -3 in x")
         .await
     {
         Ok(_) => panic!("expected type error"),

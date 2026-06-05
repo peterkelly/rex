@@ -53,8 +53,8 @@ pub fn prepare_program_with_imports(
     uri: &Url,
     compilation_unit: &CompilationUnit,
 ) -> std::result::Result<PreparedProgram, String> {
-    let mut engine =
-        Engine::with_prelude(()).map_err(|e| format!("failed to build prelude: {e}"))?;
+    let mut builder =
+        Builder::with_prelude(()).map_err(|e| format!("failed to build prelude: {e}"))?;
     let mut diagnostics = Vec::new();
 
     let module_service = session.module_service();
@@ -88,7 +88,7 @@ pub fn prepare_program_with_imports(
             .join(".");
 
         let loaded_import = match futures::executor::block_on(load_import_for_tooling(
-            &mut engine,
+            &mut builder,
             import_decl,
             importer.clone(),
             Some(Arc::clone(&lsp_importer)),
@@ -155,7 +155,7 @@ pub fn prepare_program_with_imports(
         );
     }
 
-    let ts = engine.type_system.clone();
+    let ts = builder.type_system().clone();
 
     let mut bindings = ImportBindings::default();
     let local_values = decl_value_names(&compilation_unit.decls);

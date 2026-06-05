@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use futures::executor::block_on;
 use rex_ast::CompilationUnit;
-use rex_engine::{CompileOptions, Engine, ValueDisplayOptions, standard_type_system};
+use rex_engine::{Builder, CompileOptions, ValueDisplayOptions, standard_type_system};
 use rex_lsp::public::{
     code_actions_for_source_public, completion_for_source, diagnostics_for_source,
     document_symbols_for_source_public, format_for_source_public, goto_definition_for_source,
@@ -134,12 +134,14 @@ pub fn lsp_code_actions_to_json(source: &str, line: u32, character: u32) -> Resu
 pub async fn eval_to_string(source: &str) -> Result<String, String> {
     let source = source_with_docs_body(source)?;
 
-    let mut engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
-    engine.type_system.set_limits(TypeSystemLimits::unlimited());
+    let mut builder = Builder::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
+    builder
+        .type_system_mut()
+        .set_limits(TypeSystemLimits::unlimited());
     // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between the native CLI and wasm playground.
     let parsed = parse_program(source.as_ref())?;
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let program = compiler
         .compile_program(&parsed, CompileOptions::default())
         .await
@@ -241,9 +243,9 @@ pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
     let source = source_with_docs_body(source).map_err(as_js_err)?;
 
     let fut = async move {
-        let engine = Engine::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
+        let builder = Builder::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
         let parsed = parse_program(source.as_ref())?;
-        let mut compiler = engine.into_compiler();
+        let mut compiler = builder.build_compiler();
         let program = compiler
             .compile_program(&parsed, CompileOptions::default())
             .await

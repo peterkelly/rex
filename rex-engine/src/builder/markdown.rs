@@ -1,10 +1,10 @@
-use crate::{builder::engine::Engine, modules::ModuleId};
+use crate::{builder::core::Builder, modules::ModuleId};
 use rex_ast::{Decl, DeclareFnDecl, Span, Symbol, TypeDecl, TypeExpr};
 use rex_typesystem::types::AdtDecl;
 use std::{collections::BTreeMap, fmt::Write as _};
 
 /// Return a markdown document that inventories the currently-registered
-/// engine state.
+/// builder state.
 ///
 /// The report includes:
 /// - summary counts
@@ -17,15 +17,18 @@ use std::{collections::BTreeMap, fmt::Write as _};
 /// # Examples
 ///
 /// ```rust,ignore
-/// use rex_engine::{Engine, registry_markdown};
+/// use rex_engine::{Builder, registry_markdown};
 ///
-/// let engine = Engine::with_prelude(()).unwrap();
-/// let md = registry_markdown(&engine);
+/// let builder = Builder::with_prelude(()).unwrap();
+/// let md = registry_markdown(&builder);
 ///
-/// assert!(md.contains("# Engine Registry"));
+/// assert!(md.contains("# Builder Registry"));
 /// assert!(md.contains("## ADTs"));
 /// ```
-pub fn registry_markdown(engine: &Engine) -> String {
+pub fn registry_markdown<State>(builder: &Builder<State>) -> String
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn module_anchor(id: &ModuleId) -> String {
         let raw = format!("module-{id}").to_ascii_lowercase();
         let mut out = String::with_capacity(raw.len());
@@ -59,29 +62,29 @@ pub fn registry_markdown(engine: &Engine) -> String {
     }
 
     let mut out = String::new();
-    let _ = writeln!(&mut out, "# Engine Registry");
+    let _ = writeln!(&mut out, "# Builder Registry");
     let _ = writeln!(&mut out);
     let mut module_ids: BTreeMap<String, ModuleId> = BTreeMap::new();
-    for id in engine.module_exports_cache.keys() {
+    for id in builder.module_loader.module_exports_cache.keys() {
         module_ids.insert(id.to_string(), id.clone());
     }
-    for id in engine.module_sources.keys() {
+    for id in builder.module_loader.module_sources.keys() {
         module_ids.insert(id.to_string(), id.clone());
     }
-    for module_name in engine.virtual_modules.keys() {
+    for module_name in builder.module_loader.virtual_modules.keys() {
         let id = ModuleId::Virtual(module_name.clone());
         module_ids.insert(id.to_string(), id);
     }
-    for module_name in &engine.injected_modules {
+    for module_name in &builder.module_loader.injected_modules {
         let id = ModuleId::Virtual(module_name.clone());
         module_ids.insert(id.to_string(), id);
     }
 
     let _ = writeln!(&mut out, "## Summary");
-    let env_value_count = engine.type_system.env.values.size();
-    let native_impl_count: usize = engine.natives.entries.values().map(Vec::len).sum();
-    let class_count = engine.type_system.classes.classes.len();
-    let class_instance_count: usize = engine
+    let env_value_count = builder.type_system.env.values.size();
+    let native_impl_count: usize = builder.runtime.natives.entries.values().map(Vec::len).sum();
+    let class_count = builder.type_system.classes.classes.len();
+    let class_instance_count: usize = builder
         .type_system
         .classes
         .instances
@@ -92,14 +95,14 @@ pub fn registry_markdown(engine: &Engine) -> String {
     let _ = writeln!(
         &mut out,
         "- Injected modules: {}",
-        engine.injected_modules.len()
+        builder.module_loader.injected_modules.len()
     );
     let _ = writeln!(
         &mut out,
         "- Virtual modules: {}",
-        engine.virtual_modules.len()
+        builder.module_loader.virtual_modules.len()
     );
-    let _ = writeln!(&mut out, "- ADTs: {}", engine.type_system.adts.len());
+    let _ = writeln!(&mut out, "- ADTs: {}", builder.type_system.adts.len());
     let _ = writeln!(
         &mut out,
         "- Values/functions in type env: {env_value_count}"
@@ -130,15 +133,25 @@ pub fn registry_markdown(engine: &Engine) -> String {
             let _ = writeln!(&mut out, "<a id=\"{anchor}\"></a>");
             let _ = writeln!(&mut out, "### `{display}`");
             let virtual_source = match &id {
-                ModuleId::Virtual(name) => engine.virtual_modules.get(name).and_then(|module| {
-                    module
-                        .source
-                        .clone()
-                        .or_else(|| render_virtual_module_source(&module.decls))
-                }),
+                ModuleId::Virtual(name) => builder
+                    .module_loader
+                    .virtual_modules
+                    .get(name)
+                    .and_then(|module| {
+                        module
+                            .source
+                            .clone()
+                            .or_else(|| render_virtual_module_source(&module.decls))
+                    }),
                 _ => None,
             };
-            if let Some(source) = engine.module_sources.get(&id).cloned().or(virtual_source) {
+            if let Some(source) = builder
+                .module_loader
+                .module_sources
+                .get(&id)
+                .cloned()
+                .or(virtual_source)
+            {
                 if source.trim().is_empty() {
                     let _ = writeln!(&mut out, "_Module source is empty._");
                 } else {
@@ -150,10 +163,19 @@ pub fn registry_markdown(engine: &Engine) -> String {
                 let _ = writeln!(&mut out, "_No captured source for this module._");
             }
 
-            let exports = engine.module_exports_cache.get(&id).or_else(|| match &id {
-                ModuleId::Virtual(name) => engine.virtual_modules.get(name).map(|m| &m.exports),
-                _ => None,
-            });
+            let exports =
+                builder
+                    .module_loader
+                    .module_exports_cache
+                    .get(&id)
+                    .or_else(|| match &id {
+                        ModuleId::Virtual(name) => builder
+                            .module_loader
+                            .virtual_modules
+                            .get(name)
+                            .map(|m| &m.exports),
+                        _ => None,
+                    });
             if let Some(exports) = exports {
                 let mut values: Vec<Symbol> = exports.value_names();
                 let mut types: Vec<Symbol> = exports.type_names();
@@ -172,11 +194,11 @@ pub fn registry_markdown(engine: &Engine) -> String {
     }
 
     let _ = writeln!(&mut out, "## ADTs");
-    if engine.type_system.adts.is_empty() {
+    if builder.type_system.adts.is_empty() {
         let _ = writeln!(&mut out, "_No ADTs registered._");
         let _ = writeln!(&mut out);
     } else {
-        let mut adts: Vec<&AdtDecl> = engine.type_system.adts.values().collect();
+        let mut adts: Vec<&AdtDecl> = builder.type_system.adts.values().collect();
         adts.sort_by(|a, b| a.name.cmp(&b.name));
         for adt in adts {
             let params = if adt.params.is_empty() {
@@ -215,11 +237,11 @@ pub fn registry_markdown(engine: &Engine) -> String {
     }
 
     let _ = writeln!(&mut out, "## Functions and Values");
-    if engine.type_system.env.values.is_empty() {
+    if builder.type_system.env.values.is_empty() {
         let _ = writeln!(&mut out, "_No values registered._");
         let _ = writeln!(&mut out);
     } else {
-        let mut names: Vec<Symbol> = engine
+        let mut names: Vec<Symbol> = builder
             .type_system
             .env
             .values
@@ -228,7 +250,7 @@ pub fn registry_markdown(engine: &Engine) -> String {
             .collect();
         names.sort();
         for name in names {
-            if let Some(schemes) = engine.type_system.env.lookup(&name) {
+            if let Some(schemes) = builder.type_system.env.lookup(&name) {
                 let mut scheme_strs: Vec<String> =
                     schemes.iter().map(|s| s.typ.to_string()).collect();
                 scheme_strs.sort();
@@ -245,21 +267,26 @@ pub fn registry_markdown(engine: &Engine) -> String {
     }
 
     let _ = writeln!(&mut out, "## Type Classes");
-    if engine.type_system.classes.classes.is_empty() {
+    if builder.type_system.classes.classes.is_empty() {
         let _ = writeln!(&mut out, "_No type classes registered._");
         let _ = writeln!(&mut out);
     } else {
-        let mut class_names: Vec<Symbol> =
-            engine.type_system.classes.classes.keys().cloned().collect();
+        let mut class_names: Vec<Symbol> = builder
+            .type_system
+            .classes
+            .classes
+            .keys()
+            .cloned()
+            .collect();
         class_names.sort();
         for class_name in class_names {
-            let supers = engine.type_system.classes.supers_of(&class_name);
+            let supers = builder.type_system.classes.supers_of(&class_name);
             let mut supers_sorted = supers;
             supers_sorted.sort();
             let _ = writeln!(&mut out, "### `{class_name}`");
             let _ = writeln!(&mut out, "- Superclasses: {}", symbol_list(&supers_sorted));
 
-            let mut methods: Vec<(Symbol, String)> = engine
+            let mut methods: Vec<(Symbol, String)> = builder
                 .type_system
                 .class_methods
                 .iter()
@@ -276,7 +303,7 @@ pub fn registry_markdown(engine: &Engine) -> String {
                 }
             }
 
-            let mut instances = engine
+            let mut instances = builder
                 .type_system
                 .classes
                 .instances
@@ -312,13 +339,14 @@ pub fn registry_markdown(engine: &Engine) -> String {
     }
 
     let _ = writeln!(&mut out, "## Native Implementations");
-    if engine.natives.entries.is_empty() {
+    if builder.runtime.natives.entries.is_empty() {
         let _ = writeln!(&mut out, "_No native implementations registered._");
     } else {
-        let mut native_names: Vec<Symbol> = engine.natives.entries.keys().cloned().collect();
+        let mut native_names: Vec<Symbol> =
+            builder.runtime.natives.entries.keys().cloned().collect();
         native_names.sort();
         for name in native_names {
-            if let Some(impls) = engine.natives.get(&name) {
+            if let Some(impls) = builder.runtime.natives.get(&name) {
                 let mut rows: Vec<(usize, String)> = impls
                     .iter()
                     .map(|imp| (imp.arity, imp.scheme.typ.to_string()))

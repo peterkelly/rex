@@ -28,7 +28,7 @@ Evaluation API:
 
 `rex-engine` now has an explicit preparation boundary:
 
-- `Engine` builds the host environment.
+- `Builder` builds the host environment.
 - `Compiler` prepares user code into a `CompiledProgram`.
 - `Evaluator` owns the runtime core and runs one prepared program with runtime inputs for `main`.
 
@@ -39,12 +39,12 @@ semantics: an explicit `fn main ...` defines named runtime inputs, while a final
 
 ```rust,ignore
 use rex::{
-    engine::{CompileOptions, Engine},
+    engine::{CompileOptions, Builder},
     parser::parse,
 };
 
-let engine = Engine::with_prelude(())?;
-let mut compiler = engine.into_compiler();
+let builder = Builder::with_prelude(())?;
+let mut compiler = builder.build_compiler();
 
 let parsed = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
 let program = compiler
@@ -62,7 +62,7 @@ What "compiled" means in the current design:
 - `CompiledProgram::main_signature()` reports input names/types and the external result type
 - `Evaluator` owns the runtime core needed for execution
 - `Evaluator::run` consumes the evaluator, compiled program, and runtime input map; use a new
-  engine/compiler/evaluator for another generated workflow
+  builder/compiler/evaluator lineage for another generated workflow
 
 What is captured:
 
@@ -90,14 +90,14 @@ Compile parsed Rex sources with `Compiler::compile_program` and pass the resulti
 
 ```rust,ignore
 use rex::{
-    engine::Engine,
+    engine::Builder,
     parser::parse,
 };
 
 let program = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
 
-let engine = Engine::with_prelude(())?;
-let mut compiler = engine.into_compiler();
+let builder = Builder::with_prelude(())?;
+let mut compiler = builder.build_compiler();
 let program = compiler.compile_program(&program, Default::default()).await?;
 let evaluator = compiler.into_evaluator();
 let value = evaluator.run(program, Default::default()).await?;
@@ -110,9 +110,9 @@ Qualified alias members used in type/class positions (annotations, `where` const
 headers, superclass clauses) are validated against module exports during module processing; missing
 exports fail early with module errors.
 
-## Engine Initialization and Default Imports
+## Builder Initialization and Default Imports
 
-`Engine::with_prelude(state)` is shorthand for `Engine::with_options(state, EngineOptions::default())`.
+`Builder::with_prelude(state)` is shorthand for `Builder::with_options(state, EngineOptions::default())`.
 
 - Prelude is enabled by default.
 - `Prelude` is default-imported.
@@ -122,9 +122,9 @@ exports fail early with module errors.
 If you want full control:
 
 ```rust,ignore
-use rex::engine::{Engine, EngineOptions, PreludeMode};
+use rex::engine::{Builder, EngineOptions, PreludeMode};
 
-let mut engine = Engine::with_options(
+let mut builder = Builder::with_options(
     (),
     EngineOptions {
         prelude: PreludeMode::Disabled,
@@ -138,7 +138,7 @@ let mut engine = Engine::with_options(
 This is fully supported in `rex-engine`. You can compose module loading from:
 
 - bundled stdlib imports (`std.*`)
-- modules injected with `Engine::inject_module`
+- modules injected with `Builder::inject_module`
 - custom async importers (for DB/object-store/in-memory modules)
 
 ### 1) Use an Explicit Importer
@@ -162,14 +162,14 @@ Notes:
 
 ### 2) Inject In-Memory Rex Modules
 
-For host-managed modules, either call `Engine::inject_module` or add an importer that maps
+For host-managed modules, either call `Builder::inject_module` or add an importer that maps
 `module_name` to source text.
 
 ```rust,ignore
 use futures::future::BoxFuture;
 use rex::{
     engine::{
-        CompileOptions, Engine, ImportRequest, Importer, ModuleId, ResolvedModule,
+        CompileOptions, Builder, ImportRequest, Importer, ModuleId, ResolvedModule,
         ResolvedModuleContent,
     },
     parser::parse,
@@ -177,7 +177,7 @@ use rex::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 
 let modules = Arc::new(HashMap::from([
     (
@@ -211,8 +211,8 @@ impl Importer for MapImporter {
     }
 }
 
-engine.add_importer("host-map", Arc::new(MapImporter { modules }));
-let mut compiler = engine.into_compiler();
+builder.add_importer("host-map", Arc::new(MapImporter { modules }));
+let mut compiler = builder.build_compiler();
 let parsed = parse("import acme.main (main);\nmain").map_err(|errs| format!("{errs:?}"))?;
 let program = compiler
     .compile_program(&parsed, CompileOptions::default())
@@ -225,14 +225,14 @@ println!("{value}");
 
 This is the common embedder case.
 
-Use `Module` + `Engine::inject_module(...)`:
+Use `Module` + `Builder::inject_module(...)`:
 
 1. Create a `Module`.
 2. Add exports:
    - typed exports with `export` / `export_async`
    - runtime/native exports with `export_native` / `export_native_async`
    - optional structured declarations with `add_rex_adt` / `add_adt_decl`
-3. Inject it into the engine.
+3. Inject it into the builder.
 
 `Module::add_rex_adt::<T>()` now stages the full acyclic ADT family reachable from `T`.
 This is driven by `RexType::collect_rex_family(...)`: ADT types contribute declarations there,
@@ -242,7 +242,7 @@ rejected.
 
 `Module` also exposes its staged `decls`, `adts`, and `exports` vectors directly. That is useful
 if you want to inspect, transform, or assemble a module in multiple passes before calling
-`Engine::inject_module`.
+`Builder::inject_module`.
 
 `export` handlers are fallible and must return `Result<T, EngineError>`. If a handler returns
 `Err(...)`, evaluation fails with that engine error.
@@ -251,17 +251,17 @@ if you want to inspect, transform, or assemble a module in multiple passes befor
 
 ```rust,ignore
 use rex::{
-    engine::{CompileOptions, Engine, Module},
+    engine::{CompileOptions, Builder, Module},
     parser::parse,
 };
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 
 let mut math = Module::new("acme.math");
 math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
-engine.inject_module(math)?;
-let mut compiler = engine.into_compiler();
+builder.inject_module(math)?;
+let mut compiler = builder.build_compiler();
 let parsed = parse("import acme.math (inc, double_async as d);\ninc (d 20)")
     .map_err(|errs| format!("{errs:?}"))?;
 let program = compiler
@@ -275,20 +275,20 @@ You can declare ADTs directly inside an injected host module:
 
 ```rust,ignore
 use rex_ast::Symbol;
-use rex_engine::{Engine, Module};
+use rex_engine::{Builder, Module};
 use rex_typesystem::types::{BuiltinTypeId, Type};
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 
 let mut m = Module::new("acme.status");
-let mut status = engine.adt_decl("Status", &[]);
+let mut status = builder.adt_decl("Status", &[]);
 status.add_variant(Symbol::intern("Ready"), vec![]);
 status.add_variant(
     Symbol::intern("Failed"),
     vec![Type::builtin(BuiltinTypeId::String)],
 );
 m.add_adt_decl(status)?;
-engine.inject_module(m)?;
+builder.inject_module(m)?;
 ```
 
 Then Rex code can import and use those names from the module:
@@ -327,7 +327,7 @@ Example:
 ```rust,ignore
 use rex::{
     Rex,
-    engine::{CompileOptions, Engine, EngineError, Module},
+    engine::{CompileOptions, Builder, EngineError, Module},
     parser::parse,
 };
 
@@ -350,15 +350,15 @@ fn render_label(label: Label) -> String {
     }
 }
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 
 let mut m = Module::new("sample");
 m.add_rex_adt::<Label>()?;
 m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
 })?;
-engine.inject_module(m)?;
-let mut compiler = engine.into_compiler();
+builder.inject_module(m)?;
+let mut compiler = builder.build_compiler();
 let parsed = parse(
     r#"
     import sample (Label, Left, Right, render_label);
@@ -392,8 +392,8 @@ APIs and provide an explicit `Scheme` + arity:
 
 These callbacks receive `Context<State>` (not just `&State`), so they can:
 
-- read state via `engine.state()`
-- allocate new values via `engine.heap()`
+- read state via `ctx.state()`
+- allocate new values via `ctx.heap()`
 - inspect typed call information via the explicit `&Type` / `Type` callback parameter
 
 Async native callbacks receive owned argument vectors and return `Send + 'static` futures so the
@@ -401,10 +401,10 @@ runtime can suspend them as explicit pending evaluation frames.
 
 ```rust,ignore
 use futures::FutureExt;
-use rex_engine::{Engine, Context, Handle, Module};
+use rex_engine::{Builder, Context, Handle, Module};
 use rex::typesystem::{BuiltinTypeId, Scheme, Type};
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 
 let mut m = Module::new("acme.dynamic");
 let scheme = Scheme::new(vec![], vec![], Type::fun(Type::builtin(BuiltinTypeId::I32), Type::builtin(BuiltinTypeId::I32)));
@@ -417,7 +417,7 @@ m.export_native_async("answer_async", Scheme::new(vec![], vec![], Type::builtin(
     async move { ctx.heap().alloc_i32(42) }.boxed()
 })?;
 
-engine.inject_module(m)?;
+builder.inject_module(m)?;
 ```
 
 `Scheme` and arity must agree. Registration returns an error if the type does not accept the
@@ -445,11 +445,12 @@ argument there:
 
 ```rust,ignore
 use rex::{
-    engine::CompileOptions,
+    engine::{CompileOptions, Builder},
     parser::parse,
 };
 
-let mut compiler = engine.into_compiler();
+let builder = Builder::with_prelude(())?;
+let mut compiler = builder.build_compiler();
 let parsed = parse("import foo.bar as Bar;\nBar.add 1 2")
     .map_err(|errs| format!("{errs:?}"))?;
 let program = compiler
@@ -462,21 +463,22 @@ let program = compiler
 let value = compiler.into_evaluator().run(program, Default::default()).await?;
 ```
 
-## Engine State
+## Builder State
 
-`Engine` is generic over host state: `Engine<State>`, where
+`Builder` is generic over host state: `Builder<State>`, where
 `State: Clone + Send + Sync + 'static`.
-The state is stored as `engine.state: Arc<State>` and is shared across all injected functions.
+The state is owned by the builder, moved into the compiler/runtime lineage, and shared across all
+injected functions.
 
-- Use `Engine::with_prelude(())?` if you do not need host state.
-- If you do, pass your state struct into `Engine::new(state)` or `Engine::with_prelude(state)`.
+- Use `Builder::with_prelude(())?` if you do not need host state.
+- If you do, pass your state struct into `Builder::new(state)` or `Builder::with_prelude(state)`.
 - `export` / `export_async` callbacks receive `&State` as their first parameter.
 - Handle-based native APIs (`export_native*`) receive
   `Context<State>` so
-  they can allocate public handles through the heap and read `engine.state()`.
+  they can allocate public handles through the heap and read `ctx.state()`.
 
 ```rust,ignore
-use rex_engine::Engine;
+use rex_engine::{Builder, Module};
 
 #[derive(Clone)]
 struct HostState {
@@ -484,7 +486,7 @@ struct HostState {
     roles: Vec<String>,
 }
 
-let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
     user_id: "u-123".into(),
     roles: vec!["admin".into(), "editor".into()],
 })?;
@@ -493,7 +495,7 @@ let mut globals = Module::global();
 globals.export("have_role", |state, role: String| {
     Ok(state.roles.iter().any(|r| r == &role))
 })?;
-engine.inject_module(globals)?;
+builder.inject_module(globals)?;
 ```
 
 ## Array/List Interop at Host Boundaries
@@ -588,7 +590,8 @@ Users can declare new type classes and instances directly in Rex source. As the 
 
 1. Parse Rex source into `CompilationUnit { decls, body }`.
 2. Inject `Decl::Class` / `Decl::Instance` into the type system (if you’re typechecking without running).
-3. Inject all decls into the engine (if you’re running), so instance method bodies are available at runtime.
+3. Compile the full program through `Compiler` (if you’re running), so instance method bodies are
+   available at runtime.
 
 ### Typecheck: Inject Class/Instance Decls into `TypeSystem`
 
@@ -634,10 +637,10 @@ let (_preds, ty) = infer(&mut ts, body.as_ref())?;
 assert_eq!(ty.to_string(), "i32");
 ```
 
-### Evaluate: Inject Decls into `Engine`
+### Evaluate: Inject Decls into `Builder`
 
 ```rust,ignore
-use rex_engine::{Engine, EngineError, Module};
+use rex_engine::Builder;
 use rex::parser::parse;
 
 let code = r#"
@@ -656,8 +659,8 @@ instance<t> Size (List t) where {
 
 let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 
-let engine = Engine::with_prelude(())?;
-let mut compiler = engine.into_compiler();
+let builder = Builder::with_prelude(())?;
+let mut compiler = builder.build_compiler();
 let compiled = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
 let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
@@ -669,16 +672,16 @@ println!("{value}");
 `rex-engine` is the boundary where Rust provides implementations for Rex values.
 
 For host-provided *modules*, prefer `Module` + `inject_module` (above). For root-scope values
-or functions, use `Module::global()` and inject that staged module into the engine.
+or functions, use `Module::global()` and inject that staged module into the builder.
 
 ```rust,ignore
-use rex_engine::{Engine, Module};
+use rex_engine::{Builder, Module};
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 let mut globals = Module::global();
 globals.export_value("answer", 42i32)?;
 globals.export("inc", |_state, x: i32| { Ok(x + 1) })?;
-engine.inject_module(globals)?;
+builder.inject_module(globals)?;
 ```
 
 ### Integer Literal Overloading with Host Natives
@@ -688,21 +691,21 @@ direct calls, `let` bindings, and lambda wrappers:
 
 ```rust,ignore
 use rex::parser::parse;
-use rex_engine::{Engine, Module};
+use rex_engine::{Builder, Module};
 
 for code in [
     "num_u8 4",
     "let x = 4 in num_u8 x",
     "let f = \\x -> num_i64 x in f 4",
 ] {
-    let mut engine = Engine::with_prelude(())?;
+    let mut builder = Builder::with_prelude(())?;
     let mut globals = Module::global();
     globals.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
     globals.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
-    engine.inject_module(globals)?;
+    builder.inject_module(globals)?;
 
     let program = parse(code).map_err(|errs| format!("parse error: {errs:?}"))?;
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let compiled = compiler.compile_program(&program, Default::default()).await?;
     let _ty = compiled.result_type().clone();
     let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
@@ -724,22 +727,22 @@ program with `Evaluator::run`.
 
 ```rust,ignore
 use rex::parser::parse;
-use rex_engine::{Engine, Module};
+use rex_engine::{Builder, Module};
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 let mut globals = Module::global();
 globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
-engine.inject_module(globals)?;
+builder.inject_module(globals)?;
 
 let program = parse("inc 1").map_err(|errs| format!("parse error: {errs:?}"))?;
-let mut compiler = engine.into_compiler();
+let mut compiler = builder.build_compiler();
 let compiled = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
 let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
 println!("{v}");
 ```
 
-By default, admitted async host futures are polled inline by the evaluator. This keeps the engine
+By default, admitted async host futures are polled inline by the evaluator. This keeps the runtime
 portable and avoids assuming a particular runtime, which is important for wasm embedders. Inline
 polling is fine for futures that are naturally non-blocking, but CPU-heavy or blocking work should
 be moved onto an executor supplied by the embedding application.
@@ -761,10 +764,10 @@ start yet.
 
 ```rust,ignore
 use futures::FutureExt;
-use rex_engine::{AsyncCallPolicy, Engine, EngineError, Module};
+use rex_engine::{AsyncCallPolicy, Builder, EngineError, Module};
 
-let mut engine = Engine::with_prelude(())?;
-engine.set_async_call_policy(AsyncCallPolicy::executor_fn(|future| {
+let mut builder = Builder::with_prelude(())?;
+builder.set_async_call_policy(AsyncCallPolicy::executor_fn(|future| {
     async move {
         tokio::spawn(future)
             .await
@@ -775,7 +778,7 @@ engine.set_async_call_policy(AsyncCallPolicy::executor_fn(|future| {
 
 let mut globals = Module::global();
 globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
-engine.inject_module(globals)?;
+builder.inject_module(globals)?;
 ```
 
 The executor hook is intentionally generic rather than Tokio-specific. Native applications can use
@@ -812,7 +815,7 @@ Fields of type `Vec<T>` are exposed as `Array T` and convert to/from Rex
 runtime arrays. When constructing or updating derived records from Rex code, use
 `to_array [...]` for these fields.
 
-That means `MyType::inject_rex(&mut engine)?` is enough for acyclic graphs of derived ADTs. You do
+That means `MyType::inject_rex(&mut builder)?` is enough for acyclic graphs of derived ADTs. You do
 not need to manually register dependencies in topological order. Cyclic ADT families are still not
 supported by this registration path.
 
@@ -824,7 +827,7 @@ field annotation is required. Such leaf types inherit the default no-op family c
 ```rust,ignore
 use rex::{
     Rex,
-    engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex},
+    engine::{Builder, EngineError, FromRex, Handle, Heap, IntoRex},
     typesystem::{RexType, Type},
 };
 
@@ -852,14 +855,14 @@ impl FromRex for AtomRef {
 #[derive(Rex, Debug, PartialEq)]
 struct Fragment(Vec<AtomRef>);
 
-let mut engine = Engine::with_prelude(())?;
-Fragment::inject_rex(&mut engine)?;
+let mut builder = Builder::with_prelude(())?;
+Fragment::inject_rex(&mut builder)?;
 ```
 
 ```rust,ignore
 use rex::{
     Rex,
-    engine::{Engine, FromRex},
+    engine::{Builder, FromRex},
     parser::parse,
 };
 
@@ -869,11 +872,11 @@ enum Maybe<T> {
     Nothing,
 }
 
-let mut engine = Engine::with_prelude(())?;
-Maybe::<i32>::inject_rex(&mut engine)?;
+let mut builder = Builder::with_prelude(())?;
+Maybe::<i32>::inject_rex(&mut builder)?;
 
 let program = parse("Just 1").map_err(|errs| format!("parse error: {errs:?}"))?;
-let mut compiler = engine.into_compiler();
+let mut compiler = builder.build_compiler();
 let compiled = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
 let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
@@ -885,9 +888,9 @@ assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));
 If your type metadata is data-driven (for example loaded from JSON), you can build ADTs
 without `#[derive(Rex)]`.
 
-- Use `Engine::adt_decl_from_type(...)` to seed an ADT declaration from a Rex type head.
+- Use `Builder::adt_decl_from_type(...)` to seed an ADT declaration from a Rex type head.
 - Add variants with `AdtDecl::add_variant(...)`.
-- Stage it with `Module::add_adt_decl(...)`, then inject that module with `Engine::inject_module(...)`.
+- Stage it with `Module::add_adt_decl(...)`, then inject that module with `Builder::inject_module(...)`.
 
 `Module::add_adt_decl(...)` is the low-level single-ADT staging primitive. If you are building
 several ADTs manually, prefer batching them in one module with `add_adt_family(...)`.
@@ -895,22 +898,22 @@ several ADTs manually, prefer batching them in one module with `add_adt_family(.
 ```rust,ignore
 use rex::{
     ast::Symbol,
-    engine::{Engine, Module},
+    engine::{Builder, Module},
     typesystem::{RexType, Type},
 };
 
-let mut engine = Engine::with_prelude(())?;
+let mut builder = Builder::with_prelude(())?;
 let mut globals = Module::global();
 
-let mut adt = engine.adt_decl_from_type(&Type::con("PrimitiveEither", 0))?;
+let mut adt = builder.adt_decl_from_type(&Type::con("PrimitiveEither", 0))?;
 adt.add_variant(Symbol::intern("Flag"), vec![bool::rex_type()]);
 adt.add_variant(Symbol::intern("Count"), vec![i32::rex_type()]);
 globals.add_adt_decl(adt)?;
-engine.inject_module(globals)?;
+builder.inject_module(globals)?;
 ```
 
 If you have a Rust type with manual `RexType`/`IntoRex`/`FromRex` impls, implement
-`RexAdt` and provide `rex_adt_decl()`. Then `Engine::inject_rex_adt::<T>()` gives manual
+`RexAdt` and provide `rex_adt_decl()`. Then `Builder::inject_rex_adt::<T>()` gives manual
 types the same registration workflow that `#[derive(Rex)]` exposes as `T::inject_rex(...)`.
 
 If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(...)` and add its
@@ -919,7 +922,7 @@ If the manual Rust type is itself an ADT, override `RexType::collect_rex_family(
 ```rust,ignore
 use rex::{
     ast::Symbol,
-    engine::Engine,
+    engine::Builder,
     typesystem::{AdtDecl, RexAdt, RexType, Type, TypeError, TypeVarSupply},
 };
 
@@ -946,8 +949,8 @@ impl RexAdt for PrimitiveEither {
     }
 }
 
-let mut engine = Engine::with_prelude(())?;
-engine.inject_rex_adt::<PrimitiveEither>()?;
+let mut builder = Builder::with_prelude(())?;
+builder.inject_rex_adt::<PrimitiveEither>()?;
 ```
 
 ## Depth Limits

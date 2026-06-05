@@ -10,13 +10,19 @@ use uuid::Uuid;
 
 use crate::{
     EngineError, Evaluator,
-    builder::{engine::Engine, rewrite::rewrite_program_with_imports},
+    builder::{
+        core::{Builder, ModuleLoaderState, RuntimePolicy, RuntimeRegistry},
+        rewrite::rewrite_program_with_imports,
+    },
     compiler::{program::CompiledProgram, type_check::type_check_engine},
+    env::RootedEnvironment,
+    evaluator::runtime_core::RuntimeCore,
     manifest::{MainInputSpec, MainSignature},
     modules::{
         ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, exports_from_program,
         parse_program_from_source, prefix_for_module, program_from_resolved,
     },
+    value::Heap,
 };
 
 pub(crate) mod program;
@@ -54,26 +60,48 @@ pub struct Compiler<State = ()>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) engine: Engine<State>,
+    pub(crate) state: Arc<State>,
+    pub(crate) env: RootedEnvironment,
+    pub(crate) type_system: TypeSystem,
+    pub(crate) runtime: RuntimeRegistry<State>,
+    pub(crate) module_loader: ModuleLoaderState,
+    pub(crate) policy: RuntimePolicy,
+    pub(crate) heap: Heap,
 }
 
 impl<State> Compiler<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(engine: Engine<State>) -> Self {
-        Self { engine }
+    pub(crate) fn from_builder(builder: Builder<State>) -> Self {
+        Self {
+            state: builder.state,
+            env: builder.env,
+            type_system: builder.type_system,
+            runtime: builder.runtime,
+            module_loader: builder.module_loader,
+            policy: builder.policy,
+            heap: builder.heap,
+        }
     }
 
     /// Consume this compiler and build a single-shot evaluator.
     pub fn into_evaluator(self) -> Evaluator<State> {
-        let runtime = self.engine.runtime_core();
-        Evaluator::new(runtime)
+        Evaluator::new(RuntimeCore {
+            state: Arc::clone(&self.state),
+            natives: Arc::new(self.runtime.natives.clone()),
+            typeclasses: Arc::new(self.runtime.typeclasses.clone()),
+            type_system: Arc::new(self.type_system.clone()),
+            typeclass_cache: Arc::clone(&self.runtime.typeclass_cache),
+            async_call_policy: self.policy.async_call_policy.clone(),
+            parallelism_controller: Arc::clone(&self.policy.parallelism_controller),
+            heap: self.heap.clone(),
+        })
     }
 
     /// Borrow the compiler's type system snapshot.
     pub fn type_system(&self) -> &TypeSystem {
-        &self.engine.type_system
+        &self.type_system
     }
 
     fn compile_typed_expr(
@@ -81,12 +109,17 @@ where
         typed: TypedExpr,
         main_signature: MainSignature,
     ) -> CompiledProgram {
-        let env = self.engine.env_snapshot();
+        let env = self.env.clone();
         CompiledProgram::new(main_signature, env, typed)
     }
 
     pub(crate) fn type_check(&mut self, expr: &Expr) -> Result<TypedExpr, EngineError> {
-        type_check_engine(&mut self.engine, expr)
+        type_check_engine(
+            &mut self.type_system,
+            &self.env,
+            &self.runtime.natives,
+            expr,
+        )
     }
 
     fn rewrite_and_inject_program<'a>(
@@ -100,7 +133,7 @@ where
     ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>> {
         Box::pin(async move {
             let rewritten = rewrite_program_with_imports(
-                &mut self.engine,
+                self,
                 compilation_unit,
                 importer,
                 prefix,
@@ -109,7 +142,7 @@ where
                 loading,
             )
             .await?;
-            self.engine.inject_decls(&rewritten.decls)?;
+            self.inject_decls(&rewritten.decls)?;
             Ok(rewritten)
         })
     }
@@ -132,7 +165,7 @@ where
             .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-        let chain = self.engine.modules.import_chain();
+        let chain = self.module_loader.system.import_chain();
         let rewritten = self
             .rewrite_and_inject_program(
                 &entry.program,
@@ -163,7 +196,7 @@ where
         let prefix = format!("@snippet{}", Uuid::new_v4());
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
-        let chain = self.engine.modules.import_chain();
+        let chain = self.module_loader.system.import_chain();
         let rewritten = self
             .rewrite_and_inject_program(
                 &program,
@@ -177,7 +210,7 @@ where
         let body = rewritten
             .body
             .ok_or(EngineError::MissingBody { context: "snippet" })?;
-        self.engine.infer_type(body.as_ref())
+        self.infer_type(body.as_ref())
     }
 
     pub async fn infer_module_with_importer(
@@ -185,7 +218,11 @@ where
         request: ImportRequest,
         importer: Arc<dyn Importer>,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
-        let chain = self.engine.modules.import_chain().with_importer(importer);
+        let chain = self
+            .module_loader
+            .system
+            .import_chain()
+            .with_importer(importer);
         let resolved = chain.import(request).await?;
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
@@ -208,7 +245,7 @@ where
         let body = rewritten
             .body
             .unwrap_or_else(|| Arc::new(Expr::Tuple(Default::default(), Vec::new())));
-        let result = self.engine.infer_type(body.as_ref())?;
+        let result = self.infer_type(body.as_ref())?;
 
         let exports = exports_from_program(&program, &prefix, &resolved.id);
         loaded.insert(resolved.id.clone(), exports);

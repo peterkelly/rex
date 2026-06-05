@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use rex::{
     Rex,
-    engine::{Engine, EngineError, Module},
+    engine::{Builder, EngineError, Module},
 };
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
@@ -56,14 +56,14 @@ struct CliSubprocess {
     id: Uuid,
 }
 
-pub fn inject_cli_prelude_engine(engine: &mut Engine) -> Result<(), EngineError> {
-    inject_cli_test_natives(engine)?;
-    inject_cli_io_natives(engine)?;
-    inject_cli_process_natives(engine)?;
+pub fn inject_cli_prelude_builder(builder: &mut Builder) -> Result<(), EngineError> {
+    inject_cli_test_natives(builder)?;
+    inject_cli_io_natives(builder)?;
+    inject_cli_process_natives(builder)?;
     Ok(())
 }
 
-fn inject_cli_test_natives(engine: &mut Engine) -> Result<(), EngineError> {
+fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
     let mut module = Module::new("test");
     module.export_async("do_something", |_state: &(), n: i32| async move {
         println!("do_something {} begin", n);
@@ -85,10 +85,10 @@ fn inject_cli_test_natives(engine: &mut Engine) -> Result<(), EngineError> {
         println!("is_even {} end", n);
         Ok::<bool, EngineError>(n % 2 == 0)
     })?;
-    engine.inject_module(module)
+    builder.inject_module(module)
 }
 
-fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
+fn inject_cli_io_natives(builder: &mut Builder) -> Result<(), EngineError> {
     let mut module = Module::new("std.io");
     module.export("debug", |_state: &(), message: String| {
         tracing::debug!("{message}");
@@ -155,10 +155,10 @@ fn inject_cli_io_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    engine.inject_module(module)
+    builder.inject_module(module)
 }
 
-fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
+fn inject_cli_process_natives(builder: &mut Builder) -> Result<(), EngineError> {
     let mut module = Module::new("std.process");
     module.add_rex_adt::<SpawnOptions>()?;
     module.add_rex_adt::<CliSubprocess>()?;
@@ -215,7 +215,7 @@ fn inject_cli_process_natives(engine: &mut Engine) -> Result<(), EngineError> {
         },
     )?;
 
-    engine.inject_module(module)
+    builder.inject_module(module)
 }
 
 fn subprocess_get(id: &Uuid, name: &str) -> Result<Arc<SubprocessEntry>, EngineError> {
@@ -262,7 +262,7 @@ async fn subprocess_output(
 #[cfg(test)]
 mod tests {
     use rex::{
-        engine::{Engine, Value},
+        engine::{Builder, Value},
         parser::parse as parse_rex,
         typesystem::{BuiltinTypeId, Type},
     };
@@ -281,10 +281,10 @@ mod tests {
               io.write_all 1 (process.stdout p)
         "#;
 
-        let mut engine = Engine::with_prelude(()).unwrap();
+        let mut builder = Builder::with_prelude(()).unwrap();
 
-        inject_cli_prelude_engine(&mut engine).unwrap();
-        let mut compiler = engine.into_compiler();
+        inject_cli_prelude_builder(&mut builder).unwrap();
+        let mut compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
         let program = compiler
             .compile_program(&parsed, Default::default())
@@ -305,10 +305,10 @@ mod tests {
             io.info "hello"
         "#;
 
-        let mut engine = Engine::with_prelude(()).unwrap();
+        let mut builder = Builder::with_prelude(()).unwrap();
 
-        inject_cli_prelude_engine(&mut engine).unwrap();
-        let mut compiler = engine.into_compiler();
+        inject_cli_prelude_builder(&mut builder).unwrap();
+        let mut compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
         let program = compiler
             .compile_program(&parsed, Default::default())
@@ -336,10 +336,10 @@ mod tests {
               (process.wait p, process.stdout p, process.stderr p)
         "#;
 
-        let mut engine = Engine::with_prelude(()).unwrap();
+        let mut builder = Builder::with_prelude(()).unwrap();
 
-        inject_cli_prelude_engine(&mut engine).unwrap();
-        let mut compiler = engine.into_compiler();
+        inject_cli_prelude_builder(&mut builder).unwrap();
+        let mut compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
         let program = compiler
             .compile_program(&parsed, Default::default())

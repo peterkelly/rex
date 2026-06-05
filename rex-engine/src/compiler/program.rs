@@ -1,16 +1,20 @@
-use crate::{env::Environment, manifest::MainSignature};
+use crate::{env::RootedEnvironment, manifest::MainSignature};
 use rex_typesystem::types::{Type, TypedExpr};
 use std::sync::Arc;
 
 /// Prepared Rex code plus the environment snapshot needed to run it.
 pub struct CompiledProgram {
     main_signature: MainSignature,
-    pub(crate) env: Environment,
+    pub(crate) env: RootedEnvironment,
     pub(crate) expr: Arc<TypedExpr>,
 }
 
 impl CompiledProgram {
-    pub(crate) fn new(main_signature: MainSignature, env: Environment, expr: TypedExpr) -> Self {
+    pub(crate) fn new(
+        main_signature: MainSignature,
+        env: RootedEnvironment,
+        expr: TypedExpr,
+    ) -> Self {
         Self {
             main_signature,
             env,

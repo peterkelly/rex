@@ -91,9 +91,9 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
     let inject_fn = quote! {
         impl #rex_adt_impl_generics #rust_ident #rex_adt_ty_generics #rex_adt_where_clause {
             pub fn inject_rex<State: Clone + Send + Sync + 'static>(
-                engine: &mut ::rex::engine::Engine<State>,
+                builder: &mut ::rex::engine::Builder<State>,
             ) -> Result<(), ::rex::engine::EngineError> {
-                engine.inject_rex_adt::<Self>()
+                builder.inject_rex_adt::<Self>()
             }
 
             pub fn rex_adt_decl() -> Result<::rex::typesystem::AdtDecl, ::rex::engine::EngineError> {
@@ -105,27 +105,27 @@ fn expand(ast: &DeriveInput) -> Result<TokenStream2, Error> {
             }
 
             pub fn inject_rex_with_default<State: Clone + Send + Sync + 'static>(
-                engine: &mut ::rex::engine::Engine<State>,
+                builder: &mut ::rex::engine::Builder<State>,
             ) -> Result<(), ::rex::engine::EngineError>
             where
                 Self: ::rex::engine::RexDefault<State>,
             {
-                engine.inject_rex_adt::<Self>()?;
-                engine.inject_rex_default_instance::<Self>()
+                builder.inject_rex_adt::<Self>()?;
+                builder.inject_rex_default_instance::<Self>()
             }
 
             pub fn inject_rex_with_constructor<State, Sig, H>(
-                engine: &mut ::rex::engine::Engine<State>,
+                builder: &mut ::rex::engine::Builder<State>,
                 constructor: H,
             ) -> Result<(), ::rex::engine::EngineError>
             where
                 State: Clone + Send + Sync + 'static,
                 H: ::rex::engine::HostFnSync<State, Sig>,
             {
-                engine.inject_rex_adt::<Self>()?;
+                builder.inject_rex_adt::<Self>()?;
                 let mut module = ::rex::engine::Module::global();
                 module.export(#type_name, constructor)?;
-                engine.inject_module(module)
+                builder.inject_module(module)
             }
         }
     };

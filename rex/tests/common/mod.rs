@@ -2,7 +2,7 @@
 
 use rex::{
     ast::{CompilationUnit, Symbol},
-    engine::{Engine, EngineError, Handle, Heap, Module, Value, ValueDisplayOptions},
+    engine::{Builder, EngineError, Handle, Heap, Module, Value, ValueDisplayOptions},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError, TypeKind},
 };
@@ -15,22 +15,22 @@ pub fn strip_type_span(mut err: TypeError) -> TypeError {
 }
 
 pub fn inject_globals<State: Clone + Send + Sync + 'static>(
-    engine: &mut Engine<State>,
+    builder: &mut Builder<State>,
     build: impl FnOnce(&mut Module<State>) -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
     let mut module = Module::global();
     build(&mut module)?;
-    engine.inject_module(module)
+    builder.inject_module(module)
 }
 
 pub async fn run_program<State>(
-    engine: Engine<State>,
+    builder: Builder<State>,
     program: &CompilationUnit,
 ) -> Result<(Handle, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let compiled = compiler
         .compile_program(program, Default::default())
         .await?;
@@ -43,15 +43,15 @@ where
 }
 
 pub async fn eval_source<State>(
-    engine: Engine<State>,
+    builder: Builder<State>,
     source: &str,
 ) -> Result<(Heap, Handle, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
     let program = parse_rex(source).unwrap();
-    let heap = engine.heap.clone();
-    let (handle, ty) = run_program(engine, &program).await?;
+    let heap = builder.heap().clone();
+    let (handle, ty) = run_program(builder, &program).await?;
     Ok((heap, handle, ty))
 }
 
@@ -145,7 +145,7 @@ fn strip_snippet_type_prefixes(rendered: &str) -> String {
 
 pub async fn eval_to_display_string(code: &str, expected_ty: Type) -> Result<String, String> {
     let (_heap, handle, ty) =
-        eval_source(Engine::with_prelude(()).map_err(|e| format!("{e}"))?, code)
+        eval_source(Builder::with_prelude(()).map_err(|e| format!("{e}"))?, code)
             .await
             .map_err(|e| strip_snippet_type_prefixes(&format!("{e}")))?;
     let actual_ty_display = strip_snippet_type_prefixes(&ty.to_string());

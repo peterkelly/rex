@@ -3,7 +3,7 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{CompileOptions, Engine, Handle, Heap, Value},
+    engine::{Builder, CompileOptions, Handle, Heap, Value},
     json::{json_to_rex, rex_to_json},
     parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply, standard_type_system},
@@ -216,10 +216,10 @@ fn unit_enum_string_roundtrip() {
 
 #[tokio::test]
 async fn eval_entry_points_return_type_for_json_eval() {
-    fn engine_with_eval_json_record() -> Engine {
-        let mut engine = Engine::with_prelude(()).unwrap();
-        EvalJsonRecord::inject_rex(&mut engine).unwrap();
-        engine
+    fn builder_with_eval_json_record() -> Builder {
+        let mut builder = Builder::with_prelude(()).unwrap();
+        EvalJsonRecord::inject_rex(&mut builder).unwrap();
+        builder
     }
 
     let rex_code = "EvalJsonRecord { id = 7, values = to_array [1, 2, 3, 5, 8] }";
@@ -236,9 +236,9 @@ async fn eval_entry_points_return_type_for_json_eval() {
         expected_json
     );
     let parsed = parse_rex(rex_code).unwrap();
-    let engine = engine_with_eval_json_record();
-    let type_system = engine.type_system.clone();
-    let mut compiler = engine.into_compiler();
+    let builder = builder_with_eval_json_record();
+    let type_system = builder.type_system().clone();
+    let mut compiler = builder.build_compiler();
     assert!(parsed.decls.is_empty());
     let compiled = compiler
         .compile_program(&parsed, Default::default())
@@ -251,7 +251,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .await
         .unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
-    let mut compiler = engine_with_eval_json_record().into_compiler();
+    let mut compiler = builder_with_eval_json_record().build_compiler();
     let parsed = parse_rex(rex_code).unwrap();
     let program = compiler
         .compile_program(&parsed, CompileOptions::default())
@@ -273,7 +273,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let mut compiler = engine_with_eval_json_record().into_compiler();
+    let mut compiler = builder_with_eval_json_record().build_compiler();
     let parsed = parse_rex(rex_code).unwrap();
     let program = compiler
         .compile_program(

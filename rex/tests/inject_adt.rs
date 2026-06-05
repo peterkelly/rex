@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
+    engine::{Builder, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value},
     parser::parse as parse_rex,
     typesystem::{AdtDecl, BuiltinTypeId, RexAdt, RexType, Type, TypeError, TypeVarSupply},
 };
@@ -173,11 +173,11 @@ impl RexAdt for ManualEnum {
 
 #[tokio::test]
 async fn manual_struct_adt_can_be_registered_and_roundtripped() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_rex_adt::<ManualRecord>().unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.inject_rex_adt::<ManualRecord>().unwrap();
 
     let program = parse_rex("ManualRecord { enabled = true, count = 41 }").unwrap();
-    let (handle, ty) = common::run_program(engine, &program).await.unwrap();
+    let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, ManualRecord::rex_type());
     let decoded = ManualRecord::from_rex(&handle).unwrap();
     assert_eq!(
@@ -191,11 +191,11 @@ async fn manual_struct_adt_can_be_registered_and_roundtripped() {
 
 #[tokio::test]
 async fn derived_struct_adt_can_be_registered_and_roundtripped() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    DerivedRecord::inject_rex(&mut engine).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
+    DerivedRecord::inject_rex(&mut builder).unwrap();
 
     let program = parse_rex("DerivedRecord { enabled = true, count = 41 }").unwrap();
-    let (handle, ty) = common::run_program(engine, &program).await.unwrap();
+    let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, DerivedRecord::rex_type());
     let decoded = DerivedRecord::from_rex(&handle).unwrap();
     assert_eq!(
@@ -209,8 +209,8 @@ async fn derived_struct_adt_can_be_registered_and_roundtripped() {
 
 #[tokio::test]
 async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.inject_rex_adt::<ManualEnum>().unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.inject_rex_adt::<ManualEnum>().unwrap();
 
     let program = parse_rex(
         r#"
@@ -221,15 +221,15 @@ async fn manual_enum_adt_can_be_registered_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let (handle, ty) = common::run_program(engine, &program).await.unwrap();
+    let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }
 
 #[tokio::test]
 async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    DerivedEnum::inject_rex(&mut engine).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
+    DerivedEnum::inject_rex(&mut builder).unwrap();
 
     let program = parse_rex(
         r#"
@@ -240,15 +240,15 @@ async fn derived_enum_adt_can_be_registered_and_pattern_matched() {
         "#,
     )
     .unwrap();
-    let (handle, ty) = common::run_program(engine, &program).await.unwrap();
+    let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }
 
 #[test]
 fn adt_decl_from_type_rejects_non_constructor_heads() {
-    let mut engine = Engine::new(());
-    let err = engine
+    let mut builder = Builder::new(());
+    let err = builder
         .adt_decl_from_type(&Type::tuple(vec![Type::builtin(BuiltinTypeId::I32)]))
         .unwrap_err();
     let EngineError::Custom(message) = err else {
@@ -259,8 +259,8 @@ fn adt_decl_from_type_rejects_non_constructor_heads() {
 
 #[test]
 fn adt_decl_from_type_rejects_non_constructor_heads_for_derived_types() {
-    let mut engine = Engine::new(());
-    let err = engine
+    let mut builder = Builder::new(());
+    let err = builder
         .adt_decl_from_type(&Type::tuple(vec![DerivedRecord::rex_type()]))
         .unwrap_err();
     let EngineError::Custom(message) = err else {
@@ -271,9 +271,9 @@ fn adt_decl_from_type_rejects_non_constructor_heads_for_derived_types() {
 
 #[test]
 fn adt_decl_from_type_rejects_applied_non_variable_args() {
-    let mut engine = Engine::new(());
+    let mut builder = Builder::new(());
     let typ = Type::app(Type::con("Boxed", 1), Type::builtin(BuiltinTypeId::I32));
-    let err = engine.adt_decl_from_type(&typ).unwrap_err();
+    let err = builder.adt_decl_from_type(&typ).unwrap_err();
     let EngineError::Custom(message) = err else {
         panic!("expected EngineError::Custom");
     };
@@ -282,8 +282,8 @@ fn adt_decl_from_type_rejects_applied_non_variable_args() {
 
 #[test]
 fn adt_decl_from_type_rejects_applied_non_variable_args_for_derived_types() {
-    let mut engine = Engine::new(());
-    let err = engine
+    let mut builder = Builder::new(());
+    let err = builder
         .adt_decl_from_type(&DerivedBox::<i32>::rex_type())
         .unwrap_err();
     let EngineError::Custom(message) = err else {
@@ -294,8 +294,8 @@ fn adt_decl_from_type_rejects_applied_non_variable_args_for_derived_types() {
 
 #[test]
 fn adt_decl_from_type_with_params_validates_arity() {
-    let mut engine = Engine::new(());
-    let err = engine
+    let mut builder = Builder::new(());
+    let err = builder
         .adt_decl_from_type_with_params(&Type::builtin(BuiltinTypeId::Result), &["T"])
         .unwrap_err();
     let EngineError::Custom(message) = err else {
@@ -306,8 +306,8 @@ fn adt_decl_from_type_with_params_validates_arity() {
 
 #[test]
 fn adt_decl_from_type_with_params_validates_arity_for_derived_types() {
-    let mut engine = Engine::new(());
-    let err = engine
+    let mut builder = Builder::new(());
+    let err = builder
         .adt_decl_from_type_with_params(&DerivedBox::<i32>::rex_type(), &[])
         .unwrap_err();
     let EngineError::Custom(message) = err else {
@@ -318,15 +318,15 @@ fn adt_decl_from_type_with_params_validates_arity_for_derived_types() {
 
 #[tokio::test]
 async fn adt_decl_from_type_with_params_can_register_generic_adt() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut adt = engine
+    let mut builder = Builder::with_prelude(()).unwrap();
+    let mut adt = builder
         .adt_decl_from_type_with_params(&Type::con("Wrap", 1), &["T"])
         .unwrap();
     let t = adt.param_type(&Symbol::intern("T")).unwrap();
     adt.add_variant(Symbol::intern("Wrap"), vec![t]);
     let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let program = parse_rex(
         r#"
@@ -336,22 +336,22 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt() {
         "#,
     )
     .unwrap();
-    let (handle, ty) = common::run_program(engine, &program).await.unwrap();
+    let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }
 
 #[tokio::test]
 async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_types() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut adt = engine
+    let mut builder = Builder::with_prelude(()).unwrap();
+    let mut adt = builder
         .adt_decl_from_type_with_params(&DerivedBox::<i32>::rex_type(), &["T"])
         .unwrap();
     let t = adt.param_type(&Symbol::intern("T")).unwrap();
     adt.add_variant(Symbol::intern("Boxed"), vec![t]);
     let mut module = Module::global();
     module.add_adt_decl(adt).unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let program = parse_rex(
         r#"
@@ -361,7 +361,7 @@ async fn adt_decl_from_type_with_params_can_register_generic_adt_for_derived_typ
         "#,
     )
     .unwrap();
-    let (handle, ty) = common::run_program(engine, &program).await.unwrap();
+    let (handle, ty) = common::run_program(builder, &program).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     assert_eq!(handle.as_i32().unwrap(), 10);
 }

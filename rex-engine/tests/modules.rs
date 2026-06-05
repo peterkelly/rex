@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Symbol;
 use rex_engine::{
-    CompileOptions, Context, Engine, EngineError, EngineOptions, Handle, ImportRequest, Importer,
+    Builder, CompileOptions, Context, EngineError, EngineOptions, Handle, ImportRequest, Importer,
     Module, ModuleError, ModuleId, PreludeMode, ResolvedModule, ResolvedModuleContent, Value,
 };
 use rex_parser::parse as parse_rex;
@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 fn temp_dir(name: &str) -> PathBuf {
     let mut dir = std::env::temp_dir();
-    dir.push(format!("rex-engine-test-{name}-{}", Uuid::new_v4()));
+    dir.push(format!("rex-builder-test-{name}-{}", Uuid::new_v4()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -111,8 +111,8 @@ fn resolve_rex_file(
     }))
 }
 
-fn engine_with_prelude() -> Engine {
-    Engine::with_prelude(()).unwrap()
+fn builder_with_prelude() -> Builder {
+    Builder::with_prelude(()).unwrap()
 }
 fn i32_type() -> Type {
     Type::builtin(BuiltinTypeId::I32)
@@ -155,9 +155,9 @@ impl RexAdt for LocalRunSpec {
 
 #[tokio::test]
 async fn prelude_module_can_be_imported_explicitly() {
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import Prelude (map);
         map ((+) 1) [1, 2]
@@ -179,7 +179,7 @@ async fn prelude_module_can_be_imported_explicitly() {
 
 #[tokio::test]
 async fn engine_options_can_disable_prelude() {
-    let engine = Engine::with_options(
+    let builder = Builder::with_options(
         (),
         EngineOptions {
             prelude: PreludeMode::Disabled,
@@ -187,7 +187,7 @@ async fn engine_options_can_disable_prelude() {
         },
     )
     .unwrap();
-    let err = run_snippet(engine, "map ((+) 1) [1, 2]")
+    let err = run_snippet(builder, "map ((+) 1) [1, 2]")
         .await
         .expect_err("prelude should be unavailable when disabled");
     let msg = err.to_string();
@@ -195,23 +195,23 @@ async fn engine_options_can_disable_prelude() {
 }
 
 async fn eval_module_via_fs<State: Clone + Send + Sync + 'static>(
-    engine: Engine<State>,
+    builder: Builder<State>,
     path: &Path,
 ) -> Result<(Handle, Type), EngineError> {
-    eval_module_via_importer(engine, path, Arc::new(TestFilesystemImporter)).await
+    eval_module_via_importer(builder, path, Arc::new(TestFilesystemImporter)).await
 }
 
 async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
-    engine: Engine<State>,
+    builder: Builder<State>,
     path: &Path,
     importer: Arc<dyn Importer>,
 ) -> Result<(Handle, Type), EngineError> {
     let source = fs::read_to_string(path).map_err(|err| {
         EngineError::Internal(format!("failed to read {}: {err}", path.display()))
     })?;
-    let mut engine = engine;
-    engine.add_importer("test-fs", importer);
-    let mut compiler = engine.into_compiler();
+    let mut builder = builder;
+    builder.add_importer("test-fs", importer);
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(&source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
     let program = compiler
         .compile_program(&parsed, CompileOptions::default().with_importer_path(path))
@@ -225,10 +225,10 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
 }
 
 async fn run_snippet<State: Clone + Send + Sync + 'static>(
-    engine: Engine<State>,
+    builder: Builder<State>,
     source: &str,
 ) -> Result<(Handle, Type), EngineError> {
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
     let program = compiler
         .compile_program(&parsed, CompileOptions::default())
@@ -242,13 +242,13 @@ async fn run_snippet<State: Clone + Send + Sync + 'static>(
 }
 
 async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
-    engine: Engine<State>,
+    builder: Builder<State>,
     source: &str,
     importer_path: impl AsRef<Path>,
 ) -> Result<(Handle, Type), EngineError> {
-    let mut engine = engine;
-    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter));
-    let mut compiler = engine.into_compiler();
+    let mut builder = builder;
+    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
     let program = compiler
         .compile_program(
@@ -265,7 +265,7 @@ async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
 }
 
 macro_rules! pvals {
-    ($engine:expr, $vals:expr) => {
+    ($builder:expr, $vals:expr) => {
         $vals
             .iter()
             .map(|handle| (handle.clone(), handle.value().unwrap()))
@@ -294,9 +294,9 @@ async fn module_import_local_pub() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -313,10 +313,10 @@ async fn snippet_import_reloads_when_local_module_changes() {
     write_file(&importer, "()");
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
-    let mut engine = engine_with_prelude();
-    engine.add_importer("test-fs", Arc::new(TestFilesystemImporter));
+    let mut builder = builder_with_prelude();
+    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
 
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
 
     let source = "import foo (value);\nvalue 0";
     let parsed = parse_rex(source).unwrap();
@@ -365,10 +365,10 @@ async fn imported_type_names_in_fn_signatures_are_rewritten() {
         "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, _ty) = run_snippet_at(
-        engine,
+        builder,
         r#"
         import a (id);
         import b (Boxed);
@@ -408,10 +408,10 @@ async fn imported_class_names_in_instance_headers_are_rewritten() {
         "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet_at(
-        engine,
+        builder,
         r#"
         import dep as D;
 
@@ -460,9 +460,9 @@ async fn module_import_selected_clause_can_import_class_exports() {
         "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 7),
@@ -484,10 +484,10 @@ async fn imported_type_alias_in_lambda_annotation_is_not_shadowed_by_param_name(
         "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet_at(
-        engine,
+        builder,
         r#"
         import dep as D;
 
@@ -535,9 +535,9 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -548,7 +548,7 @@ async fn module_cycle_with_pub_function_signatures_resolves() {
 
 #[tokio::test]
 async fn module_injected_from_rust_sync_and_async_exports() {
-    let mut engine = engine_with_prelude();
+    let mut builder = builder_with_prelude();
 
     let mut module = Module::new("host.math");
     module
@@ -560,10 +560,10 @@ async fn module_injected_from_rust_sync_and_async_exports() {
             |_state: &(), x: i32| async move { Ok(x * 2) },
         )
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import host.math (inc, double_async as d);
         inc (d 20)
@@ -581,7 +581,7 @@ async fn module_injected_from_rust_sync_and_async_exports() {
 
 #[tokio::test]
 async fn module_injected_from_rust_native_pointer_exports_sync() {
-    let mut engine = Engine::with_prelude(true).unwrap();
+    let mut builder = Builder::with_prelude(true).unwrap();
 
     let mut module = Module::new("host.ptrsync");
     module
@@ -630,10 +630,10 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
         })
         .unwrap();
 
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import host.ptrsync (pick, pick_typed, heap_i32);
         (pick 10 42, pick_typed 5 99, heap_i32)
@@ -654,7 +654,7 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
     let Value::Tuple(xs) = value else {
         panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
-    let xs = pvals!(engine, xs);
+    let xs = pvals!(builder, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {
@@ -668,15 +668,15 @@ async fn module_injected_from_rust_native_pointer_exports_sync() {
 
 #[tokio::test]
 async fn module_injected_from_rust_allows_overloaded_export_names() {
-    let mut engine = engine_with_prelude();
+    let mut builder = builder_with_prelude();
 
     let mut module = Module::new("host.over");
     module.export("id", |_state: &(), x: i32| Ok(x)).unwrap();
     module.export("id", |_state: &(), x: String| Ok(x)).unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import host.over (id);
         (id 7, id "ok")
@@ -698,7 +698,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
     let Value::Tuple(xs) = value else {
         panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
-    let xs = pvals!(engine, xs);
+    let xs = pvals!(builder, xs);
     assert_eq!(xs.len(), 2);
     match &xs[0].1 {
         Value::I32(n) => assert_eq!(*n, 7),
@@ -712,7 +712,7 @@ async fn module_injected_from_rust_allows_overloaded_export_names() {
 
 #[tokio::test]
 async fn module_injected_from_rust_exposes_module_local_embedder_types() {
-    let mut engine = engine_with_prelude();
+    let mut builder = builder_with_prelude();
 
     let mut module = Module::new("host.delay");
     module.add_rex_adt::<LocalRunSpec>().unwrap();
@@ -726,10 +726,10 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
             },
         )
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let (_value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import host.delay as Delay;
         let x: Delay.RunSpec = Delay.make_run_spec in
@@ -744,7 +744,7 @@ async fn module_injected_from_rust_exposes_module_local_embedder_types() {
 
 #[tokio::test]
 async fn module_injected_from_rust_native_pointer_exports_async() {
-    let mut engine = Engine::with_prelude(true).unwrap();
+    let mut builder = Builder::with_prelude(true).unwrap();
 
     let mut module = Module::new("host.ptrasync");
     module
@@ -796,10 +796,10 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
         })
         .unwrap();
 
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import host.ptrasync (pick_async, pick_typed_async as pta, heap_i32_async);
         (pick_async 7 21, pta 1 2, heap_i32_async)
@@ -820,7 +820,7 @@ async fn module_injected_from_rust_native_pointer_exports_async() {
     let Value::Tuple(xs) = value else {
         panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
-    let xs = pvals!(engine, xs);
+    let xs = pvals!(builder, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {
@@ -878,7 +878,7 @@ fn module_native_async_pointer_export_rejects_invalid_arity_scheme_pair() {
 
 #[tokio::test]
 async fn module_injected_from_rust_wildcard_import() {
-    let mut engine = engine_with_prelude();
+    let mut builder = builder_with_prelude();
 
     let mut module = Module::new("host.ops");
     module
@@ -887,10 +887,10 @@ async fn module_injected_from_rust_wildcard_import() {
     module
         .export("add", |_state: &(), a: i32, b: i32| Ok(a + b))
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import host.ops (*);
         add (triple 10) 2
@@ -908,15 +908,15 @@ async fn module_injected_from_rust_wildcard_import() {
 
 #[tokio::test]
 async fn module_injected_from_rust_rejects_duplicate_module_name() {
-    let mut engine = engine_with_prelude();
+    let mut builder = builder_with_prelude();
 
     let mut one = Module::new("host.dupe");
     one.export("x", |_state: &(), x: i32| Ok(x)).unwrap();
-    engine.inject_module(one).unwrap();
+    builder.inject_module(one).unwrap();
 
     let mut two = Module::new("host.dupe");
     two.export("y", |_state: &(), x: i32| Ok(x)).unwrap();
-    let err = engine.inject_module(two).unwrap_err();
+    let err = builder.inject_module(two).unwrap_err();
     assert!(err.to_string().contains("already injected"));
 }
 
@@ -941,9 +941,9 @@ async fn module_import_rejects_private_access() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -962,10 +962,10 @@ async fn snippet_can_import_with_explicit_base() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet_at(
-        engine,
+        builder,
         r#"
         import foo.bar as Bar;
         Bar.add 20 22
@@ -1005,9 +1005,9 @@ async fn module_import_wildcard_clause() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -1037,9 +1037,9 @@ async fn module_import_selected_clause_with_alias() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     let value = value_ptr.value().unwrap();
     match value {
@@ -1068,9 +1068,9 @@ async fn module_import_selected_clause_missing_export() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1100,9 +1100,9 @@ async fn module_import_selected_clause_can_import_type_exports() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_via_fs(builder, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1134,9 +1134,9 @@ async fn module_import_selected_clause_single_name_can_bind_type_and_constructor
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_via_fs(builder, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1168,9 +1168,9 @@ async fn module_import_selected_clause_alias_binds_type_and_constructor_facets()
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_via_fs(builder, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Token") || tag.as_ref() == "Token");
@@ -1202,9 +1202,9 @@ async fn module_import_wildcard_clause_imports_type_exports_too() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, _ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, _ty) = eval_module_via_fs(builder, &main).await.unwrap();
     match value_ptr.value().unwrap() {
         Value::Adt(tag, fields) => {
             assert!(tag.as_ref().ends_with(".Ready") || tag.as_ref() == "Ready");
@@ -1241,9 +1241,9 @@ async fn module_import_wildcard_clause_imports_class_exports_too() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 11),
@@ -1275,9 +1275,9 @@ async fn module_import_alias_and_selected_clause_can_coexist_for_same_module() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     let TypeKind::Tuple(items) = ty.as_ref() else {
         panic!("expected tuple type, got {ty}");
     };
@@ -1317,9 +1317,9 @@ async fn module_import_selected_clause_type_name_does_not_create_value_facet() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1350,9 +1350,9 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1362,11 +1362,11 @@ async fn module_import_selected_clause_class_name_does_not_create_type_facet() {
 
 #[tokio::test]
 async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_imports() {
-    let mut engine = engine_with_prelude();
+    let mut builder = builder_with_prelude();
 
     let mut module = Module::new("host.types");
     module
-        .add_adt_decls_from_types(&mut engine, vec![LocalRunSpec::rex_type()])
+        .add_adt_decls_from_types(&mut builder, vec![LocalRunSpec::rex_type()])
         .unwrap();
     module
         .export_native(
@@ -1378,10 +1378,10 @@ async fn module_injected_from_rust_add_adt_decls_from_types_supports_type_item_i
             },
         )
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let (value_ptr, _ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import host.types (RunSpec, pending);
         let x: RunSpec = pending in
@@ -1426,9 +1426,9 @@ async fn module_import_missing_class_export_in_instance_header() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1460,9 +1460,9 @@ async fn module_import_missing_type_export_in_fn_signature() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1498,9 +1498,9 @@ async fn module_import_missing_type_export_in_instance_head() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1534,9 +1534,9 @@ async fn module_import_missing_class_export_in_fn_where_constraint() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1570,9 +1570,9 @@ async fn module_import_missing_class_export_in_declare_fn_where_constraint() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1608,9 +1608,9 @@ async fn module_import_missing_class_export_in_class_super_constraint() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1642,9 +1642,9 @@ async fn module_import_missing_type_export_in_letrec_annotation_with_alias_named
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1677,9 +1677,9 @@ async fn letrec_annotation_with_alias_named_binding_still_rewrites_valid_importe
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 0),
@@ -1710,9 +1710,9 @@ async fn let_annotation_with_alias_named_binding_still_rewrites_valid_imported_t
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = eval_module_via_fs(engine, &main).await.unwrap();
+    let (value_ptr, ty) = eval_module_via_fs(builder, &main).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 0),
@@ -1743,9 +1743,9 @@ async fn module_import_missing_type_export_in_let_annotation_with_alias_named_bi
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1782,9 +1782,9 @@ async fn module_import_selected_clause_duplicate_name() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1813,9 +1813,9 @@ async fn module_import_selected_clause_conflicts_with_local() {
 "#,
     );
 
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let err = match eval_module_via_fs(engine, &main).await {
+    let err = match eval_module_via_fs(builder, &main).await {
         Ok(v) => panic!("expected error, got {v:?}"),
         Err(e) => e,
     };
@@ -1825,10 +1825,10 @@ async fn module_import_selected_clause_conflicts_with_local() {
 
 #[tokio::test]
 async fn std_json_encode_decode_smoke() {
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import std.json as Json;
 
@@ -1851,10 +1851,10 @@ async fn std_json_encode_decode_smoke() {
 
 #[tokio::test]
 async fn std_json_roundtrip_nested() {
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import std.json as Json;
 
@@ -1898,7 +1898,7 @@ async fn std_json_roundtrip_nested() {
     let Value::Tuple(xs) = value else {
         panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
-    let xs = pvals!(engine, xs);
+    let xs = pvals!(builder, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {
@@ -1911,9 +1911,9 @@ async fn std_json_roundtrip_nested() {
 
 #[tokio::test]
 async fn std_json_decode_errors_have_useful_messages() {
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
-    let (value_ptr, ty) = run_snippet(engine,
+    let (value_ptr, ty) = run_snippet(builder,
         r#"
         import std.json as Json;
 
@@ -1967,7 +1967,7 @@ async fn std_json_decode_errors_have_useful_messages() {
     let Value::Tuple(parts) = value else {
         panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
-    let parts = pvals!(engine, parts);
+    let parts = pvals!(builder, parts);
     let got: Vec<String> = parts
         .into_iter()
         .map(|(pointer, v)| match v {
@@ -1984,10 +1984,10 @@ async fn std_json_decode_errors_have_useful_messages() {
 
 #[tokio::test]
 async fn std_json_numeric_decode_errors() {
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import std.json as Json;
 
@@ -2021,7 +2021,7 @@ async fn std_json_numeric_decode_errors() {
     let Value::Tuple(parts) = value else {
         panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
-    let parts = pvals!(engine, parts);
+    let parts = pvals!(builder, parts);
     let got: Vec<String> = parts
         .into_iter()
         .map(|(pointer, v)| match v {
@@ -2036,10 +2036,10 @@ async fn std_json_numeric_decode_errors() {
 
 #[tokio::test]
 async fn std_json_show_renders_valid_json() {
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import std.json as Json;
 
@@ -2085,10 +2085,10 @@ async fn std_json_show_renders_valid_json() {
 
 #[tokio::test]
 async fn std_json_parse_and_from_string_roundtrip() {
-    let engine = engine_with_prelude();
+    let builder = builder_with_prelude();
 
     let (value_ptr, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         import std.json as Json;
 
@@ -2145,7 +2145,7 @@ async fn std_json_parse_and_from_string_roundtrip() {
     let Value::Tuple(xs) = value else {
         panic!("expected tuple, got {}", value_ptr.type_name().unwrap());
     };
-    let xs = pvals!(engine, xs);
+    let xs = pvals!(builder, xs);
     let got: Vec<i32> = xs
         .into_iter()
         .map(|(pointer, v)| match v {

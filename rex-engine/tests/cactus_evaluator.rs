@@ -1,6 +1,6 @@
 use futures::{FutureExt, channel::oneshot};
 use rex_engine::{
-    AsyncCallExecutor, AsyncCallPolicy, Engine, EngineError, ExecutionBounds, FromRex, Handle,
+    AsyncCallExecutor, AsyncCallPolicy, Builder, EngineError, ExecutionBounds, FromRex, Handle,
     Module, NativeAsyncPermit, NativeFuture, ParallelismController,
 };
 use rex_parser::parse as parse_rex;
@@ -15,12 +15,12 @@ use std::task::{Context as TaskContext, Poll, Waker};
 
 async fn eval_value<State>(
     source: &str,
-    engine: Engine<State>,
+    builder: Builder<State>,
 ) -> Result<(Handle, Type), EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(source).unwrap();
     let program = compiler
         .compile_program(&parsed, Default::default())
@@ -33,8 +33,8 @@ where
     Ok((value, typ))
 }
 
-async fn eval_i32(source: &str, engine: Engine<()>) -> i32 {
-    let (value, _typ) = eval_value(source, engine).await.unwrap();
+async fn eval_i32(source: &str, builder: Builder<()>) -> i32 {
+    let (value, _typ) = eval_value(source, builder).await.unwrap();
     i32::from_rex(&value).unwrap()
 }
 
@@ -154,9 +154,9 @@ fn gate_parts(child_count: usize) -> GateParts {
     }
 }
 
-fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
+fn builder_with_gate(child_count: usize) -> (Builder<()>, GateControl) {
     let parts = gate_parts(child_count);
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     module
         .export_async("gate", {
@@ -180,14 +180,14 @@ fn engine_with_gate(child_count: usize) -> (Engine<()>, GateControl) {
             }
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    (engine, parts.control)
+    (builder, parts.control)
 }
 
-fn engine_with_even_gate(child_count: usize) -> (Engine<()>, GateControl) {
+fn builder_with_even_gate(child_count: usize) -> (Builder<()>, GateControl) {
     let parts = gate_parts(child_count);
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     module
         .export_async("gate_even", {
@@ -211,18 +211,18 @@ fn engine_with_even_gate(child_count: usize) -> (Engine<()>, GateControl) {
             }
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    (engine, parts.control)
+    (builder, parts.control)
 }
 
-fn engine_with_gate_and_even_gate(
+fn builder_with_gate_and_even_gate(
     gate_count: usize,
     even_gate_count: usize,
-) -> (Engine<()>, GateControl, GateControl) {
+) -> (Builder<()>, GateControl, GateControl) {
     let value_parts = gate_parts(gate_count);
     let even_parts = gate_parts(even_gate_count);
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     module
         .export_async("gate", {
@@ -268,29 +268,29 @@ fn engine_with_gate_and_even_gate(
             }
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    (engine, value_parts.control, even_parts.control)
+    (builder, value_parts.control, even_parts.control)
 }
 
 async fn eval_with_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<i32>) {
-    let (engine, gate) = engine_with_gate(gate_count);
-    eval_with_gate_control(source, engine, gate, gate_count).await
+    let (builder, gate) = builder_with_gate(gate_count);
+    eval_with_gate_control(source, builder, gate, gate_count).await
 }
 
 async fn eval_with_even_gates(source: &str, gate_count: usize) -> (Handle, Type, Vec<i32>) {
-    let (engine, gate) = engine_with_even_gate(gate_count);
-    eval_with_gate_control(source, engine, gate, gate_count).await
+    let (builder, gate) = builder_with_even_gate(gate_count);
+    eval_with_gate_control(source, builder, gate, gate_count).await
 }
 
 async fn eval_with_gate_control(
     source: &str,
-    engine: Engine<()>,
+    builder: Builder<()>,
     gate: GateControl,
     gate_count: usize,
 ) -> (Handle, Type, Vec<i32>) {
     let source = source.to_string();
-    let eval_task = tokio::spawn(async move { eval_value(&source, engine).await });
+    let eval_task = tokio::spawn(async move { eval_value(&source, builder).await });
     assert!(
         wait_for_count(&gate.started, gate_count).await,
         "evaluation did not start all gated async children"
@@ -337,10 +337,10 @@ fn handle_as_i32_list(value: &Handle) -> Vec<i32> {
         .collect()
 }
 
-fn engine_collecting_on_every_alloc() -> Engine<()> {
-    let engine = Engine::with_prelude(()).unwrap();
-    engine.heap.set_collect_on_every_alloc(true).unwrap();
-    engine
+fn builder_collecting_on_every_alloc() -> Builder<()> {
+    let builder = Builder::with_prelude(()).unwrap();
+    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    builder
 }
 
 #[tokio::test]
@@ -363,7 +363,7 @@ async fn evaluator_handles_literals_sequences_and_records() {
         in
             foo2.x + (match sum2 with { case A {x} -> x; case B {x} -> x; })
         "#,
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
     )
     .await;
     assert_eq!(result, 8);
@@ -461,8 +461,8 @@ async fn dict_map_starts_all_async_callbacks() {
 
 #[tokio::test]
 async fn sequence_map_preserves_order_when_callbacks_complete_out_of_order() {
-    let (engine, mut gate) = engine_with_gate(3);
-    let eval_task = tokio::spawn(async move { eval_value("map gate [1, 2, 3]", engine).await });
+    let (builder, mut gate) = builder_with_gate(3);
+    let eval_task = tokio::spawn(async move { eval_value("map gate [1, 2, 3]", builder).await });
 
     assert!(
         wait_for_count(&gate.started, 3).await,
@@ -489,9 +489,9 @@ async fn sequence_map_preserves_order_when_callbacks_complete_out_of_order() {
 
 #[tokio::test]
 async fn sequence_filter_preserves_order_when_callbacks_complete_out_of_order() {
-    let (engine, mut gate) = engine_with_even_gate(4);
+    let (builder, mut gate) = builder_with_even_gate(4);
     let eval_task =
-        tokio::spawn(async move { eval_value("filter gate_even [1, 2, 3, 4]", engine).await });
+        tokio::spawn(async move { eval_value("filter gate_even [1, 2, 3, 4]", builder).await });
 
     assert!(
         wait_for_count(&gate.started, 4).await,
@@ -519,7 +519,7 @@ async fn sequence_filter_preserves_order_when_callbacks_complete_out_of_order() 
 
 #[tokio::test]
 async fn sequence_filter_map_preserves_order_when_callbacks_complete_out_of_order() {
-    let (engine, mut gate) = engine_with_even_gate(4);
+    let (builder, mut gate) = builder_with_even_gate(4);
     let eval_task = tokio::spawn(async move {
         eval_value(
             r#"
@@ -527,7 +527,7 @@ async fn sequence_filter_map_preserves_order_when_callbacks_complete_out_of_orde
                 (\x -> if gate_even x then Some (x * 10) else None)
                 [1, 2, 3, 4]
             "#,
-            engine,
+            builder,
         )
         .await
     });
@@ -558,7 +558,7 @@ async fn sequence_filter_map_preserves_order_when_callbacks_complete_out_of_orde
 
 #[tokio::test]
 async fn sequence_flat_map_preserves_order_when_callbacks_complete_out_of_order() {
-    let (engine, mut gate) = engine_with_gate(3);
+    let (builder, mut gate) = builder_with_gate(3);
     let eval_task = tokio::spawn(async move {
         eval_value(
             r#"
@@ -566,7 +566,7 @@ async fn sequence_flat_map_preserves_order_when_callbacks_complete_out_of_order(
                 (\x -> let y = gate x in [y, y + 100])
                 [1, 2, 3]
             "#,
-            engine,
+            builder,
         )
         .await
     });
@@ -596,7 +596,7 @@ async fn sequence_flat_map_preserves_order_when_callbacks_complete_out_of_order(
 
 #[tokio::test]
 async fn dict_map_preserves_keys_when_callbacks_complete_out_of_order() {
-    let (engine, mut gate) = engine_with_gate(3);
+    let (builder, mut gate) = builder_with_gate(3);
     let eval_task = tokio::spawn(async move {
         eval_value(
             r#"
@@ -607,7 +607,7 @@ async fn dict_map_preserves_keys_when_callbacks_complete_out_of_order() {
                     case {a, b, c} -> a * 100 + b * 10 + c;
                 }
             "#,
-            engine,
+            builder,
         )
         .await
     });
@@ -637,7 +637,7 @@ async fn dict_map_preserves_keys_when_callbacks_complete_out_of_order() {
 
 #[tokio::test]
 async fn sibling_map_and_filter_fan_out_their_callbacks() {
-    let (engine, gate, even_gate) = engine_with_gate_and_even_gate(2, 2);
+    let (builder, gate, even_gate) = builder_with_gate_and_even_gate(2, 2);
     let eval_task = tokio::spawn(async move {
         eval_value(
             r#"
@@ -646,7 +646,7 @@ async fn sibling_map_and_filter_fan_out_their_callbacks() {
             in
                 (sum (map gate xs), count (filter gate_even xs))
             "#,
-            engine,
+            builder,
         )
         .await
     });
@@ -734,8 +734,8 @@ async fn application_evaluation_starts_all_async_arguments() {
 #[tokio::test]
 async fn async_call_policy_wraps_host_calls() {
     let spawned = Arc::new(AtomicUsize::new(0));
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.set_async_call_policy(AsyncCallPolicy::executor(CountingCallExecutor {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.set_async_call_policy(AsyncCallPolicy::executor(CountingCallExecutor {
         spawned: Arc::clone(&spawned),
     }));
 
@@ -743,9 +743,9 @@ async fn async_call_policy_wraps_host_calls() {
     module
         .export_async("bump", |_: &(), value: i32| async move { Ok(value + 1) })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    let result = eval_i32("bump 1 + bump 2", engine).await;
+    let result = eval_i32("bump 1 + bump 2", builder).await;
     assert_eq!(result, 5);
     assert_eq!(spawned.load(Ordering::SeqCst), 2);
 }
@@ -753,31 +753,31 @@ async fn async_call_policy_wraps_host_calls() {
 #[tokio::test]
 async fn async_call_policy_accepts_executor_closures() {
     let spawned = Arc::new(AtomicUsize::new(0));
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.set_async_call_policy(AsyncCallPolicy::executor_fn({
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.set_async_call_policy(AsyncCallPolicy::executor_fn({
         let spawned = Arc::clone(&spawned);
         move |future| {
             spawned.fetch_add(1, Ordering::SeqCst);
             future
         }
     }));
-    assert!(engine.async_call_policy().is_executor());
+    assert!(builder.async_call_policy().is_executor());
 
     let mut module = Module::global();
     module
         .export_async("bump", |_: &(), value: i32| async move { Ok(value + 1) })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    let result = eval_i32("bump 10 + bump 20", engine).await;
+    let result = eval_i32("bump 10 + bump 20", builder).await;
     assert_eq!(result, 32);
     assert_eq!(spawned.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]
 async fn small_ready_work_bound_still_completes_fanout() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.set_execution_bounds(ExecutionBounds::new(1, 64));
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.set_execution_bounds(ExecutionBounds::new(1, 64));
 
     let result = eval_i32(
         r#"
@@ -790,7 +790,7 @@ async fn small_ready_work_bound_still_completes_fanout() {
         in
             sum doubled
         "#,
-        engine,
+        builder,
     )
     .await;
     assert_eq!(result, 272);
@@ -798,10 +798,10 @@ async fn small_ready_work_bound_still_completes_fanout() {
 
 #[tokio::test]
 async fn pending_async_bound_delays_admitting_host_calls() {
-    let (mut engine, mut gate) = engine_with_gate(2);
-    engine.set_execution_bounds(ExecutionBounds::new(64, 1));
+    let (mut builder, mut gate) = builder_with_gate(2);
+    builder.set_execution_bounds(ExecutionBounds::new(64, 1));
 
-    let eval_task = tokio::spawn(async move { eval_i32("sum [gate 1, gate 2]", engine).await });
+    let eval_task = tokio::spawn(async move { eval_i32("sum [gate 1, gate 2]", builder).await });
 
     assert!(
         wait_for_count(&gate.started, 1).await,
@@ -835,12 +835,12 @@ async fn pending_async_bound_delays_admitting_host_calls() {
 
 #[tokio::test]
 async fn dynamic_native_async_permits_can_increase_during_evaluation() {
-    let (mut engine, gate) = engine_with_gate(3);
+    let (mut builder, gate) = builder_with_gate(3);
     let controller = DynamicPermitController::new(1);
-    engine.set_parallelism_controller(controller.clone());
+    builder.set_parallelism_controller(controller.clone());
 
     let eval_task =
-        tokio::spawn(async move { eval_i32("sum [gate 1, gate 2, gate 3]", engine).await });
+        tokio::spawn(async move { eval_i32("sum [gate 1, gate 2, gate 3]", builder).await });
 
     assert!(
         wait_for_count(&gate.started, 1).await,
@@ -883,9 +883,9 @@ async fn dynamic_native_async_permits_delay_host_callback_invocation() {
     let (release_tx, release_rx) = oneshot::channel();
     let release = Arc::new(Mutex::new(Some(release_rx)));
 
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let controller = DynamicPermitController::new(0);
-    engine.set_parallelism_controller(controller.clone());
+    builder.set_parallelism_controller(controller.clone());
     let mut module = Module::global();
     module
         .export_async("gate_call", {
@@ -910,9 +910,9 @@ async fn dynamic_native_async_permits_delay_host_callback_invocation() {
             }
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    let eval_task = tokio::spawn(async move { eval_i32("gate_call 1", engine).await });
+    let eval_task = tokio::spawn(async move { eval_i32("gate_call 1", builder).await });
 
     for _ in 0..64 {
         tokio::task::yield_now().await;
@@ -952,8 +952,8 @@ async fn pending_async_bound_delays_invoking_host_callbacks() {
     }
     let releases = Arc::new(Mutex::new(release_rxs));
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    engine.set_execution_bounds(ExecutionBounds::new(64, 1));
+    let mut builder = Builder::with_prelude(()).unwrap();
+    builder.set_execution_bounds(ExecutionBounds::new(64, 1));
     let mut module = Module::global();
     module
         .export_async("gate_call", {
@@ -979,10 +979,10 @@ async fn pending_async_bound_delays_invoking_host_callbacks() {
             }
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
     let eval_task =
-        tokio::spawn(async move { eval_i32("sum [gate_call 1, gate_call 2]", engine).await });
+        tokio::spawn(async move { eval_i32("sum [gate_call 1, gate_call 2]", builder).await });
 
     assert!(
         wait_for_count(&invoked, 1).await,
@@ -1082,7 +1082,7 @@ async fn gc_every_alloc_handles_broad_evaluator_paths() {
                 + (if arr == arr then 1 else 0)
                 + tuple_score
         "#,
-        engine_collecting_on_every_alloc(),
+        builder_collecting_on_every_alloc(),
     )
     .await;
     assert_eq!(result, 313);
@@ -1090,7 +1090,7 @@ async fn gc_every_alloc_handles_broad_evaluator_paths() {
 
 #[tokio::test]
 async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     module
         .export("triple", |_: &(), value: i32| Ok(value * 3))
@@ -1106,8 +1106,8 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
             |_: &(), value: i32| async move { Ok(value + 1) },
         )
         .unwrap();
-    engine.inject_module(module).unwrap();
-    engine.heap.set_collect_on_every_alloc(true).unwrap();
+    builder.inject_module(module).unwrap();
+    builder.heap().set_collect_on_every_alloc(true).unwrap();
 
     let result = eval_i32(
         r#"
@@ -1122,7 +1122,7 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
         in
             folded + sum arr
         "#,
-        engine,
+        builder,
     )
     .await;
     assert_eq!(result, 87);
@@ -1130,7 +1130,7 @@ async fn gc_every_alloc_handles_host_callbacks_and_conversions() {
 
 #[tokio::test]
 async fn gc_every_alloc_handles_native_returning_nested_data() {
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
     let row_ty = Type::tuple(vec![i32_ty.clone(), Type::array(i32_ty.clone())]);
@@ -1173,8 +1173,8 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
             engine.heap().alloc_array(rows)
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
-    engine.heap.set_collect_on_every_alloc(true).unwrap();
+    builder.inject_module(module).unwrap();
+    builder.heap().set_collect_on_every_alloc(true).unwrap();
 
     let result = eval_i32(
         r#"
@@ -1185,7 +1185,7 @@ async fn gc_every_alloc_handles_native_returning_nested_data() {
         in
             sum (map row_score rows)
         "#,
-        engine,
+        builder,
     )
     .await;
     assert_eq!(result, 776);
@@ -1207,7 +1207,7 @@ async fn gc_every_alloc_handles_self_referential_data() {
                 case Empty -> 0;
             }
         "#,
-        engine_collecting_on_every_alloc(),
+        builder_collecting_on_every_alloc(),
     )
     .await;
     assert_eq!(result, 2);
@@ -1232,7 +1232,7 @@ async fn gc_every_alloc_handles_captured_closure_envs() {
         in
             f 10 + sum noise
         "#,
-        engine_collecting_on_every_alloc(),
+        builder_collecting_on_every_alloc(),
     )
     .await;
     assert_eq!(result, 466);
@@ -1269,7 +1269,7 @@ async fn gc_every_alloc_handles_typeclass_cached_values() {
         in
             sum box_scores + sum int_scores + reused_box + reused_int
         "#,
-        engine_collecting_on_every_alloc(),
+        builder_collecting_on_every_alloc(),
     )
     .await;
     assert_eq!(result, 89);
@@ -1277,7 +1277,7 @@ async fn gc_every_alloc_handles_typeclass_cached_values() {
 
 #[tokio::test]
 async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     let array_i32 = Type::array(Type::builtin(BuiltinTypeId::I32));
     let i32_ty = Type::builtin(BuiltinTypeId::I32);
@@ -1308,8 +1308,8 @@ async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
             },
         )
         .unwrap();
-    engine.inject_module(module).unwrap();
-    engine.heap.set_collect_on_every_alloc(true).unwrap();
+    builder.inject_module(module).unwrap();
+    builder.heap().set_collect_on_every_alloc(true).unwrap();
 
     let result = eval_i32(
         r#"
@@ -1317,7 +1317,7 @@ async fn gc_every_alloc_handles_async_native_handles_across_awaits() {
             1, 2, 3, 4, 5, 6, 7, 8
         ])
         "#,
-        engine,
+        builder,
     )
     .await;
     assert_eq!(result, 36);
@@ -1343,7 +1343,7 @@ async fn evaluator_handles_control_flow_typeclasses_and_recursion() {
                 case None -> 0;
             }
         "#,
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
     )
     .await;
     assert_eq!(result, 24);
@@ -1361,7 +1361,7 @@ async fn evaluator_handles_prelude_collection_callbacks() {
         in
             total
         "#,
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
     )
     .await;
     assert_eq!(result, 9);
@@ -1379,7 +1379,7 @@ async fn evaluator_handles_higher_order_closures() {
         in
             a + b
         "#,
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
     )
     .await;
     assert_eq!(result, 10);
@@ -1397,7 +1397,7 @@ async fn evaluator_handles_partial_and_multi_arg_closures() {
         in
             (inc 41) + picked
         "#,
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
     )
     .await;
     assert_eq!(result, 84);

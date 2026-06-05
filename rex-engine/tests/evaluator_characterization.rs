@@ -1,10 +1,10 @@
 use rex_ast::Symbol;
-use rex_engine::{Engine, EngineError, Handle};
+use rex_engine::{Builder, EngineError, Handle};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind};
 
-async fn run_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), EngineError> {
-    let mut compiler = engine.into_compiler();
+async fn run_snippet(builder: Builder, source: &str) -> Result<(Handle, Type), EngineError> {
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(source).unwrap();
     let program = compiler
         .compile_program(&parsed, Default::default())
@@ -19,7 +19,7 @@ async fn run_snippet(engine: Engine, source: &str) -> Result<(Handle, Type), Eng
 
 #[tokio::test]
 async fn owning_evaluator_resources_can_be_kept_after_run() {
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let parsed = parse_rex("(7 is i32)").unwrap();
     let program = compiler
         .compile_program(&parsed, Default::default())
@@ -42,9 +42,9 @@ async fn owning_evaluator_resources_can_be_kept_after_run() {
 
 #[tokio::test]
 async fn baseline_control_flow_typeclass_and_recursion_paths_still_evaluate() {
-    let engine = Engine::with_prelude(()).unwrap();
+    let builder = Builder::with_prelude(()).unwrap();
     let (value, ty) = run_snippet(
-        engine,
+        builder,
         r#"
         class Pick a where {
             pick : a -> a;

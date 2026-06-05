@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
-use rex_engine::{Engine, EngineError, Module, Value, registry_markdown};
+use rex_engine::{Builder, EngineError, Module, Value, registry_markdown};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -23,24 +23,24 @@ fn strip_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn engine_with_arith() -> Engine {
-    Engine::with_prelude(()).unwrap()
+fn builder_with_arith() -> Builder {
+    Builder::with_prelude(()).unwrap()
 }
 fn inject_globals(
-    engine: &mut Engine,
+    builder: &mut Builder,
     build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
 ) {
     let mut module = Module::<()>::global();
     build(&mut module).unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 }
 
 #[test]
 fn registry_markdown_lists_core_sections() {
-    let engine = Engine::with_prelude(()).unwrap();
-    let doc = registry_markdown(&engine);
+    let builder = Builder::with_prelude(()).unwrap();
+    let doc = registry_markdown(&builder);
 
-    assert!(doc.contains("# Engine Registry"));
+    assert!(doc.contains("# Builder Registry"));
     assert!(doc.contains("## Module Index"));
     assert!(doc.contains("## Modules"));
     assert!(doc.contains("## ADTs"));
@@ -56,7 +56,7 @@ fn registry_markdown_lists_core_sections() {
 
 #[tokio::test]
 async fn compile_program_rejects_declaration_only_input() {
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let program = parse_program("fn id<a> x: a -> a = x;");
     let err = match compiler.compile_program(&program, Default::default()).await {
         Ok(_) => panic!("declaration-only program unexpectedly compiled"),
@@ -69,7 +69,7 @@ async fn compile_program_rejects_declaration_only_input() {
 #[tokio::test]
 async fn compile_program_uses_explicit_main_signature_and_runtime_inputs() {
     let program = parse_program("fn main x: i32 -> y: i32 -> i32 = x + y;");
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let compiled = compiler
         .compile_program(&program, Default::default())
         .await
@@ -92,9 +92,27 @@ async fn compile_program_uses_explicit_main_signature_and_runtime_inputs() {
 }
 
 #[tokio::test]
+async fn compile_program_handles_gc_during_compile_and_main_input_application() {
+    let builder = Builder::with_prelude(()).unwrap();
+    builder.heap().set_collect_on_every_alloc(true).unwrap();
+    let mut compiler = builder.build_compiler();
+    let program = parse_program("fn main x: i32 -> i32 = x + 1;");
+    let compiled = compiler
+        .compile_program(&program, Default::default())
+        .await
+        .unwrap();
+
+    let evaluator = compiler.into_evaluator();
+    let mut inputs = BTreeMap::new();
+    inputs.insert("x".to_string(), evaluator.heap().alloc_i32(41).unwrap());
+    let value = evaluator.run(compiled, inputs).await.unwrap();
+    assert_eq!(value.as_i32().unwrap(), 42);
+}
+
+#[tokio::test]
 async fn compile_program_preserves_function_results_from_main() {
     let program = parse_program("fn main x: i32 -> i32 -> i32 = \\ y -> x + y;");
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let compiled = compiler
         .compile_program(&program, Default::default())
         .await
@@ -116,7 +134,7 @@ async fn compile_program_preserves_function_results_from_main() {
 #[tokio::test]
 async fn compile_program_treats_final_expression_as_zero_input_main() {
     let program = parse_program("1 + 2");
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let compiled = compiler
         .compile_program(&program, Default::default())
         .await
@@ -135,7 +153,7 @@ async fn compile_program_treats_final_expression_as_zero_input_main() {
 #[tokio::test]
 async fn compile_program_rejects_main_plus_final_expression() {
     let program = parse_program("fn main x: i32 -> i32 = x;\n2");
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let err = match compiler.compile_program(&program, Default::default()).await {
         Ok(_) => panic!("main plus final expression unexpectedly compiled"),
         Err(err) => err,
@@ -147,7 +165,7 @@ async fn compile_program_rejects_main_plus_final_expression() {
 #[tokio::test]
 async fn evaluator_rejects_missing_or_extra_main_inputs() {
     let program = parse_program("fn main x: i32 -> i32 = x;");
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let compiled = compiler
         .compile_program(&program, Default::default())
         .await
@@ -164,7 +182,7 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
             if missing == vec!["x".to_string()] && extra.is_empty()
     ));
 
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let compiled = compiler
         .compile_program(&program, Default::default())
         .await
@@ -184,7 +202,7 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
 
 #[test]
 fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::new("acme.types");
     let a = Type::var(TypeVar::new(0, Some(Symbol::intern("a"))));
     let types = vec![
@@ -195,7 +213,9 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
         Type::app(Type::user_con("Foo", 1), Type::builtin(BuiltinTypeId::I32)),
     ];
 
-    module.add_adt_decls_from_types(&mut engine, types).unwrap();
+    module
+        .add_adt_decls_from_types(&mut builder, types)
+        .unwrap();
 
     assert_eq!(module.decls.len(), 2);
     assert!(
@@ -214,12 +234,12 @@ fn module_add_adt_decls_from_types_collects_nested_unique_adts() {
 
 #[test]
 fn module_add_adt_decls_from_types_rejects_conflicting_adts() {
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::new("acme.types");
     let types = vec![Type::user_con("Thing", 1), Type::user_con("Thing", 2)];
 
     let err = module
-        .add_adt_decls_from_types(&mut engine, types)
+        .add_adt_decls_from_types(&mut builder, types)
         .unwrap_err();
 
     assert!(matches!(err, EngineError::Custom(_)));
@@ -231,10 +251,10 @@ fn module_add_adt_decls_from_types_rejects_conflicting_adts() {
 
 #[test]
 fn inject_adt_family_rejects_cycles() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    let mut a = engine.adt_decl("A", &[]);
+    let mut builder = Builder::with_prelude(()).unwrap();
+    let mut a = builder.adt_decl("A", &[]);
     a.add_variant(Symbol::intern("A"), vec![Type::con("B", 0)]);
-    let mut b = engine.adt_decl("B", &[]);
+    let mut b = builder.adt_decl("B", &[]);
     b.add_variant(Symbol::intern("B"), vec![Type::con("A", 0)]);
 
     let mut module = Module::<()>::global();
@@ -245,19 +265,19 @@ fn inject_adt_family_rejects_cycles() {
 
 #[tokio::test]
 async fn injected_module_can_define_pub_adt_declarations() {
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
 
     let mut module = Module::new("acme.status");
-    let mut status = engine.adt_decl("Status", &[]);
+    let mut status = builder.adt_decl("Status", &[]);
     status.add_variant(Symbol::intern("Ready"), vec![]);
     status.add_variant(
         Symbol::intern("Failed"),
         vec![Type::builtin(BuiltinTypeId::String)],
     );
     module.add_adt_decl(status).unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_program(
         r#"
             import acme.status (Failed);
@@ -286,9 +306,9 @@ async fn injected_module_can_define_pub_adt_declarations() {
 #[tokio::test]
 async fn export_value_registers_global_value() {
     let expr = parse("answer");
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| module.export_value("answer", 42i32));
-    let mut compiler = engine.into_compiler();
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_globals(&mut builder, |module| module.export_value("answer", 42i32));
+    let mut compiler = builder.build_compiler();
     let body_program = CompilationUnit {
         decls: Vec::new(),
         body: Some(expr),
@@ -318,11 +338,11 @@ async fn record_update_requires_known_variant_for_sum_types() {
           f (Bar { x = 1 })
         "#,
     );
-    let mut engine = engine_with_arith();
+    let mut builder = builder_with_arith();
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
-    engine.inject_module(module).unwrap();
-    let mut compiler = engine.into_compiler();
+    builder.inject_module(module).unwrap();
+    let mut compiler = builder.build_compiler();
     let body_program = CompilationUnit {
         decls: Vec::new(),
         body: program.body.clone(),

@@ -13,10 +13,7 @@ use rex_typesystem::{
 use crate::{
     compiler::program::CompiledProgram,
     error::EngineError,
-    evaluator::{
-        eval::{eval_typed_expr, synthetic_application_expr_from_head},
-        runtime_core::RuntimeCore,
-    },
+    evaluator::{eval::eval_typed_expr, runtime_core::RuntimeCore},
     util::split_fun,
     value::{Cell, Handle, Heap, HeapAccess, Pointer},
 };
@@ -83,17 +80,9 @@ where
         inputs: BTreeMap<String, Handle>,
     ) -> Result<Handle, EngineError> {
         let runtime = self.runtime;
-        let heap = runtime.heap.clone();
         let main_signature = program.main_signature().clone();
-        let args = main_input_args(&heap, &main_signature, &inputs)?;
-        let (env, expr) = if args.is_empty() {
-            (program.env, program.expr.as_ref().clone())
-        } else {
-            synthetic_application_expr_from_head(program.env, program.expr.as_ref().clone(), &args)?
-        };
-        let pointer = eval_typed_expr(runtime, env, Arc::new(expr)).await?;
-        drop(inputs);
-        heap.handle(pointer)
+        let args = main_input_args(&runtime.heap, &main_signature, &inputs)?;
+        eval_typed_expr(runtime, program.env, Arc::clone(&program.expr), args).await
     }
 }
 
@@ -101,7 +90,7 @@ fn main_input_args(
     heap: &Heap,
     signature: &crate::MainSignature,
     inputs: &BTreeMap<String, Handle>,
-) -> Result<Vec<(Pointer, Type)>, EngineError> {
+) -> Result<Vec<(Handle, Type)>, EngineError> {
     let expected = signature
         .inputs()
         .iter()
@@ -121,7 +110,8 @@ fn main_input_args(
             let handle = inputs.get(&input.name).ok_or_else(|| {
                 EngineError::Internal("validated input map was incomplete".into())
             })?;
-            Ok((handle.pointer_for_heap(heap)?, input.typ.clone()))
+            handle.pointer_for_heap(heap)?;
+            Ok((handle.clone(), input.typ.clone()))
         })
         .collect()
 }

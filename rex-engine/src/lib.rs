@@ -3,7 +3,7 @@
 
 //! Host environment, compiler, and runtime evaluator for Rex.
 //!
-//! Embedders build an [`Engine`] with host modules and runtime policy, convert
+//! Embedders build a [`Builder`] with host modules and runtime policy, convert
 //! it into a [`Compiler`] to prepare Rex source or ASTs into a
 //! [`CompiledProgram`], then run that program with a single-shot [`Evaluator`]
 //! and a map of runtime inputs for `main`.
@@ -26,7 +26,7 @@ mod util;
 mod value;
 
 pub use builder::{
-    engine::Engine,
+    core::Builder,
     export::{Export, HostFnAsync, HostFnSync, NativeFuture},
     markdown::registry_markdown,
 };

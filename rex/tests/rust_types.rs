@@ -3,22 +3,22 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Engine, EngineError, FromRex, Handle, Heap, Value},
+    engine::{Builder, EngineError, FromRex, Handle, Heap, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
 
 /// Helper to evaluate a Rex expression and return the result handle.
-async fn eval_expr(engine: Engine<()>, expr: &str) -> (Handle, Heap, Type) {
+async fn eval_expr(builder: Builder<()>, expr: &str) -> (Handle, Heap, Type) {
     let program = parse_rex(expr).unwrap();
-    let heap = engine.heap.clone();
-    let (value, ty) = common::run_program(engine, &program).await.unwrap();
+    let heap = builder.heap().clone();
+    let (value, ty) = common::run_program(builder, &program).await.unwrap();
     (value, heap, ty)
 }
 
 /// Helper to infer the type of a Rex expression
-async fn infer_type(engine: Engine<()>, expr: &str) -> Type {
-    let mut compiler = engine.into_compiler();
+async fn infer_type(builder: Builder<()>, expr: &str) -> Type {
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(expr).unwrap();
     let program = compiler
         .compile_program(&parsed, Default::default())
@@ -33,14 +33,14 @@ async fn vec_from_value() {
         Ok(format!("accept_vec: {:?}", items))
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("accept_vec", accept_vec)
     })
     .unwrap();
 
     let (result, heap, ty) =
-        eval_expr(engine, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
+        eval_expr(builder, r#"accept_vec (prim_array_from_list [1, 2, 3])"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     common::assert_handles_eq(
         &result,
@@ -56,13 +56,13 @@ async fn vec_from_value_accepts_list_literal_without_conversion() {
         Ok(format!("accept_vec: {:?}", items))
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("accept_vec", accept_vec)
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(engine, r#"accept_vec [1, 2, 3]"#).await;
+    let (result, heap, ty) = eval_expr(builder, r#"accept_vec [1, 2, 3]"#).await;
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     common::assert_handles_eq(
         &result,
@@ -78,13 +78,13 @@ async fn vec_to_value() {
         Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_vec", return_vec)
     })
     .unwrap();
 
-    let (result, heap, ty) = eval_expr(engine, r#"return_vec "hello""#).await;
+    let (result, heap, ty) = eval_expr(builder, r#"return_vec "hello""#).await;
     assert_eq!(ty, Type::array(Type::builtin(BuiltinTypeId::I32)));
     common::assert_handles_eq(
         &result,
@@ -106,13 +106,13 @@ async fn vec_rex_type() {
         Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_vec", return_vec)
     })
     .unwrap();
 
-    let ty = infer_type(engine, r#"return_vec "hello""#).await;
+    let ty = infer_type(builder, r#"return_vec "hello""#).await;
     assert_eq!(
         ty,
         Type::app(
@@ -128,14 +128,14 @@ async fn to_list_allows_pattern_matching_host_arrays() {
         Ok((0..input.len()).map(|i| i as i32).collect())
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_vec", return_vec)
     })
     .unwrap();
 
     let (result, heap, ty) = eval_expr(
-        engine,
+        builder,
         r#"match (to_list (return_vec "abc")) with {
             case Cons x _ -> x;
             case Empty -> -1;
@@ -148,9 +148,9 @@ async fn to_list_allows_pattern_matching_host_arrays() {
 
 #[tokio::test]
 async fn option_prelude() {
-    let engine = Engine::with_prelude(()).unwrap();
+    let builder = Builder::with_prelude(()).unwrap();
     let (result, heap, ty) = eval_expr(
-        engine,
+        builder,
         r#"(((Some 4) is Option i32), (None is Option i32))"#,
     )
     .await;
@@ -179,12 +179,12 @@ async fn option_from_value() {
         Ok(format!("accept_opt: {:?}", opt))
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("accept_opt", accept_opt)
     })
     .unwrap();
-    let (result, heap, ty) = eval_expr(engine, r#"(accept_opt (Some 4), accept_opt None)"#).await;
+    let (result, heap, ty) = eval_expr(builder, r#"(accept_opt (Some 4), accept_opt None)"#).await;
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -214,12 +214,12 @@ async fn option_into_value() {
         })
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_opt", return_opt)
     })
     .unwrap();
-    let (result, heap, ty) = eval_expr(engine, r#"(return_opt "hello", return_opt "")"#).await;
+    let (result, heap, ty) = eval_expr(builder, r#"(return_opt "hello", return_opt "")"#).await;
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -249,13 +249,13 @@ async fn option_rex_type() {
         })
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_opt", return_opt)
     })
     .unwrap();
 
-    let ty = infer_type(engine, r#"return_opt "hello""#).await;
+    let ty = infer_type(builder, r#"return_opt "hello""#).await;
     assert_eq!(
         ty,
         Type::app(
@@ -267,9 +267,9 @@ async fn option_rex_type() {
 
 #[tokio::test]
 async fn result_prelude() {
-    let engine = Engine::with_prelude(()).unwrap();
+    let builder = Builder::with_prelude(()).unwrap();
     let (result, heap, ty) = eval_expr(
-        engine,
+        builder,
         r#"(((Ok 42) is Result i32 string), ((Err "error") is Result i32 string))"#,
     )
     .await;
@@ -308,13 +308,13 @@ async fn result_from_value_primitives() {
         Ok(format!("accept_result: {:?}", res))
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("accept_result", accept_result)
     })
     .unwrap();
     let (result, heap, ty) = eval_expr(
-        engine,
+        builder,
         r#"(accept_result (Ok 42), accept_result (Err "failed"))"#,
     )
     .await;
@@ -344,13 +344,13 @@ async fn result_from_value_different_primitives() {
         Ok(format!("accept_result: {:?}", res))
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("accept_result", accept_result)
     })
     .unwrap();
     let (result, heap, ty) = eval_expr(
-        engine,
+        builder,
         r#"(accept_result (Ok 3.14), accept_result (Err 404))"#,
     )
     .await;
@@ -384,13 +384,13 @@ async fn result_into_value_primitives() {
         })
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_result", return_result)
     })
     .unwrap();
     let (result, heap, ty) =
-        eval_expr(engine, r#"(return_result "hello", return_result "")"#).await;
+        eval_expr(builder, r#"(return_result "hello", return_result "")"#).await;
     assert_eq!(
         ty,
         Type::tuple(vec![
@@ -430,13 +430,13 @@ async fn result_rex_type() {
         })
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_result", return_result)
     })
     .unwrap();
 
-    let ty = infer_type(engine, r#"return_result "hello""#).await;
+    let ty = infer_type(builder, r#"return_result "hello""#).await;
     assert_eq!(
         ty,
         Type::app(
@@ -470,16 +470,16 @@ async fn result_from_value_custom_types() {
         })
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    Point::inject_rex(&mut engine).unwrap();
-    ErrorInfo::inject_rex(&mut engine).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    Point::inject_rex(&mut builder).unwrap();
+    ErrorInfo::inject_rex(&mut builder).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("accept_result", accept_result)
     })
     .unwrap();
 
     let (result, heap, ty) = eval_expr(
-        engine,
+        builder,
         r#"(
             accept_result (Ok (Point { x = 10, y = 20 })),
             accept_result (Err (ErrorInfo { code = 404, message = "not found" }))
@@ -519,16 +519,16 @@ async fn result_into_value_custom_types() {
         })
     }
 
-    let mut engine = Engine::with_prelude(()).unwrap();
-    Point::inject_rex(&mut engine).unwrap();
-    ErrorInfo::inject_rex(&mut engine).unwrap();
-    common::inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    Point::inject_rex(&mut builder).unwrap();
+    ErrorInfo::inject_rex(&mut builder).unwrap();
+    common::inject_globals(&mut builder, |module| {
         module.export("return_result", return_result)
     })
     .unwrap();
 
     let (result, _heap, ty) =
-        eval_expr(engine, r#"(return_result true, return_result false)"#).await;
+        eval_expr(builder, r#"(return_result true, return_result false)"#).await;
     assert_eq!(
         ty,
         Type::tuple(vec![

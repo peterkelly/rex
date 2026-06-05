@@ -3,7 +3,7 @@ use lsp_types::{
     WorkspaceEdit,
 };
 use rex::{
-    engine::{Engine, Module},
+    engine::{Builder, Module},
     parser::parse as parse_rex,
 };
 use rex_ast::{CompilationUnit, Decl, Expr, NameRef, TypeExpr};
@@ -86,11 +86,11 @@ fn engine_local_module_prefix(path: &Path) -> String {
 
 async fn eval_source_to_display(code: &str) -> (String, String) {
     let program = parse_rex(code).expect("parse source");
-    let mut engine = Engine::with_prelude(()).expect("build engine");
+    let mut builder = Builder::with_prelude(()).expect("build builder");
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
-    engine.inject_module(module).expect("inject decls");
-    let mut compiler = engine.into_compiler();
+    builder.inject_module(module).expect("inject decls");
+    let mut compiler = builder.build_compiler();
     let body_program = CompilationUnit {
         decls: Vec::new(),
         body: program.body.clone(),

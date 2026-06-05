@@ -2,7 +2,7 @@ mod common;
 
 use rex::{
     ast::CompilationUnit,
-    engine::{Engine, EngineError, Module},
+    engine::{Builder, EngineError, Module},
     parser::parse as parse_rex,
     typesystem::TypeError,
 };
@@ -12,13 +12,13 @@ async fn compile_err(code: &str) -> EngineError {
         panic!("expected parse success, got: {errs:?}\ncode:\n{code}");
     });
 
-    let mut engine = Engine::with_prelude(()).unwrap();
+    let mut builder = Builder::with_prelude(()).unwrap();
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
-    if let Err(e) = engine.inject_module(module) {
+    if let Err(e) = builder.inject_module(module) {
         return e;
     }
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     // Preserve declaration-injected body diagnostics here.
     let body_program = CompilationUnit {
         decls: Vec::new(),
@@ -55,7 +55,7 @@ async fn expect_type_err(code: &str, f: impl FnOnce(&TypeError) -> bool) {
 
 async fn expect_engine_err(code: &str, f: impl FnOnce(&EngineError) -> bool) {
     let err = compile_err(code).await;
-    assert!(f(&err), "unexpected engine error: {err:?}\ncode:\n{code}");
+    assert!(f(&err), "unexpected builder error: {err:?}\ncode:\n{code}");
 }
 
 #[tokio::test]

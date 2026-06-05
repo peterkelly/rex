@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Engine, Value},
+    engine::{Builder, Value},
     typesystem::{BuiltinTypeId, Type},
 };
 
@@ -22,7 +22,7 @@ async fn record_update_end_to_end() {
         in
             (foo2.x, match sum2 with { case A {x} -> x; case B {x} -> x; })
     "#;
-    let (_heap, value_handle, ty) = common::eval_source(Engine::with_prelude(()).unwrap(), code)
+    let (_heap, value_handle, ty) = common::eval_source(Builder::with_prelude(()).unwrap(), code)
         .await
         .unwrap();
     assert_eq!(

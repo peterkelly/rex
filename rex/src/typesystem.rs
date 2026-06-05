@@ -1,7 +1,7 @@
 //! Type inference and Rex type metadata.
 //!
 //! Embedders usually interact with these types indirectly through
-//! [`Engine`](crate::engine::Engine) and [`Module`](crate::engine::Module). Use
+//! [`Builder`](crate::engine::Builder) and [`Module`](crate::engine::Module). Use
 //! this module when you need to build dynamic native signatures, inspect
 //! inferred types, register Rust ADTs, or run type inference without evaluating
 //! a program.

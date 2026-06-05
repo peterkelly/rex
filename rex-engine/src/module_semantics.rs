@@ -10,10 +10,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{
-    EngineError,
-    builder::{engine::Engine, rewrite::load_module_types_from_resolved},
-};
+use crate::{Builder, EngineError, builder::rewrite::load_module_types_from_resolved};
 use rex_ast::{CompilationUnit, ImportDecl};
 
 pub use crate::builder::rewrite::{
@@ -38,7 +35,7 @@ pub struct ToolingLoadedImport {
 }
 
 pub async fn load_import_for_tooling<State>(
-    engine: &mut Engine<State>,
+    builder: &mut Builder<State>,
     import_decl: &ImportDecl,
     importer: Option<ModuleId>,
     extra_importer: Option<Arc<dyn Importer>>,
@@ -49,8 +46,12 @@ where
     State: Clone + Send + Sync + 'static,
 {
     let chain = match extra_importer {
-        Some(importer) => engine.modules.import_chain().with_importer(importer),
-        None => engine.modules.import_chain(),
+        Some(importer) => builder
+            .module_loader
+            .system
+            .import_chain()
+            .with_importer(importer),
+        None => builder.module_loader.system.import_chain(),
     };
     let spec = import_specifier(&import_decl.path);
     let resolved = chain
@@ -64,12 +65,17 @@ where
         ResolvedModuleContent::Source(source) => Some(source.clone()),
         ResolvedModuleContent::CompilationUnit(_) => None,
     };
-    engine.refresh_if_stale(&resolved)?;
-    let exports = if let Some(exports) = engine.module_exports_cache.get(&resolved.id).cloned() {
-        engine.ensure_cycle_interfaces_published(&resolved.id)?;
+    builder.refresh_if_stale(&resolved)?;
+    let exports = if let Some(exports) = builder
+        .module_loader
+        .module_exports_cache
+        .get(&resolved.id)
+        .cloned()
+    {
+        builder.ensure_cycle_interfaces_published(&resolved.id)?;
         exports
     } else {
-        load_module_types_from_resolved(engine, resolved.clone(), &chain, loaded, loading).await?
+        load_module_types_from_resolved(builder, resolved.clone(), &chain, loaded, loading).await?
     };
 
     Ok(ToolingLoadedImport {

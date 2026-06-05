@@ -2,7 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use rex_ast::CompilationUnit;
-use rex_engine::{Engine, Module, standard_type_system};
+use rex_engine::{Builder, Module, standard_type_system};
 use rex_fuzz::{FuzzError, fuzz_source_input, read_stdin_bytes};
 use rex_parser::parse;
 use rex_typesystem::inference::infer;
@@ -27,15 +27,15 @@ async fn run_one(input: &[u8]) {
         return;
     }
 
-    let Ok(mut engine) = Engine::with_prelude(()) else {
+    let Ok(mut builder) = Builder::with_prelude(()) else {
         return;
     };
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
-    if engine.inject_module(module).is_err() {
+    if builder.inject_module(module).is_err() {
         return;
     }
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let body_program = CompilationUnit {
         decls: Vec::new(),
         body: Some(body.clone()),

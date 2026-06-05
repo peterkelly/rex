@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{CompiledProgram, Engine, EngineError, Evaluator},
+    engine::{Builder, CompiledProgram, EngineError, Evaluator},
     json::{json_to_main_inputs, rex_to_json},
     parser::parse as parse_rex,
 };
@@ -15,7 +15,7 @@ struct Prepared {
 
 async fn prepare(source: &str) -> Prepared {
     let parsed = parse_rex(source).unwrap();
-    let mut compiler = Engine::with_prelude(()).unwrap().into_compiler();
+    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let compiled = compiler
         .compile_program(&parsed, Default::default())
         .await

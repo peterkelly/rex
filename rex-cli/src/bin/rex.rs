@@ -11,7 +11,7 @@ use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
     engine::{
-        CompileOptions, CompiledProgram, Compiler, Engine, Importer, MainInputSpec, Manifest,
+        Builder, CompileOptions, CompiledProgram, Compiler, Importer, MainInputSpec, Manifest,
         ModuleId, type_has_vars,
     },
     json::{json_to_main_inputs, rex_to_json},
@@ -164,14 +164,14 @@ struct RunSourceOpts {
     raw_output: bool,
 }
 
-fn init_engine() -> Result<(Engine, Arc<dyn Importer>), String> {
-    let mut engine =
-        Engine::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
-    cli_prelude::inject_cli_prelude_engine(&mut engine).map_err(|e| e.to_string())?;
+fn init_builder() -> Result<(Builder, Arc<dyn Importer>), String> {
+    let mut builder =
+        Builder::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
+    cli_prelude::inject_cli_prelude_builder(&mut builder).map_err(|e| e.to_string())?;
     let filesystem_importer = FilesystemImporter::new();
     let importer: Arc<dyn Importer> = Arc::new(filesystem_importer);
-    engine.add_importer("filesystem", Arc::clone(&importer));
-    Ok((engine, importer))
+    builder.add_importer("filesystem", Arc::clone(&importer));
+    Ok((builder, importer))
 }
 
 async fn run_source(source: &str, opts: RunSourceOpts) -> Result<(), String> {
@@ -277,8 +277,8 @@ async fn compile_cli_program(
     program: &CompilationUnit,
     file: Option<&str>,
 ) -> Result<(Compiler, CompiledProgram), String> {
-    let (engine, _importer) = init_engine()?;
-    let mut compiler = engine.into_compiler();
+    let (builder, _importer) = init_builder()?;
+    let mut compiler = builder.build_compiler();
     let importer_path = file.map(PathBuf::from);
     let compiled = compiler
         .compile_program(program, compile_options(importer_path))

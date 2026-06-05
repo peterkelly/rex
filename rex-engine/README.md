@@ -1,7 +1,7 @@
 # Rex Engine (`rex-engine`)
 
 This crate prepares and evaluates Rex programs and supports host-native injection of functions and
-values. The API exposes an explicit preparation boundary: `Engine` builds the host environment,
+values. The API exposes an explicit preparation boundary: `Builder` builds the host environment,
 `Compiler` prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator` runs one
 prepared program with a map of runtime inputs for `main`. The runtime stores values in the heap and
 returns rooted `Handle`s; `Handle::value()` exposes safe public `Value` views for inspection. It
@@ -10,21 +10,21 @@ supports closures, application, let-in, if-then-else, tuples/lists/dicts, and `m
 ## Quickstart
 
 ```rust
-use rex_engine::{Engine, Module};
+use rex_engine::{Builder, Module};
 use rex_parser::parse;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut engine = Engine::with_prelude(())?;
+    let mut builder = Builder::with_prelude(())?;
     let mut globals = Module::global();
     globals.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
     globals.export_value("answer", 42i32)?;
-    engine.inject_module(globals)?;
+    builder.inject_module(globals)?;
 
     let program = parse("inc answer").map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let compiled = compiler.compile_program(&program, Default::default()).await?;
     let evaluator = compiler.into_evaluator();
     let value = evaluator.run(compiled, Default::default()).await?;
@@ -44,9 +44,9 @@ Phase-specific errors:
 
 The engine implementation is split by phase:
 
-- `builder/`: host environment construction, module injection, import rewriting, export
-  registration, and registry reporting.
-- `compiler/`: typechecking plus `CompiledProgram` construction.
+- `builder/`: builder-facing host/module registration and registry reporting.
+- `compiler/`: program preparation, import rewriting, typechecking, module loading state, and
+  `CompiledProgram` construction.
 - `evaluator/`: scheduler-driven execution, native dispatch, runtime context, and runtime core
   state.
 
@@ -62,7 +62,7 @@ live beside those phase directories.
 - Add pointer-level exports with `export_native` / `export_native_async`.
 - Add constant values with `export_value`.
 - Add ADTs with `add_adt_decl` or `add_rex_adt::<T>()`.
-- Materialize the staged module with `Engine::inject_module(...)`.
+- Materialize the staged module with `Builder::inject_module(...)`.
 
 `Module::add_rex_adt::<T>()` collects `T`'s Rex family via `RexType::collect_rex_family` and
 stages the reachable acyclic ADT family automatically. Ordinary leaf types inherit the default
@@ -70,7 +70,7 @@ no-op implementation, so they participate in Rex type mapping without pretending
 
 Operator names can be injected with parentheses (e.g., `"(+)"`); the engine normalizes to `+`.
 
-`Engine` is generic over host state (`Engine<State>`, where `State: Clone + Send + Sync + 'static`).
+`Builder` is generic over host state (`Builder<State>`, where `State: Clone + Send + Sync + 'static`).
 `export` callbacks receive `&State` as the first argument and must return `Result<T, EngineError>`;
 returning `Err(...)` fails evaluation.
 `export_async` callbacks receive `&State` and return `Future<Output = Result<T, EngineError>>`;
@@ -80,8 +80,8 @@ Pointer-level APIs (`export_native*`) receive `Context<State>` so they can acces
 
 ## Prelude
 
-`Engine::with_prelude(())?` injects the standard runtime helpers. If you need host state, pass
-your state value instead: `Engine::with_prelude(state)?`.
+`Builder::with_prelude(())?` injects the standard runtime helpers. If you need host state, pass
+your state value instead: `Builder::with_prelude(state)?`.
 
 The standard prelude source lives in `src/prelude/typeclasses.rex`. `src/prelude/type_system.rs`
 builds the prelude-enabled `TypeSystem`, while `src/prelude/mod.rs` parses the source, exposes
@@ -89,7 +89,7 @@ builds the prelude-enabled `TypeSystem`, while `src/prelude/mod.rs` parses the s
 
 For explicit control, use:
 
-- `Engine::with_options(state, EngineOptions { ... })`
+- `Builder::with_options(state, EngineOptions { ... })`
 - `PreludeMode::{Enabled, Disabled}`
 - `default_imports` (defaults to importing `Prelude` weakly)
 

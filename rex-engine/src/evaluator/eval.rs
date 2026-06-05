@@ -1,5 +1,5 @@
 use crate::{
-    env::Environment,
+    env::{Environment, RootedEnvironment},
     error::EngineError,
     evaluator::{
         CallSite, application_result_type,
@@ -21,7 +21,7 @@ use crate::{
         FrValueState, FrVar, Frame,
     },
     util::{is_function_type, split_fun},
-    value::{Cell, Closure, Collection, Heap, HeapAccess, Pointer, TempRoots, list_to_vec},
+    value::{Cell, Closure, Collection, Handle, Heap, HeapAccess, Pointer, TempRoots, list_to_vec},
 };
 use rex_ast::{Pattern, Symbol};
 use rex_typesystem::{
@@ -47,13 +47,30 @@ pub(crate) enum EvalControl<State: Clone + Send + Sync + 'static> {
 
 pub(crate) async fn eval_typed_expr<State>(
     runtime: RuntimeCore<State>,
-    env: Environment,
+    rooted_env: RootedEnvironment,
     expr: Arc<TypedExpr>,
-) -> Result<Pointer, EngineError>
+    input_args: Vec<(Handle, Type)>,
+) -> Result<Handle, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
-    let root_parent = runtime.heap.alloc_ptr_root_frame_parent()?;
+    let root_parent = runtime
+        .heap
+        .handle(runtime.heap.alloc_ptr_root_frame_parent()?)?;
+    let env = rooted_env.to_environment()?;
+    let (env, expr) = if input_args.is_empty() {
+        (env, expr)
+    } else {
+        let args = input_args
+            .iter()
+            .map(|(handle, typ)| Ok((handle.pointer_for_heap(&runtime.heap)?, typ.clone())))
+            .collect::<Result<Vec<_>, EngineError>>()?;
+        let (env, expr) = synthetic_application_expr_from_head(env, expr.as_ref().clone(), &args)?;
+        (env, Arc::new(expr))
+    };
+    // rooted_env and input_args intentionally remain in scope across this
+    // await; their handles root the raw pointers stored in env and the
+    // synthetic input application.
     eval_typed_expr_from_parent(runtime, root_parent, EvalStop::RootSentinel, env, expr).await
 }
 
@@ -66,14 +83,15 @@ pub(crate) enum EvalStop {
 
 pub(crate) async fn eval_typed_expr_from_parent<State>(
     mut runtime: RuntimeCore<State>,
-    initial_parent: Pointer,
+    initial_parent: Handle,
     stop: EvalStop,
     env: Environment,
     expr: Arc<TypedExpr>,
-) -> Result<Pointer, EngineError>
+) -> Result<Handle, EngineError>
 where
     State: Clone + Send + Sync + 'static,
 {
+    let initial_parent = initial_parent.pointer_for_heap(&runtime.heap)?;
     let root_frame = runtime
         .heap
         .alloc_ptr_frame(frame_for_expr(initial_parent, expr, env))?;
@@ -158,12 +176,12 @@ where
                 match stop {
                     EvalStop::RootSentinel => {
                         if is_root_frame_parent(&runtime.heap, &parent)? {
-                            return Ok(value);
+                            return runtime.heap.handle(value);
                         }
                     }
                     EvalStop::Parent(stop_parent) => {
                         if parent == stop_parent {
-                            return Ok(value);
+                            return runtime.heap.handle(value);
                         }
                         if is_root_frame_parent(&runtime.heap, &parent)? {
                             return Err(EngineError::Internal(

@@ -1,11 +1,11 @@
 mod common;
 
 use rex::{
-    engine::{Engine, EngineError, Handle, Heap, Module, Value},
+    engine::{Builder, EngineError, Handle, Heap, Module, Value},
     typesystem::{BuiltinTypeId, Type},
 };
 
-fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), EngineError> {
+fn register_integer_literal_natives(builder: &mut Builder<()>) -> Result<(), EngineError> {
     let mut module = Module::global();
     module.export("num_u8", |_state: &(), x: u8| Ok(format!("{x}:u8")))?;
     module.export("num_u16", |_state: &(), x: u16| Ok(format!("{x}:u16")))?;
@@ -15,13 +15,13 @@ fn register_integer_literal_natives(engine: &mut Engine<()>) -> Result<(), Engin
     module.export("num_i16", |_state: &(), x: i16| Ok(format!("{x}:i16")))?;
     module.export("num_i32", |_state: &(), x: i32| Ok(format!("{x}:i32")))?;
     module.export("num_i64", |_state: &(), x: i64| Ok(format!("{x}:i64")))?;
-    engine.inject_module(module)
+    builder.inject_module(module)
 }
 
 async fn eval(code: &str) -> Result<(Heap, Handle, Type), EngineError> {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    register_integer_literal_natives(&mut engine)?;
-    common::eval_source(engine, code).await
+    let mut builder = Builder::with_prelude(()).unwrap();
+    register_integer_literal_natives(&mut builder)?;
+    common::eval_source(builder, code).await
 }
 
 fn expected_values() -> Vec<&'static str> {

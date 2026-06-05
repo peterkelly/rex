@@ -8,11 +8,11 @@
 //! embedded in Rust applications. Host programs provide modules and native
 //! functions, then run user-supplied Rex snippets or module files to coordinate
 //! work. The main public API is the [`engine`] module, especially
-//! [`Engine`](engine::Engine) for configuring the runtime and
+//! [`Builder`](engine::Builder) for configuring the runtime and
 //! [`Module`](engine::Module) for exposing host capabilities to Rex code.
 //!
 //! Most embedders start with
-//! [`Engine::with_prelude`](engine::Engine::with_prelude), register one or more
+//! [`Builder::with_prelude`](engine::Builder::with_prelude), register one or more
 //! host modules, then compile and run a snippet or module workflow through
 //! [`Compiler`](engine::Compiler) and [`Evaluator`](engine::Evaluator). The parser,
 //! type system, runtime value, and JSON conversion APIs are also re-exported here so
@@ -23,19 +23,19 @@
 //! ```rust,no_run
 //! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
 //! use rex::{
-//!     engine::{CompileOptions, Engine, EngineError, Module},
+//!     engine::{CompileOptions, Builder, EngineError, Module},
 //!     parser::parse as parse_rex,
 //! };
 //!
-//! let mut engine = Engine::with_prelude(())?;
+//! let mut builder = Builder::with_prelude(())?;
 //!
 //! let mut math = Module::new("host.math");
 //! math.export("inc", |_state: &(), x: i32| {
 //!     Ok::<i32, EngineError>(x + 1)
 //! })?;
-//! engine.inject_module(math)?;
+//! builder.inject_module(math)?;
 //!
-//! let mut compiler = engine.into_compiler();
+//! let mut compiler = builder.build_compiler();
 //! let parsed = parse_rex("import host.math (inc);\ninc 41")
 //!     .map_err(|errs| EngineError::from(format!("parse error: {errs:?}")))?;
 //! let program = compiler
@@ -52,7 +52,7 @@
 //!
 //! For lightweight tests and command-line style integrations, [`eval`] parses,
 //! typechecks, evaluates, and converts the result to JSON in one call. Production
-//! embedders usually use [`Engine`](engine::Engine) directly so they can
+//! embedders usually use [`Builder`](engine::Builder) directly so they can
 //! register host modules, set parallelism policy, inspect type information,
 //! and handle compile and evaluation errors separately.
 
@@ -89,21 +89,21 @@ pub use rex_proc_macro::Rex;
 /// Parse, typecheck, evaluate, and JSON-encode a Rex snippet.
 ///
 /// This is a convenience helper for small integrations, examples, and tests. It
-/// creates an [`Engine`](engine::Engine) with the prelude enabled, installs the
+/// creates a [`Builder`](engine::Builder) with the prelude enabled, installs the
 /// bundled stdlib importer, compiles `source` as a snippet, evaluates it once, and
 /// converts the result to JSON [`Value`](serde_json::Value) using the inferred
 /// result type.
 ///
 /// Hosts that need to inject functions, control module loading, preserve compile
-/// diagnostics, or set runtime policy should use [`Engine`](engine::Engine)
+/// diagnostics, or set runtime policy should use [`Builder`](engine::Builder)
 /// directly instead.
 pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionError> {
     let parsed = parser::parse(source)
         .map_err(|errs| engine::EngineError::from(format!("parse error: {errs:?}")))?;
 
-    let engine = engine::Engine::with_prelude(())
+    let builder = engine::Builder::with_prelude(())
         .map_err(|e| engine::EngineError::from(format!("failed to initialize engine: {e}")))?;
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let program = compiler
         .compile_program(&parsed, engine::CompileOptions::default())
         .await?;

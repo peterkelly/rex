@@ -1,4 +1,5 @@
-pub(crate) mod engine;
+#[path = "builder.rs"]
+pub(crate) mod core;
 pub(crate) mod export;
 pub(crate) mod markdown;
 pub(crate) mod qualify;

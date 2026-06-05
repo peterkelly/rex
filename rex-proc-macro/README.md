@@ -11,7 +11,7 @@ The derive generates:
 - `rex::engine::IntoRex`
 - `rex::engine::FromRex`
 - inherent helper methods such as `inject_rex`, `rex_adt_decl`, and `rex_adt_family`
-- an ADT declaration suitable for injection into an `Engine`
+- an ADT declaration suitable for injection through a `Builder`
 - ADT-family discovery so `inject_rex` registers all reachable acyclic derived dependencies
 
 Derived fields of type `Vec<T>` are represented as `Array T` and convert to/from Rex runtime arrays.

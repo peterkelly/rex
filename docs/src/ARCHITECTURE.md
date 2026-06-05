@@ -20,32 +20,32 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - The inference implementation itself lives in `rex-typesystem/src/inference.rs`; `typesystem.rs` now holds the shared core types, environments, and registration logic.
   - For untrusted code, set `rex_typesystem::TypeSystemLimits::safe_defaults()` before inference.
 - `rex-engine`: host environment builder, compiler, and runtime evaluator. Entry points:
-  - `Engine::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
-  - `standard_type_system()?` to create a typing environment with the engine-owned standard prelude.
-  - `Engine::into_compiler()` to consume the prepared engine into a compilation view.
-  - `Engine::into_evaluator()` / `Compiler::into_evaluator()` to consume preparation state into an evaluator.
+  - `Builder::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
+  - `standard_type_system()?` to create a typing environment with the `rex-engine` standard prelude.
+  - `Builder::build_compiler()` to consume the prepared builder into a compilation view.
+  - `Compiler::into_evaluator()` to consume preparation state into an evaluator.
   - `Compiler::compile_program` to prepare a parsed program entry point into `CompiledProgram`;
     `Compiler::infer_*` for type-only checks.
   - `Evaluator::run(compiled, inputs).await` to execute one prepared program. `inputs` is a
     `BTreeMap<String, Handle>` for the program's external `main` interface; `run` consumes the
     evaluator, compiled program, and input map.
-  - `Engine` carries host state as `Engine<State>` (`State: Clone + Send + Sync + 'static`);
+  - `Builder` carries host state as `Builder<State>` (`State: Clone + Send + Sync + 'static`);
     typed `export` callbacks receive `&State` and return `Result<T, EngineError>`, typed
     `export_async` callbacks receive `&State` and return
     `Future<Output = Result<T, EngineError>>`, while handle-based native APIs
     (`export_native*`) receive `Context<State>`.
   - compile and evaluation APIs return `EngineError`; convenience entry
     points that cross phases return `ExecutionError`.
-  - Host module injection API: `Module` + `Export` + `Engine::inject_module`.
+  - Host module injection API: `Module` + `Export` + `Builder::inject_module`.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
 
 `rex-engine` is organized internally around the same phases:
 
-- `builder/` owns engine construction, module injection, import qualification/rewrite, host export
-  registration, and registry markdown.
-- `compiler/` owns typechecking and `CompiledProgram` construction.
+- `builder/` owns builder-facing host/module registration and registry markdown.
+- `compiler/` owns program preparation, import rewriting, typechecking, module loading state, and
+  `CompiledProgram` construction.
 - `evaluator/` owns execution, scheduling, native dispatch, `Context`, and the runtime core.
 - `modules/`, `value.rs`, and `config.rs` hold shared module identities, heap values/GC roots,
   and runtime options.
@@ -58,13 +58,18 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   `Evaluator::run` with its runtime input map, consuming the evaluator as well. Prepare all
   required declarations/modules before constructing or consuming the evaluator.
 - **Same-lineage runtime model**: a `CompiledProgram` is intended to run on the evaluator produced
-  from the same compiler. Rex programs are supplied as source and compiled per run, so the engine
-  does not expose a portable compiled-artifact or cross-runtime linking model.
+  from the same compiler. Rex programs are supplied as source and compiled per run, so Rex does
+  not expose a portable compiled-artifact or cross-runtime linking model.
+- **Phase ownership**: `Builder` owns embedder configuration only until `build_compiler()`.
+  `Compiler` then owns preparation state: the type environment, runtime declaration environment,
+  runtime registries, heap, module loader caches, and execution policy snapshot. `Evaluator` is
+  built only by consuming that compiler, so runtime code cannot mutate modules or compile new
+  declarations.
 - **Prelude ownership**: `rex-engine` owns the standard prelude source, standard typing
   environment, and runtime contract. The split is:
   - typeclass and instance declarations written in Rex at `rex-engine/src/prelude/typeclasses.rex`
   - `rex-engine/src/prelude/type_system.rs` builds the prelude-enabled `TypeSystem`, including ADTs, parsed declarations, and primop schemes
-  - `rex-engine/src/prelude/mod.rs` parses the Rex source and injects runtime method bodies/native implementations for `Engine::with_prelude(state)?`
+  - `rex-engine/src/prelude/mod.rs` parses the Rex source and injects runtime method bodies/native implementations for `Builder::with_prelude(state)?`
   - `rex-typesystem` exposes generic registration/inference APIs and does not own the standard prelude
 - **Depth bounding**: Some parts of the pipeline are naturally recursive (parsing deeply nested parentheses, matching deeply nested terms). The parser enforces a fixed AST-depth cap, and the typechecker-limit API provides bounded recursion for production/untrusted workloads.
 - **Import-use rewrite/validation**: module processing resolves import aliases across expression

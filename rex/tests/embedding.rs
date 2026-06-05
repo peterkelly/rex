@@ -4,7 +4,7 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Context, Engine, EngineError, FromRex, Handle, IntoRex, Module, RexDefault, Value,
+        Builder, Context, EngineError, FromRex, Handle, IntoRex, Module, RexDefault, Value,
         virtual_export_name,
     },
     parser::parse as parse_rex,
@@ -39,7 +39,7 @@ fn render_label(label: Label) -> String {
 
 #[tokio::test]
 async fn module_render_label_with_module_scoped_adts_left_and_right() {
-    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
     let mut module = Module::new("sample");
     module.add_rex_adt::<Side>().unwrap();
@@ -50,8 +50,8 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
             Ok::<String, EngineError>(render_label(label))
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
-    let mut compiler = engine.into_compiler();
+    builder.inject_module(module).unwrap();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(
         r#"
             import sample (Label, Left, Right, Wrong, render_label);
@@ -116,7 +116,7 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
 
 #[tokio::test]
 async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
-    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
     let mut module = Module::new("sample");
     module.add_rex_adt::<Label>().unwrap();
@@ -125,8 +125,8 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
             Ok::<String, EngineError>(render_label(label))
         })
         .unwrap();
-    engine.inject_module(module).unwrap();
-    let mut compiler = engine.into_compiler();
+    builder.inject_module(module).unwrap();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(
         r#"
             import sample (Label, Left, render_label);
@@ -158,13 +158,13 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     // (e.g. both have `Right`), `match` arms that use the bare constructor after an
     // `is Sample.Correctness` ascription currently remain ambiguous. This test ensures
     // we keep surfacing that ambiguity instead of silently picking one constructor.
-    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
     let mut module = Module::new("sample");
     module.add_rex_adt::<Side>().unwrap();
     module.add_rex_adt::<Correctness>().unwrap();
-    engine.inject_module(module).unwrap();
-    let mut compiler = engine.into_compiler();
+    builder.inject_module(module).unwrap();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_rex(
         r#"
             import sample (Right, Wrong);
@@ -298,7 +298,7 @@ struct EmbedRecord {
 async fn injected_functions_can_read_shared_state_fields() {
     let account_id = uuid::uuid!("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     let project_id = uuid::uuid!("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
-    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+    let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
         account_id,
         project_id,
         is_admin: true,
@@ -306,7 +306,7 @@ async fn injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    common::inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut builder, |module| {
         module.export("current_account_id", current_account_id)?;
         module.export("current_project_id", current_project_id)?;
         module.export("is_admin", is_admin)?;
@@ -316,7 +316,7 @@ async fn injected_functions_can_read_shared_state_fields() {
     .unwrap();
 
     let (_heap, value, ty) = common::eval_source(
-        engine,
+        builder,
         "(current_account_id, current_project_id, is_admin, have_role \"admin\", have_role \"viewer\")",
     )
     .await
@@ -345,7 +345,7 @@ async fn injected_functions_can_read_shared_state_fields() {
 async fn derived_rex_default_can_read_host_state() {
     let account_id = uuid::uuid!("11111111-1111-4111-8111-111111111111");
     let project_id = uuid::uuid!("22222222-2222-4222-8222-222222222222");
-    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+    let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
         account_id,
         project_id,
         is_admin: true,
@@ -353,9 +353,9 @@ async fn derived_rex_default_can_read_host_state() {
     })
     .unwrap();
 
-    Entity1::inject_rex_with_default(&mut engine).unwrap();
+    Entity1::inject_rex_with_default(&mut builder).unwrap();
 
-    let (_heap, value, ty) = common::eval_source(engine, "let e: Entity1 = default in e")
+    let (_heap, value, ty) = common::eval_source(builder, "let e: Entity1 = default in e")
         .await
         .unwrap();
     assert_eq!(ty, Type::con("Entity1", 0));
@@ -378,7 +378,7 @@ async fn derived_rex_default_can_read_host_state() {
 async fn derived_rex_default_record_update_can_override_fields() {
     let account_id = uuid::uuid!("33333333-3333-4333-8333-333333333333");
     let project_id = uuid::uuid!("44444444-4444-4444-8444-444444444444");
-    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+    let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
         account_id,
         project_id,
         is_admin: false,
@@ -386,10 +386,10 @@ async fn derived_rex_default_record_update_can_override_fields() {
     })
     .unwrap();
 
-    Entity1::inject_rex_with_default(&mut engine).unwrap();
+    Entity1::inject_rex_with_default(&mut builder).unwrap();
 
     let (_heap, value, ty) = common::eval_source(
-        engine,
+        builder,
         r#"let e: Entity1 = { default with { name = "sample", tags = Some (to_array ["x", "y"]), numbers = to_array [7, 11] } } in e"#,
     )
     .await
@@ -414,7 +414,7 @@ async fn derived_rex_default_record_update_can_override_fields() {
 async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
     let account_id = uuid::uuid!("55555555-5555-4555-8555-555555555555");
     let project_id = uuid::uuid!("66666666-6666-4666-8666-666666666666");
-    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+    let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
         account_id,
         project_id,
         is_admin: false,
@@ -422,9 +422,9 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
     })
     .unwrap();
 
-    Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
+    Entity2::inject_rex_with_constructor(&mut builder, Entity2::rex_new).unwrap();
 
-    let (_heap, value, ty) = common::eval_source(engine, r#"Entity2 "sample" [7, 11]"#)
+    let (_heap, value, ty) = common::eval_source(builder, r#"Entity2 "sample" [7, 11]"#)
         .await
         .unwrap();
     assert_eq!(ty, Type::con("Entity2", 0));
@@ -447,7 +447,7 @@ async fn entity2_constructor_defaults_from_host_state_with_required_fields() {
 async fn entity2_constructor_result_can_be_record_updated() {
     let account_id = uuid::uuid!("77777777-7777-4777-8777-777777777777");
     let project_id = uuid::uuid!("88888888-8888-4888-8888-888888888888");
-    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+    let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
         account_id,
         project_id,
         is_admin: true,
@@ -455,10 +455,10 @@ async fn entity2_constructor_result_can_be_record_updated() {
     })
     .unwrap();
 
-    Entity2::inject_rex_with_constructor(&mut engine, Entity2::rex_new).unwrap();
+    Entity2::inject_rex_with_constructor(&mut builder, Entity2::rex_new).unwrap();
 
     let (_heap, value, ty) = common::eval_source(
-        engine,
+        builder,
         r#"{
             (Entity2 "sample" [7, 11])
             with {
@@ -487,7 +487,7 @@ async fn entity2_constructor_result_can_be_record_updated() {
 
 #[tokio::test]
 async fn async_injected_functions_can_read_shared_state_fields() {
-    let mut engine: Engine<HostState> = Engine::with_prelude(HostState {
+    let mut builder: Builder<HostState> = Builder::with_prelude(HostState {
         account_id: uuid::uuid!("cccccccc-cccc-4ccc-8ccc-cccccccccccc"),
         project_id: uuid::uuid!("dddddddd-dddd-4ddd-8ddd-dddddddddddd"),
         is_admin: false,
@@ -495,7 +495,7 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     })
     .unwrap();
 
-    common::inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut builder, |module| {
         module.export_async("have_role_async", |state: &HostState, role: String| {
             have_role_async(state.clone(), role)
         })
@@ -503,7 +503,7 @@ async fn async_injected_functions_can_read_shared_state_fields() {
     .unwrap();
 
     let (_heap, value, ty) = common::eval_source(
-        engine,
+        builder,
         "(have_role_async \"editor\", have_role_async \"admin\")",
     )
     .await
@@ -524,11 +524,13 @@ async fn async_injected_functions_can_read_shared_state_fields() {
 
 #[tokio::test]
 async fn generic_export_can_repeat_a_value_into_a_list() {
-    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
     // This demonstrates how to write a generic function by declaring a fresh
     // type variable `T` and using it in the exported Rex type scheme.
-    let t_var = engine.type_system.fresh_type_var(Some(Symbol::intern("T")));
+    let t_var = builder
+        .type_system_mut()
+        .fresh_type_var(Some(Symbol::intern("T")));
     let t = Type::var(t_var.clone());
     let scheme = Scheme::new(
         vec![t_var],
@@ -538,7 +540,7 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
             Type::fun(Type::builtin(BuiltinTypeId::I32), Type::list(t)),
         ),
     );
-    common::inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut builder, |module| {
         module.export_native("repeat_value", scheme, 2, |engine, _, args| {
             let value = args[0].clone();
             let len = args[1].to_rust::<i32>()?;
@@ -549,7 +551,7 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
     .unwrap();
 
     let (_heap, value, ty) =
-        common::eval_source(engine, r#"(repeat_value "rex" 3, repeat_value true 2)"#)
+        common::eval_source(builder, r#"(repeat_value "rex" 3, repeat_value true 2)"#)
             .await
             .unwrap();
     assert_eq!(
@@ -575,12 +577,16 @@ async fn generic_export_can_repeat_a_value_into_a_list() {
 
 #[tokio::test]
 async fn generic_export_can_swap_two_values_of_different_types() {
-    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
     // This is another example of writing a generic function: it introduces
     // independent type variables `P` and `Q` and returns them in swapped order.
-    let p_var = engine.type_system.fresh_type_var(Some(Symbol::intern("P")));
-    let q_var = engine.type_system.fresh_type_var(Some(Symbol::intern("Q")));
+    let p_var = builder
+        .type_system_mut()
+        .fresh_type_var(Some(Symbol::intern("P")));
+    let q_var = builder
+        .type_system_mut()
+        .fresh_type_var(Some(Symbol::intern("Q")));
     let p = Type::var(p_var.clone());
     let q = Type::var(q_var.clone());
     let scheme = Scheme::new(
@@ -588,7 +594,7 @@ async fn generic_export_can_swap_two_values_of_different_types() {
         vec![],
         Type::fun(p.clone(), Type::fun(q.clone(), Type::tuple(vec![q, p]))),
     );
-    common::inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut builder, |module| {
         module.export_native("swap_pair", scheme, 2, |engine, _, args| {
             engine
                 .heap()
@@ -598,7 +604,7 @@ async fn generic_export_can_swap_two_values_of_different_types() {
     .unwrap();
 
     let (_heap, value, ty) =
-        common::eval_source(engine, r#"(swap_pair "left" 7, swap_pair true "right")"#)
+        common::eval_source(builder, r#"(swap_pair "left" 7, swap_pair true "right")"#)
             .await
             .unwrap();
     assert_eq!(
@@ -628,11 +634,11 @@ async fn generic_export_can_swap_two_values_of_different_types() {
 
 #[tokio::test]
 async fn overloaded_exports_types_and_values() {
-    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
 
-    EmbedRecord::inject_rex(&mut engine).unwrap();
+    EmbedRecord::inject_rex(&mut builder).unwrap();
 
-    common::inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut builder, |module| {
         module.export("over1", |_state: &(), x: i32| Ok(x + 1))?;
         module.export("over1", |_state: &(), x: bool| {
             Ok(if x {
@@ -668,7 +674,7 @@ async fn overloaded_exports_types_and_values() {
     "#;
 
     let body_program = parse_rex(expr).unwrap();
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let compiled = compiler
         .compile_program(&body_program, Default::default())
         .await
@@ -694,10 +700,10 @@ async fn overloaded_exports_types_and_values() {
 
 #[tokio::test]
 async fn overloaded_async_exports_types_and_values() {
-    let mut engine: Engine<()> = Engine::with_prelude(()).unwrap();
-    EmbedRecord::inject_rex(&mut engine).unwrap();
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
+    EmbedRecord::inject_rex(&mut builder).unwrap();
 
-    common::inject_globals(&mut engine, |module| {
+    common::inject_globals(&mut builder, |module| {
         module.export_async("a1", |_state: &(), x: i32| async move { Ok(x + 1) })?;
         module.export_async("a1", |_state: &(), x: bool| async move {
             Ok(if x {
@@ -740,7 +746,7 @@ async fn overloaded_async_exports_types_and_values() {
     "#;
 
     let body_program = parse_rex(expr).unwrap();
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let compiled = compiler
         .compile_program(&body_program, Default::default())
         .await

@@ -1,14 +1,14 @@
 mod common;
 
 use rex::{
-    engine::{Engine, Value},
+    engine::{Builder, Value},
     typesystem::{BuiltinTypeId, Type, TypeKind},
 };
 
 #[tokio::test]
 async fn let_rec_self_recursive_factorial() {
     let (heap, handle, ty) = common::eval_source(
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
         r#"
         let rec
             fact = \n ->
@@ -31,7 +31,7 @@ async fn let_rec_self_recursive_factorial() {
 #[tokio::test]
 async fn let_rec_self_recursive_fibonacci() {
     let (heap, handle, ty) = common::eval_source(
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
         r#"
         let rec
             fib = \n ->
@@ -53,7 +53,7 @@ async fn let_rec_self_recursive_fibonacci() {
 #[tokio::test]
 async fn let_rec_mutual_even_odd() {
     let (heap, handle, ty) = common::eval_source(
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
         r#"
         let rec
             even = \n -> if n == 0 then true else odd (n - 1),
@@ -85,7 +85,7 @@ async fn let_rec_mutual_even_odd() {
 #[tokio::test]
 async fn let_rec_mutual_three_function_group() {
     let (heap, handle, ty) = common::eval_source(
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
         r#"
         let rec
             step0 = \n -> if n == 0 then 0 else step1 (n - 1),
@@ -115,7 +115,7 @@ async fn let_rec_mutual_three_function_group() {
 #[tokio::test]
 async fn let_rec_function_is_still_polymorphic() {
     let (heap, handle, ty) = common::eval_source(
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
         r#"
         let rec
             id = \x -> x
@@ -140,7 +140,7 @@ async fn let_rec_function_is_still_polymorphic() {
 #[tokio::test]
 async fn let_rec_allows_self_referential_data_cycles() {
     let (_heap, handle, ty) = common::eval_source(
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
         r#"
         let rec
             xs = Cons 1 xs
@@ -165,7 +165,7 @@ async fn let_rec_allows_self_referential_data_cycles() {
 #[tokio::test]
 async fn let_rec_allows_mutual_data_cycles() {
     let (_heap, handle, ty) = common::eval_source(
-        Engine::with_prelude(()).unwrap(),
+        Builder::with_prelude(()).unwrap(),
         r#"
         let rec
             a = Cons 1 b,

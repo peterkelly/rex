@@ -1,5 +1,9 @@
 use crate::{
-    builder::{engine::Engine, qualify::qualify_program},
+    builder::{
+        core::{Builder, ModuleLoaderState},
+        qualify::qualify_program,
+    },
+    compiler::Compiler,
     error::EngineError,
     modules::{
         ImportBindingPolicy, ImportBindings, add_import_bindings, alias_is_visible,
@@ -50,8 +54,88 @@ impl fmt::Display for ImportUseError {
     }
 }
 
-pub(crate) fn rewrite_program_with_imports<'a, State>(
-    engine: &'a mut Engine<State>,
+pub(crate) trait ModuleRewriteContext: Send {
+    fn module_loader(&self) -> &ModuleLoaderState;
+    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState;
+    fn refresh_if_stale(
+        &mut self,
+        resolved: &ResolvedModule,
+    ) -> Result<Option<String>, EngineError>;
+    fn ensure_cycle_interfaces_published(
+        &mut self,
+        module_id: &ModuleId,
+    ) -> Result<(), EngineError>;
+    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError>;
+
+    fn default_imports(&self) -> &[String] {
+        &self.module_loader().default_imports
+    }
+}
+
+impl<State> ModuleRewriteContext for Builder<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn module_loader(&self) -> &ModuleLoaderState {
+        &self.module_loader
+    }
+
+    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState {
+        &mut self.module_loader
+    }
+
+    fn refresh_if_stale(
+        &mut self,
+        resolved: &ResolvedModule,
+    ) -> Result<Option<String>, EngineError> {
+        Builder::refresh_if_stale(self, resolved)
+    }
+
+    fn ensure_cycle_interfaces_published(
+        &mut self,
+        module_id: &ModuleId,
+    ) -> Result<(), EngineError> {
+        Builder::ensure_cycle_interfaces_published(self, module_id)
+    }
+
+    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+        Builder::inject_decls(self, decls)
+    }
+}
+
+impl<State> ModuleRewriteContext for Compiler<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn module_loader(&self) -> &ModuleLoaderState {
+        &self.module_loader
+    }
+
+    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState {
+        &mut self.module_loader
+    }
+
+    fn refresh_if_stale(
+        &mut self,
+        resolved: &ResolvedModule,
+    ) -> Result<Option<String>, EngineError> {
+        Compiler::refresh_if_stale(self, resolved)
+    }
+
+    fn ensure_cycle_interfaces_published(
+        &mut self,
+        module_id: &ModuleId,
+    ) -> Result<(), EngineError> {
+        Compiler::ensure_cycle_interfaces_published(self, module_id)
+    }
+
+    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+        Compiler::inject_decls(self, decls)
+    }
+}
+
+pub(crate) fn rewrite_program_with_imports<'a, C>(
+    engine: &'a mut C,
     compilation_unit: &'a CompilationUnit,
     importer: Option<ModuleId>,
     prefix: &'a str,
@@ -60,7 +144,7 @@ pub(crate) fn rewrite_program_with_imports<'a, State>(
     loading: &'a mut BTreeSet<ModuleId>,
 ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>>
 where
-    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
         let mut bindings = ImportBindings::default();
@@ -1208,8 +1292,8 @@ fn rewrite_import_uses_type_expr(
     }
 }
 
-fn resolve_module_exports_for_rewrite<'a, State>(
-    engine: &'a mut Engine<State>,
+fn resolve_module_exports_for_rewrite<'a, C>(
+    engine: &'a mut C,
     import_decl: &'a ImportDecl,
     importer: Option<ModuleId>,
     chain: &'a ImportChain,
@@ -1217,7 +1301,7 @@ fn resolve_module_exports_for_rewrite<'a, State>(
     loading: &'a mut BTreeSet<ModuleId>,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
-    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
         let spec = import_specifier(&import_decl.path);
@@ -1228,7 +1312,12 @@ where
             })
             .await?;
         engine.refresh_if_stale(&imported)?;
-        if let Some(exports) = engine.module_exports_cache.get(&imported.id).cloned() {
+        if let Some(exports) = engine
+            .module_loader()
+            .module_exports_cache
+            .get(&imported.id)
+            .cloned()
+        {
             engine.ensure_cycle_interfaces_published(&imported.id)?;
             return Ok(exports);
         }
@@ -1236,15 +1325,15 @@ where
     })
 }
 
-pub(crate) fn load_module_types_from_resolved<'a, State>(
-    engine: &'a mut Engine<State>,
+pub(crate) fn load_module_types_from_resolved<'a, C>(
+    engine: &'a mut C,
     resolved: ResolvedModule,
     chain: &'a ImportChain,
     loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
     loading: &'a mut BTreeSet<ModuleId>,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
-    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
         if let Some(exports) = loaded.get(&resolved.id) {
@@ -1260,15 +1349,15 @@ where
     })
 }
 
-fn load_module_types_via_scc<'a, State>(
-    engine: &'a mut Engine<State>,
+fn load_module_types_via_scc<'a, C>(
+    engine: &'a mut C,
     root: ResolvedModule,
     chain: &'a ImportChain,
     loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
     loading: &'a mut BTreeSet<ModuleId>,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
-    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
         #[derive(Clone)]
@@ -1304,12 +1393,14 @@ where
             loading.insert(resolved.id.clone());
             if let ResolvedModuleContent::Source(source) = &resolved.content {
                 engine
+                    .module_loader_mut()
                     .module_sources
                     .insert(resolved.id.clone(), source.clone());
             }
             let qualified = qualify_program(&program, &prefix);
             let interfaces = interface_decls_from_program(&qualified);
             engine
+                .module_loader_mut()
                 .module_interface_cache
                 .insert(resolved.id.clone(), interfaces);
 
@@ -1344,6 +1435,7 @@ where
             );
             if let Some(fingerprint) = fingerprint {
                 engine
+                    .module_loader_mut()
                     .module_source_fingerprints
                     .insert(module_id, fingerprint);
             }

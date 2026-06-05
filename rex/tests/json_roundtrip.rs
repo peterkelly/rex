@@ -4,13 +4,13 @@ mod common;
 
 use rex::{
     Rex,
-    engine::{Engine, Module},
+    engine::{Builder, Module},
     json::rex_to_json,
 };
 use serde::{Deserialize, Serialize};
 
-fn engine_with_prelude() -> Engine {
-    Engine::with_prelude(()).unwrap()
+fn builder_with_prelude() -> Builder {
+    Builder::with_prelude(()).unwrap()
 }
 #[derive(Rex, Clone, Debug, PartialEq, Deserialize, Serialize)]
 enum EchoEnum {
@@ -28,7 +28,7 @@ struct EchoRecord {
 
 #[tokio::test]
 async fn injected_echo_module_roundtrips_embedder_types_through_json() {
-    let mut engine = engine_with_prelude();
+    let mut builder = builder_with_prelude();
 
     let mut module = Module::new("echo");
     module.add_rex_adt::<EchoEnum>().unwrap();
@@ -39,11 +39,11 @@ async fn injected_echo_module_roundtrips_embedder_types_through_json() {
             |_state: &(), variant: EchoEnum, record: EchoRecord| Ok((variant, record)),
         )
         .unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 
-    let type_system = engine.type_system.clone();
+    let type_system = builder.type_system().clone();
     let (_heap, value_handle, ty) = common::eval_source(
-        engine,
+        builder,
         r#"
         import echo (EchoEnum, EchoRecord, Foo, BAR, echo);
 

@@ -1,6 +1,6 @@
 use futures::FutureExt;
 use rex_ast::{CompilationUnit, Decl, Expr};
-use rex_engine::{Context, Engine, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value};
+use rex_engine::{Builder, Context, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -23,8 +23,8 @@ fn strip_span(mut err: TypeError) -> TypeError {
     err
 }
 
-fn engine_with_arith() -> Engine {
-    Engine::with_prelude(()).unwrap()
+fn builder_with_arith() -> Builder {
+    Builder::with_prelude(()).unwrap()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,23 +49,23 @@ impl IntoRex for HandleOnlyI32 {
 }
 
 fn inject_globals(
-    engine: &mut Engine,
+    builder: &mut Builder,
     build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
 ) {
     let mut module = Module::global();
     build(&mut module).unwrap();
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 }
 
-fn inject_global_decls(engine: &mut Engine, decls: &[Decl]) {
+fn inject_global_decls(builder: &mut Builder, decls: &[Decl]) {
     let mut module = Module::global();
     module.add_decls(decls.iter().cloned());
-    engine.inject_module(module).unwrap();
+    builder.inject_module(module).unwrap();
 }
 
-fn inject_global_type_decls(engine: &mut Engine, decls: &[Decl]) {
+fn inject_global_type_decls(builder: &mut Builder, decls: &[Decl]) {
     inject_global_decls(
-        engine,
+        builder,
         &decls
             .iter()
             .filter_map(|decl| match decl {
@@ -76,8 +76,8 @@ fn inject_global_type_decls(engine: &mut Engine, decls: &[Decl]) {
     );
 }
 
-async fn eval_expr(engine: Engine, expr: &Expr) -> Result<Handle, EngineError> {
-    let mut compiler = engine.into_compiler();
+async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Handle, EngineError> {
+    let mut compiler = builder.build_compiler();
     let program = CompilationUnit {
         decls: Vec::new(),
         body: Some(Arc::new(expr.clone())),
@@ -93,8 +93,8 @@ async fn eval_expr(engine: Engine, expr: &Expr) -> Result<Handle, EngineError> {
 
 #[tokio::test]
 async fn engine_consumes_into_evaluator() {
-    let engine = Engine::with_prelude(()).unwrap();
-    let mut compiler = engine.into_compiler();
+    let builder = Builder::with_prelude(()).unwrap();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_program("1 + 2");
     let program = compiler
         .compile_program(&parsed, Default::default())
@@ -113,8 +113,8 @@ async fn engine_consumes_into_evaluator() {
 
 #[tokio::test]
 async fn compiler_consumes_into_evaluator() {
-    let engine = Engine::with_prelude(()).unwrap();
-    let mut compiler = engine.into_compiler();
+    let builder = Builder::with_prelude(()).unwrap();
+    let mut compiler = builder.build_compiler();
     let parsed = parse_program("let answer = 40 + 2 in answer");
     let program = compiler
         .compile_program(&parsed, Default::default())
@@ -127,13 +127,13 @@ async fn compiler_consumes_into_evaluator() {
 }
 
 macro_rules! pval {
-    ($engine:expr, $ptr:expr) => {
+    ($builder:expr, $ptr:expr) => {
         $ptr.value().unwrap()
     };
 }
 
 macro_rules! pvals {
-    ($engine:expr, $vals:expr) => {
+    ($builder:expr, $vals:expr) => {
         $vals
             .iter()
             .map(|value| value.value().unwrap())
@@ -158,7 +158,7 @@ impl HandleRef for &Handle {
 }
 
 macro_rules! assert_pointer_eq {
-    ($heap:expr, $lhs:expr, $engine:ident . heap . $alloc:ident ( $($args:tt)* ) . unwrap()) => {{
+    ($heap:expr, $lhs:expr, $builder:ident . heap . $alloc:ident ( $($args:tt)* ) . unwrap()) => {{
         let lhs: Handle = HandleRef::handle_ref(&$lhs).clone();
         let rhs = lhs.heap().$alloc($($args)*).unwrap();
         assert!(
@@ -205,12 +205,12 @@ async fn eval_let_lambda() {
             id (id 1, id 2)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 2);
             assert!(matches!(xs[0], Value::I32(1)));
             assert!(matches!(xs[1], Value::I32(2)));
@@ -222,13 +222,13 @@ async fn eval_let_lambda() {
 #[tokio::test]
 async fn eval_native_injection() {
     let expr = parse("inc 1");
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_globals(&mut builder, |module| {
         module.export_async("inc", |_: &(), x: i32| async move { Ok(x + 1) })
     });
 
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(2).unwrap());
 }
 
 #[tokio::test]
@@ -248,8 +248,8 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         )
         "#,
     );
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_globals(&mut builder, |module| {
         module.export("f0", |_: &()| Ok(0i32))?;
         module.export("f1", |_: &(), a: i32| Ok(a))?;
         module.export("f2", |_: &(), a: i32, b: i32| Ok(a + b))?;
@@ -279,11 +279,11 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
         Ok(())
     });
 
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             let expected = [0, 1, 3, 6, 10, 15, 21, 28, 36];
             assert_eq!(xs.len(), expected.len());
             for (idx, expected) in expected.iter().enumerate() {
@@ -299,9 +299,9 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
 
 #[tokio::test]
 async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
-    let compile_engine = Engine::with_prelude(()).unwrap();
+    let compile_builder = Builder::with_prelude(()).unwrap();
 
-    let mut compiler = compile_engine.into_compiler();
+    let mut compiler = compile_builder.build_compiler();
     let parsed = parse_program(
         r#"
             let answer = 41 in
@@ -320,12 +320,12 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
 
 #[tokio::test]
 async fn exported_value_resolves_at_runtime() {
-    let mut compile_engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut compile_engine, |module| {
+    let mut compile_builder = Builder::with_prelude(()).unwrap();
+    inject_globals(&mut compile_builder, |module| {
         module.export_value("answer", 41i32)
     });
 
-    let mut compiler = compile_engine.into_compiler();
+    let mut compiler = compile_builder.build_compiler();
     let parsed = parse_program("answer + 1");
     let program = compiler
         .compile_program(&parsed, Default::default())
@@ -357,8 +357,8 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         )
         "#,
     );
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_globals(&mut builder, |module| {
         module.export_async("af0", |_: &()| async { Ok(0i32) })?;
         module.export_async("af1", |_: &(), a: i32| async move { Ok(a) })?;
         module.export_async("af2", |_: &(), a: i32, b: i32| async move { Ok(a + b) })?;
@@ -393,11 +393,11 @@ async fn eval_async_native_injection_supports_arities_0_to_8() {
         Ok(())
     });
 
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             let expected = [0, 1, 3, 6, 10, 15, 21, 28, 36];
             assert_eq!(xs.len(), expected.len());
             for (idx, expected) in expected.iter().enumerate() {
@@ -427,18 +427,18 @@ async fn eval_deep_list_does_not_overflow() {
 
     let program = parse_rex(&code).unwrap();
     let expr = program.body.unwrap();
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
     let xs = list_values(&value.value().unwrap());
     assert_eq!(xs.len(), N);
     let expected = value.heap().alloc_i32(0).unwrap();
     assert_pointer_eq!(
-        &engine.heap,
+        value.heap(),
         xs.first().expect("list should be non-empty"),
         expected
     );
     assert_pointer_eq!(
-        &engine.heap,
+        value.heap(),
         xs.last().expect("list should be non-empty"),
         expected
     );
@@ -447,29 +447,29 @@ async fn eval_deep_list_does_not_overflow() {
 #[tokio::test]
 async fn eval_type_annotation_let() {
     let expr = parse("let x: i32 = 42 in x");
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(42).unwrap());
 }
 
 #[tokio::test]
 async fn eval_type_annotation_is() {
     let expr = parse("\"hi\" is str");
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
     assert_pointer_eq!(
-        &engine.heap,
+        value.heap(),
         value,
-        engine.heap.alloc_string("hi".into()).unwrap()
+        value.heap().alloc_string("hi".into()).unwrap()
     );
 }
 
 #[tokio::test]
 async fn eval_type_annotation_lambda_param() {
     let expr = parse("let f = \\ (a : f32) -> a in f 1.5");
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     assert!(matches!(value, Value::F32(v) if (v - 1.5).abs() < f32::EPSILON));
 }
 
@@ -485,12 +485,12 @@ async fn eval_record_update_single_variant_adt() {
           bar.x
         "#,
     );
-    let mut engine = engine_with_arith();
-    inject_global_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+    let mut builder = builder_with_arith();
+    inject_global_decls(&mut builder, &program.decls);
+    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(6).unwrap());
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(6).unwrap());
 }
 
 #[tokio::test]
@@ -507,12 +507,12 @@ async fn eval_record_update_refined_by_match() {
           }
         "#,
     );
-    let mut engine = engine_with_arith();
-    inject_global_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+    let mut builder = builder_with_arith();
+    inject_global_decls(&mut builder, &program.decls);
+    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(2).unwrap());
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(2).unwrap());
 }
 
 #[tokio::test]
@@ -525,19 +525,19 @@ async fn eval_record_update_plain_record_type() {
           match (f { x = 1, y = 2 }) with { case {y} -> y; }
         "#,
     );
-    let mut engine = engine_with_arith();
-    inject_global_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+    let mut builder = builder_with_arith();
+    inject_global_decls(&mut builder, &program.decls);
+    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(9).unwrap());
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(9).unwrap());
 }
 
 #[tokio::test]
 async fn eval_type_annotation_mismatch() {
     let expr = parse("let x: i32 = 3.14 in x");
-    let engine = engine_with_arith();
-    match eval_expr(engine, expr.as_ref()).await {
+    let builder = builder_with_arith();
+    match eval_expr(builder, expr.as_ref()).await {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
             assert!(matches!(err, TypeError::Unification(_, _)));
@@ -550,8 +550,8 @@ async fn eval_type_annotation_mismatch() {
 #[tokio::test]
 async fn eval_typed_hole_reports_type_error_not_runtime_error() {
     let expr = parse("let y : i32 = ? in y");
-    let engine = engine_with_arith();
-    match eval_expr(engine, expr.as_ref()).await {
+    let builder = builder_with_arith();
+    match eval_expr(builder, expr.as_ref()).await {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
             match err {
@@ -571,25 +571,25 @@ async fn eval_typed_hole_reports_type_error_not_runtime_error() {
 
 #[tokio::test]
 async fn eval_sync_native_injection() {
-    fn engine_with_natives() -> Engine {
-        let mut engine = Engine::new(());
-        inject_globals(&mut engine, |module| {
+    fn builder_with_natives() -> Builder {
+        let mut builder = Builder::new(());
+        inject_globals(&mut builder, |module| {
             module.export("zero", |_: &()| Ok(0u32))?;
             module.export("(+)", |_: &(), x: u32, y: u32| Ok(x + y))?;
             module.export_value("one", 1u32)?;
             Ok(())
         });
-        engine
+        builder
     }
 
     let expr = parse("one + one");
-    let value = eval_expr(engine_with_natives(), expr.as_ref())
+    let value = eval_expr(builder_with_natives(), expr.as_ref())
         .await
         .unwrap();
     assert_eq!(value.as_u32().unwrap(), 2);
 
     let expr = parse("zero");
-    let value = eval_expr(engine_with_natives(), expr.as_ref())
+    let value = eval_expr(builder_with_natives(), expr.as_ref())
         .await
         .unwrap();
     assert_eq!(value.as_u32().unwrap(), 0);
@@ -597,8 +597,8 @@ async fn eval_sync_native_injection() {
 
 #[tokio::test]
 async fn typed_native_injection_uses_handle_conversions() {
-    let mut engine = engine_with_arith();
-    inject_globals(&mut engine, |module| {
+    let mut builder = builder_with_arith();
+    inject_globals(&mut builder, |module| {
         module.export("bump_handle_only", |_: &(), value: HandleOnlyI32| {
             Ok(HandleOnlyI32(value.0 + 1))
         })?;
@@ -615,7 +615,7 @@ async fn typed_native_injection_uses_handle_conversions() {
     });
 
     let expr = parse("(bump_handle_only 41, shift_handle_only_array (to_array [1, 2, 3]))");
-    let mut compiler = engine.into_compiler();
+    let mut compiler = builder.build_compiler();
     let program = CompilationUnit {
         decls: Vec::new(),
         body: Some(expr),
@@ -656,15 +656,15 @@ async fn typed_native_injection_uses_handle_conversions() {
 
 #[tokio::test]
 async fn eval_export_err_is_evaluation_failure() {
-    let mut engine = Engine::new(());
-    inject_globals(&mut engine, |module| {
+    let mut builder = Builder::new(());
+    inject_globals(&mut builder, |module| {
         module.export("fail", |_: &()| {
             Err::<i32, _>(EngineError::Custom("boom".into()))
         })
     });
 
     let expr = parse("fail");
-    match eval_expr(engine, expr.as_ref()).await {
+    match eval_expr(builder, expr.as_ref()).await {
         Err(EngineError::Custom(msg)) => assert_eq!(msg, "boom"),
         Err(other) => panic!("expected custom error, got {other:?}"),
         Ok(_) => panic!("expected evaluation failure"),
@@ -729,7 +729,7 @@ fn engine_export_native_async_rejects_invalid_arity_scheme_pair() {
 
 #[tokio::test]
 async fn eval_match_list() {
-    let engine = engine_with_arith();
+    let builder = builder_with_arith();
 
     let expr = parse(
         r#"
@@ -739,13 +739,13 @@ async fn eval_match_list() {
         }
         "#,
     );
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
 async fn eval_cons_constructor_form_for_lists() {
-    let engine = engine_with_arith();
+    let builder = builder_with_arith();
 
     let expr = parse(
         r#"
@@ -756,8 +756,8 @@ async fn eval_cons_constructor_form_for_lists() {
             (from_sugar, from_ctor, match from_ctor with { case Cons h _t -> h; case [] -> 0; })
         "#,
     );
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     let Value::Tuple(xs) = value else {
         panic!("expected tuple result");
     };
@@ -770,61 +770,65 @@ async fn eval_cons_constructor_form_for_lists() {
     assert_eq!(sugar_items.len(), 2);
     assert_eq!(ctor_items.len(), 2);
     assert_pointer_eq!(
-        &engine.heap,
+        sugar_items[0].heap(),
         sugar_items[0],
-        engine.heap.alloc_i32(1).unwrap()
+        sugar_items[0].heap().alloc_i32(1).unwrap()
     );
     assert_pointer_eq!(
-        &engine.heap,
+        sugar_items[1].heap(),
         sugar_items[1],
-        engine.heap.alloc_i32(2).unwrap()
+        sugar_items[1].heap().alloc_i32(2).unwrap()
     );
     assert_pointer_eq!(
-        &engine.heap,
+        ctor_items[0].heap(),
         ctor_items[0],
-        engine.heap.alloc_i32(1).unwrap()
+        ctor_items[0].heap().alloc_i32(1).unwrap()
     );
     assert_pointer_eq!(
-        &engine.heap,
+        ctor_items[1].heap(),
         ctor_items[1],
-        engine.heap.alloc_i32(2).unwrap()
+        ctor_items[1].heap().alloc_i32(2).unwrap()
     );
-    assert_pointer_eq!(&engine.heap, xs[2], engine.heap.alloc_i32(1).unwrap());
+    assert_pointer_eq!(xs[2].heap(), xs[2], xs[2].heap().alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
 async fn eval_simple_addition() {
     let expr = parse("420 + 69");
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(489).unwrap());
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(489).unwrap());
 }
 
 #[tokio::test]
 async fn eval_simple_mod() {
     let expr = parse("10 % 3");
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
 async fn eval_get_list_and_tuple() {
     let expr = parse("get 1 [1, 2, 3]");
-    let value = eval_expr(engine_with_arith(), expr.as_ref()).await.unwrap();
+    let value = eval_expr(builder_with_arith(), expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(value.as_i32().unwrap(), 2);
 
     let expr = parse("(1, 2, 3).2");
-    let value = eval_expr(engine_with_arith(), expr.as_ref()).await.unwrap();
+    let value = eval_expr(builder_with_arith(), expr.as_ref())
+        .await
+        .unwrap();
     assert_eq!(value.as_i32().unwrap(), 3);
 }
 
 #[tokio::test]
 async fn eval_simple_multiplication_float() {
     let expr = parse("420.0 * 6.9");
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::F32(v) => assert!((v - 2898.0).abs() < 1e-3),
         _ => panic!("expected f32 result"),
@@ -841,9 +845,9 @@ async fn eval_let_id_nested() {
             id (id 420 + id 69)
         "#,
     );
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(489).unwrap());
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(489).unwrap());
 }
 
 #[tokio::test]
@@ -856,9 +860,9 @@ async fn eval_higher_order_add() {
             add 40 2
         "#,
     );
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(42).unwrap());
 }
 
 #[tokio::test]
@@ -873,12 +877,12 @@ async fn eval_match_dict_and_tuple() {
             }
         "#,
     );
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 2);
             assert!(matches!(xs[0], Value::I32(2)));
             assert!(matches!(xs[1], Value::I32(3)));
@@ -890,8 +894,8 @@ async fn eval_match_dict_and_tuple() {
 #[tokio::test]
 async fn eval_match_missing_arm_errors() {
     let expr = parse("match (Err 1) with { case Ok x -> x; }");
-    let engine = Engine::with_prelude(()).unwrap();
-    let result = eval_expr(engine, expr.as_ref()).await;
+    let builder = Builder::with_prelude(()).unwrap();
+    let result = eval_expr(builder, expr.as_ref()).await;
     match result {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
@@ -904,8 +908,8 @@ async fn eval_match_missing_arm_errors() {
 #[tokio::test]
 async fn eval_match_invalid_pattern_type_error() {
     let expr = parse("match (Ok 1) with { case [] -> 0; case x::xs -> 1; }");
-    let engine = Engine::with_prelude(()).unwrap();
-    let result = eval_expr(engine, expr.as_ref()).await;
+    let builder = Builder::with_prelude(()).unwrap();
+    let result = eval_expr(builder, expr.as_ref()).await;
     match result {
         Err(EngineError::Type(err)) => {
             let err = strip_span(err);
@@ -929,9 +933,9 @@ async fn eval_nested_match_list_sum() {
         }
         "#,
     );
-    let engine = engine_with_arith();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
+    let builder = builder_with_arith();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
 }
 
 #[tokio::test]
@@ -951,12 +955,12 @@ async fn eval_safe_div_pipeline() {
             )
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 3);
             match xs[0] {
                 Value::F32(v) => assert!((v - 1.0).abs() < 1e-3),
@@ -988,12 +992,12 @@ async fn eval_user_adt_declaration() {
             }
         "#,
     );
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_global_type_decls(&mut builder, &program.decls);
+    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(42).unwrap());
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(42).unwrap());
 }
 
 #[tokio::test]
@@ -1004,11 +1008,11 @@ async fn eval_fn_decl_simple() {
         add 1 2
         "#,
     );
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut engine, &program.decls);
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_global_type_decls(&mut builder, &program.decls);
     let expr = program.body_with_fns().unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
 }
 
 #[tokio::test]
@@ -1019,11 +1023,11 @@ async fn eval_fn_decl_with_where_constraints() {
         my_add 1 2
         "#,
     );
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut engine, &program.decls);
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_global_type_decls(&mut builder, &program.decls);
     let expr = program.body_with_fns().unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(3).unwrap());
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(3).unwrap());
 }
 
 #[tokio::test]
@@ -1037,15 +1041,15 @@ async fn eval_adt_record_projection_single_variant() {
             (x.field1, x.field2)
         "#,
     );
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_global_type_decls(&mut builder, &program.decls);
+    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
-    let value = pval!(engine, value);
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert!(matches!(xs[0], Value::I32(1)));
             match xs[1] {
                 Value::F32(v) => assert!((v - 2.0).abs() < 1e-3),
@@ -1070,12 +1074,12 @@ async fn eval_adt_record_projection_match_arm() {
             }
         "#,
     );
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_global_type_decls(&mut engine, &program.decls);
-    let value = eval_expr(engine, program.body.as_ref().unwrap().as_ref())
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_global_type_decls(&mut builder, &program.decls);
+    let value = eval_expr(builder, program.body.as_ref().unwrap().as_ref())
         .await
         .unwrap();
-    assert_pointer_eq!(&engine.heap, value, engine.heap.alloc_i32(1).unwrap());
+    assert_pointer_eq!(value.heap(), value, value.heap().alloc_i32(1).unwrap());
 }
 
 #[tokio::test]
@@ -1091,21 +1095,37 @@ async fn eval_list_map_fold_filter() {
             (ys, zs, total)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 3);
             let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 3);
-            assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(2).unwrap());
-            assert_pointer_eq!(&engine.heap, vals[1], engine.heap.alloc_i32(3).unwrap());
-            assert_pointer_eq!(&engine.heap, vals[2], engine.heap.alloc_i32(4).unwrap());
+            assert_pointer_eq!(
+                vals[0].heap(),
+                vals[0],
+                vals[0].heap().alloc_i32(2).unwrap()
+            );
+            assert_pointer_eq!(
+                vals[1].heap(),
+                vals[1],
+                vals[1].heap().alloc_i32(3).unwrap()
+            );
+            assert_pointer_eq!(
+                vals[2].heap(),
+                vals[2],
+                vals[2].heap().alloc_i32(4).unwrap()
+            );
             let vals = list_values(&xs[1]);
             assert_eq!(vals.len(), 1);
-            assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(2).unwrap());
+            assert_pointer_eq!(
+                vals[0].heap(),
+                vals[0],
+                vals[0].heap().alloc_i32(2).unwrap()
+            );
             assert!(matches!(xs[2], Value::I32(6)));
         }
         _ => panic!("expected tuple result"),
@@ -1124,22 +1144,38 @@ async fn eval_list_flat_map_zip_unzip() {
             (xs, unzipped)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 2);
             let vals = list_values(&xs[0]);
             assert_eq!(vals.len(), 4);
-            assert_pointer_eq!(&engine.heap, vals[0], engine.heap.alloc_i32(1).unwrap());
-            assert_pointer_eq!(&engine.heap, vals[1], engine.heap.alloc_i32(1).unwrap());
-            assert_pointer_eq!(&engine.heap, vals[2], engine.heap.alloc_i32(2).unwrap());
-            assert_pointer_eq!(&engine.heap, vals[3], engine.heap.alloc_i32(2).unwrap());
+            assert_pointer_eq!(
+                vals[0].heap(),
+                vals[0],
+                vals[0].heap().alloc_i32(1).unwrap()
+            );
+            assert_pointer_eq!(
+                vals[1].heap(),
+                vals[1],
+                vals[1].heap().alloc_i32(1).unwrap()
+            );
+            assert_pointer_eq!(
+                vals[2].heap(),
+                vals[2],
+                vals[2].heap().alloc_i32(2).unwrap()
+            );
+            assert_pointer_eq!(
+                vals[3].heap(),
+                vals[3],
+                vals[3].heap().alloc_i32(2).unwrap()
+            );
             match &xs[1] {
                 Value::Tuple(parts) => {
-                    let parts = pvals!(engine, parts);
+                    let parts = pvals!(builder, parts);
                     assert_eq!(parts.len(), 2);
                     list_values(&parts[0]);
                     list_values(&parts[1]);
@@ -1164,12 +1200,12 @@ async fn eval_list_sum_mean_min_max() {
             (s, m, lo, hi)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 4);
             assert!(matches!(xs[0], Value::I32(6)));
             match xs[1] {
@@ -1199,12 +1235,12 @@ async fn eval_option_result_helpers() {
             (opt2, res, unwrapped_opt, unwrapped_res, ok, err)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 6);
             assert!(matches!(xs[0], Value::Adt(ref n, _) if n.as_ref() == "Some"));
             assert!(matches!(xs[1], Value::Adt(ref n, _) if n.as_ref() == "Ok"));
@@ -1229,17 +1265,17 @@ async fn eval_option_filter() {
             (keep, drop, empty)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 3);
             match &xs[0] {
                 Value::Adt(tag, args) if tag.as_ref() == "Some" => {
                     assert_eq!(args.len(), 1);
-                    assert!(matches!(pval!(engine, args[0].clone()), Value::I32(2)));
+                    assert!(matches!(pval!(builder, args[0].clone()), Value::I32(2)));
                 }
                 _ => panic!("expected Some 2"),
             }
@@ -1262,17 +1298,17 @@ async fn eval_option_filter_map() {
             (keep, drop, empty)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 3);
             match &xs[0] {
                 Value::Adt(tag, args) if tag.as_ref() == "Some" => {
                     assert_eq!(args.len(), 1);
-                    assert!(matches!(pval!(engine, args[0].clone()), Value::I32(3)));
+                    assert!(matches!(pval!(builder, args[0].clone()), Value::I32(3)));
                 }
                 _ => panic!("expected Some 3"),
             }
@@ -1286,14 +1322,14 @@ async fn eval_option_filter_map() {
 #[tokio::test]
 async fn eval_unwrap_errors_for_empty_option_and_err_result() {
     let none_expr = parse("(unwrap ((None is Option i32)))");
-    match eval_expr(Engine::with_prelude(()).unwrap(), none_expr.as_ref()).await {
+    match eval_expr(Builder::with_prelude(()).unwrap(), none_expr.as_ref()).await {
         Err(EngineError::Custom(msg)) => assert_eq!(msg, "called unwrap on None"),
         Err(other) => panic!("expected custom error, got {other:?}"),
         Ok(_) => panic!("expected evaluation failure"),
     }
 
     let err_expr = parse(r#"(unwrap ((Err "boom") is Result i32 string))"#);
-    match eval_expr(Engine::with_prelude(()).unwrap(), err_expr.as_ref()).await {
+    match eval_expr(Builder::with_prelude(()).unwrap(), err_expr.as_ref()).await {
         Err(EngineError::Custom(msg)) => assert_eq!(msg, "called unwrap on Err"),
         Err(other) => panic!("expected custom error, got {other:?}"),
         Ok(_) => panic!("expected evaluation failure"),
@@ -1314,12 +1350,12 @@ async fn eval_order_ops() {
             (a, b, c, d, e)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 5);
             assert!(matches!(xs[0], Value::Bool(true)));
             assert!(matches!(xs[1], Value::Bool(true)));
@@ -1344,12 +1380,12 @@ async fn eval_option_and_then_or_else() {
             (a, b, c)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 3);
             assert!(matches!(xs[0], Value::Adt(ref n, _) if n.as_ref() == "Some"));
             assert!(matches!(xs[1], Value::Adt(ref n, _) if n.as_ref() == "None"));
@@ -1373,12 +1409,12 @@ async fn eval_result_filter_pipeline() {
             (count ys, total)
         "#,
     );
-    let engine = Engine::with_prelude(()).unwrap();
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let builder = Builder::with_prelude(()).unwrap();
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 2);
             assert!(matches!(xs[0], Value::I32(3)));
             assert!(matches!(xs[1], Value::I32(5)));
@@ -1389,8 +1425,8 @@ async fn eval_result_filter_pipeline() {
 
 #[tokio::test]
 async fn eval_array_combinators() {
-    let mut engine = Engine::with_prelude(()).unwrap();
-    inject_globals(&mut engine, |module| {
+    let mut builder = Builder::with_prelude(()).unwrap();
+    inject_globals(&mut builder, |module| {
         module.export_value("arr", vec![1i32, 2i32, 3i32])
     });
     let expr = parse(
@@ -1406,15 +1442,15 @@ async fn eval_array_combinators() {
             (mapped, total, taken, skipped, unzipped)
         "#,
     );
-    let value = eval_expr(engine, expr.as_ref()).await.unwrap();
-    let value = pval!(engine, value);
+    let value = eval_expr(builder, expr.as_ref()).await.unwrap();
+    let value = pval!(builder, value);
     match value {
         Value::Tuple(xs) => {
-            let xs = pvals!(engine, xs);
+            let xs = pvals!(builder, xs);
             assert_eq!(xs.len(), 5);
             match &xs[0] {
                 Value::Array(vals) => {
-                    let vals = pvals!(engine, vals);
+                    let vals = pvals!(builder, vals);
                     assert_eq!(vals.len(), 3);
                     assert!(matches!(vals[0], Value::I32(2)));
                     assert!(matches!(vals[1], Value::I32(3)));
@@ -1425,7 +1461,7 @@ async fn eval_array_combinators() {
             assert!(matches!(xs[1], Value::I32(6)));
             match &xs[2] {
                 Value::Array(vals) => {
-                    let vals = pvals!(engine, vals);
+                    let vals = pvals!(builder, vals);
                     assert_eq!(vals.len(), 2);
                     assert!(matches!(vals[0], Value::I32(1)));
                     assert!(matches!(vals[1], Value::I32(2)));
@@ -1434,7 +1470,7 @@ async fn eval_array_combinators() {
             }
             match &xs[3] {
                 Value::Array(vals) => {
-                    let vals = pvals!(engine, vals);
+                    let vals = pvals!(builder, vals);
                     assert_eq!(vals.len(), 2);
                     assert!(matches!(vals[0], Value::I32(2)));
                     assert!(matches!(vals[1], Value::I32(3)));
@@ -1443,7 +1479,7 @@ async fn eval_array_combinators() {
             }
             match &xs[4] {
                 Value::Tuple(parts) => {
-                    let parts = pvals!(engine, parts);
+                    let parts = pvals!(builder, parts);
                     assert_eq!(parts.len(), 2);
                     match &parts[0] {
                         Value::Array(vals) => assert_eq!(vals.len(), 3),

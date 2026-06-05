@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rex_ast::Symbol;
 
 use crate::EngineError;
-use crate::value::{Handle, Heap, Pointer};
+use crate::value::{Handle, Pointer};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Environment(Arc<EnvEntry>);
@@ -13,14 +13,6 @@ pub struct Environment(Arc<EnvEntry>);
 struct EnvEntry {
     parent: Option<Environment>,
     bindings: BTreeMap<Symbol, Pointer>,
-}
-
-#[derive(Clone)]
-pub(crate) struct RootedEnvironment(Arc<RootedEnvEntry>);
-
-struct RootedEnvEntry {
-    parent: Option<RootedEnvironment>,
-    bindings: BTreeMap<Symbol, Handle>,
 }
 
 impl Environment {
@@ -97,43 +89,59 @@ impl Environment {
         *self = rebuilt.unwrap_or_default();
         Ok(())
     }
+}
 
-    fn entry_id(&self) -> usize {
-        // EnvEntry arcs are immutable, so identity is enough within one rewrite pass.
-        Arc::as_ptr(&self.0) as usize
+impl Default for Environment {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
+struct RootedEnvEntry {
+    parent: Option<RootedEnvironment>,
+    bindings: BTreeMap<Symbol, Handle>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RootedEnvironment(Arc<RootedEnvEntry>);
+
 impl RootedEnvironment {
-    pub(crate) fn from_environment(env: &Environment, heap: &Heap) -> Result<Self, EngineError> {
-        let mut rooted = HashMap::new();
-        Self::from_environment_shared(env, heap, &mut rooted)
+    pub(crate) fn new() -> Self {
+        RootedEnvironment(Arc::new(RootedEnvEntry {
+            parent: None,
+            bindings: BTreeMap::new(),
+        }))
     }
 
-    fn from_environment_shared(
-        env: &Environment,
-        heap: &Heap,
-        rooted: &mut HashMap<usize, RootedEnvironment>,
-    ) -> Result<Self, EngineError> {
-        let id = env.entry_id();
-        if let Some(existing) = rooted.get(&id) {
-            return Ok(existing.clone());
-        }
-
-        let parent = env
-            .0
-            .parent
-            .as_ref()
-            .map(|parent| Self::from_environment_shared(parent, heap, rooted))
-            .transpose()?;
+    pub(crate) fn extend(&self, name: Symbol, value: Handle) -> Self {
         let mut bindings = BTreeMap::new();
-        for (name, pointer) in &env.0.bindings {
-            bindings.insert(name.clone(), heap.handle(*pointer)?);
-        }
+        bindings.insert(name, value);
+        RootedEnvironment(Arc::new(RootedEnvEntry {
+            parent: Some(self.clone()),
+            bindings,
+        }))
+    }
 
-        let env = RootedEnvironment(Arc::new(RootedEnvEntry { parent, bindings }));
-        rooted.insert(id, env.clone());
-        Ok(env)
+    pub(crate) fn get(&self, name: &Symbol) -> Option<Handle> {
+        let mut current: Option<&RootedEnvironment> = Some(self);
+        while let Some(env) = current {
+            if let Some(v) = env.0.bindings.get(name) {
+                return Some(v.clone());
+            }
+            current = env.0.parent.as_ref();
+        }
+        None
+    }
+
+    pub(crate) fn contains(&self, name: &Symbol) -> bool {
+        let mut current: Option<&RootedEnvironment> = Some(self);
+        while let Some(env) = current {
+            if env.0.bindings.contains_key(name) {
+                return true;
+            }
+            current = env.0.parent.as_ref();
+        }
+        false
     }
 
     pub(crate) fn to_environment(&self) -> Result<Environment, EngineError> {
@@ -160,7 +168,7 @@ impl RootedEnvironment {
     }
 }
 
-impl Default for Environment {
+impl Default for RootedEnvironment {
     fn default() -> Self {
         Self::new()
     }
@@ -174,13 +182,12 @@ mod tests {
     #[test]
     fn rooted_environment_survives_copying_gc() {
         let heap = Heap::new();
-        let a = heap.alloc_ptr_i32(1).unwrap();
-        let b = heap.alloc_ptr_i32(2).unwrap();
+        let a = heap.alloc_i32(1).unwrap();
+        let b = heap.alloc_i32(2).unwrap();
 
-        let env = Environment::new()
+        let rooted = RootedEnvironment::new()
             .extend(Symbol::intern("a"), a)
             .extend(Symbol::intern("b"), b);
-        let rooted = RootedEnvironment::from_environment(&env, &heap).unwrap();
 
         heap.set_collect_on_every_alloc(true).unwrap();
         heap.alloc_ptr_i32(3).unwrap();

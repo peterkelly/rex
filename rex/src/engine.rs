@@ -1,7 +1,7 @@
 //! Compile and run Rex programs from a Rust host.
 //!
 //! This module is the main embedding API. A host creates an
-//! [`Engine`](crate::engine::Engine), injects Rex modules or Rust-backed
+//! [`Builder`](crate::engine::Builder), injects Rex modules or Rust-backed
 //! [`Module`](crate::engine::Module) exports, compiles user source into a
 //! [`CompiledProgram`](crate::engine::CompiledProgram), and runs it with an
 //! [`Evaluator`](crate::engine::Evaluator).
@@ -30,14 +30,14 @@ pub use rex_engine::MainSignature;
 /// JSON-serializable description of a compiled program's external types.
 pub use rex_engine::Manifest;
 
-/// Compile-time view of an [`Engine`] used to prepare Rex source for execution.
+/// Compile-time view of a [`Builder`] used to prepare Rex source for execution.
 pub use rex_engine::Compiler;
 
 /// Host-call context passed to dynamic native functions.
 pub use rex_engine::Context;
 
-/// Configurable Rex engine for host modules, type information, and runtime policy.
-pub use rex_engine::Engine;
+/// Builder for host modules, type information, and runtime policy.
+pub use rex_engine::Builder;
 
 /// Importer implementation that rejects every module import.
 pub use rex_engine::DenyImporter;
@@ -48,7 +48,7 @@ pub use rex_engine::EngineError;
 /// Error raised while importing or preparing modules.
 pub use rex_engine::ModuleError;
 
-/// Options used when constructing an [`Engine`].
+/// Options used when constructing a [`Builder`].
 pub use rex_engine::EngineOptions;
 
 /// Single-shot runtime used to run a compiled Rex program.
@@ -66,7 +66,7 @@ pub use rex_engine::ParallelismController;
 /// Error returned by APIs that perform both compilation and evaluation.
 pub use rex_engine::ExecutionError;
 
-/// A staged Rust-backed function export before it is injected into an [`Engine`].
+/// A staged Rust-backed function export before it is injected into a [`Builder`].
 pub use rex_engine::Export;
 
 /// Convert a Rex runtime value into a Rust value.
@@ -105,7 +105,7 @@ pub use rex_engine::NativeFuture;
 /// Name of the automatically injected Rex prelude module.
 pub use rex_engine::PRELUDE_MODULE_NAME;
 
-/// Controls whether the Rex prelude is installed when constructing an [`Engine`].
+/// Controls whether the Rex prelude is installed when constructing a [`Builder`].
 pub use rex_engine::PreludeMode;
 
 /// Internal module name used for declarations injected into the root environment.

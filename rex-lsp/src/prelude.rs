@@ -15,7 +15,7 @@ pub(crate) use rex_ast::{
 };
 pub(crate) use rex_ast::{Position as RexPosition, Span, Spanned};
 pub(crate) use rex_engine::{
-    Engine, EngineError, ImportRequest, Importer, ModuleError, ModuleExports, ModuleId,
+    Builder, EngineError, ImportRequest, Importer, ModuleError, ModuleExports, ModuleId,
     ResolvedModule, ResolvedModuleContent,
     module_semantics::{
         ImportBindingPolicy, ImportBindings, add_import_bindings, collect_pattern_bindings,

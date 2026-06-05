@@ -4,7 +4,7 @@
 evaluator passes lightweight pointers to those heap entries. The heap now includes a copying
 collector, so internal pointers can move during allocation.
 
-This gives the engine a clear separation between identity and storage without exposing raw heap
+This gives the runtime a clear separation between identity and storage without exposing raw heap
 pointers to embedders. Public API code works with rooted `Handle` values, while `Pointer` remains
 an internal representation detail.
 
@@ -33,7 +33,7 @@ Conceptually:
 - `generation` distinguishes different occupants of the same slot over time.
 - `heap_id` prevents accidental cross-heap usage.
 
-`Pointer` is intentionally crate-private. The engine validates it on access, so stale pointers and
+`Pointer` is intentionally crate-private. The runtime validates it on access, so stale pointers and
 cross-heap usage fail deterministically inside the runtime. Because collection is copying, any raw
 pointer from before a collection is stale unless it has been rewritten through a traced runtime
 structure.
@@ -70,9 +70,9 @@ Internal runtime reads/writes go through heap methods. Public construction uses
 
 ### Runtime heap lifecycle
 
-`Engine` constructs the initial `Heap` during preparation (`Engine::new`, `Engine::with_prelude`).
-When an engine is converted into a `Compiler` and then an `Evaluator`, the evaluator runtime core
-and compiler state share the same heap handle.
+`Builder` constructs the initial `Heap` during preparation (`Builder::new`, `Builder::with_prelude`).
+`Builder::build_compiler()` moves that heap handle into the `Compiler`, and
+`Compiler::into_evaluator()` then moves it into the evaluator runtime core.
 
 - Evaluation returns `Handle`, not `Value`.
 - Callers can inspect via the returned handle or allocate more values from native callbacks through
@@ -142,7 +142,7 @@ Runtime conversion traits are handle-centric:
 Public native injection paths pass handles, including module runtime exports
 (`export_native` / `export_native_async`). These callbacks receive
 `Context<State>`, so they can allocate public handles through
-`engine.heap()` and inspect host state via `engine.state()`. `Value` is used
+`ctx.heap()` and inspect host state via `ctx.state()`. `Value` is used
 where direct payload inspection is required.
 
 This keeps ownership/allocation behavior centralized in the heap while making it
