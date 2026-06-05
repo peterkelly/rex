@@ -8,10 +8,8 @@ use std::path::Path;
 
 use rex::{
     ast::{CompilationUnit, Decl, Symbol},
-    typesystem::{
-        Instance, Predicate, Scheme, Type, TypeKind, TypeSystem, prelude_typeclasses_program,
-        standard_type_system,
-    },
+    engine::{prelude_typeclasses_program, standard_type_system},
+    typesystem::{Instance, Predicate, Scheme, Type, TypeKind, TypeSystem},
 };
 
 const OUTPUT_PATH: &str = "docs/src/PRELUDE.md";

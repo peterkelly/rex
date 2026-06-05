@@ -108,8 +108,14 @@ pub use rex_engine::PRELUDE_MODULE_NAME;
 /// Controls whether the Rex prelude is installed when constructing a [`Builder`].
 pub use rex_engine::PreludeMode;
 
+/// Return the parsed Rex program that implements prelude type class methods.
+pub use rex_engine::prelude_typeclasses_program;
+
 /// Internal module name used for declarations injected into the root environment.
 pub use rex_engine::ROOT_MODULE_NAME;
+
+/// Create a typing environment with the standard Rex prelude.
+pub use rex_engine::standard_type_system;
 
 /// Importer implementation for bundled stdlib modules.
 pub use rex_engine::StdlibImporter;

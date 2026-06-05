@@ -2,9 +2,9 @@ mod common;
 
 use rex::{
     ast::CompilationUnit,
-    engine::{Builder, Module},
+    engine::{Builder, Module, standard_type_system},
     parser::parse,
-    typesystem::{infer, standard_type_system},
+    typesystem::infer,
 };
 
 #[derive(Clone)]

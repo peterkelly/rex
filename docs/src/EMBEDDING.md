@@ -549,8 +549,9 @@ match (to_list bytes) with {
 
 ```rust,ignore
 use rex::{
+    engine::standard_type_system,
     parser::parse,
-    typesystem::{infer, standard_type_system},
+    typesystem::infer,
 };
 
 let program = parse("map (\\x -> x) [1, 2, 3]").map_err(|errs| format!("{errs:?}"))?;
@@ -597,8 +598,9 @@ Users can declare new type classes and instances directly in Rex source. As the 
 
 ```rust,ignore
 use rex::{
+    engine::standard_type_system,
     parser::parse,
-    typesystem::{infer, standard_type_system},
+    typesystem::infer,
 };
 
 let code = r#"

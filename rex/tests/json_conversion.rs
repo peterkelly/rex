@@ -3,10 +3,10 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, CompileOptions, Handle, Heap, Value},
+    engine::{Builder, CompileOptions, Handle, Heap, Value, standard_type_system},
     json::{json_to_rex, rex_to_json},
     parser::parse as parse_rex,
-    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply, standard_type_system},
+    typesystem::{AdtDecl, BuiltinTypeId, Type, TypeSystem, TypeVarSupply},
 };
 use serde::Serialize;
 use serde_json::json;

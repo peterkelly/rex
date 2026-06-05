@@ -13,7 +13,7 @@ This crate implements a Hindley-Milner style type system with parametric polymor
 `rex-typesystem` does not parse or own the standard Rex prelude. The engine owns
 `rex-engine/src/prelude/typeclasses.rex`, the standard primop schemes, and
 `rex_engine::standard_type_system()`. The `rex` crate re-exports that constructor as
-`rex::typesystem::standard_type_system()`.
+`rex::engine::standard_type_system()`.
 
 ## Quickstart
 

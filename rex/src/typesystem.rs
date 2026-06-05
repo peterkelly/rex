@@ -21,12 +21,6 @@ pub use rex_typesystem::inference::infer;
 /// Infer a typed expression tree, preserving type information at each node.
 pub use rex_typesystem::inference::infer_typed;
 
-/// Return the parsed Rex program that implements prelude type class methods.
-pub use rex_engine::prelude_typeclasses_program;
-
-/// Create a typing environment with the standard Rex prelude.
-pub use rex_engine::standard_type_system;
-
 /// Structured declaration for a Rex algebraic data type.
 pub use rex_typesystem::types::AdtDecl;
 
