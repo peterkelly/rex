@@ -13,13 +13,11 @@ DeclBody           <- ImportDecl / TypeDecl / FnDecl / DeclareFnDecl / ClassDecl
 # Imports
 
 ImportDecl         <- IMPORT cut(ImportPath ImportClause? ImportAlias? label("expected `;` after import declaration", SEMI_COLON))
-ImportPath         <- RemoteImportPath / RelativeImportPath / DottedImportPath
-RemoteImportPath   <- HTTPS_URL
-DottedImportPath   <- IDENT (DOT IDENT)* HashSuffix?
-RelativeImportPath <- RelativePrefix IDENT ImportPathSegment* HashSuffix?
+ImportPath         <- RelativeImportPath / DottedImportPath
+DottedImportPath   <- IDENT (DOT IDENT)*
+RelativeImportPath <- RelativePrefix IDENT ImportPathSegment*
 RelativePrefix     <- (DOT DIV / DOT_DOT DIV)+
 ImportPathSegment  <- (DOT / DIV) IDENT
-HashSuffix         <- HASH_TAG (IDENT / INT)
 ImportClause       <- PAREN_L MUL PAREN_R / PAREN_L ImportItem (COMMA ImportItem)* PAREN_R
 ImportItem         <- ValueName (AS IDENT)?
 ImportAlias        <- AS IDENT

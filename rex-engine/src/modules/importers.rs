@@ -1,5 +1,5 @@
 use futures::future::BoxFuture;
-use rex_util::{sha256_hex, stdlib_source};
+use rex_util::stdlib_source;
 
 use crate::error::{EngineError, ModuleError};
 
@@ -19,19 +19,6 @@ impl Importer for StdlibImporter {
             let Some(source) = stdlib_source(&base) else {
                 return Ok(None);
             };
-
-            if let Some(expected) = req.expected_sha {
-                let hash = sha256_hex(source.as_bytes());
-                let expected = expected.to_ascii_lowercase();
-                if !hash.starts_with(&expected) {
-                    return Err(ModuleError::ShaMismatchStdlib {
-                        module: base,
-                        expected,
-                        actual: hash,
-                    }
-                    .into());
-                }
-            }
 
             Ok(Some(ResolvedModule {
                 id: req.module_id,

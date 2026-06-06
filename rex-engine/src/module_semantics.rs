@@ -50,13 +50,12 @@ where
             .with_importer(importer),
         None => builder.module_loader.system.import_chain(),
     };
-    let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
+    let module_id = import_specifier(&import_decl.path)?;
     let resolved = load_state
         .import(
             &chain,
             ImportRequest {
                 module_id,
-                expected_sha,
                 importer,
             },
         )

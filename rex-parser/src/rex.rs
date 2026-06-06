@@ -27,12 +27,10 @@ pub(crate) enum RexRule {
     DeclBody,
     ImportDecl,
     ImportPath,
-    RemoteImportPath,
     DottedImportPath,
     RelativeImportPath,
     RelativePrefix,
     ImportPathSegment,
-    HashSuffix,
     ImportClause,
     ImportItem,
     ImportAlias,
@@ -123,12 +121,10 @@ impl RexRule {
         Self::DeclBody,
         Self::ImportDecl,
         Self::ImportPath,
-        Self::RemoteImportPath,
         Self::DottedImportPath,
         Self::RelativeImportPath,
         Self::RelativePrefix,
         Self::ImportPathSegment,
-        Self::HashSuffix,
         Self::ImportClause,
         Self::ImportItem,
         Self::ImportAlias,
@@ -422,20 +418,11 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
             ),
             grammar_rule(
                 R::ImportPath,
-                choice([
-                    rule(R::RemoteImportPath),
-                    rule(R::RelativeImportPath),
-                    rule(R::DottedImportPath),
-                ]),
+                choice([rule(R::RelativeImportPath), rule(R::DottedImportPath)]),
             ),
-            grammar_rule(R::RemoteImportPath, tok(T::HttpsUrl)),
             grammar_rule(
                 R::DottedImportPath,
-                seq([
-                    tok(T::Ident),
-                    rep(seq([tok(T::Dot), tok(T::Ident)])),
-                    opt(rule(R::HashSuffix)),
-                ]),
+                seq([tok(T::Ident), rep(seq([tok(T::Dot), tok(T::Ident)]))]),
             ),
             grammar_rule(
                 R::RelativeImportPath,
@@ -443,7 +430,6 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
                     rule(R::RelativePrefix),
                     tok(T::Ident),
                     rep(rule(R::ImportPathSegment)),
-                    opt(rule(R::HashSuffix)),
                 ]),
             ),
             grammar_rule(
@@ -456,10 +442,6 @@ pub(crate) fn rex_grammar() -> Grammar<RexRule> {
             grammar_rule(
                 R::ImportPathSegment,
                 seq([choice([tok(T::Dot), tok(T::Div)]), tok(T::Ident)]),
-            ),
-            grammar_rule(
-                R::HashSuffix,
-                seq([tok(T::HashTag), choice([tok(T::Ident), tok(T::Int)])]),
             ),
             grammar_rule(
                 R::ImportClause,

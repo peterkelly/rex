@@ -39,7 +39,6 @@ impl ImportChain {
                 .importer
                 .import(ImportRequest {
                     module_id: req.module_id.clone(),
-                    expected_sha: req.expected_sha.clone(),
                     importer: req.importer.clone(),
                 })
                 .await?;
@@ -56,10 +55,6 @@ impl ImportChain {
 }
 
 /// Per-compile importer result cache.
-///
-/// `expected_sha` is deliberately not part of the request key because it
-/// constrains module content, not module identity. Cache hits revalidate it
-/// against the cached content hash instead of calling importers again.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ResolvedModuleCache {
     requests: BTreeMap<ImportRequestKey, ModuleId>,
@@ -79,27 +74,22 @@ impl ResolvedModuleCache {
                     "resolved module cache request pointed at missing module `{module_id}`"
                 ))
             })?;
-            validate_expected_sha(&resolved, request.expected_sha.as_deref())?;
             return Ok(resolved);
         }
 
         if request.importer.is_none()
             && let Some(resolved) = self.modules.get(&request.module_id).cloned()
         {
-            validate_expected_sha(&resolved, request.expected_sha.as_deref())?;
             self.requests.insert(key, resolved.id.clone());
             return Ok(resolved);
         }
 
-        let expected_sha = request.expected_sha.clone();
         let resolved = chain.import(request).await?;
         if let Some(cached) = self.modules.get(&resolved.id).cloned() {
-            validate_expected_sha(&cached, expected_sha.as_deref())?;
             self.requests.insert(key, cached.id.clone());
             return Ok(cached);
         }
 
-        validate_expected_sha(&resolved, expected_sha.as_deref())?;
         self.requests.insert(key, resolved.id.clone());
         self.modules.insert(resolved.id.clone(), resolved.clone());
         Ok(resolved)
@@ -119,28 +109,6 @@ impl ImportRequestKey {
             importer: request.importer.clone(),
         }
     }
-}
-
-fn validate_expected_sha(
-    resolved: &ResolvedModule,
-    expected_sha: Option<&str>,
-) -> Result<(), EngineError> {
-    let Some(expected) = expected_sha else {
-        return Ok(());
-    };
-    let Some(actual) = resolved.content_fingerprint() else {
-        return Ok(());
-    };
-    let expected = expected.to_ascii_lowercase();
-    if actual.starts_with(&expected) {
-        return Ok(());
-    }
-    Err(ModuleError::ShaMismatchModule {
-        module: resolved.id.clone(),
-        expected,
-        actual,
-    }
-    .into())
 }
 
 #[derive(Clone, Default)]

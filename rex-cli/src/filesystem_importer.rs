@@ -5,7 +5,7 @@ use rex::engine::{
     EngineError, ImportRequest, Importer, ModuleError, ModuleId, ResolvedModule,
     ResolvedModuleContent,
 };
-use rex_util::{ImportPathError, resolve_local_import_path, sha256_hex};
+use rex_util::{ImportPathError, resolve_local_import_path};
 
 #[derive(Clone, Debug)]
 pub struct FilesystemImporter {
@@ -52,7 +52,7 @@ impl Importer for FilesystemImporter {
                     return Err(ModuleError::ImportEscapesRoot.into());
                 }
             };
-            if let Some(module) = resolve_rex_file(module_id, path, req.expected_sha, "local")? {
+            if let Some(module) = resolve_rex_file(module_id, path, "local")? {
                 return Ok(Some(module));
             }
 
@@ -64,7 +64,6 @@ impl Importer for FilesystemImporter {
 fn resolve_rex_file(
     id: ModuleId,
     path: PathBuf,
-    expected_sha: Option<String>,
     kind: &'static str,
 ) -> Result<Option<ResolvedModule>, EngineError> {
     let Ok(canon) = path.canonicalize() else {
@@ -75,19 +74,6 @@ fn resolve_rex_file(
         Ok(bytes) => bytes,
         Err(_) => return Ok(None),
     };
-    let hash = sha256_hex(&bytes);
-    if let Some(expected) = expected_sha {
-        let expected = expected.to_ascii_lowercase();
-        if !hash.starts_with(&expected) {
-            return Err(ModuleError::ShaMismatchPath {
-                kind,
-                path: canon,
-                expected,
-                actual: hash,
-            }
-            .into());
-        }
-    }
     let source = String::from_utf8(bytes).map_err(|source| ModuleError::NotUtf8 {
         kind,
         path: canon.clone(),

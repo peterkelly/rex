@@ -1502,7 +1502,7 @@ mod tests {
         let grammar = parse(crate::rex::REX_PEG_GRAMMAR).unwrap();
         let rules = grammar.rules().collect::<Vec<_>>();
 
-        assert_eq!(rules.len(), 91);
+        assert_eq!(rules.len(), 89);
         assert_eq!(rules.first().unwrap().name, "CompilationUnit");
         assert_eq!(rules.last().unwrap().name, "ValueName");
     }

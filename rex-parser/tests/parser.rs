@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use rex_ast::{
-    Decl, Expr, ImportClause, ImportPath, NameRef, Pattern, Scope, Span, Symbol, TypeExpr, Var,
-    app, assert_expr_eq, b, d, f, l, s, tup, u, v,
+    Decl, Expr, ImportClause, NameRef, Pattern, Scope, Span, Symbol, TypeExpr, Var, app,
+    assert_expr_eq, b, d, f, l, s, tup, u, v,
 };
 use rex_parser::error::ParseError;
 use rex_parser::{MAX_AST_DEPTH, parse as parse_rex, span};
@@ -1526,16 +1526,10 @@ fn test_import_relative_current_dir_path() {
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
-    match &import.path {
-        ImportPath::Local { segments, sha } => {
-            assert_eq!(
-                segments,
-                &vec![Symbol::intern("foo"), Symbol::intern("bar")]
-            );
-            assert_eq!(sha, &None);
-        }
-        other => panic!("expected local import path, got {other:?}"),
-    }
+    assert_eq!(
+        import.path.segments,
+        vec![Symbol::intern("foo"), Symbol::intern("bar")]
+    );
     assert_eq!(import.alias, Symbol::intern("bar"));
 }
 
@@ -1546,21 +1540,15 @@ fn test_import_relative_parent_dir_path() {
     let Decl::Import(import) = &program.decls[0] else {
         panic!("expected import decl");
     };
-    match &import.path {
-        ImportPath::Local { segments, sha } => {
-            assert_eq!(
-                segments,
-                &vec![
-                    Symbol::intern("super"),
-                    Symbol::intern("super"),
-                    Symbol::intern("foo"),
-                    Symbol::intern("bar")
-                ]
-            );
-            assert_eq!(sha, &None);
-        }
-        other => panic!("expected local import path, got {other:?}"),
-    }
+    assert_eq!(
+        import.path.segments,
+        vec![
+            Symbol::intern("super"),
+            Symbol::intern("super"),
+            Symbol::intern("foo"),
+            Symbol::intern("bar")
+        ]
+    );
     assert_eq!(import.alias, Symbol::intern("FB"));
 }
 

@@ -25,22 +25,6 @@ pub enum ModuleError {
         path: PathBuf,
         source: std::string::FromUtf8Error,
     },
-    ShaMismatchStdlib {
-        module: String,
-        expected: String,
-        actual: String,
-    },
-    ShaMismatchModule {
-        module: ModuleId,
-        expected: String,
-        actual: String,
-    },
-    ShaMismatchPath {
-        kind: &'static str,
-        path: PathBuf,
-        expected: String,
-        actual: String,
-    },
     MissingExport {
         module: Symbol,
         export: Symbol,
@@ -87,32 +71,6 @@ impl std::fmt::Display for ModuleError {
                     path.display()
                 )
             }
-            ModuleError::ShaMismatchStdlib {
-                module,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "sha mismatch for `{module}`: expected #{expected}, got #{actual}"
-            ),
-            ModuleError::ShaMismatchModule {
-                module,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "module import sha mismatch for {module}: expected #{expected}, got #{actual}"
-            ),
-            ModuleError::ShaMismatchPath {
-                kind,
-                path,
-                expected,
-                actual,
-            } => write!(
-                f,
-                "{kind} import sha mismatch for {}: expected #{expected}, got #{actual}",
-                path.display()
-            ),
             ModuleError::MissingExport { module, export } => {
                 write!(f, "module `{module}` does not export `{export}`")
             }

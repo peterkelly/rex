@@ -190,35 +190,13 @@ impl AstBuilder {
         &mut self,
         node: &CstNode<RexRule>,
     ) -> Result<(ImportPath, Option<Symbol>), ParseError> {
-        if let Some(remote) = first_rule(node, RexRule::RemoteImportPath) {
-            let token = expect_token(remote, TokenKind::HttpsUrl)?;
-            let Token::HttpsUrl(url, ..) = token else {
-                return Err(internal_err(remote.span, "expected URL token"));
-            };
-            let (base_url, sha) = match url.split_once('#') {
-                Some((a, b)) if !b.is_empty() => (a.to_string(), Some(b.to_string())),
-                _ => (url.clone(), None),
-            };
-            let alias = base_url
-                .rsplit('/')
-                .next()
-                .unwrap_or("")
-                .trim_end_matches(".rex")
-                .to_string();
-            return Ok((
-                ImportPath::Remote { url: base_url, sha },
-                (!alias.is_empty()).then(|| Symbol::intern(&alias)),
-            ));
-        }
-
         if let Some(dotted) = first_rule(node, RexRule::DottedImportPath) {
             let mut segments = Vec::new();
             for token in direct_tokens(dotted, TokenKind::Ident) {
                 segments.push(Symbol::intern(&ident_text(token)?));
             }
-            let sha = first_rule(dotted, RexRule::HashSuffix).map_or(Ok(None), hash_suffix)?;
             let alias = segments.last().cloned();
-            return Ok((ImportPath::Local { segments, sha }, alias));
+            return Ok((ImportPath { segments }, alias));
         }
 
         let relative = expect_rule(node, RexRule::RelativeImportPath)?;
@@ -242,9 +220,8 @@ impl AstBuilder {
                 _ => {}
             }
         }
-        let sha = first_rule(relative, RexRule::HashSuffix).map_or(Ok(None), hash_suffix)?;
         let alias = segments.last().cloned();
-        Ok((ImportPath::Local { segments, sha }, alias))
+        Ok((ImportPath { segments }, alias))
     }
 
     fn import_clause(&mut self, node: &CstNode<RexRule>) -> Result<ImportClause, ParseError> {
@@ -1300,20 +1277,6 @@ fn make_binary_expr(lhs: Expr, operator: &Token, rhs: Expr) -> Expr {
         )),
         Arc::new(rhs),
     )
-}
-
-fn hash_suffix(node: &CstNode<RexRule>) -> Result<Option<String>, ParseError> {
-    for token in node.children.iter().filter_map(|child| match child {
-        Cst::Token(token) => Some(token),
-        _ => None,
-    }) {
-        match token {
-            Token::Ident(value, ..) => return Ok(Some(value.clone())),
-            Token::Int(value, ..) => return Ok(Some(value.to_string())),
-            _ => {}
-        }
-    }
-    Ok(None)
 }
 
 fn expect_binary_operator(node: &CstNode<RexRule>) -> Result<&Token, ParseError> {

@@ -75,12 +75,8 @@ pub fn prepare_program_with_imports(
         };
         let import_span = *span;
 
-        let ImportPath::Local { segments, .. } = path else {
-            // LSP does not attempt network fetches; leave remote imports unresolved.
-            continue;
-        };
-
-        let module_name = segments
+        let module_name = path
+            .segments
             .iter()
             .map(|s| s.as_ref())
             .collect::<Vec<_>>()

@@ -1307,14 +1307,13 @@ where
     C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
-        let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
+        let module_id = import_specifier(&import_decl.path)?;
         let imported = load_state
             .resolved_modules
             .import(
                 chain,
                 ImportRequest {
                     module_id,
-                    expected_sha,
                     importer,
                 },
             )
@@ -1412,14 +1411,13 @@ where
 
             let imports = graph_imports_for_program(&program, engine.default_imports());
             for import_decl in imports {
-                let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
+                let module_id = import_specifier(&import_decl.path)?;
                 let imported = load_state
                     .resolved_modules
                     .import(
                         chain,
                         ImportRequest {
                             module_id,
-                            expected_sha,
                             importer: Some(resolved.id.clone()),
                         },
                     )

@@ -8,7 +8,7 @@ use rex_ast::{
 };
 use rex_parser::parse as parse_rex;
 
-use crate::{ModuleError, builder::qualify::collect_local_renames, error::EngineError};
+use crate::{builder::qualify::collect_local_renames, error::EngineError};
 
 pub(crate) mod importers;
 pub(crate) mod module;
@@ -32,22 +32,14 @@ pub(crate) use types::{module_key_for_module, prefix_for_module};
 pub const ROOT_MODULE_NAME: &str = "__root__";
 pub const PRELUDE_MODULE_NAME: &str = "std.prelude";
 
-pub fn import_specifier(path: &ImportPath) -> Result<(ModuleId, Option<String>), EngineError> {
-    match path {
-        ImportPath::Local { segments, sha } => {
-            let id = ModuleId::from_segments(
-                segments
-                    .iter()
-                    .map(|segment| segment.as_ref().to_string())
-                    .collect::<Vec<_>>(),
-            )?;
-            Ok((id, sha.clone()))
-        }
-        ImportPath::Remote { url, .. } => Err(ModuleError::ImportsDisabled {
-            module_name: url.clone(),
-        }
-        .into()),
-    }
+pub fn import_specifier(path: &ImportPath) -> Result<ModuleId, EngineError> {
+    let id = ModuleId::from_segments(
+        path.segments
+            .iter()
+            .map(|segment| segment.as_ref().to_string())
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(id)
 }
 
 pub fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
@@ -69,10 +61,7 @@ pub fn default_import_decl(module_name: &str) -> ImportDecl {
     ImportDecl {
         span: Span::default(),
         is_pub: false,
-        path: ImportPath::Local {
-            segments,
-            sha: None,
-        },
+        path: ImportPath { segments },
         alias,
         clause: Some(ImportClause::All),
     }

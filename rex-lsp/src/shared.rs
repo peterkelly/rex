@@ -207,21 +207,14 @@ impl LspModuleService {
         self.module_paths.get(id).cloned()
     }
 
-    fn import_specifier(
-        path: &ImportPath,
-    ) -> Result<Option<(ModuleId, Option<String>)>, EngineError> {
-        match path {
-            ImportPath::Local { segments, sha } => {
-                let id = ModuleId::from_segments(
-                    segments
-                        .iter()
-                        .map(|segment| segment.as_ref().to_string())
-                        .collect::<Vec<_>>(),
-                )?;
-                Ok(Some((id, sha.clone())))
-            }
-            ImportPath::Remote { .. } => Ok(None),
-        }
+    fn import_specifier(path: &ImportPath) -> Result<ModuleId, EngineError> {
+        let id = ModuleId::from_segments(
+            path.segments
+                .iter()
+                .map(|segment| segment.as_ref().to_string())
+                .collect::<Vec<_>>(),
+        )?;
+        Ok(id)
     }
 
     pub(crate) fn load_import_path(
@@ -229,18 +222,15 @@ impl LspModuleService {
         uri: &Url,
         path: &ImportPath,
     ) -> Result<Option<LspLoadedModule>, EngineError> {
-        let Some((module_id, expected_sha)) = Self::import_specifier(path)? else {
-            return Ok(None);
-        };
+        let module_id = Self::import_specifier(path)?;
         self.load_request(ImportRequest {
             module_id,
-            expected_sha,
             importer: uri_to_file_path(uri).and_then(|path| module_id_from_path(&path)),
         })
     }
 
     fn load_request(&self, req: ImportRequest) -> Result<Option<LspLoadedModule>, EngineError> {
-        if let Some(module) = self.load_stdlib(req.module_id.clone(), req.expected_sha.clone())? {
+        if let Some(module) = self.load_stdlib(req.module_id.clone())? {
             return Ok(Some(module));
         }
 
@@ -274,30 +264,14 @@ impl LspModuleService {
                 .into());
             }
         };
-        self.load_path(resolved_id, path, req.expected_sha, "local")
+        self.load_path(resolved_id, path, "local")
     }
 
-    fn load_stdlib(
-        &self,
-        module_id: ModuleId,
-        expected_sha: Option<String>,
-    ) -> Result<Option<LspLoadedModule>, EngineError> {
+    fn load_stdlib(&self, module_id: ModuleId) -> Result<Option<LspLoadedModule>, EngineError> {
         let module_name = module_id.to_string();
         let Some(source) = stdlib_source(&module_name) else {
             return Ok(None);
         };
-        let hash = sha256_hex(source.as_bytes());
-        if let Some(expected) = expected_sha {
-            let expected = expected.to_ascii_lowercase();
-            if !hash.starts_with(&expected) {
-                return Err(ModuleError::ShaMismatchStdlib {
-                    module: module_name.to_string(),
-                    expected,
-                    actual: hash,
-                }
-                .into());
-            }
-        }
         Ok(Some(LspLoadedModule {
             id: module_id,
             path: None,
@@ -309,12 +283,9 @@ impl LspModuleService {
         &self,
         id: ModuleId,
         path: PathBuf,
-        expected_sha: Option<String>,
         kind: &'static str,
     ) -> Result<Option<LspLoadedModule>, EngineError> {
-        if let Some(module) =
-            self.load_open_document(id.clone(), &path, expected_sha.as_deref(), kind)?
-        {
+        if let Some(module) = self.load_open_document(id.clone(), &path, kind)? {
             return Ok(Some(module));
         }
 
@@ -322,9 +293,7 @@ impl LspModuleService {
             return Ok(None);
         };
 
-        if let Some(module) =
-            self.load_open_document(id.clone(), &canon, expected_sha.as_deref(), kind)?
-        {
+        if let Some(module) = self.load_open_document(id.clone(), &canon, kind)? {
             return Ok(Some(module));
         }
 
@@ -332,15 +301,13 @@ impl LspModuleService {
             Ok(bytes) => bytes,
             Err(_) => return Ok(None),
         };
-        self.loaded_from_bytes(id, canon, bytes, expected_sha.as_deref(), kind)
-            .map(Some)
+        self.loaded_from_bytes(id, canon, bytes, kind).map(Some)
     }
 
     fn load_open_document(
         &self,
         id: ModuleId,
         path: &Path,
-        expected_sha: Option<&str>,
         kind: &'static str,
     ) -> Result<Option<LspLoadedModule>, EngineError> {
         let Some(url) = url_from_file_path(path) else {
@@ -349,7 +316,7 @@ impl LspModuleService {
         let Some(source) = self.open_documents.get(&url).cloned() else {
             return Ok(None);
         };
-        self.loaded_from_source(id, path.to_path_buf(), source, expected_sha, kind)
+        self.loaded_from_source(id, path.to_path_buf(), source, kind)
             .map(Some)
     }
 
@@ -358,11 +325,8 @@ impl LspModuleService {
         id: ModuleId,
         path: PathBuf,
         bytes: Vec<u8>,
-        expected_sha: Option<&str>,
         kind: &'static str,
     ) -> Result<LspLoadedModule, EngineError> {
-        let hash = sha256_hex(&bytes);
-        self.check_path_hash(&path, &hash, expected_sha, kind)?;
         let source = String::from_utf8(bytes).map_err(|source| ModuleError::NotUtf8 {
             kind,
             path: path.clone(),
@@ -380,39 +344,13 @@ impl LspModuleService {
         id: ModuleId,
         path: PathBuf,
         source: String,
-        expected_sha: Option<&str>,
-        kind: &'static str,
+        _kind: &'static str,
     ) -> Result<LspLoadedModule, EngineError> {
-        let hash = sha256_hex(source.as_bytes());
-        self.check_path_hash(&path, &hash, expected_sha, kind)?;
         Ok(LspLoadedModule {
             id,
             path: Some(path),
             source,
         })
-    }
-
-    fn check_path_hash(
-        &self,
-        path: &Path,
-        hash: &str,
-        expected_sha: Option<&str>,
-        kind: &'static str,
-    ) -> Result<(), EngineError> {
-        let Some(expected) = expected_sha else {
-            return Ok(());
-        };
-        let expected = expected.to_ascii_lowercase();
-        if hash.starts_with(&expected) {
-            return Ok(());
-        }
-        Err(ModuleError::ShaMismatchPath {
-            kind,
-            path: path.to_path_buf(),
-            expected,
-            actual: hash.to_string(),
-        }
-        .into())
     }
 }
 

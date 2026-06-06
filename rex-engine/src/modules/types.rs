@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_typesystem::types::Type;
-use rex_util::sha256_hex;
 
 use crate::{Handle, modules::ModuleId};
 
@@ -13,7 +12,6 @@ use crate::{Handle, modules::ModuleId};
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ImportRequest {
     pub module_id: ModuleId,
-    pub expected_sha: Option<String>,
     pub importer: Option<ModuleId>,
 }
 
@@ -21,7 +19,6 @@ impl ImportRequest {
     pub fn new(module_id: ModuleId) -> Self {
         Self {
             module_id,
-            expected_sha: None,
             importer: None,
         }
     }
@@ -29,14 +26,8 @@ impl ImportRequest {
     pub fn with_importer(module_id: ModuleId, importer: ModuleId) -> Self {
         Self {
             module_id,
-            expected_sha: None,
             importer: Some(importer),
         }
-    }
-
-    pub fn with_expected_sha(mut self, expected_sha: Option<String>) -> Self {
-        self.expected_sha = expected_sha;
-        self
     }
 }
 
@@ -61,19 +52,6 @@ pub enum ResolvedModuleContent {
 pub struct ResolvedModule {
     pub id: ModuleId,
     pub content: ResolvedModuleContent,
-}
-
-impl ResolvedModule {
-    fn source_fingerprint(source: &str) -> String {
-        sha256_hex(source.as_bytes())
-    }
-
-    pub(crate) fn content_fingerprint(&self) -> Option<String> {
-        match &self.content {
-            ResolvedModuleContent::Source(source) => Some(Self::source_fingerprint(source)),
-            ResolvedModuleContent::CompilationUnit(_) => None,
-        }
-    }
 }
 
 /// Deterministic compact key derived from a [`ModuleId`].

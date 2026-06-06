@@ -471,16 +471,8 @@ pub struct InstanceDecl {
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ImportPath {
-    Local {
-        segments: Vec<Symbol>,
-        sha: Option<String>,
-    },
-    Remote {
-        url: String,
-        sha: Option<String>,
-    },
+pub struct ImportPath {
+    pub segments: Vec<Symbol>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]

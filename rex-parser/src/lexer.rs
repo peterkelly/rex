@@ -86,7 +86,6 @@ pub enum Token {
     CommentL(Span),
     CommentR(Span),
     DotDot(Span),
-    HashTag(Span),
     In(Span),
     Let(Span),
     Rec(Span),
@@ -104,7 +103,6 @@ pub enum Token {
     String(String, Span),
 
     // Idents
-    HttpsUrl(String, Span),
     Ident(String, Span),
 
     // Eof
@@ -411,8 +409,6 @@ impl Token {
                     Token::Comma(span)
                 } else if capture.name("DotDot").is_some() {
                     Token::DotDot(span)
-                } else if capture.name("HashTag").is_some() {
-                    Token::HashTag(span)
                 } else if capture.name("In").is_some() {
                     Token::In(span)
                 } else if capture.name("Let").is_some() {
@@ -507,9 +503,6 @@ impl Token {
                 }
 
                 // Idents
-                else if let Some(m) = capture.name("HttpsUrl") {
-                    Token::HttpsUrl(m.as_str().to_string(), span)
-                }
                 else if let Some(m) = capture.name("Ident") {
                     Token::Ident(m.as_str().to_string(), span)
                 }
@@ -571,7 +564,6 @@ impl Token {
                 r"(?P<Colon>:)|",
                 r"(?P<Comma>,)|",
                 r"(?P<DotDot>\.\.)|",
-                r"(?P<HashTag>\#)|",
                 r"(?P<In>\bin\b)|",   // Added word boundaries
                 r"(?P<Let>\blet\b)|", // Added word boundaries
                 r"(?P<Rec>\brec\b)|",
@@ -607,8 +599,6 @@ impl Token {
                 r"(?P<Null>\bnull\b)|",
                 r#""(?P<DoubleString>(\\"|[^"])*)"|"#,
                 r#"'(?P<SingleString>(\\'|[^'])*)'|"#,
-                // URL-ish bare tokens (used by module imports)
-                r"(?P<HttpsUrl>https://[^\s]+)|",
                 // Idents
                 r"(?P<Ident>[_a-zA-Z]([_a-zA-Z]|[0-9])*)|",
                 // Unexpected
@@ -633,7 +623,7 @@ impl Token {
             Eq(..) | Ne(..) | Lt(..) | Le(..) | Gt(..) | Ge(..) => Precedence(3),
             Add(..) | Sub(..) | Concat(..) => Precedence(4),
             Mul(..) | Div(..) | Mod(..) => Precedence(5),
-            Ident(..) | HttpsUrl(..) => Precedence::highest(),
+            Ident(..) => Precedence::highest(),
             _ => Precedence::lowest(),
         }
     }
@@ -686,7 +676,6 @@ impl Spanned for Token {
             CommentR(span, ..) => *span,
             Dot(span, ..) => *span,
             DotDot(span, ..) => *span,
-            HashTag(span, ..) => *span,
             In(span, ..) => *span,
             Let(span, ..) => *span,
             Rec(span, ..) => *span,
@@ -720,7 +709,6 @@ impl Spanned for Token {
             String(_, span, ..) => *span,
 
             // Idents
-            HttpsUrl(_, span, ..) => *span,
             Ident(_, span, ..) => *span,
 
             // Eof
@@ -770,7 +758,6 @@ impl Display for Token {
             CommentR(..) => write!(f, "*/"),
             Dot(..) => write!(f, "."),
             DotDot(..) => write!(f, ".."),
-            HashTag(..) => write!(f, "#"),
             In(..) => write!(f, "in"),
             Let(..) => write!(f, "let"),
             Rec(..) => write!(f, "rec"),
@@ -804,7 +791,6 @@ impl Display for Token {
             String(x, ..) => write!(f, "{}", x),
 
             // Idents
-            HttpsUrl(url, ..) => write!(f, "{}", url),
             Ident(ident, ..) => write!(f, "{}", ident),
 
             // Eof
