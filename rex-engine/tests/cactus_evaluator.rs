@@ -1,7 +1,7 @@
 use futures::{FutureExt, channel::oneshot};
 use rex_engine::{
-    AsyncCallExecutor, AsyncCallPolicy, Builder, EngineError, ExecutionBounds, FromRex, Handle,
-    Module, NativeAsyncPermit, NativeFuture, ParallelismController,
+    AsyncCallExecutor, AsyncCallPolicy, Builder, CompileOptions, EngineError, ExecutionBounds,
+    FromRex, Handle, Module, NativeAsyncPermit, NativeFuture, ParallelismController,
 };
 use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{BuiltinTypeId, Scheme, Type};
@@ -23,7 +23,7 @@ where
     let compiler = builder.build_compiler();
     let parsed = parse_rex(source).unwrap();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await?;
     let typ = program.result_type().clone();
     let value = evaluator.run(program, Default::default()).await?;

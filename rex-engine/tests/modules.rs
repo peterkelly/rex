@@ -34,8 +34,16 @@ fn write_file(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
 }
 
-#[derive(Clone, Default)]
-struct TestFilesystemImporter;
+#[derive(Clone)]
+struct TestFilesystemImporter {
+    root: PathBuf,
+}
+
+impl TestFilesystemImporter {
+    fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+}
 
 impl Importer for TestFilesystemImporter {
     fn import<'a>(
@@ -43,31 +51,24 @@ impl Importer for TestFilesystemImporter {
         req: ImportRequest,
     ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
         Box::pin(async move {
-            let (module_name, expected_sha) = match req.module_name.split_once('#') {
-                Some((base, sha)) if !sha.is_empty() => (base.to_string(), Some(sha.to_string())),
-                _ => (req.module_name, None),
+            let module_id = match req.importer.as_ref().and_then(ModuleId::parent) {
+                Some(parent) => parent.join(&req.module_id),
+                None => req.module_id.clone(),
             };
-
-            if module_name.ends_with(".rex") || Path::new(&module_name).components().count() > 1 {
-                return resolve_rex_file(PathBuf::from(module_name), expected_sha, "local");
-            }
-
-            let segs: Vec<&str> = module_name.split('.').collect();
-            let base_dir = match req.importer {
-                Some(ModuleId::Local { path }) => path.parent().map(|p| p.to_path_buf()),
-                _ => std::env::current_dir().ok(),
-            };
-            if let Some(base_dir) = base_dir {
-                let path = match resolve_local_import_path(base_dir.as_path(), &segs) {
-                    Ok(Some(path)) => path,
-                    Ok(None) => return Ok(None),
-                    Err(ImportPathError::EscapesRoot) => {
-                        return Err(ModuleError::ImportEscapesRoot.into());
-                    }
-                };
-                if let Some(module) = resolve_rex_file(path, expected_sha.clone(), "local")? {
-                    return Ok(Some(module));
+            let segs = module_id
+                .segments()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            let path = match resolve_local_import_path(self.root.as_path(), &segs) {
+                Ok(Some(path)) => path,
+                Ok(None) => return Ok(None),
+                Err(ImportPathError::EscapesRoot) => {
+                    return Err(ModuleError::ImportEscapesRoot.into());
                 }
+            };
+            if let Some(module) = resolve_rex_file(module_id, path, req.expected_sha, "local")? {
+                return Ok(Some(module));
             }
 
             Ok(None)
@@ -76,6 +77,7 @@ impl Importer for TestFilesystemImporter {
 }
 
 fn resolve_rex_file(
+    id: ModuleId,
     path: PathBuf,
     expected_sha: Option<String>,
     kind: &'static str,
@@ -106,7 +108,7 @@ fn resolve_rex_file(
         source,
     })?;
     Ok(Some(ResolvedModule {
-        id: ModuleId::Local { path: canon },
+        id,
         content: ResolvedModuleContent::Source(source),
     }))
 }
@@ -159,7 +161,7 @@ async fn prelude_module_can_be_imported_explicitly() {
     let (value_ptr, ty) = run_snippet(
         builder,
         r#"
-        import Prelude (map);
+        import std.prelude (map);
         map ((+) 1) [1, 2]
         "#,
     )
@@ -198,7 +200,11 @@ async fn eval_module_via_fs<State: Clone + Send + Sync + 'static>(
     builder: Builder<State>,
     path: &Path,
 ) -> Result<(Handle, Type), EngineError> {
-    eval_module_via_importer(builder, path, Arc::new(TestFilesystemImporter)).await
+    let root = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    eval_module_via_importer(builder, path, Arc::new(TestFilesystemImporter::new(root))).await
 }
 
 async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
@@ -213,9 +219,8 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
     builder.add_importer("test-fs", importer);
     let compiler = builder.build_compiler();
     let parsed = parse_rex(&source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
-    let (program, evaluator) = compiler
-        .compile_program(&parsed, CompileOptions::default().with_importer_path(path))
-        .await?;
+    let options = CompileOptions::new(module_id_for_path(path)?);
+    let (program, evaluator) = compiler.compile_program(&parsed, options).await?;
     let typ = program.result_type().clone();
     let value = evaluator.run(program, Default::default()).await?;
     Ok((value, typ))
@@ -227,9 +232,8 @@ async fn run_snippet<State: Clone + Send + Sync + 'static>(
 ) -> Result<(Handle, Type), EngineError> {
     let compiler = builder.build_compiler();
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
-    let (program, evaluator) = compiler
-        .compile_program(&parsed, CompileOptions::default())
-        .await?;
+    let options = CompileOptions::for_module("snippet")?;
+    let (program, evaluator) = compiler.compile_program(&parsed, options).await?;
     let typ = program.result_type().clone();
     let value = evaluator.run(program, Default::default()).await?;
     Ok((value, typ))
@@ -241,18 +245,27 @@ async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
     importer_path: impl AsRef<Path>,
 ) -> Result<(Handle, Type), EngineError> {
     let mut builder = builder;
-    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
+    let importer_path = importer_path.as_ref();
+    let root = importer_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter::new(root)));
     let compiler = builder.build_compiler();
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
-    let (program, evaluator) = compiler
-        .compile_program(
-            &parsed,
-            CompileOptions::default().with_importer_path(importer_path.as_ref()),
-        )
-        .await?;
+    let options = CompileOptions::new(module_id_for_path(importer_path)?);
+    let (program, evaluator) = compiler.compile_program(&parsed, options).await?;
     let typ = program.result_type().clone();
     let value = evaluator.run(program, Default::default()).await?;
     Ok((value, typ))
+}
+
+fn module_id_for_path(path: &Path) -> Result<ModuleId, EngineError> {
+    let name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| EngineError::Internal(format!("invalid module path: {}", path.display())))?;
+    Ok(ModuleId::parse(name)?)
 }
 
 macro_rules! pvals {
@@ -305,13 +318,13 @@ async fn snippet_import_observes_local_module_changes_with_new_compiler() {
 
     write_file(&module, "pub fn value x: i32 -> i32 = x + 1;");
     let mut builder = builder_with_prelude();
-    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
+    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter::new(&dir)));
 
     let compiler = builder.build_compiler();
 
     let source = "import foo (value);\nvalue 0";
     let parsed = parse_rex(source).unwrap();
-    let options = CompileOptions::default().with_importer_path(importer.as_path());
+    let options = CompileOptions::new(module_id_for_path(&importer).unwrap());
     let _ = compiler
         .compile_program(&parsed, options.clone())
         .await
@@ -321,7 +334,7 @@ async fn snippet_import_observes_local_module_changes_with_new_compiler() {
     // observed without relying on stale cache invalidation.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
     let mut builder = builder_with_prelude();
-    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
+    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter::new(&dir)));
     let compiler = builder.build_compiler();
     let (program, evaluator) = compiler.compile_program(&parsed, options).await.unwrap();
     let ty = program.result_type().clone();

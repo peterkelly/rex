@@ -212,7 +212,7 @@ where
             return Ok(());
         }
 
-        let module_id = ModuleId::Virtual(module_name.clone());
+        let module_id = ModuleId::parse(&module_name)?;
 
         let mut decls = module.decls.clone();
         decls.extend(
@@ -254,9 +254,9 @@ where
         self.module_loader
             .system
             .prepend_importer(Arc::new(StaticModuleImporter {
-                module_name: module_name.clone(),
+                module_id: module_id.clone(),
                 resolved: ResolvedModule {
-                    id: ModuleId::Virtual(module_name.clone()),
+                    id: module_id,
                     content: ResolvedModuleContent::CompilationUnit(compilation_unit.clone()),
                 },
             }));
@@ -767,7 +767,7 @@ where
 
 #[derive(Clone)]
 pub(crate) struct StaticModuleImporter {
-    pub(crate) module_name: String,
+    pub(crate) module_id: ModuleId,
     pub(crate) resolved: ResolvedModule,
 }
 
@@ -777,12 +777,7 @@ impl Importer for StaticModuleImporter {
         req: ImportRequest,
     ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
         Box::pin(async move {
-            let requested = req
-                .module_name
-                .split_once('#')
-                .map(|(base, _)| base)
-                .unwrap_or(req.module_name.as_str());
-            if requested != self.module_name {
+            if req.module_id != self.module_id {
                 return Ok(None);
             }
             Ok(Some(self.resolved.clone()))

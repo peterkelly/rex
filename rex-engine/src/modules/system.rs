@@ -35,7 +35,8 @@ impl ImportChain {
             let resolved = entry
                 .importer
                 .import(ImportRequest {
-                    module_name: req.module_name.clone(),
+                    module_id: req.module_id.clone(),
+                    expected_sha: req.expected_sha.clone(),
                     importer: req.importer.clone(),
                 })
                 .await?;
@@ -45,7 +46,7 @@ impl ImportChain {
             }
         }
         Err(ModuleError::NotFound {
-            module_name: req.module_name,
+            module_name: req.module_id.to_string(),
         }
         .into())
     }

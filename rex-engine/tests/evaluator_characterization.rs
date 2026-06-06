@@ -1,5 +1,5 @@
 use rex_ast::Symbol;
-use rex_engine::{Builder, EngineError, Handle};
+use rex_engine::{Builder, CompileOptions, EngineError, Handle};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::types::{BuiltinTypeId, Type, TypeKind};
 
@@ -7,7 +7,7 @@ async fn run_snippet(builder: Builder, source: &str) -> Result<(Handle, Type), E
     let compiler = builder.build_compiler();
     let parsed = parse_rex(source).unwrap();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await?;
     let typ = program.result_type().clone();
     let value = evaluator.run(program, Default::default()).await?;
@@ -19,7 +19,7 @@ async fn owning_evaluator_resources_can_be_kept_after_run() {
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let parsed = parse_rex("(7 is i32)").unwrap();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await
         .unwrap();
     let type_system = evaluator.type_system();

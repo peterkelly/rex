@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use rex_ast::{CompilationUnit, Decl, Expr, Symbol};
-use rex_engine::{Builder, EngineError, Module, Value, registry_markdown};
+use rex_engine::{Builder, CompileOptions, EngineError, Module, Value, registry_markdown};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -26,6 +26,10 @@ fn strip_span(mut err: TypeError) -> TypeError {
 fn builder_with_arith() -> Builder {
     Builder::with_prelude(()).unwrap()
 }
+
+fn compile_options() -> CompileOptions {
+    CompileOptions::for_module("test.main").unwrap()
+}
 fn inject_globals(
     builder: &mut Builder,
     build: impl FnOnce(&mut Module<()>) -> Result<(), EngineError>,
@@ -47,9 +51,9 @@ fn registry_markdown_lists_core_sections() {
     assert!(doc.contains("## Functions and Values"));
     assert!(doc.contains("## Type Classes"));
     assert!(doc.contains("## Native Implementations"));
-    assert!(doc.contains("[`virtual:Prelude`](#module-virtual-prelude)"));
-    assert!(doc.contains("<a id=\"module-virtual-prelude\"></a>"));
-    assert!(doc.contains("### `virtual:Prelude`"));
+    assert!(doc.contains("[`std.prelude`](#module-std-prelude)"));
+    assert!(doc.contains("<a id=\"module-std-prelude\"></a>"));
+    assert!(doc.contains("### `std.prelude`"));
     assert!(doc.contains("`List`"));
     assert!(doc.contains("`Option`"));
 }
@@ -58,7 +62,7 @@ fn registry_markdown_lists_core_sections() {
 async fn compile_program_rejects_declaration_only_input() {
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let program = parse_program("fn id<a> x: a -> a = x;");
-    let err = match compiler.compile_program(&program, Default::default()).await {
+    let err = match compiler.compile_program(&program, compile_options()).await {
         Ok(_) => panic!("declaration-only program unexpectedly compiled"),
         Err(err) => err,
     };
@@ -71,7 +75,7 @@ async fn compile_program_uses_explicit_main_signature_and_runtime_inputs() {
     let program = parse_program("fn main x: i32 -> y: i32 -> i32 = x + y;");
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await
         .unwrap();
 
@@ -97,7 +101,7 @@ async fn compile_program_handles_gc_during_compile_and_main_input_application() 
     let compiler = builder.build_compiler();
     let program = parse_program("fn main x: i32 -> i32 = x + 1;");
     let (compiled, evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await
         .unwrap();
     let mut inputs = BTreeMap::new();
@@ -111,7 +115,7 @@ async fn compile_program_preserves_function_results_from_main() {
     let program = parse_program("fn main x: i32 -> i32 -> i32 = \\ y -> x + y;");
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let (compiled, _evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await
         .unwrap();
 
@@ -133,7 +137,7 @@ async fn compile_program_treats_final_expression_as_zero_input_main() {
     let program = parse_program("1 + 2");
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await
         .unwrap();
 
@@ -147,7 +151,7 @@ async fn compile_program_treats_final_expression_as_zero_input_main() {
 async fn compile_program_rejects_main_plus_final_expression() {
     let program = parse_program("fn main x: i32 -> i32 = x;\n2");
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
-    let err = match compiler.compile_program(&program, Default::default()).await {
+    let err = match compiler.compile_program(&program, compile_options()).await {
         Ok(_) => panic!("main plus final expression unexpectedly compiled"),
         Err(err) => err,
     };
@@ -160,7 +164,7 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
     let program = parse_program("fn main x: i32 -> i32 = x;");
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await
         .unwrap();
     let err = evaluator
@@ -176,7 +180,7 @@ async fn evaluator_rejects_missing_or_extra_main_inputs() {
 
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await
         .unwrap();
     let mut inputs = BTreeMap::new();
@@ -276,7 +280,7 @@ async fn injected_module_can_define_pub_adt_declarations() {
             "#,
     );
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, compile_options())
         .await
         .unwrap();
     let value = evaluator.run(program, Default::default()).await.unwrap();
@@ -301,7 +305,7 @@ async fn export_value_registers_global_value() {
         body: Some(expr),
     };
     let (compiled, evaluator) = compiler
-        .compile_program(&body_program, Default::default())
+        .compile_program(&body_program, compile_options())
         .await
         .unwrap();
     let ty = compiled.result_type().clone();
@@ -331,7 +335,7 @@ async fn record_update_requires_known_variant_for_sum_types() {
         body: program.body.clone(),
     };
     match compiler
-        .compile_program(&body_program, Default::default())
+        .compile_program(&body_program, compile_options())
         .await
     {
         Err(err) => {

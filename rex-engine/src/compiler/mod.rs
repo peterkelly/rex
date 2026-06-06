@@ -1,12 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
 use rex_ast::{CompilationUnit, Expr, FnDecl, Var};
 use rex_typesystem::types::{Predicate, Type, TypeKind, TypedExpr};
 use rex_typesystem::typesystem::TypeSystem;
-use uuid::Uuid;
 
 use crate::{
     EngineError, Evaluator,
@@ -29,25 +27,20 @@ pub(crate) mod program;
 pub(crate) mod type_check;
 
 /// Options for compiling an already parsed Rex program.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct CompileOptions {
-    /// Path used to resolve relative imports in the program.
-    pub importer_path: Option<PathBuf>,
-    /// Source identity used to qualify top-level declarations.
-    pub prefix_source: Option<ModuleId>,
+    /// Abstract module identity assigned to this program for import resolution
+    /// and canonical symbol qualification.
+    pub module_id: ModuleId,
 }
 
 impl CompileOptions {
-    /// Use `path` as the anchor for resolving relative imports.
-    pub fn with_importer_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.importer_path = Some(path.into());
-        self
+    pub fn new(module_id: ModuleId) -> Self {
+        Self { module_id }
     }
 
-    /// Use `source` to qualify top-level declarations.
-    pub fn with_prefix_source(mut self, source: ModuleId) -> Self {
-        self.prefix_source = Some(source);
-        self
+    pub fn for_module(module: impl AsRef<str>) -> Result<Self, EngineError> {
+        Ok(Self::new(ModuleId::parse(module)?))
     }
 }
 
@@ -157,18 +150,15 @@ where
         options: CompileOptions,
     ) -> Result<(CompiledProgram, Evaluator<State>), EngineError> {
         let entry = main_entry_program(program)?;
-        let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
-        let prefix = options
-            .prefix_source
-            .map(|id| prefix_for_module(&id))
-            .unwrap_or_else(|| format!("@snippet{}", Uuid::new_v4()));
+        let module_id = options.module_id;
+        let prefix = prefix_for_module(&module_id);
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
         let chain = self.module_loader.system.import_chain();
         let rewritten = self
             .rewrite_and_inject_program(
                 &entry.program,
-                importer,
+                Some(module_id),
                 &prefix,
                 &chain,
                 &mut loaded,
@@ -188,20 +178,17 @@ where
     pub async fn infer_snippet(
         mut self,
         source: &str,
-        importer_path: Option<&Path>,
+        module_id: ModuleId,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let program = parse_program_from_source(source, None)?;
-        let importer = importer_path.map(|p| ModuleId::Local {
-            path: p.to_path_buf(),
-        });
-        let prefix = format!("@snippet{}", Uuid::new_v4());
+        let prefix = prefix_for_module(&module_id);
         let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
         let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
         let chain = self.module_loader.system.import_chain();
         let rewritten = self
             .rewrite_and_inject_program(
                 &program,
-                importer,
+                Some(module_id),
                 &prefix,
                 &chain,
                 &mut loaded,

@@ -262,12 +262,16 @@ async fn subprocess_output(
 #[cfg(test)]
 mod tests {
     use rex::{
-        engine::{Builder, Value},
+        engine::{Builder, CompileOptions, Value},
         parser::parse as parse_rex,
         typesystem::{BuiltinTypeId, Type},
     };
 
     use super::*;
+
+    fn compile_options() -> CompileOptions {
+        CompileOptions::for_module("cli.test").unwrap()
+    }
     #[tokio::test]
     async fn cli_prelude_typecheck_smoke() {
         let code = r#"
@@ -287,7 +291,7 @@ mod tests {
         let compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
         let (program, evaluator) = compiler
-            .compile_program(&parsed, Default::default())
+            .compile_program(&parsed, compile_options())
             .await
             .unwrap();
         evaluator.run(program, Default::default()).await.unwrap();
@@ -307,7 +311,7 @@ mod tests {
         let compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
         let (program, evaluator) = compiler
-            .compile_program(&parsed, Default::default())
+            .compile_program(&parsed, compile_options())
             .await
             .unwrap();
         let ty = program.result_type().clone();
@@ -334,7 +338,7 @@ mod tests {
         let compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
         let (program, evaluator) = compiler
-            .compile_program(&parsed, Default::default())
+            .compile_program(&parsed, compile_options())
             .await
             .unwrap();
         let ty = program.result_type().clone();

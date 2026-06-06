@@ -1,6 +1,8 @@
 use futures::FutureExt;
 use rex_ast::{CompilationUnit, Decl, Expr};
-use rex_engine::{Builder, Context, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value};
+use rex_engine::{
+    Builder, CompileOptions, Context, EngineError, FromRex, Handle, Heap, IntoRex, Module, Value,
+};
 use rex_parser::parse as parse_rex;
 use rex_typesystem::{
     error::TypeError,
@@ -25,6 +27,10 @@ fn strip_span(mut err: TypeError) -> TypeError {
 
 fn builder_with_arith() -> Builder {
     Builder::with_prelude(()).unwrap()
+}
+
+fn compile_options() -> CompileOptions {
+    CompileOptions::for_module("test.main").unwrap()
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -83,7 +89,7 @@ async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Handle, EngineError>
         body: Some(Arc::new(expr.clone())),
     };
     let (compiled, evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await?;
     evaluator.run(compiled, Default::default()).await
 }
@@ -94,7 +100,7 @@ async fn compile_program_returns_evaluator() {
     let compiler = builder.build_compiler();
     let parsed = parse_program("1 + 2");
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, compile_options())
         .await
         .unwrap();
     let ty = program.result_type().clone();
@@ -110,7 +116,7 @@ async fn compiler_is_consumed_by_compile_program() {
     let compiler = builder.build_compiler();
     let parsed = parse_program("let answer = 40 + 2 in answer");
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, compile_options())
         .await
         .unwrap();
     let value = evaluator.run(program, Default::default()).await.unwrap();
@@ -301,7 +307,7 @@ async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
             "#,
     );
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, compile_options())
         .await
         .unwrap();
     let value = evaluator.run(program, Default::default()).await.unwrap();
@@ -318,7 +324,7 @@ async fn exported_value_resolves_at_runtime() {
     let compiler = compile_builder.build_compiler();
     let parsed = parse_program("answer + 1");
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, compile_options())
         .await
         .unwrap();
     let value = evaluator.run(program, Default::default()).await.unwrap();
@@ -606,7 +612,7 @@ async fn typed_native_injection_uses_handle_conversions() {
         body: Some(expr),
     };
     let (compiled, evaluator) = compiler
-        .compile_program(&program, Default::default())
+        .compile_program(&program, compile_options())
         .await
         .unwrap();
     let ty = compiled.result_type().clone();

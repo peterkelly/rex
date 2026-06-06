@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Builder, CompiledProgram, EngineError, Evaluator},
+    engine::{Builder, CompileOptions, CompiledProgram, EngineError, Evaluator},
     json::{json_to_main_inputs, rex_to_json},
     parser::parse as parse_rex,
 };
@@ -17,7 +17,7 @@ async fn prepare(source: &str) -> Prepared {
     let parsed = parse_rex(source).unwrap();
     let compiler = Builder::with_prelude(()).unwrap().build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await
         .unwrap();
     let manifest = compiled

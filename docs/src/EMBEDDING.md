@@ -48,7 +48,7 @@ let compiler = builder.build_compiler();
 
 let parsed = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
 let (program, evaluator) = compiler
-    .compile_program(&parsed, CompileOptions::default())
+    .compile_program(&parsed, CompileOptions::for_module("workflow.main")?)
     .await?;
 assert_eq!(program.result_type().to_string(), "i32");
 let value = evaluator.run(program, Default::default()).await?;
@@ -89,7 +89,7 @@ Compile parsed Rex sources with `Compiler::compile_program` and pass the resulti
 
 ```rust,ignore
 use rex::{
-    engine::Builder,
+    engine::{Builder, CompileOptions},
     parser::parse,
 };
 
@@ -97,7 +97,9 @@ let program = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}")
 
 let builder = Builder::with_prelude(())?;
 let compiler = builder.build_compiler();
-let (program, evaluator) = compiler.compile_program(&program, Default::default()).await?;
+let (program, evaluator) = compiler
+    .compile_program(&program, CompileOptions::for_module("workflow.main")?)
+    .await?;
 let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
 ```
@@ -113,7 +115,7 @@ exports fail early with module errors.
 `Builder::with_prelude(state)` is shorthand for `Builder::with_options(state, EngineOptions::default())`.
 
 - Prelude is enabled by default.
-- `Prelude` is default-imported.
+- `std.prelude` is default-imported.
 - Default imports are weak: they fill missing names, but never override local declarations
   or explicit imports.
 
@@ -149,7 +151,7 @@ request.
 
 Notes:
 
-- importers receive an `ImportRequest` with the requested module name and the importing module id.
+- importers receive an `ImportRequest` with the requested `ModuleId` and the importing module id.
 - snippets and parsed programs load declaration-only modules through the compiler's import
   rewriting path; module source itself remains declaration-only.
 - import clauses (`(*)` / item lists) import exported names into unqualified scope.
@@ -161,14 +163,13 @@ Notes:
 ### 2) Inject In-Memory Rex Modules
 
 For host-managed modules, either call `Builder::inject_module` or add an importer that maps
-`module_name` to source text.
+module IDs to source text.
 
 ```rust,ignore
 use futures::future::BoxFuture;
 use rex::{
     engine::{
-        CompileOptions, Builder, ImportRequest, Importer, ModuleId, ResolvedModule,
-        ResolvedModuleContent,
+        CompileOptions, Builder, ImportRequest, Importer, ResolvedModule, ResolvedModuleContent,
     },
     parser::parse,
 };
@@ -198,11 +199,12 @@ impl Importer for MapImporter {
         req: ImportRequest,
     ) -> BoxFuture<'a, Result<Option<ResolvedModule>, rex::engine::EngineError>> {
         Box::pin(async move {
-            let Some(source) = self.modules.get(&req.module_name) else {
+            let module_name = req.module_id.to_string();
+            let Some(source) = self.modules.get(&module_name) else {
                 return Ok(None);
             };
             Ok(Some(ResolvedModule {
-                id: ModuleId::Virtual(format!("host:{}", req.module_name)),
+                id: req.module_id,
                 content: ResolvedModuleContent::Source(source.clone()),
             }))
         })
@@ -213,7 +215,7 @@ builder.add_importer("host-map", Arc::new(MapImporter { modules }));
 let compiler = builder.build_compiler();
 let parsed = parse("import acme.main (main);\nmain").map_err(|errs| format!("{errs:?}"))?;
 let (program, evaluator) = compiler
-    .compile_program(&parsed, CompileOptions::default())
+    .compile_program(&parsed, CompileOptions::for_module("workflow.main")?)
     .await?;
 let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
@@ -263,7 +265,7 @@ let compiler = builder.build_compiler();
 let parsed = parse("import acme.math (inc, double_async as d);\ninc (d 20)")
     .map_err(|errs| format!("{errs:?}"))?;
 let (program, evaluator) = compiler
-    .compile_program(&parsed, CompileOptions::default())
+    .compile_program(&parsed, CompileOptions::for_module("workflow.main")?)
     .await?;
 let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
@@ -368,7 +370,7 @@ let parsed = parse(
 )
 .map_err(|errs| format!("{errs:?}"))?;
 let (program, evaluator) = compiler
-    .compile_program(&parsed, CompileOptions::default())
+    .compile_program(&parsed, CompileOptions::for_module("workflow.main")?)
     .await?;
 let value = evaluator.run(program, Default::default()).await?;
 println!("{value}"); // ("left        ", "       right")
@@ -436,10 +438,10 @@ Importer contract:
 
 ### 5) Snippets That Import Relative Modules
 
-If you evaluate ad-hoc Rex snippets that contain imports, parse the snippet and
-pass an importer path in `CompileOptions` for `Compiler::compile_program`. For
-type-only checks through `Compiler::infer_snippet`, pass the same importer path
-argument there:
+If you evaluate ad-hoc Rex snippets that contain imports, give the snippet an
+explicit module name in `CompileOptions`. Importers receive that name as
+`ImportRequest::importer` and decide how relative module names map to files,
+databases, in-memory source, or any other backing store.
 
 ```rust,ignore
 use rex::{
@@ -452,11 +454,7 @@ let compiler = builder.build_compiler();
 let parsed = parse("import foo.bar as Bar;\nBar.add 1 2")
     .map_err(|errs| format!("{errs:?}"))?;
 let (program, evaluator) = compiler
-    .compile_program(
-        &parsed,
-        CompileOptions::default()
-            .with_importer_path(std::path::Path::new("/tmp/workflow/_snippet.rex")),
-    )
+    .compile_program(&parsed, CompileOptions::for_module("workflow.snippet")?)
     .await?;
 let value = evaluator.run(program, Default::default()).await?;
 ```
@@ -640,7 +638,7 @@ assert_eq!(ty.to_string(), "i32");
 ### Evaluate: Inject Decls into `Builder`
 
 ```rust,ignore
-use rex_engine::Builder;
+use rex_engine::{Builder, CompileOptions};
 use rex::parser::parse;
 
 let code = r#"
@@ -661,7 +659,9 @@ let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 
 let builder = Builder::with_prelude(())?;
 let compiler = builder.build_compiler();
-let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
+let (compiled, evaluator) = compiler
+    .compile_program(&program, CompileOptions::for_module("workflow.main")?)
+    .await?;
 let _ty = compiled.result_type().clone();
 let value = evaluator.run(compiled, Default::default()).await?;
 println!("{value}");
@@ -691,7 +691,7 @@ direct calls, `let` bindings, and lambda wrappers:
 
 ```rust,ignore
 use rex::parser::parse;
-use rex_engine::{Builder, Module};
+use rex_engine::{Builder, CompileOptions, Module};
 
 for code in [
     "num_u8 4",
@@ -706,7 +706,9 @@ for code in [
 
     let program = parse(code).map_err(|errs| format!("parse error: {errs:?}"))?;
     let compiler = builder.build_compiler();
-    let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
+    let (compiled, evaluator) = compiler
+        .compile_program(&program, CompileOptions::for_module("workflow.main")?)
+        .await?;
     let _ty = compiled.result_type().clone();
     let value = evaluator.run(compiled, Default::default()).await?;
     println!("{value}");
@@ -727,7 +729,7 @@ program with `Evaluator::run`.
 
 ```rust,ignore
 use rex::parser::parse;
-use rex_engine::{Builder, Module};
+use rex_engine::{Builder, CompileOptions, Module};
 
 let mut builder = Builder::with_prelude(())?;
 let mut globals = Module::global();
@@ -736,7 +738,9 @@ builder.inject_module(globals)?;
 
 let program = parse("inc 1").map_err(|errs| format!("parse error: {errs:?}"))?;
 let compiler = builder.build_compiler();
-let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
+let (compiled, evaluator) = compiler
+    .compile_program(&program, CompileOptions::for_module("workflow.main")?)
+    .await?;
 let _ty = compiled.result_type().clone();
 let v = evaluator.run(compiled, Default::default()).await?;
 println!("{v}");
@@ -862,7 +866,7 @@ Fragment::inject_rex(&mut builder)?;
 ```rust,ignore
 use rex::{
     Rex,
-    engine::{Builder, FromRex},
+    engine::{Builder, CompileOptions, FromRex},
     parser::parse,
 };
 
@@ -877,7 +881,9 @@ Maybe::<i32>::inject_rex(&mut builder)?;
 
 let program = parse("Just 1").map_err(|errs| format!("parse error: {errs:?}"))?;
 let compiler = builder.build_compiler();
-let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
+let (compiled, evaluator) = compiler
+    .compile_program(&program, CompileOptions::for_module("workflow.main")?)
+    .await?;
 let _ty = compiled.result_type().clone();
 let v = evaluator.run(compiled, Default::default()).await?;
 assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));

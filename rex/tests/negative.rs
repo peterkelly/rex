@@ -2,7 +2,7 @@ mod common;
 
 use rex::{
     ast::CompilationUnit,
-    engine::{Builder, EngineError, Module},
+    engine::{Builder, CompileOptions, EngineError, Module},
     parser::parse as parse_rex,
     typesystem::TypeError,
 };
@@ -25,7 +25,10 @@ async fn compile_err(code: &str) -> EngineError {
         body: program.body.clone(),
     };
     let (compiled, evaluator) = match compiler
-        .compile_program(&body_program, Default::default())
+        .compile_program(
+            &body_program,
+            CompileOptions::for_module("test.main").unwrap(),
+        )
         .await
     {
         Ok(compiled) => compiled,

@@ -84,9 +84,31 @@ impl AnalysisSession {
     }
 
     pub(crate) fn module_service(&self) -> LspModuleService {
+        let module_paths = self
+            .open_documents
+            .keys()
+            .filter_map(|uri| {
+                let path = uri_to_file_path(uri)?;
+                let id = module_id_from_path(&path)?;
+                Some((id, path))
+            })
+            .collect();
         LspModuleService {
             open_documents: self.open_documents.clone(),
+            module_paths: Arc::new(module_paths),
+            root: None,
         }
+    }
+
+    pub(crate) fn module_service_for_uri(&self, uri: &Url) -> LspModuleService {
+        let mut service = self.module_service();
+        if let Some(path) = uri_to_file_path(uri)
+            && let Some(id) = module_id_from_path(&path)
+        {
+            service.root = path.parent().map(|parent| parent.to_path_buf());
+            Arc::make_mut(&mut service.module_paths).insert(id, path);
+        }
+        service
     }
 
     pub(crate) fn tokenize_and_parse_cached(
@@ -161,40 +183,44 @@ pub(crate) fn url_from_file_path(_path: &std::path::Path) -> Option<Url> {
     None
 }
 
+pub(crate) fn module_id_from_path(path: &Path) -> Option<ModuleId> {
+    let stem = path.file_stem()?.to_str()?;
+    ModuleId::parse(stem).ok()
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct LspModuleService {
     pub(crate) open_documents: Arc<HashMap<Url, String>>,
+    module_paths: Arc<HashMap<ModuleId, PathBuf>>,
+    root: Option<PathBuf>,
 }
 
 #[derive(Clone)]
 pub(crate) struct LspLoadedModule {
     pub(crate) id: ModuleId,
+    pub(crate) path: Option<PathBuf>,
     pub(crate) source: String,
 }
 
 impl LspModuleService {
-    fn import_specifier(path: &ImportPath) -> Option<String> {
-        match path {
-            ImportPath::Local { segments, sha } => {
-                let base = segments
-                    .iter()
-                    .map(|s| s.as_ref())
-                    .collect::<Vec<_>>()
-                    .join(".");
-                Some(if let Some(sha) = sha {
-                    format!("{base}#{sha}")
-                } else {
-                    base
-                })
-            }
-            ImportPath::Remote { .. } => None,
-        }
+    pub(crate) fn path_for_module(&self, id: &ModuleId) -> Option<PathBuf> {
+        self.module_paths.get(id).cloned()
     }
 
-    fn split_name_and_sha(module_name: String) -> (String, Option<String>) {
-        match module_name.split_once('#') {
-            Some((base, sha)) if !sha.is_empty() => (base.to_string(), Some(sha.to_string())),
-            _ => (module_name, None),
+    fn import_specifier(
+        path: &ImportPath,
+    ) -> Result<Option<(ModuleId, Option<String>)>, EngineError> {
+        match path {
+            ImportPath::Local { segments, sha } => {
+                let id = ModuleId::from_segments(
+                    segments
+                        .iter()
+                        .map(|segment| segment.as_ref().to_string())
+                        .collect::<Vec<_>>(),
+                )?;
+                Ok(Some((id, sha.clone())))
+            }
+            ImportPath::Remote { .. } => Ok(None),
         }
     }
 
@@ -203,39 +229,41 @@ impl LspModuleService {
         uri: &Url,
         path: &ImportPath,
     ) -> Result<Option<LspLoadedModule>, EngineError> {
-        let Some(module_name) = Self::import_specifier(path) else {
+        let Some((module_id, expected_sha)) = Self::import_specifier(path)? else {
             return Ok(None);
         };
         self.load_request(ImportRequest {
-            module_name,
-            importer: uri_to_file_path(uri).map(|path| ModuleId::Local { path }),
+            module_id,
+            expected_sha,
+            importer: uri_to_file_path(uri).and_then(|path| module_id_from_path(&path)),
         })
     }
 
     fn load_request(&self, req: ImportRequest) -> Result<Option<LspLoadedModule>, EngineError> {
-        if req.module_name.starts_with("https://") {
-            return Ok(None);
-        }
-
-        let (module_name, expected_sha) = Self::split_name_and_sha(req.module_name);
-
-        if let Some(module) = self.load_stdlib(&module_name, expected_sha.clone())? {
+        if let Some(module) = self.load_stdlib(req.module_id.clone(), req.expected_sha.clone())? {
             return Ok(Some(module));
         }
 
-        if module_name.ends_with(".rex") || Path::new(&module_name).components().count() > 1 {
-            return self.load_path(PathBuf::from(module_name), expected_sha, "local");
-        }
-
-        let base_dir = match req.importer {
-            Some(ModuleId::Local { path }) => path.parent().map(|p| p.to_path_buf()),
-            _ => None,
-        };
+        let importer_path = req
+            .importer
+            .as_ref()
+            .and_then(|id| self.module_paths.get(id));
+        let base_dir = importer_path
+            .and_then(|path| path.parent().map(|p| p.to_path_buf()))
+            .or_else(|| self.root.clone());
         let Some(base_dir) = base_dir else {
             return Ok(None);
         };
 
-        let segments = module_name.split('.').collect::<Vec<_>>();
+        let resolved_id = match req.importer.as_ref().and_then(ModuleId::parent) {
+            Some(parent) => parent.join(&req.module_id),
+            None => req.module_id,
+        };
+        let segments = resolved_id
+            .segments()
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
         let path = match resolve_local_import_path(base_dir.as_path(), &segments) {
             Ok(Some(path)) => path,
             Ok(None) => return Ok(None),
@@ -246,15 +274,16 @@ impl LspModuleService {
                 .into());
             }
         };
-        self.load_path(path, expected_sha, "local")
+        self.load_path(resolved_id, path, req.expected_sha, "local")
     }
 
     fn load_stdlib(
         &self,
-        module_name: &str,
+        module_id: ModuleId,
         expected_sha: Option<String>,
     ) -> Result<Option<LspLoadedModule>, EngineError> {
-        let Some(source) = stdlib_source(module_name) else {
+        let module_name = module_id.to_string();
+        let Some(source) = stdlib_source(&module_name) else {
             return Ok(None);
         };
         let hash = sha256_hex(source.as_bytes());
@@ -270,18 +299,22 @@ impl LspModuleService {
             }
         }
         Ok(Some(LspLoadedModule {
-            id: ModuleId::Virtual(module_name.to_string()),
+            id: module_id,
+            path: None,
             source: source.to_string(),
         }))
     }
 
     fn load_path(
         &self,
+        id: ModuleId,
         path: PathBuf,
         expected_sha: Option<String>,
         kind: &'static str,
     ) -> Result<Option<LspLoadedModule>, EngineError> {
-        if let Some(module) = self.load_open_document(&path, expected_sha.as_deref(), kind)? {
+        if let Some(module) =
+            self.load_open_document(id.clone(), &path, expected_sha.as_deref(), kind)?
+        {
             return Ok(Some(module));
         }
 
@@ -289,7 +322,9 @@ impl LspModuleService {
             return Ok(None);
         };
 
-        if let Some(module) = self.load_open_document(&canon, expected_sha.as_deref(), kind)? {
+        if let Some(module) =
+            self.load_open_document(id.clone(), &canon, expected_sha.as_deref(), kind)?
+        {
             return Ok(Some(module));
         }
 
@@ -297,12 +332,13 @@ impl LspModuleService {
             Ok(bytes) => bytes,
             Err(_) => return Ok(None),
         };
-        self.loaded_from_bytes(canon, bytes, expected_sha.as_deref(), kind)
+        self.loaded_from_bytes(id, canon, bytes, expected_sha.as_deref(), kind)
             .map(Some)
     }
 
     fn load_open_document(
         &self,
+        id: ModuleId,
         path: &Path,
         expected_sha: Option<&str>,
         kind: &'static str,
@@ -313,12 +349,13 @@ impl LspModuleService {
         let Some(source) = self.open_documents.get(&url).cloned() else {
             return Ok(None);
         };
-        self.loaded_from_source(path.to_path_buf(), source, expected_sha, kind)
+        self.loaded_from_source(id, path.to_path_buf(), source, expected_sha, kind)
             .map(Some)
     }
 
     fn loaded_from_bytes(
         &self,
+        id: ModuleId,
         path: PathBuf,
         bytes: Vec<u8>,
         expected_sha: Option<&str>,
@@ -332,13 +369,15 @@ impl LspModuleService {
             source,
         })?;
         Ok(LspLoadedModule {
-            id: ModuleId::Local { path: path.clone() },
+            id,
+            path: Some(path),
             source,
         })
     }
 
     fn loaded_from_source(
         &self,
+        id: ModuleId,
         path: PathBuf,
         source: String,
         expected_sha: Option<&str>,
@@ -347,7 +386,8 @@ impl LspModuleService {
         let hash = sha256_hex(source.as_bytes());
         self.check_path_hash(&path, &hash, expected_sha, kind)?;
         Ok(LspLoadedModule {
-            id: ModuleId::Local { path: path.clone() },
+            id,
+            path: Some(path),
             source,
         })
     }

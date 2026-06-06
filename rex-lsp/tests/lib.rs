@@ -3,7 +3,7 @@ use lsp_types::{
     WorkspaceEdit,
 };
 use rex::{
-    engine::{Builder, Module},
+    engine::{Builder, CompileOptions, Module},
     parser::parse as parse_rex,
 };
 use rex_ast::{CompilationUnit, Decl, Expr, NameRef, TypeExpr};
@@ -71,14 +71,22 @@ fn position_of(text: &str, needle: &str) -> Position {
     Position { line, character }
 }
 
-fn engine_local_module_prefix(path: &Path) -> String {
+fn engine_module_prefix_for_path(path: &Path) -> String {
+    let module_name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .expect("test module path should have a UTF-8 stem");
     let mut hash: u64 = 0xcbf29ce484222325;
-    for b in b"local:" {
+    for b in b"module:" {
         hash ^= u64::from(*b);
         hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
     }
-    for b in path.as_os_str().as_encoded_bytes() {
-        hash ^= u64::from(*b);
+    for segment in module_name.split('.') {
+        for b in segment.as_bytes() {
+            hash ^= u64::from(*b);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        hash ^= u64::from(b'.');
         hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
     }
     format!("@m{hash:016x}")
@@ -96,7 +104,10 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
         body: program.body.clone(),
     };
     let (compiled, evaluator) = compiler
-        .compile_program(&body_program, Default::default())
+        .compile_program(
+            &body_program,
+            CompileOptions::for_module("lsp.test").unwrap(),
+        )
         .await
         .expect("compile source");
     let ty = compiled.result_type().clone();
@@ -461,7 +472,7 @@ D.make 1
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
 
     let canonical_dep = dep.canonicalize().expect("canonical dep path");
-    let expected_name = format!("{}.make", engine_local_module_prefix(&canonical_dep));
+    let expected_name = format!("{}.make", engine_module_prefix_for_path(&canonical_dep));
     assert!(
         ts.env
             .lookup(&rex_ast::Symbol::intern(&expected_name))
@@ -894,7 +905,7 @@ D.add 20 22
     assert!(diags.is_empty(), "unexpected diagnostics: {diags:?}");
 
     let canonical_dep = dep.canonicalize().expect("canonical dep path");
-    let expected_name = format!("{}.add", engine_local_module_prefix(&canonical_dep));
+    let expected_name = format!("{}.add", engine_module_prefix_for_path(&canonical_dep));
     let Expr::App(_, f, _) = rewritten.body.as_ref().expect("body").as_ref() else {
         panic!("expected outer application, got {:?}", rewritten.body);
     };

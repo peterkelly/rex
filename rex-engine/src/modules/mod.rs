@@ -8,49 +8,45 @@ use rex_ast::{
 };
 use rex_parser::parse as parse_rex;
 
-use crate::{builder::qualify::collect_local_renames, error::EngineError};
+use crate::{ModuleError, builder::qualify::collect_local_renames, error::EngineError};
 
 pub(crate) mod importers;
 pub(crate) mod module;
+pub(crate) mod module_id;
 pub(crate) mod system;
 pub(crate) mod types;
 
 pub use importers::{DenyImporter, StdlibImporter};
 pub use module::Module;
+pub use module_id::{ModuleId, ModuleIdError};
 pub use system::Importer;
 pub use types::virtual_export_name;
 pub use types::{
-    CanonicalSymbol, ImportRequest, ModuleExports, ModuleId, ModuleInstance, ModuleKey,
-    ResolvedModule, ResolvedModuleContent, SymbolKind, VirtualModule,
+    CanonicalSymbol, ImportRequest, ModuleExports, ModuleInstance, ModuleKey, ResolvedModule,
+    ResolvedModuleContent, SymbolKind, VirtualModule,
 };
 
 pub(crate) use system::{ImportChain, ModuleSystem};
 pub(crate) use types::{module_key_for_module, prefix_for_module};
 
 pub const ROOT_MODULE_NAME: &str = "__root__";
-pub const PRELUDE_MODULE_NAME: &str = "Prelude";
+pub const PRELUDE_MODULE_NAME: &str = "std.prelude";
 
-pub fn import_specifier(path: &ImportPath) -> String {
+pub fn import_specifier(path: &ImportPath) -> Result<(ModuleId, Option<String>), EngineError> {
     match path {
         ImportPath::Local { segments, sha } => {
-            let base = segments
-                .iter()
-                .map(|s| s.as_ref())
-                .collect::<Vec<_>>()
-                .join(".");
-            if let Some(sha) = sha {
-                format!("{base}#{sha}")
-            } else {
-                base
-            }
+            let id = ModuleId::from_segments(
+                segments
+                    .iter()
+                    .map(|segment| segment.as_ref().to_string())
+                    .collect::<Vec<_>>(),
+            )?;
+            Ok((id, sha.clone()))
         }
-        ImportPath::Remote { url, sha } => {
-            if let Some(sha) = sha {
-                format!("{url}#{sha}")
-            } else {
-                url.clone()
-            }
+        ImportPath::Remote { url, .. } => Err(ModuleError::ImportsDisabled {
+            module_name: url.clone(),
         }
+        .into()),
     }
 }
 
@@ -62,14 +58,22 @@ pub fn contains_import_alias(decls: &[Decl], alias: &Symbol) -> bool {
 }
 
 pub fn default_import_decl(module_name: &str) -> ImportDecl {
+    let segments = module_name
+        .split('.')
+        .map(Symbol::intern)
+        .collect::<Vec<_>>();
+    let alias = segments
+        .last()
+        .cloned()
+        .unwrap_or_else(|| Symbol::intern(module_name));
     ImportDecl {
         span: Span::default(),
         is_pub: false,
         path: ImportPath::Local {
-            segments: vec![Symbol::intern(module_name)],
+            segments,
             sha: None,
         },
-        alias: Symbol::intern(module_name),
+        alias,
         clause: Some(ImportClause::All),
     }
 }

@@ -21,7 +21,7 @@ and runtime implementation.
 - `rex-engine/src/prelude/type_system.rs` builds the standard type environment,
   including ADTs, helper functions, and `prim_*` schemes.
 - `rex-engine/src/prelude/mod.rs` parses the Rex source, injects runtime ADTs,
-  registers native functions, and builds the virtual `Prelude` module.
+  registers native functions, and builds the `std.prelude` module.
 - Primitive names and scheme shapes are still manually mirrored between
   type-system construction and runtime registration.
 - Some runtime registration depends on looking up schemes already present in the type-system environment, such as `unwrap`, `is_some`, and related builtins.

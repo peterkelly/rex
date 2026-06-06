@@ -6,14 +6,14 @@ use crate::{
     compiler::Compiler,
     error::EngineError,
     modules::{
-        ImportBindingPolicy, ImportBindings, add_import_bindings, alias_is_visible,
+        ImportBindingPolicy, ImportBindings, ModuleId, add_import_bindings, alias_is_visible,
         collect_pattern_bindings, contains_import_alias, decl_type_names, decl_value_names,
         default_import_decl, exports_from_program, import_specifier, interface_decls_from_program,
         program_from_resolved, qualified_alias_member,
         system::ImportChain,
         types::{
-            CanonicalSymbol, ImportRequest, ModuleExports, ModuleId, ResolvedModule,
-            ResolvedModuleContent, prefix_for_module,
+            CanonicalSymbol, ImportRequest, ModuleExports, ResolvedModule, ResolvedModuleContent,
+            prefix_for_module,
         },
     },
 };
@@ -172,7 +172,7 @@ where
 
         let default_imports = engine.default_imports().to_vec();
         for module_name in default_imports {
-            let alias = Symbol::intern(&module_name);
+            let alias = Symbol::intern(default_import_alias(&module_name));
             if contains_import_alias(&compilation_unit.decls, &alias) {
                 continue;
             }
@@ -1304,10 +1304,11 @@ where
     C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
-        let spec = import_specifier(&import_decl.path);
+        let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
         let imported = chain
             .import(ImportRequest {
-                module_name: spec,
+                module_id,
+                expected_sha,
                 importer,
             })
             .await?;
@@ -1406,10 +1407,11 @@ where
 
             let imports = graph_imports_for_program(&program, engine.default_imports());
             for import_decl in imports {
-                let spec = import_specifier(&import_decl.path);
+                let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
                 let imported = chain
                     .import(ImportRequest {
-                        module_name: spec,
+                        module_id,
+                        expected_sha,
                         importer: Some(resolved.id.clone()),
                     })
                     .await?;
@@ -1498,13 +1500,17 @@ fn graph_imports_for_program(
         }
     }
     for module_name in default_imports {
-        let alias = Symbol::intern(module_name);
+        let alias = Symbol::intern(default_import_alias(module_name));
         if contains_import_alias(&compilation_unit.decls, &alias) {
             continue;
         }
         out.push(default_import_decl(module_name));
     }
     out
+}
+
+fn default_import_alias(module_name: &str) -> &str {
+    module_name.rsplit('.').next().unwrap_or(module_name)
 }
 
 fn tarjan_scc_module_ids(

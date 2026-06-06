@@ -4,8 +4,8 @@ use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Builder, Context, EngineError, FromRex, Handle, IntoRex, Module, RexDefault, Value,
-        virtual_export_name,
+        Builder, CompileOptions, Context, EngineError, FromRex, Handle, IntoRex, Module,
+        RexDefault, Value, virtual_export_name,
     },
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Scheme, Type, TypeError, TypeKind},
@@ -66,7 +66,7 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
     )
     .unwrap();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await
         .unwrap();
     let ty = program.result_type().clone();
@@ -131,7 +131,7 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
     )
     .unwrap();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await
         .unwrap();
     let ty = program.result_type().clone();
@@ -169,7 +169,10 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
             "#,
     )
     .unwrap();
-    let err = match compiler.compile_program(&parsed, Default::default()).await {
+    let err = match compiler
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
+        .await
+    {
         Ok(_) => panic!("expected ambiguity error for overlapping constructor in match pattern"),
         Err(err) => err,
     };
@@ -668,7 +671,10 @@ async fn overloaded_exports_types_and_values() {
     let body_program = parse_rex(expr).unwrap();
     let compiler = builder.build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(&body_program, Default::default())
+        .compile_program(
+            &body_program,
+            CompileOptions::for_module("test.main").unwrap(),
+        )
         .await
         .unwrap();
     let ty = compiled.result_type().clone();
@@ -737,7 +743,10 @@ async fn overloaded_async_exports_types_and_values() {
     let body_program = parse_rex(expr).unwrap();
     let compiler = builder.build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(&body_program, Default::default())
+        .compile_program(
+            &body_program,
+            CompileOptions::for_module("test.main").unwrap(),
+        )
         .await
         .unwrap();
     let ty = compiled.result_type().clone();

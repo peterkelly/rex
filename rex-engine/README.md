@@ -10,7 +10,7 @@ supports closures, application, let-in, if-then-else, tuples/lists/dicts, and `m
 ## Quickstart
 
 ```rust
-use rex_engine::{Builder, Module};
+use rex_engine::{Builder, CompileOptions, Module};
 use rex_parser::parse;
 
 #[tokio::main]
@@ -25,7 +25,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
     let compiler = builder.build_compiler();
-    let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
+    let (compiled, evaluator) = compiler
+        .compile_program(&program, CompileOptions::for_module("workflow.main")?)
+        .await?;
     let value = evaluator.run(compiled, Default::default()).await?;
 
     assert_eq!(value.as_i32()?, 43);
@@ -90,7 +92,7 @@ For explicit control, use:
 
 - `Builder::with_options(state, EngineOptions { ... })`
 - `PreludeMode::{Enabled, Disabled}`
-- `default_imports` (defaults to importing `Prelude` weakly)
+- `default_imports` (defaults to importing `std.prelude` weakly)
 
 - **Constructors**: `Empty`, `Cons`, `Some`, `None`, `Ok`, `Err`
 - **Arithmetic**: `+`, `-`, `*`, `/`, `negate`, `zero`, `one`

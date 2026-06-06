@@ -57,12 +57,12 @@ pub fn prepare_program_with_imports(
         Builder::with_prelude(()).map_err(|e| format!("failed to build prelude: {e}"))?;
     let mut diagnostics = Vec::new();
 
-    let module_service = session.module_service();
+    let module_service = session.module_service_for_uri(uri);
 
     let mut imports: HashMap<Symbol, ImportModuleInfo> = HashMap::new();
     let mut loaded = std::collections::BTreeMap::new();
     let mut loading = BTreeSet::new();
-    let importer = uri_to_file_path(uri).map(|path| ModuleId::Local { path });
+    let importer = uri_to_file_path(uri).and_then(|path| module_id_from_path(&path));
     let lsp_importer: Arc<dyn Importer> = Arc::new(module_service.clone());
 
     for decl in &compilation_unit.decls {
@@ -109,10 +109,15 @@ pub fn prepare_program_with_imports(
             }
         };
 
-        let module_path = match &loaded_import.module_id {
-            ModuleId::Local { path } => Some(path.clone()),
-            ModuleId::Remote(..) | ModuleId::Virtual(..) => None,
-        };
+        let module_path = module_service
+            .path_for_module(&loaded_import.module_id)
+            .or_else(|| {
+                module_service
+                    .load_import_path(uri, path)
+                    .ok()
+                    .flatten()
+                    .and_then(|module| module.path)
+            });
 
         let mut export_defs = HashMap::new();
         if let Some(source) = &loaded_import.source {
@@ -213,7 +218,7 @@ pub(crate) fn completion_exports_for_module_alias(
     };
 
     let Some(module) = session
-        .module_service()
+        .module_service_for_uri(uri)
         .load_import_path(uri, &import_decl.path)
         .map_err(|err| err.to_string())?
     else {

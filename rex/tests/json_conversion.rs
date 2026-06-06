@@ -10,9 +10,6 @@ use rex::{
 };
 use serde::Serialize;
 use serde_json::json;
-use std::fs;
-use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 fn mk_type_system() -> TypeSystem {
@@ -26,17 +23,6 @@ fn mk_unit_enum(name: &str, variants: &[&str]) -> AdtDecl {
         adt.add_variant(Symbol::intern(variant), vec![]);
     }
     adt
-}
-
-fn temp_dir(name: &str) -> PathBuf {
-    let mut dir = std::env::temp_dir();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    dir.push(format!("rex-json-eval-{name}-{nanos}"));
-    fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 fn fixed_uuid() -> Uuid {
@@ -241,7 +227,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let compiler = builder.build_compiler();
     assert!(parsed.decls.is_empty());
     let (compiled, evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await
         .unwrap();
     let ty_eval = compiled.result_type().clone();
@@ -250,7 +236,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let compiler = builder_with_eval_json_record().build_compiler();
     let parsed = parse_rex(rex_code).unwrap();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, CompileOptions::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await
         .unwrap();
     let ty_snippet = program.result_type().clone();
@@ -262,16 +248,10 @@ async fn eval_entry_points_return_type_for_json_eval() {
         expected_json.clone(),
     );
 
-    let dir = temp_dir("snippet-at");
-    let importer = dir.join("main.rex");
-    fs::write(&importer, "()").unwrap();
     let compiler = builder_with_eval_json_record().build_compiler();
     let parsed = parse_rex(rex_code).unwrap();
     let (program, evaluator) = compiler
-        .compile_program(
-            &parsed,
-            CompileOptions::default().with_importer_path(importer.as_path()),
-        )
+        .compile_program(&parsed, CompileOptions::for_module("main").unwrap())
         .await
         .unwrap();
     let ty_snippet_at = program.result_type().clone();

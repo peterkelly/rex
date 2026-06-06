@@ -1,7 +1,7 @@
 mod common;
 
 use rex::{
-    engine::{Builder, Handle, Heap, Value},
+    engine::{Builder, CompileOptions, Handle, Heap, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type},
 };
@@ -46,7 +46,7 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                     let parsed = parse_rex(&source)
                         .unwrap_or_else(|errs| panic!("{name}: parse error before eval: {errs:?}"));
                     let (program, evaluator) = compiler
-                        .compile_program(&parsed, Default::default())
+                        .compile_program(&parsed, CompileOptions::for_module("demo.main").unwrap())
                         .await
                         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
                     let ty = program.result_type().clone();

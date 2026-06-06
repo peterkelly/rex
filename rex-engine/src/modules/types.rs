@@ -1,36 +1,10 @@
 use std::collections::BTreeMap;
-use std::fmt;
-use std::path::PathBuf;
 
 use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_typesystem::types::Type;
 use rex_util::sha256_hex;
 
-use crate::Handle;
-
-/// Stable identity for a Rex module as seen by the runtime module system.
-///
-/// Module IDs are used as cache keys, cycle-detection keys, and the source of
-/// deterministic prefixes for canonical internal symbols.
-#[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
-pub enum ModuleId {
-    /// A module loaded from a local filesystem path.
-    Local { path: PathBuf },
-    /// A module loaded from a remote locator such as a URL.
-    Remote(String),
-    /// A host-provided or built-in module that has no source file identity.
-    Virtual(String),
-}
-
-impl fmt::Display for ModuleId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModuleId::Local { path } => write!(f, "file:{}", path.display()),
-            ModuleId::Remote(url) => write!(f, "{url}"),
-            ModuleId::Virtual(name) => write!(f, "virtual:{name}"),
-        }
-    }
-}
+use crate::{Handle, modules::ModuleId};
 
 /// Request passed from the module system to importers when Rex code imports a module.
 ///
@@ -38,23 +12,31 @@ impl fmt::Display for ModuleId {
 /// importing module so importers can resolve relative names or enforce policy.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct ImportRequest {
-    pub module_name: String,
+    pub module_id: ModuleId,
+    pub expected_sha: Option<String>,
     pub importer: Option<ModuleId>,
 }
 
 impl ImportRequest {
-    pub fn new(module_name: impl Into<String>) -> Self {
+    pub fn new(module_id: ModuleId) -> Self {
         Self {
-            module_name: module_name.into(),
+            module_id,
+            expected_sha: None,
             importer: None,
         }
     }
 
-    pub fn with_importer(module_name: impl Into<String>, importer: ModuleId) -> Self {
+    pub fn with_importer(module_id: ModuleId, importer: ModuleId) -> Self {
         Self {
-            module_name: module_name.into(),
+            module_id,
+            expected_sha: None,
             importer: Some(importer),
         }
+    }
+
+    pub fn with_expected_sha(mut self, expected_sha: Option<String>) -> Self {
+        self.expected_sha = expected_sha;
+        self
     }
 }
 
@@ -302,19 +284,10 @@ fn hash_module_identity(state: &mut u64, id: &ModuleId) {
         }
     }
 
-    match id {
-        ModuleId::Local { path } => {
-            hash_bytes(state, b"local:");
-            hash_bytes(state, path.as_os_str().as_encoded_bytes());
-        }
-        ModuleId::Remote(url) => {
-            hash_bytes(state, b"remote:");
-            hash_bytes(state, url.as_bytes());
-        }
-        ModuleId::Virtual(name) => {
-            hash_bytes(state, b"virtual:");
-            hash_bytes(state, name.as_bytes());
-        }
+    hash_bytes(state, b"module:");
+    for segment in id.segments() {
+        hash_bytes(state, segment.as_bytes());
+        hash_bytes(state, b".");
     }
 }
 
@@ -331,9 +304,13 @@ pub fn qualify(prefix: &str, name: &Symbol) -> Symbol {
 }
 
 pub fn virtual_export_name(module: &str, export: &str) -> String {
-    let id = ModuleId::Virtual(module.to_string());
-    let key = module_key_for_module(&id);
-    CanonicalSymbol::new(key, SymbolKind::Value, Symbol::intern(export))
-        .symbol()
-        .to_string()
+    match ModuleId::parse(module) {
+        Ok(id) => {
+            let key = module_key_for_module(&id);
+            CanonicalSymbol::new(key, SymbolKind::Value, Symbol::intern(export))
+                .symbol()
+                .to_string()
+        }
+        Err(_) => format!("{module}.{export}"),
+    }
 }

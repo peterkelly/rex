@@ -143,7 +143,10 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
     let parsed = parse_program(source.as_ref())?;
     let compiler = builder.build_compiler();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, CompileOptions::default())
+        .compile_program(
+            &parsed,
+            CompileOptions::for_module("wasm.snippet").map_err(|e| e.to_string())?,
+        )
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
     let value = evaluator
@@ -246,7 +249,10 @@ pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
         let parsed = parse_program(source.as_ref())?;
         let compiler = builder.build_compiler();
         let (program, evaluator) = compiler
-            .compile_program(&parsed, CompileOptions::default())
+            .compile_program(
+                &parsed,
+                CompileOptions::for_module("wasm.snippet").map_err(|e| e.to_string())?,
+            )
             .await
             .map_err(|e| format!("runtime error: {e}"))?;
         let value = evaluator

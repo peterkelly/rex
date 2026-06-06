@@ -164,11 +164,13 @@ struct RunSourceOpts {
     raw_output: bool,
 }
 
-fn init_builder() -> Result<(Builder, Arc<dyn Importer>), String> {
+fn init_builder(import_root: Option<PathBuf>) -> Result<(Builder, Arc<dyn Importer>), String> {
     let mut builder =
         Builder::with_prelude(()).map_err(|e| format!("failed to initialize engine: {e}"))?;
     cli_prelude::inject_cli_prelude_builder(&mut builder).map_err(|e| e.to_string())?;
-    let filesystem_importer = FilesystemImporter::new();
+    let filesystem_importer = import_root
+        .map(FilesystemImporter::with_root)
+        .unwrap_or_default();
     let importer: Arc<dyn Importer> = Arc::new(filesystem_importer);
     builder.add_importer("filesystem", Arc::clone(&importer));
     Ok((builder, importer))
@@ -276,29 +278,26 @@ async fn compile_cli_program(
     program: &CompilationUnit,
     file: Option<&str>,
 ) -> Result<(Evaluator, CompiledProgram), String> {
-    let (builder, _importer) = init_builder()?;
+    let file_path = file.map(PathBuf::from);
+    let import_root = file_path
+        .as_ref()
+        .and_then(|path| path.parent().map(|parent| parent.to_path_buf()));
+    let (builder, _importer) = init_builder(import_root)?;
     let compiler = builder.build_compiler();
-    let importer_path = file.map(PathBuf::from);
     let (compiled, evaluator) = compiler
-        .compile_program(program, compile_options(importer_path))
+        .compile_program(program, compile_options(file_path.as_ref())?)
         .await
         .map_err(|e| format!("{e}"))?;
     Ok((evaluator, compiled))
 }
 
-fn snippet_prefix_source(importer_path: Option<&PathBuf>) -> ModuleId {
-    importer_path
-        .map(|path| ModuleId::Local { path: path.clone() })
-        .unwrap_or_else(|| ModuleId::Virtual("__snippet__".to_string()))
-}
-
-fn compile_options(importer_path: Option<PathBuf>) -> CompileOptions {
-    let prefix_source = snippet_prefix_source(importer_path.as_ref());
-    let options = CompileOptions::default().with_prefix_source(prefix_source);
-    match importer_path {
-        Some(path) => options.with_importer_path(path),
-        None => options,
-    }
+fn compile_options(file: Option<&PathBuf>) -> Result<CompileOptions, String> {
+    let module_name = file
+        .and_then(|path| path.file_stem())
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("snippet");
+    let module_id = ModuleId::parse(module_name).map_err(|err| err.to_string())?;
+    Ok(CompileOptions::new(module_id))
 }
 
 fn render_result_json(value: &serde_json::Value, raw_output: bool) -> Result<String, String> {

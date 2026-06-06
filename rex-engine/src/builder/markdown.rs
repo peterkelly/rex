@@ -72,12 +72,14 @@ where
         module_ids.insert(id.to_string(), id.clone());
     }
     for module_name in builder.module_loader.virtual_modules.keys() {
-        let id = ModuleId::Virtual(module_name.clone());
-        module_ids.insert(id.to_string(), id);
+        if let Ok(id) = ModuleId::parse(module_name) {
+            module_ids.insert(id.to_string(), id);
+        }
     }
     for module_name in &builder.module_loader.injected_modules {
-        let id = ModuleId::Virtual(module_name.clone());
-        module_ids.insert(id.to_string(), id);
+        if let Ok(id) = ModuleId::parse(module_name) {
+            module_ids.insert(id.to_string(), id);
+        }
     }
 
     let _ = writeln!(&mut out, "## Summary");
@@ -132,19 +134,16 @@ where
             let anchor = module_anchor(&id);
             let _ = writeln!(&mut out, "<a id=\"{anchor}\"></a>");
             let _ = writeln!(&mut out, "### `{display}`");
-            let virtual_source = match &id {
-                ModuleId::Virtual(name) => builder
-                    .module_loader
-                    .virtual_modules
-                    .get(name)
-                    .and_then(|module| {
-                        module
-                            .source
-                            .clone()
-                            .or_else(|| render_virtual_module_source(&module.decls))
-                    }),
-                _ => None,
-            };
+            let virtual_source = builder
+                .module_loader
+                .virtual_modules
+                .get(&id.to_string())
+                .and_then(|module| {
+                    module
+                        .source
+                        .clone()
+                        .or_else(|| render_virtual_module_source(&module.decls))
+                });
             if let Some(source) = builder
                 .module_loader
                 .module_sources
@@ -163,19 +162,17 @@ where
                 let _ = writeln!(&mut out, "_No captured source for this module._");
             }
 
-            let exports =
-                builder
-                    .module_loader
-                    .module_exports_cache
-                    .get(&id)
-                    .or_else(|| match &id {
-                        ModuleId::Virtual(name) => builder
-                            .module_loader
-                            .virtual_modules
-                            .get(name)
-                            .map(|m| &m.exports),
-                        _ => None,
-                    });
+            let exports = builder
+                .module_loader
+                .module_exports_cache
+                .get(&id)
+                .or_else(|| {
+                    builder
+                        .module_loader
+                        .virtual_modules
+                        .get(&id.to_string())
+                        .map(|m| &m.exports)
+                });
             if let Some(exports) = exports {
                 let mut values: Vec<Symbol> = exports.value_names();
                 let mut types: Vec<Symbol> = exports.type_names();

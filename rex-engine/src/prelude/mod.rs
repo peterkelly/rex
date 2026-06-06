@@ -177,7 +177,8 @@ where
         return Ok(());
     }
 
-    let module_key = module_key_for_module(&ModuleId::Virtual(PRELUDE_MODULE_NAME.to_string()));
+    let prelude_module_id = ModuleId::parse(PRELUDE_MODULE_NAME)?;
+    let module_key = module_key_for_module(&prelude_module_id);
     let mut exports = ModuleExports::default();
     for (name, _) in engine.type_system.env.values.iter() {
         if !name.as_ref().starts_with("@m") {
@@ -221,7 +222,7 @@ where
         }
     }
 
-    let module_id = ModuleId::Virtual(PRELUDE_MODULE_NAME.to_string());
+    let module_id = prelude_module_id;
     let compilation_unit = CompilationUnit {
         decls: Vec::new(),
         body: None,
@@ -246,7 +247,7 @@ where
         .module_loader
         .system
         .prepend_importer(Arc::new(StaticModuleImporter {
-            module_name: PRELUDE_MODULE_NAME.to_string(),
+            module_id: module_id.clone(),
             resolved: ResolvedModule {
                 id: module_id,
                 content: ResolvedModuleContent::CompilationUnit(compilation_unit),

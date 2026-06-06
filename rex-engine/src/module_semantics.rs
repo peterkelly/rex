@@ -53,10 +53,11 @@ where
             .with_importer(importer),
         None => builder.module_loader.system.import_chain(),
     };
-    let spec = import_specifier(&import_decl.path);
+    let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
     let resolved = chain
         .import(ImportRequest {
-            module_name: spec,
+            module_id,
+            expected_sha,
             importer,
         })
         .await?;

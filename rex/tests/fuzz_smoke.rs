@@ -2,7 +2,7 @@ mod common;
 
 use rex::{
     ast::CompilationUnit,
-    engine::{Builder, Module, standard_type_system},
+    engine::{Builder, CompileOptions, Module, standard_type_system},
     parser::parse,
     typesystem::infer,
 };
@@ -77,7 +77,10 @@ async fn fuzz_smoke_pipeline_does_not_panic() {
             body: Some(body.clone()),
         };
         if let Ok((compiled, evaluator)) = compiler
-            .compile_program(&body_program, Default::default())
+            .compile_program(
+                &body_program,
+                CompileOptions::for_module("test.main").unwrap(),
+            )
             .await
         {
             let _ = evaluator.run(compiled, Default::default()).await;

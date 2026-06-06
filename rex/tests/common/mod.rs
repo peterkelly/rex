@@ -2,7 +2,9 @@
 
 use rex::{
     ast::{CompilationUnit, Symbol},
-    engine::{Builder, EngineError, Handle, Heap, Module, Value, ValueDisplayOptions},
+    engine::{
+        Builder, CompileOptions, EngineError, Handle, Heap, Module, Value, ValueDisplayOptions,
+    },
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Type, TypeError, TypeKind},
 };
@@ -32,7 +34,7 @@ where
 {
     let compiler = builder.build_compiler();
     let (compiled, evaluator) = compiler
-        .compile_program(program, Default::default())
+        .compile_program(program, CompileOptions::for_module("test.main")?)
         .await?;
     let ty = compiled.result_type().clone();
     let value = evaluator.run(compiled, Default::default()).await?;
@@ -121,17 +123,27 @@ pub fn type_compatible(actual: &Type, expected: &Type) -> bool {
     }
 }
 
-fn strip_snippet_type_prefixes(rendered: &str) -> String {
+fn strip_generated_type_prefixes(rendered: &str) -> String {
     let mut out = String::with_capacity(rendered.len());
     let mut rest = rendered;
 
-    while let Some(start) = rest.find("@snippet") {
+    while let Some(start) = rest.find('@') {
         out.push_str(&rest[..start]);
-        let after_marker = &rest[start + "@snippet".len()..];
+        let after_marker = &rest[start + 1..];
         if let Some(dot) = after_marker.find('.') {
-            rest = &after_marker[dot + 1..];
+            let marker = &after_marker[..dot];
+            if marker.starts_with("snippet")
+                || marker
+                    .strip_prefix('m')
+                    .is_some_and(|hash| hash.chars().all(|ch| ch.is_ascii_hexdigit()))
+            {
+                rest = &after_marker[dot + 1..];
+                continue;
+            }
+            out.push('@');
+            rest = after_marker;
         } else {
-            out.push_str("@snippet");
+            out.push('@');
             rest = after_marker;
         }
     }
@@ -144,13 +156,13 @@ pub async fn eval_to_display_string(code: &str, expected_ty: Type) -> Result<Str
     let (_heap, handle, ty) =
         eval_source(Builder::with_prelude(()).map_err(|e| format!("{e}"))?, code)
             .await
-            .map_err(|e| strip_snippet_type_prefixes(&format!("{e}")))?;
-    let actual_ty_display = strip_snippet_type_prefixes(&ty.to_string());
-    let expected_ty_display = strip_snippet_type_prefixes(&expected_ty.to_string());
-    // FIXME: Direct snippet compilation gives local test ADTs internal
-    // `@snippet<uuid>.Type` names. Until public type rendering has a real
-    // namespace-to-surface-name layer, strip that generated prefix here so
-    // tests can compare the user-facing type text they actually care about.
+            .map_err(|e| strip_generated_type_prefixes(&format!("{e}")))?;
+    let actual_ty_display = strip_generated_type_prefixes(&ty.to_string());
+    let expected_ty_display = strip_generated_type_prefixes(&expected_ty.to_string());
+    // FIXME: Direct snippet compilation gives local test ADTs internal module
+    // prefixes. Until public type rendering has a real namespace-to-surface-name
+    // layer, strip them here so tests compare the user-facing type text they
+    // actually care about.
     assert!(
         type_compatible(&ty, &expected_ty) || actual_ty_display == expected_ty_display,
         "eval returned unexpected type for: {code}\nactual: {actual_ty_display}\nexpected: {expected_ty_display}"

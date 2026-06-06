@@ -4,7 +4,7 @@ use rex_ast::Symbol;
 use rex_parser::{error::ParseError, lexer::LexicalError};
 use rex_typesystem::error::TypeError;
 
-use crate::modules::ModuleId;
+use crate::modules::{ModuleId, ModuleIdError};
 
 #[derive(Debug, Eq, PartialEq)]
 pub enum ModuleError {
@@ -206,6 +206,8 @@ pub enum EngineError {
         missing: Vec<String>,
         extra: Vec<String>,
     },
+    #[error("{0}")]
+    InvalidModuleId(#[from] ModuleIdError),
     #[error("empty sequence")]
     EmptySequence,
     #[error("index {index} out of bounds in `{name}` (len {len})")]

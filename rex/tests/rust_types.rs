@@ -3,7 +3,7 @@ mod common;
 use rex::{
     Rex,
     ast::Symbol,
-    engine::{Builder, EngineError, FromRex, Handle, Heap, Value},
+    engine::{Builder, CompileOptions, EngineError, FromRex, Handle, Heap, Value},
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, RexType, Type},
 };
@@ -21,7 +21,7 @@ async fn infer_type(builder: Builder<()>, expr: &str) -> Type {
     let compiler = builder.build_compiler();
     let parsed = parse_rex(expr).unwrap();
     let (program, _evaluator) = compiler
-        .compile_program(&parsed, Default::default())
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
         .await
         .unwrap();
     program.result_type().clone()

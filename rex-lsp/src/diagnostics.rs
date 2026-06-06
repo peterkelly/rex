@@ -150,12 +150,22 @@ pub(crate) fn push_type_diagnostics(
     };
 
     let result = if let Some(path) = uri_to_file_path(uri) {
-        builder.add_importer("lsp-modules", Arc::new(session.module_service()));
+        let Some(module_id) = crate::shared::module_id_from_path(path.as_path()) else {
+            return;
+        };
+        builder.add_importer("lsp-modules", Arc::new(session.module_service_for_uri(uri)));
         let compiler = builder.build_compiler();
-        futures::executor::block_on(compiler.infer_snippet(text, Some(path.as_path())))
+        futures::executor::block_on(compiler.infer_snippet(text, module_id))
     } else {
         let compiler = builder.build_compiler();
-        futures::executor::block_on(compiler.infer_snippet(text, None))
+        let module_id = match rex_engine::ModuleId::parse("snippet") {
+            Ok(id) => id,
+            Err(err) => {
+                push_engine_error(err.into(), diagnostics, compilation_unit);
+                return;
+            }
+        };
+        futures::executor::block_on(compiler.infer_snippet(text, module_id))
     };
 
     if let Err(err) = result {

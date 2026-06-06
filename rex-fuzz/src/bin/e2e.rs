@@ -2,7 +2,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
 use rex_ast::CompilationUnit;
-use rex_engine::{Builder, Module, standard_type_system};
+use rex_engine::{Builder, CompileOptions, Module, standard_type_system};
 use rex_fuzz::{FuzzError, fuzz_source_input, read_stdin_bytes};
 use rex_parser::parse;
 use rex_typesystem::inference::infer;
@@ -40,10 +40,10 @@ async fn run_one(input: &[u8]) {
         decls: Vec::new(),
         body: Some(body.clone()),
     };
-    if let Ok((compiled, evaluator)) = compiler
-        .compile_program(&body_program, Default::default())
-        .await
-    {
+    let Ok(options) = CompileOptions::for_module("fuzz.main") else {
+        return;
+    };
+    if let Ok((compiled, evaluator)) = compiler.compile_program(&body_program, options).await {
         let _ = evaluator.run(compiled, Default::default()).await;
     }
 }

@@ -87,8 +87,8 @@ rewrite paths. Remaining string usage is intentional in these boundary layers:
   output stringify symbols/types for readability.
 - **Protocol/serialization boundaries**: JSON/LSP payloads are string-based and convert structured
   internal symbols/types at the edge.
-- **Filesystem/module specifiers**: import specifiers and path labels are textual before being
-  resolved into structured module identities.
+- **Module specifiers**: parsed import names are textual before being resolved into structured
+  `ModuleId` values.
 
 Non-goal for this pass:
 

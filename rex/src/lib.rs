@@ -39,7 +39,7 @@
 //! let parsed = parse_rex("import host.math (inc);\ninc 41")
 //!     .map_err(|errs| EngineError::from(format!("parse error: {errs:?}")))?;
 //! let (program, evaluator) = compiler
-//!     .compile_program(&parsed, CompileOptions::default())
+//!     .compile_program(&parsed, CompileOptions::for_module("workflow.main")?)
 //!     .await?;
 //! let typ = program.result_type().clone();
 //! let value = evaluator.run(program, Default::default()).await?;
@@ -105,7 +105,7 @@ pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionEr
         .map_err(|e| engine::EngineError::from(format!("failed to initialize engine: {e}")))?;
     let compiler = builder.build_compiler();
     let (program, evaluator) = compiler
-        .compile_program(&parsed, engine::CompileOptions::default())
+        .compile_program(&parsed, engine::CompileOptions::for_module("eval.snippet")?)
         .await?;
     let result_type = program.result_type().clone();
     let type_system = evaluator.type_system();
