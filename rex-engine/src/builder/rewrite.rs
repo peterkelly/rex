@@ -6,10 +6,10 @@ use crate::{
     compiler::Compiler,
     error::EngineError,
     modules::{
-        ImportBindingPolicy, ImportBindings, ModuleId, add_import_bindings, alias_is_visible,
-        collect_pattern_bindings, contains_import_alias, decl_type_names, decl_value_names,
-        default_import_decl, exports_from_program, import_specifier, interface_decls_from_program,
-        program_from_resolved, qualified_alias_member,
+        ImportBindingPolicy, ImportBindings, ModuleId, ResolvedModuleCache, add_import_bindings,
+        alias_is_visible, collect_pattern_bindings, contains_import_alias, decl_type_names,
+        decl_value_names, default_import_decl, exports_from_program, import_specifier,
+        interface_decls_from_program, program_from_resolved, qualified_alias_member,
         system::ImportChain,
         types::{
             CanonicalSymbol, ImportRequest, ModuleExports, ResolvedModule, ResolvedModuleContent,
@@ -57,10 +57,6 @@ impl fmt::Display for ImportUseError {
 pub(crate) trait ModuleRewriteContext: Send {
     fn module_loader(&self) -> &ModuleLoaderState;
     fn module_loader_mut(&mut self) -> &mut ModuleLoaderState;
-    fn refresh_if_stale(
-        &mut self,
-        resolved: &ResolvedModule,
-    ) -> Result<Option<String>, EngineError>;
     fn ensure_cycle_interfaces_published(
         &mut self,
         module_id: &ModuleId,
@@ -82,13 +78,6 @@ where
 
     fn module_loader_mut(&mut self) -> &mut ModuleLoaderState {
         &mut self.module_loader
-    }
-
-    fn refresh_if_stale(
-        &mut self,
-        resolved: &ResolvedModule,
-    ) -> Result<Option<String>, EngineError> {
-        Builder::refresh_if_stale(self, resolved)
     }
 
     fn ensure_cycle_interfaces_published(
@@ -115,13 +104,6 @@ where
         &mut self.module_loader
     }
 
-    fn refresh_if_stale(
-        &mut self,
-        resolved: &ResolvedModule,
-    ) -> Result<Option<String>, EngineError> {
-        Compiler::refresh_if_stale(self, resolved)
-    }
-
     fn ensure_cycle_interfaces_published(
         &mut self,
         module_id: &ModuleId,
@@ -134,14 +116,38 @@ where
     }
 }
 
+#[derive(Debug, Default)]
+pub struct ModuleLoadState {
+    resolved_modules: ResolvedModuleCache,
+    loaded: BTreeMap<ModuleId, ModuleExports>,
+    loading: BTreeSet<ModuleId>,
+}
+
+impl ModuleLoadState {
+    pub(crate) async fn import(
+        &mut self,
+        chain: &ImportChain,
+        request: ImportRequest,
+    ) -> Result<ResolvedModule, EngineError> {
+        self.resolved_modules.import(chain, request).await
+    }
+
+    pub(crate) fn loaded_mut(&mut self) -> &mut BTreeMap<ModuleId, ModuleExports> {
+        &mut self.loaded
+    }
+
+    pub(crate) fn loading_mut(&mut self) -> &mut BTreeSet<ModuleId> {
+        &mut self.loading
+    }
+}
+
 pub(crate) fn rewrite_program_with_imports<'a, C>(
     engine: &'a mut C,
     compilation_unit: &'a CompilationUnit,
     importer: Option<ModuleId>,
     prefix: &'a str,
     chain: &'a ImportChain,
-    loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
-    loading: &'a mut BTreeSet<ModuleId>,
+    load_state: &'a mut ModuleLoadState,
 ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>>
 where
     C: ModuleRewriteContext + 'a,
@@ -163,8 +169,7 @@ where
                 import_decl,
                 importer.clone(),
                 chain,
-                loaded,
-                loading,
+                load_state,
             )
             .await?;
             add_import_bindings(&mut bindings, import_decl, &exports, &import_policy)?;
@@ -182,8 +187,7 @@ where
                 &import_decl,
                 importer.clone(),
                 chain,
-                loaded,
-                loading,
+                load_state,
             )
             .await?;
             for (local, target) in exports.values() {
@@ -1297,22 +1301,24 @@ fn resolve_module_exports_for_rewrite<'a, C>(
     import_decl: &'a ImportDecl,
     importer: Option<ModuleId>,
     chain: &'a ImportChain,
-    loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
-    loading: &'a mut BTreeSet<ModuleId>,
+    load_state: &'a mut ModuleLoadState,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
     C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
         let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
-        let imported = chain
-            .import(ImportRequest {
-                module_id,
-                expected_sha,
-                importer,
-            })
+        let imported = load_state
+            .resolved_modules
+            .import(
+                chain,
+                ImportRequest {
+                    module_id,
+                    expected_sha,
+                    importer,
+                },
+            )
             .await?;
-        engine.refresh_if_stale(&imported)?;
         if let Some(exports) = engine
             .module_loader()
             .module_exports_cache
@@ -1322,7 +1328,7 @@ where
             engine.ensure_cycle_interfaces_published(&imported.id)?;
             return Ok(exports);
         }
-        load_module_types_from_resolved(engine, imported, chain, loaded, loading).await
+        load_module_types_from_resolved(engine, imported, chain, load_state).await
     })
 }
 
@@ -1330,23 +1336,22 @@ pub(crate) fn load_module_types_from_resolved<'a, C>(
     engine: &'a mut C,
     resolved: ResolvedModule,
     chain: &'a ImportChain,
-    loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
-    loading: &'a mut BTreeSet<ModuleId>,
+    load_state: &'a mut ModuleLoadState,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
     C: ModuleRewriteContext + 'a,
 {
     Box::pin(async move {
-        if let Some(exports) = loaded.get(&resolved.id) {
+        if let Some(exports) = load_state.loaded.get(&resolved.id) {
             return Ok(exports.clone());
         }
 
-        if loading.contains(&resolved.id)
-            && let Some(exports) = loaded.get(&resolved.id)
+        if load_state.loading.contains(&resolved.id)
+            && let Some(exports) = load_state.loaded.get(&resolved.id)
         {
             return Ok(exports.clone());
         }
-        load_module_types_via_scc(engine, resolved, chain, loaded, loading).await
+        load_module_types_via_scc(engine, resolved, chain, load_state).await
     })
 }
 
@@ -1354,8 +1359,7 @@ fn load_module_types_via_scc<'a, C>(
     engine: &'a mut C,
     root: ResolvedModule,
     chain: &'a ImportChain,
-    loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
-    loading: &'a mut BTreeSet<ModuleId>,
+    load_state: &'a mut ModuleLoadState,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
     C: ModuleRewriteContext + 'a,
@@ -1368,8 +1372,8 @@ where
             prefix: String,
         }
 
-        if let Some(exports) = loaded.get(&root.id)
-            && !loading.contains(&root.id)
+        if let Some(exports) = load_state.loaded.get(&root.id)
+            && !load_state.loading.contains(&root.id)
         {
             return Ok(exports.clone());
         }
@@ -1379,19 +1383,20 @@ where
         let mut stack = vec![root.clone()];
 
         while let Some(resolved) = stack.pop() {
-            let fingerprint = engine.refresh_if_stale(&resolved)?;
             if pending.contains_key(&resolved.id) {
                 continue;
             }
-            if loaded.contains_key(&resolved.id) && !loading.contains(&resolved.id) {
+            if load_state.loaded.contains_key(&resolved.id)
+                && !load_state.loading.contains(&resolved.id)
+            {
                 continue;
             }
 
             let prefix = prefix_for_module(&resolved.id);
             let program = program_from_resolved(&resolved)?;
             let exports = exports_from_program(&program, &prefix, &resolved.id);
-            loaded.insert(resolved.id.clone(), exports);
-            loading.insert(resolved.id.clone());
+            load_state.loaded.insert(resolved.id.clone(), exports);
+            load_state.loading.insert(resolved.id.clone());
             if let ResolvedModuleContent::Source(source) = &resolved.content {
                 engine
                     .module_loader_mut()
@@ -1408,18 +1413,23 @@ where
             let imports = graph_imports_for_program(&program, engine.default_imports());
             for import_decl in imports {
                 let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
-                let imported = chain
-                    .import(ImportRequest {
-                        module_id,
-                        expected_sha,
-                        importer: Some(resolved.id.clone()),
-                    })
+                let imported = load_state
+                    .resolved_modules
+                    .import(
+                        chain,
+                        ImportRequest {
+                            module_id,
+                            expected_sha,
+                            importer: Some(resolved.id.clone()),
+                        },
+                    )
                     .await?;
                 edges
                     .entry(resolved.id.clone())
                     .or_default()
                     .push(imported.id.clone());
-                if (loading.contains(&imported.id) || !loaded.contains_key(&imported.id))
+                if (load_state.loading.contains(&imported.id)
+                    || !load_state.loaded.contains_key(&imported.id))
                     && !pending.contains_key(&imported.id)
                 {
                     stack.push(imported);
@@ -1435,16 +1445,10 @@ where
                     prefix,
                 },
             );
-            if let Some(fingerprint) = fingerprint {
-                engine
-                    .module_loader_mut()
-                    .module_source_fingerprints
-                    .insert(module_id, fingerprint);
-            }
         }
 
         if pending.is_empty() {
-            return loaded.get(&root.id).cloned().ok_or_else(|| {
+            return load_state.loaded.get(&root.id).cloned().ok_or_else(|| {
                 EngineError::Internal("missing module exports after SCC load".into())
             });
         }
@@ -1471,18 +1475,18 @@ where
                     Some(node.resolved.id.clone()),
                     &node.prefix,
                     chain,
-                    loaded,
-                    loading,
+                    load_state,
                 )
                 .await?;
                 engine.inject_decls(&rewritten.decls)?;
             }
             for module_id in component {
-                loading.remove(&module_id);
+                load_state.loading.remove(&module_id);
             }
         }
 
-        loaded
+        load_state
+            .loaded
             .get(&root.id)
             .cloned()
             .ok_or_else(|| EngineError::Internal("missing root exports after SCC load".into()))

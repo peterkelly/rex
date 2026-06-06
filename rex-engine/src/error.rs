@@ -30,6 +30,11 @@ pub enum ModuleError {
         expected: String,
         actual: String,
     },
+    ShaMismatchModule {
+        module: ModuleId,
+        expected: String,
+        actual: String,
+    },
     ShaMismatchPath {
         kind: &'static str,
         path: PathBuf,
@@ -89,6 +94,14 @@ impl std::fmt::Display for ModuleError {
             } => write!(
                 f,
                 "sha mismatch for `{module}`: expected #{expected}, got #{actual}"
+            ),
+            ModuleError::ShaMismatchModule {
+                module,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "module import sha mismatch for {module}: expected #{expected}, got #{actual}"
             ),
             ModuleError::ShaMismatchPath {
                 kind,

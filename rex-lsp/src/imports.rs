@@ -60,8 +60,7 @@ pub fn prepare_program_with_imports(
     let module_service = session.module_service_for_uri(uri);
 
     let mut imports: HashMap<Symbol, ImportModuleInfo> = HashMap::new();
-    let mut loaded = std::collections::BTreeMap::new();
-    let mut loading = BTreeSet::new();
+    let mut load_state = ModuleLoadState::default();
     let importer = uri_to_file_path(uri).and_then(|path| module_id_from_path(&path));
     let lsp_importer: Arc<dyn Importer> = Arc::new(module_service.clone());
 
@@ -92,8 +91,7 @@ pub fn prepare_program_with_imports(
             import_decl,
             importer.clone(),
             Some(Arc::clone(&lsp_importer)),
-            &mut loaded,
-            &mut loading,
+            &mut load_state,
         )) {
             Ok(loaded) => loaded,
             Err(err) => {

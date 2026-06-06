@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use futures::{FutureExt, future::BoxFuture};
 use rex_ast::Symbol;
@@ -72,6 +72,38 @@ impl Importer for TestFilesystemImporter {
             }
 
             Ok(None)
+        })
+    }
+}
+
+#[derive(Clone)]
+struct CountingImporter {
+    calls: Arc<AtomicUsize>,
+    module_id: ModuleId,
+}
+
+impl CountingImporter {
+    fn new(calls: Arc<AtomicUsize>, module_id: ModuleId) -> Self {
+        Self { calls, module_id }
+    }
+}
+
+impl Importer for CountingImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            if req.module_id != self.module_id {
+                return Ok(None);
+            }
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(ResolvedModule {
+                id: self.module_id.clone(),
+                content: ResolvedModuleContent::Source(
+                    "pub fn value x: i32 -> i32 = x + 1;".to_string(),
+                ),
+            }))
         })
     }
 }
@@ -339,6 +371,35 @@ async fn snippet_import_observes_local_module_changes_with_new_compiler() {
     let (program, evaluator) = compiler.compile_program(&parsed, options).await.unwrap();
     let ty = program.result_type().clone();
     let value_ptr = evaluator.run(program, Default::default()).await.unwrap();
+    assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
+    match value_ptr.value().unwrap() {
+        Value::I32(v) => assert_eq!(v, 2),
+        other => panic!("expected i32, got {}", other.value_type_name()),
+    }
+}
+
+#[tokio::test]
+async fn duplicate_import_request_uses_resolved_module_cache() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_id = ModuleId::parse("foo").unwrap();
+    let mut builder = builder_with_prelude();
+    builder.add_importer(
+        "counting",
+        Arc::new(CountingImporter::new(Arc::clone(&calls), module_id)),
+    );
+
+    let (value_ptr, ty) = run_snippet(
+        builder,
+        r#"
+        import foo as Foo;
+        import foo (value);
+        value 1
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 2),

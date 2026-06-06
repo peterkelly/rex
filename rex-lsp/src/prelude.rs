@@ -18,9 +18,10 @@ pub(crate) use rex_engine::{
     Builder, EngineError, ImportRequest, Importer, ModuleError, ModuleExports, ModuleId,
     ResolvedModule, ResolvedModuleContent,
     module_semantics::{
-        ImportBindingPolicy, ImportBindings, add_import_bindings, collect_pattern_bindings,
-        decl_type_names, decl_value_names, exports_from_program, load_import_for_tooling,
-        prefix_for_module, rewrite_import_uses, validate_import_uses_with_spans,
+        ImportBindingPolicy, ImportBindings, ModuleLoadState, add_import_bindings,
+        collect_pattern_bindings, decl_type_names, decl_value_names, exports_from_program,
+        load_import_for_tooling, prefix_for_module, rewrite_import_uses,
+        validate_import_uses_with_spans,
     },
     standard_type_system,
 };

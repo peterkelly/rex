@@ -430,7 +430,6 @@ pub(crate) struct ModuleLoaderState {
     pub(crate) module_exports_cache: BTreeMap<ModuleId, ModuleExports>,
     pub(crate) module_interface_cache: BTreeMap<ModuleId, Vec<Decl>>,
     pub(crate) module_sources: BTreeMap<ModuleId, String>,
-    pub(crate) module_source_fingerprints: BTreeMap<ModuleId, String>,
     pub(crate) published_cycle_interfaces: BTreeSet<ModuleId>,
     pub(crate) default_imports: Vec<String>,
     pub(crate) virtual_modules: BTreeMap<String, VirtualModule>,
@@ -452,7 +451,6 @@ impl ModuleLoaderState {
             module_exports_cache: BTreeMap::new(),
             module_interface_cache: BTreeMap::new(),
             module_sources: BTreeMap::new(),
-            module_source_fingerprints: BTreeMap::new(),
             published_cycle_interfaces: BTreeSet::new(),
             default_imports,
             virtual_modules: BTreeMap::new(),
@@ -678,24 +676,6 @@ where
         Ok(schemes[0].clone())
     }
 
-    pub(crate) fn refresh_if_stale(
-        &mut self,
-        resolved: &ResolvedModule,
-    ) -> Result<Option<String>, EngineError> {
-        let Some(next) = resolved.content_fingerprint() else {
-            return Ok(None);
-        };
-        if let Some(prev) = self
-            .module_loader
-            .module_source_fingerprints
-            .get(&resolved.id)
-            && prev != &next
-        {
-            invalidate_module_caches(&mut self.module_loader, &mut self.type_system, &resolved.id);
-        }
-        Ok(Some(next))
-    }
-
     pub(crate) fn ensure_cycle_interfaces_published(
         &mut self,
         module_id: &ModuleId,
@@ -730,24 +710,6 @@ where
         expr: &Expr,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         infer(&mut self.type_system, expr).map_err(EngineError::Type)
-    }
-
-    pub(crate) fn refresh_if_stale(
-        &mut self,
-        resolved: &ResolvedModule,
-    ) -> Result<Option<String>, EngineError> {
-        let Some(next) = resolved.content_fingerprint() else {
-            return Ok(None);
-        };
-        if let Some(prev) = self
-            .module_loader
-            .module_source_fingerprints
-            .get(&resolved.id)
-            && prev != &next
-        {
-            invalidate_module_caches(&mut self.module_loader, &mut self.type_system, &resolved.id);
-        }
-        Ok(Some(next))
     }
 
     pub(crate) fn ensure_cycle_interfaces_published(
@@ -1308,52 +1270,5 @@ fn qualify_module_type_refs(
                 .collect(),
         )),
         TypeKind::Var(_) => typ.clone(),
-    }
-}
-
-fn invalidate_module_caches(
-    module_loader: &mut ModuleLoaderState,
-    type_system: &mut TypeSystem,
-    id: &ModuleId,
-) {
-    if let Some(prev_interface) = module_loader.module_interface_cache.get(id).cloned() {
-        remove_type_level_symbols_for_module_interface(type_system, &prev_interface);
-    }
-    module_loader.module_exports_cache.remove(id);
-    module_loader.module_interface_cache.remove(id);
-    module_loader.module_sources.remove(id);
-    module_loader.module_source_fingerprints.remove(id);
-    module_loader.published_cycle_interfaces.remove(id);
-}
-
-fn remove_type_level_symbols_for_module_interface(type_system: &mut TypeSystem, decls: &[Decl]) {
-    for decl in decls {
-        match decl {
-            Decl::Fn(fd) => {
-                type_system.env.remove(&fd.name.name);
-                type_system.declared_values.remove(&fd.name.name);
-            }
-            Decl::DeclareFn(df) => {
-                type_system.env.remove(&df.name.name);
-                type_system.declared_values.remove(&df.name.name);
-            }
-            Decl::Type(td) => {
-                type_system.adts.remove(&td.name);
-                for variant in &td.variants {
-                    type_system.env.remove(&variant.name);
-                    type_system.declared_values.remove(&variant.name);
-                }
-            }
-            Decl::Class(cd) => {
-                type_system.classes.classes.remove(&cd.name);
-                type_system.classes.instances.remove(&cd.name);
-                type_system.class_info.remove(&cd.name);
-                for method in &cd.methods {
-                    type_system.env.remove(&method.name);
-                    type_system.class_methods.remove(&method.name);
-                }
-            }
-            Decl::Import(..) | Decl::Instance(..) => {}
-        }
     }
 }

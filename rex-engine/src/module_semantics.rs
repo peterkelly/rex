@@ -5,16 +5,14 @@
 //! snapshot-aware importer, then use these helpers for canonical names, export
 //! tables, binding expansion, validation, and rewrite behavior.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use crate::{Builder, EngineError, builder::rewrite::load_module_types_from_resolved};
 use rex_ast::{CompilationUnit, ImportDecl};
 
 pub use crate::builder::rewrite::{
-    ImportUseError, rewrite_import_uses, validate_import_uses, validate_import_uses_with_spans,
+    ImportUseError, ModuleLoadState, rewrite_import_uses, validate_import_uses,
+    validate_import_uses_with_spans,
 };
 pub use crate::modules::types::{module_key_for_module, prefix_for_module, prefix_for_module_key};
 pub use crate::modules::{
@@ -39,8 +37,7 @@ pub async fn load_import_for_tooling<State>(
     import_decl: &ImportDecl,
     importer: Option<ModuleId>,
     extra_importer: Option<Arc<dyn Importer>>,
-    loaded: &mut BTreeMap<ModuleId, ModuleExports>,
-    loading: &mut BTreeSet<ModuleId>,
+    load_state: &mut ModuleLoadState,
 ) -> Result<ToolingLoadedImport, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -54,19 +51,21 @@ where
         None => builder.module_loader.system.import_chain(),
     };
     let (module_id, expected_sha) = import_specifier(&import_decl.path)?;
-    let resolved = chain
-        .import(ImportRequest {
-            module_id,
-            expected_sha,
-            importer,
-        })
+    let resolved = load_state
+        .import(
+            &chain,
+            ImportRequest {
+                module_id,
+                expected_sha,
+                importer,
+            },
+        )
         .await?;
     let program = program_from_resolved(&resolved)?;
     let source = match &resolved.content {
         ResolvedModuleContent::Source(source) => Some(source.clone()),
         ResolvedModuleContent::CompilationUnit(_) => None,
     };
-    builder.refresh_if_stale(&resolved)?;
     let exports = if let Some(exports) = builder
         .module_loader
         .module_exports_cache
@@ -76,7 +75,7 @@ where
         builder.ensure_cycle_interfaces_published(&resolved.id)?;
         exports
     } else {
-        load_module_types_from_resolved(builder, resolved.clone(), &chain, loaded, loading).await?
+        load_module_types_from_resolved(builder, resolved.clone(), &chain, load_state).await?
     };
 
     Ok(ToolingLoadedImport {

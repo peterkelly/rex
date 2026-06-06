@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use futures::future::BoxFuture;
@@ -10,14 +10,14 @@ use crate::{
     EngineError, Evaluator,
     builder::{
         core::{Builder, ModuleLoaderState, RuntimePolicy, RuntimeRegistry},
-        rewrite::rewrite_program_with_imports,
+        rewrite::{ModuleLoadState, rewrite_program_with_imports},
     },
     compiler::{program::CompiledProgram, type_check::type_check_engine},
     env::RootedEnvironment,
     evaluator::runtime_core::RuntimeCore,
     manifest::{MainInputSpec, MainSignature},
     modules::{
-        ImportChain, ImportRequest, Importer, ModuleExports, ModuleId, exports_from_program,
+        ImportChain, ImportRequest, Importer, ModuleId, exports_from_program,
         parse_program_from_source, prefix_for_module, program_from_resolved,
     },
     value::Heap,
@@ -120,8 +120,7 @@ where
         importer: Option<ModuleId>,
         prefix: &'a str,
         chain: &'a ImportChain,
-        loaded: &'a mut BTreeMap<ModuleId, ModuleExports>,
-        loading: &'a mut BTreeSet<ModuleId>,
+        load_state: &'a mut ModuleLoadState,
     ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>> {
         Box::pin(async move {
             let rewritten = rewrite_program_with_imports(
@@ -130,8 +129,7 @@ where
                 importer,
                 prefix,
                 chain,
-                loaded,
-                loading,
+                load_state,
             )
             .await?;
             self.inject_decls(&rewritten.decls)?;
@@ -152,8 +150,7 @@ where
         let entry = main_entry_program(program)?;
         let module_id = options.module_id;
         let prefix = prefix_for_module(&module_id);
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+        let mut load_state = ModuleLoadState::default();
         let chain = self.module_loader.system.import_chain();
         let rewritten = self
             .rewrite_and_inject_program(
@@ -161,8 +158,7 @@ where
                 Some(module_id),
                 &prefix,
                 &chain,
-                &mut loaded,
-                &mut loading,
+                &mut load_state,
             )
             .await?;
         let body = rewritten
@@ -182,18 +178,10 @@ where
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let program = parse_program_from_source(source, None)?;
         let prefix = prefix_for_module(&module_id);
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+        let mut load_state = ModuleLoadState::default();
         let chain = self.module_loader.system.import_chain();
         let rewritten = self
-            .rewrite_and_inject_program(
-                &program,
-                Some(module_id),
-                &prefix,
-                &chain,
-                &mut loaded,
-                &mut loading,
-            )
+            .rewrite_and_inject_program(&program, Some(module_id), &prefix, &chain, &mut load_state)
             .await?;
         let body = rewritten
             .body
@@ -211,11 +199,10 @@ where
             .system
             .import_chain()
             .with_importer(importer);
-        let resolved = chain.import(request).await?;
-        let mut loaded: BTreeMap<ModuleId, ModuleExports> = BTreeMap::new();
-        let mut loading: BTreeSet<ModuleId> = BTreeSet::new();
+        let mut load_state = ModuleLoadState::default();
+        let resolved = load_state.import(&chain, request).await?;
 
-        loading.insert(resolved.id.clone());
+        load_state.loading_mut().insert(resolved.id.clone());
 
         let prefix = prefix_for_module(&resolved.id);
         let program = program_from_resolved(&resolved)?;
@@ -226,8 +213,7 @@ where
                 Some(resolved.id.clone()),
                 &prefix,
                 &chain,
-                &mut loaded,
-                &mut loading,
+                &mut load_state,
             )
             .await?;
         let body = rewritten
@@ -236,8 +222,8 @@ where
         let result = self.infer_type(body.as_ref())?;
 
         let exports = exports_from_program(&program, &prefix, &resolved.id);
-        loaded.insert(resolved.id.clone(), exports);
-        loading.remove(&resolved.id);
+        load_state.loaded_mut().insert(resolved.id.clone(), exports);
+        load_state.loading_mut().remove(&resolved.id);
 
         Ok(result)
     }

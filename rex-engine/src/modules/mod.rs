@@ -26,7 +26,7 @@ pub use types::{
     ResolvedModuleContent, SymbolKind, VirtualModule,
 };
 
-pub(crate) use system::{ImportChain, ModuleSystem};
+pub(crate) use system::{ImportChain, ModuleSystem, ResolvedModuleCache};
 pub(crate) use types::{module_key_for_module, prefix_for_module};
 
 pub const ROOT_MODULE_NAME: &str = "__root__";
