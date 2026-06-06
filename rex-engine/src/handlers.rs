@@ -53,7 +53,15 @@ pub(crate) fn declare_fn_decl_from_scheme(export_name: &str, scheme: &Scheme) ->
             span: Span::default(),
             name: Symbol::intern(export_name),
         },
-        type_params: Vec::new(),
+        type_params: scheme
+            .vars
+            .iter()
+            .map(|var| {
+                var.name
+                    .clone()
+                    .unwrap_or_else(|| Symbol::intern(&format!("t{}", var.id)))
+            })
+            .collect(),
         params: params
             .into_iter()
             .enumerate()

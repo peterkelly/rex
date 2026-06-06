@@ -1,8 +1,8 @@
 /* CLI example: logging + Show
 
 Run:
-  cargo run -p rex-cli --bin rex -- rex-cli/examples/cli_subprocess_log.rex
-  REX_LOG=debug cargo run -p rex-cli --bin rex -- rex-cli/examples/cli_subprocess_log.rex
+  cargo run -p rex-cli --bin rex -- rex-cli/examples/stdio/cli_subprocess_log.rex
+  REX_LOG=debug cargo run -p rex-cli --bin rex -- rex-cli/examples/stdio/cli_subprocess_log.rex
 
 Notes:
   - info/debug/warn/error accept and return strings, and also emit a
@@ -12,12 +12,13 @@ Notes:
 import std.io;
 import std.process;
 
-let _ = io.debug "spawning..." in
 let p = process.spawn (process.SpawnOptions {
   cmd = "sh",
   args = to_array ["-c", "printf hi"]
 }) in
 let _ = process.wait p in
 let out = process.stdout p in
-let msg = io.info (show out) in
-(msg, count out)
+bind (\_ ->
+  bind (\msg -> pure (msg, count out))
+       (io.info (show out)))
+     (io.debug "spawning...")

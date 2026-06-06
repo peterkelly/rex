@@ -38,7 +38,11 @@ pub use config::{
 };
 pub use env::Environment;
 pub use error::{EngineError, ExecutionError, ModuleError};
-pub use evaluator::{Evaluator, context::Context};
+pub use evaluator::{
+    Evaluator,
+    context::Context,
+    host_action::{HostAction, HostActionEffect, HostActionFuture, run_host_action},
+};
 pub use handlers::RexDefault;
 pub use manifest::{MainInputSpec, MainSignature, Manifest, build_manifest, type_has_vars};
 pub use modules::{

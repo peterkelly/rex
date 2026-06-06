@@ -4,11 +4,12 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
+use crate::modules::stdio;
+pub use crate::modules::stdio::{io_result_type_arg, run_io_handle};
 use rex::{
     Rex,
     engine::{Builder, EngineError, Module},
 };
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
@@ -58,7 +59,7 @@ struct CliSubprocess {
 
 pub fn inject_cli_prelude_builder(builder: &mut Builder) -> Result<(), EngineError> {
     inject_cli_test_natives(builder)?;
-    inject_cli_io_natives(builder)?;
+    stdio::inject_cli_io_natives(builder)?;
     inject_cli_process_natives(builder)?;
     Ok(())
 }
@@ -85,76 +86,6 @@ fn inject_cli_test_natives(builder: &mut Builder) -> Result<(), EngineError> {
         println!("is_even {} end", n);
         Ok::<bool, EngineError>(n % 2 == 0)
     })?;
-    builder.inject_module(module)
-}
-
-fn inject_cli_io_natives(builder: &mut Builder) -> Result<(), EngineError> {
-    let mut module = Module::new("std.io");
-    module.export("debug", |_state: &(), message: String| {
-        tracing::debug!("{message}");
-        Ok::<String, EngineError>(message)
-    })?;
-    module.export("info", |_state: &(), message: String| {
-        tracing::info!("{message}");
-        Ok::<String, EngineError>(message)
-    })?;
-    module.export("warn", |_state: &(), message: String| {
-        tracing::warn!("{message}");
-        Ok::<String, EngineError>(message)
-    })?;
-    module.export("error", |_state: &(), message: String| {
-        tracing::error!("{message}");
-        Ok::<String, EngineError>(message)
-    })?;
-
-    module.export_async("read_all", |_state: &(), fd: i32| async move {
-        if fd != 0 {
-            return Err(EngineError::Internal(format!(
-                "read_all only supports fd 0 (stdin), got {fd}"
-            )));
-        }
-
-        let mut buf = Vec::new();
-        io::stdin()
-            .read_to_end(&mut buf)
-            .await
-            .map_err(|e| EngineError::Internal(format!("read_all failed: {e}")))?;
-        Ok::<Vec<u8>, EngineError>(buf)
-    })?;
-
-    module.export_async(
-        "write_all",
-        |_state: &(), fd: i32, bytes: Vec<u8>| async move {
-            match fd {
-                1 => {
-                    let mut out = io::stdout();
-                    out.write_all(&bytes)
-                        .await
-                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
-                    out.flush()
-                        .await
-                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
-                }
-                2 => {
-                    let mut out = io::stderr();
-                    out.write_all(&bytes)
-                        .await
-                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
-                    out.flush()
-                        .await
-                        .map_err(|e| EngineError::Internal(format!("write_all failed: {e}")))?;
-                }
-                _ => {
-                    return Err(EngineError::Internal(format!(
-                        "write_all only supports fd 1 (stdout) and 2 (stderr), got {fd}"
-                    )));
-                }
-            }
-
-            Ok::<(), EngineError>(())
-        },
-    )?;
-
     builder.inject_module(module)
 }
 
@@ -294,7 +225,11 @@ mod tests {
             .compile_program(&parsed, compile_options())
             .await
             .unwrap();
-        evaluator.run(program, Default::default()).await.unwrap();
+        let (value, ctx) = evaluator
+            .run_with_context(program, Default::default())
+            .await
+            .unwrap();
+        run_io_handle(ctx, value).await.unwrap();
     }
 
     #[tokio::test]
@@ -315,9 +250,97 @@ mod tests {
             .await
             .unwrap();
         let ty = program.result_type().clone();
-        let value = evaluator.run(program, Default::default()).await.unwrap();
-        assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
+        let (value, ctx) = evaluator
+            .run_with_context(program, Default::default())
+            .await
+            .unwrap();
+        let inner = io_result_type_arg(&ty).unwrap();
+        let value = run_io_handle(ctx, value).await.unwrap();
+        assert_eq!(inner, Type::builtin(BuiltinTypeId::String));
         assert_eq!(value.to_rust::<String>().unwrap(), "hello");
+    }
+
+    #[tokio::test]
+    async fn cli_io_filesystem_actions_sequence_with_bind() {
+        let path = std::env::temp_dir().join(format!("rex-cli-io-{}.txt", Uuid::new_v4()));
+        let path_str = path.display().to_string();
+        let code = format!(
+            r#"
+            import std.io;
+
+            let path = "{path_str}" in
+              bind (\_ ->
+                bind (\contents ->
+                  bind (\exists ->
+                    bind (\_ -> pure (contents, exists))
+                         (io.remove_file path))
+                       (io.exists path))
+                     (io.read_file path))
+                   (io.write_file path "hello")
+            "#
+        );
+
+        let mut builder = Builder::with_prelude(()).unwrap();
+
+        inject_cli_prelude_builder(&mut builder).unwrap();
+        let compiler = builder.build_compiler();
+        let parsed = parse_rex(&code).unwrap();
+        let (program, evaluator) = compiler
+            .compile_program(&parsed, compile_options())
+            .await
+            .unwrap();
+        let ty = program.result_type().clone();
+        let (value, ctx) = evaluator
+            .run_with_context(program, Default::default())
+            .await
+            .unwrap();
+        let inner = io_result_type_arg(&ty).unwrap();
+        let value = run_io_handle(ctx, value).await.unwrap();
+        assert_eq!(
+            inner,
+            Type::tuple(vec![
+                Type::builtin(BuiltinTypeId::String),
+                Type::builtin(BuiltinTypeId::Bool),
+            ])
+        );
+        let Value::Tuple(xs) = value.value().unwrap() else {
+            panic!("expected tuple");
+        };
+        assert_eq!(xs[0].to_rust::<String>().unwrap(), "hello");
+        assert!(xs[1].to_rust::<bool>().unwrap());
+        assert!(!path.exists());
+    }
+
+    #[tokio::test]
+    async fn cli_io_deep_bind_chain_does_not_recurse_rust_stack() {
+        let code = r#"
+            import std.io;
+
+            fn go n: i32 -> io.IO i32 =
+              if n <= 0 then pure n
+              else bind (\_ -> go (n - 1)) (pure n);
+
+            go 10000
+        "#;
+
+        let mut builder = Builder::with_prelude(()).unwrap();
+
+        inject_cli_prelude_builder(&mut builder).unwrap();
+        let compiler = builder.build_compiler();
+        let parsed = parse_rex(code).unwrap();
+        let (program, evaluator) = compiler
+            .compile_program(&parsed, compile_options())
+            .await
+            .unwrap();
+        let ty = program.result_type().clone();
+        let (value, ctx) = evaluator
+            .run_with_context(program, Default::default())
+            .await
+            .unwrap();
+        let inner = io_result_type_arg(&ty).unwrap();
+        let value = run_io_handle(ctx, value).await.unwrap();
+        assert_eq!(inner, Type::builtin(BuiltinTypeId::I32));
+        assert_eq!(value.to_rust::<i32>().unwrap(), 0);
     }
 
     #[tokio::test]

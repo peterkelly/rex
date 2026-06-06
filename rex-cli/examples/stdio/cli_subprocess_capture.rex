@@ -1,7 +1,7 @@
 /* CLI example: subprocess + wait + stdout/stderr
 
 Run:
-  cargo run -p rex-cli --bin rex -- rex-cli/examples/cli_subprocess_capture.rex
+  cargo run -p rex-cli --bin rex -- rex-cli/examples/stdio/cli_subprocess_capture.rex
 
 This spawns a subprocess, waits for it to exit, then forwards its captured
 stdout/stderr to the CLI stdout/stderr.
@@ -15,6 +15,7 @@ let p = process.spawn (process.SpawnOptions {
   args = to_array ["-c", "printf hi; printf err 1>&2; exit 7"]
 }) in
 let code = process.wait p in
-let _ = io.write_all 1 (process.stdout p) in
-let _ = io.write_all 2 (process.stderr p) in
-code
+let forward =
+  bind (\_ -> io.write_all 2 (process.stderr p))
+       (io.write_all 1 (process.stdout p)) in
+bind (\_ -> pure code) forward

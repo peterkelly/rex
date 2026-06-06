@@ -13,13 +13,14 @@ use rex_typesystem::{
 use crate::{
     compiler::program::CompiledProgram,
     error::EngineError,
-    evaluator::{eval::eval_typed_expr, runtime_core::RuntimeCore},
+    evaluator::{context::Context, eval::eval_typed_expr, runtime_core::RuntimeCore},
     util::split_fun,
     value::{Cell, Handle, Heap, HeapAccess, Pointer},
 };
 
 pub(crate) mod context;
 pub(crate) mod eval;
+pub(crate) mod host_action;
 pub(crate) mod native_callable;
 pub(crate) mod native_functions;
 pub(crate) mod runtime_core;
@@ -79,10 +80,32 @@ where
         program: CompiledProgram,
         inputs: BTreeMap<String, Handle>,
     ) -> Result<Handle, EngineError> {
+        self.run_with_context(program, inputs)
+            .await
+            .map(|(value, _ctx)| value)
+    }
+
+    /// Run one prepared program and keep a host-call context for follow-up host work.
+    ///
+    /// This is used by embedders that treat the evaluated result as a host-managed action and
+    /// need to resume Rex callbacks after the top-level expression has produced that action.
+    pub async fn run_with_context(
+        self,
+        program: CompiledProgram,
+        inputs: BTreeMap<String, Handle>,
+    ) -> Result<(Handle, Context<State>), EngineError> {
         let runtime = self.runtime;
         let main_signature = program.main_signature().clone();
         let args = main_input_args(&runtime.heap, &main_signature, &inputs)?;
-        eval_typed_expr(runtime, program.env, Arc::clone(&program.expr), args).await
+        let value = eval_typed_expr(
+            runtime.clone(),
+            program.env,
+            Arc::clone(&program.expr),
+            args,
+        )
+        .await?;
+        let ctx = Context::new_at_call_site(&runtime, CallSite { parent: None });
+        Ok((value, ctx))
     }
 }
 

@@ -84,6 +84,18 @@ pub use rex_engine::Heap;
 /// Trait implemented by typed asynchronous Rust functions that can be exported to Rex.
 pub use rex_engine::HostFnAsync;
 
+/// One node in a host-managed monadic action graph.
+pub use rex_engine::HostAction;
+
+/// Effect thunk used by host-managed action runners.
+pub use rex_engine::HostActionEffect;
+
+/// Boxed future returned by a host-managed action effect.
+pub use rex_engine::HostActionFuture;
+
+/// Run a host-managed monadic action graph at an embedder boundary.
+pub use rex_engine::run_host_action;
+
 /// Trait implemented by typed synchronous Rust functions that can be exported to Rex.
 pub use rex_engine::HostFnSync;
 

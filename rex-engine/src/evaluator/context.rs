@@ -10,9 +10,11 @@ use rex_typesystem::{
 
 use crate::{
     builder::registry::NativeImpl,
-    env::Environment,
+    env::{Environment, RootedEnvironment},
     error::EngineError,
-    evaluator::{CallSite, runtime_core::RuntimeCore},
+    evaluator::{
+        CallSite, application_result_type, eval::eval_typed_expr, runtime_core::RuntimeCore,
+    },
     overloaded_fn::OverloadedFn,
     util::{impl_matches_type, is_function_type},
     value::{Handle, Heap, Pointer},
@@ -54,6 +56,72 @@ where
 
     pub fn type_system(&self) -> &TypeSystem {
         self.runtime.type_system.as_ref()
+    }
+
+    /// Resume one Rex callback from engine-owned host action machinery.
+    ///
+    /// This is the internal callback bridge used by [`run_host_action`](super::host_action::run_host_action).
+    /// Host-managed action values, such as `std.io.IO`, may store Rex callbacks
+    /// in `map`, `ap`, or `bind` nodes. When the host action runner reaches one
+    /// of those nodes, it needs to evaluate exactly one ordinary Rex function
+    /// application against already-produced Rex values. This helper constructs a
+    /// small synthetic typed application expression rooted in the current heap
+    /// and hands that expression back to the normal evaluator.
+    ///
+    /// The important constraint is that this function resumes a callback once;
+    /// it must not be used as a recursive action interpreter. In particular, a
+    /// monadic runner must not call this function and then immediately recurse
+    /// into itself to execute the callback's returned action. That shape rebuilds
+    /// user-authored recursion in Rust async call frames, so a deeply nested Rex
+    /// `bind` chain could overflow the Rust stack despite the evaluator's own
+    /// iterative machinery.
+    ///
+    /// The intended pattern is the one used by `run_host_action`: keep the host
+    /// control flow in an explicit loop with an explicit continuation stack. A
+    /// `map` callback may continue within the same loop because it produces an
+    /// ordinary value; a `bind` callback produces the next action handle and the
+    /// runner returns that handle to its outer loop instead of recursively
+    /// awaiting another action run. Keeping this helper crate-private makes that
+    /// discipline enforceable: embedders get a narrow host-action API rather
+    /// than a general "apply arbitrary Rex function" escape hatch.
+    pub(crate) async fn resume_callback_once(
+        &self,
+        func: Handle,
+        func_type: Type,
+        args: Vec<(Handle, Type)>,
+    ) -> Result<Handle, EngineError> {
+        func.pointer_for_heap(&self.runtime.heap)?;
+        let func_name = Symbol::intern("__rex_apply_func");
+        let mut env = RootedEnvironment::new().extend(func_name.clone(), func);
+        let mut expr = TypedExpr::new(
+            func_type.clone(),
+            rex_typesystem::types::TypedExprKind::Var {
+                name: func_name,
+                overloads: Vec::new(),
+            },
+        );
+        let mut cur_type = func_type;
+
+        for (idx, (arg, arg_type)) in args.into_iter().enumerate() {
+            arg.pointer_for_heap(&self.runtime.heap)?;
+            let arg_name = Symbol::intern(&format!("__rex_apply_arg_{idx}"));
+            env = env.extend(arg_name.clone(), arg);
+            let arg_expr = TypedExpr::new(
+                arg_type.clone(),
+                rex_typesystem::types::TypedExprKind::Var {
+                    name: arg_name,
+                    overloads: Vec::new(),
+                },
+            );
+            let result_type = application_result_type(&cur_type, &arg_type)?;
+            expr = TypedExpr::new(
+                result_type.clone(),
+                rex_typesystem::types::TypedExprKind::App(Arc::new(expr), Arc::new(arg_expr)),
+            );
+            cur_type = result_type;
+        }
+
+        eval_typed_expr(self.runtime.clone(), env, Arc::new(expr), Vec::new()).await
     }
 
     pub(crate) fn handles_from_pointers(
