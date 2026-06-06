@@ -238,31 +238,23 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let parsed = parse_rex(rex_code).unwrap();
     let builder = builder_with_eval_json_record();
     let type_system = builder.type_system().clone();
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     assert!(parsed.decls.is_empty());
-    let compiled = compiler
+    let (compiled, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
     let ty_eval = compiled.result_type().clone();
-    let handle_eval = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .unwrap();
+    let handle_eval = evaluator.run(compiled, Default::default()).await.unwrap();
     assert_eval_json(&type_system, &handle_eval, &ty_eval, expected_json.clone());
-    let mut compiler = builder_with_eval_json_record().build_compiler();
+    let compiler = builder_with_eval_json_record().build_compiler();
     let parsed = parse_rex(rex_code).unwrap();
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, CompileOptions::default())
         .await
         .unwrap();
     let ty_snippet = program.result_type().clone();
-    let handle_snippet = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .unwrap();
+    let handle_snippet = evaluator.run(program, Default::default()).await.unwrap();
     assert_eval_json(
         &type_system,
         &handle_snippet,
@@ -273,9 +265,9 @@ async fn eval_entry_points_return_type_for_json_eval() {
     let dir = temp_dir("snippet-at");
     let importer = dir.join("main.rex");
     fs::write(&importer, "()").unwrap();
-    let mut compiler = builder_with_eval_json_record().build_compiler();
+    let compiler = builder_with_eval_json_record().build_compiler();
     let parsed = parse_rex(rex_code).unwrap();
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(
             &parsed,
             CompileOptions::default().with_importer_path(importer.as_path()),
@@ -283,11 +275,7 @@ async fn eval_entry_points_return_type_for_json_eval() {
         .await
         .unwrap();
     let ty_snippet_at = program.result_type().clone();
-    let handle_snippet_at = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .unwrap();
+    let handle_snippet_at = evaluator.run(program, Default::default()).await.unwrap();
     assert_eval_json(
         &type_system,
         &handle_snippet_at,

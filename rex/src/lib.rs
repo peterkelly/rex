@@ -35,14 +35,14 @@
 //! })?;
 //! builder.inject_module(math)?;
 //!
-//! let mut compiler = builder.build_compiler();
+//! let compiler = builder.build_compiler();
 //! let parsed = parse_rex("import host.math (inc);\ninc 41")
 //!     .map_err(|errs| EngineError::from(format!("parse error: {errs:?}")))?;
-//! let program = compiler
+//! let (program, evaluator) = compiler
 //!     .compile_program(&parsed, CompileOptions::default())
 //!     .await?;
 //! let typ = program.result_type().clone();
-//! let value = compiler.into_evaluator().run(program, Default::default()).await?;
+//! let value = evaluator.run(program, Default::default()).await?;
 //!
 //! assert_eq!(typ.to_string(), "i32");
 //! assert_eq!(value.as_i32()?, 42);
@@ -103,12 +103,11 @@ pub async fn eval(source: &str) -> Result<serde_json::Value, engine::ExecutionEr
 
     let builder = engine::Builder::with_prelude(())
         .map_err(|e| engine::EngineError::from(format!("failed to initialize engine: {e}")))?;
-    let mut compiler = builder.build_compiler();
-    let program = compiler
+    let compiler = builder.build_compiler();
+    let (program, evaluator) = compiler
         .compile_program(&parsed, engine::CompileOptions::default())
         .await?;
     let result_type = program.result_type().clone();
-    let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
 
     let value = evaluator

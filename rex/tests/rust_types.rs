@@ -18,9 +18,9 @@ async fn eval_expr(builder: Builder<()>, expr: &str) -> (Handle, Heap, Type) {
 
 /// Helper to infer the type of a Rex expression
 async fn infer_type(builder: Builder<()>, expr: &str) -> Type {
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(expr).unwrap();
-    let program = compiler
+    let (program, _evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();

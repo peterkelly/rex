@@ -211,16 +211,13 @@ async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
     })?;
     let mut builder = builder;
     builder.add_importer("test-fs", importer);
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(&source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, CompileOptions::default().with_importer_path(path))
         .await?;
     let typ = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await?;
+    let value = evaluator.run(program, Default::default()).await?;
     Ok((value, typ))
 }
 
@@ -228,16 +225,13 @@ async fn run_snippet<State: Clone + Send + Sync + 'static>(
     builder: Builder<State>,
     source: &str,
 ) -> Result<(Handle, Type), EngineError> {
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, CompileOptions::default())
         .await?;
     let typ = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await?;
+    let value = evaluator.run(program, Default::default()).await?;
     Ok((value, typ))
 }
 
@@ -248,19 +242,16 @@ async fn run_snippet_at<State: Clone + Send + Sync + 'static>(
 ) -> Result<(Handle, Type), EngineError> {
     let mut builder = builder;
     builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(source).map_err(|errs| EngineError::Internal(format!("{errs:?}")))?;
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(
             &parsed,
             CompileOptions::default().with_importer_path(importer_path.as_ref()),
         )
         .await?;
     let typ = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await?;
+    let value = evaluator.run(program, Default::default()).await?;
     Ok((value, typ))
 }
 
@@ -306,8 +297,8 @@ async fn module_import_local_pub() {
 }
 
 #[tokio::test]
-async fn snippet_import_reloads_when_local_module_changes() {
-    let dir = temp_dir("snippet_import_reloads_when_local_module_changes");
+async fn snippet_import_observes_local_module_changes_with_new_compiler() {
+    let dir = temp_dir("snippet_import_observes_local_module_changes_with_new_compiler");
     let module = dir.join("foo.rex");
     let importer = dir.join("main.rex");
     write_file(&importer, "()");
@@ -316,7 +307,7 @@ async fn snippet_import_reloads_when_local_module_changes() {
     let mut builder = builder_with_prelude();
     builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
 
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
 
     let source = "import foo (value);\nvalue 0";
     let parsed = parse_rex(source).unwrap();
@@ -326,16 +317,15 @@ async fn snippet_import_reloads_when_local_module_changes() {
         .await
         .unwrap();
 
-    // Same module path, changed contents: import resolution must observe updated
-    // source and invalidate stale per-module caches during preparation.
+    // Each run uses a fresh Builder/Compiler, so the changed module source is
+    // observed without relying on stale cache invalidation.
     write_file(&module, "pub fn value x: i32 -> i32 = x + 2;");
-    let program = compiler.compile_program(&parsed, options).await.unwrap();
+    let mut builder = builder_with_prelude();
+    builder.add_importer("test-fs", Arc::new(TestFilesystemImporter));
+    let compiler = builder.build_compiler();
+    let (program, evaluator) = compiler.compile_program(&parsed, options).await.unwrap();
     let ty = program.result_type().clone();
-    let value_ptr = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .unwrap();
+    let value_ptr = evaluator.run(program, Default::default()).await.unwrap();
     assert_eq!(ty, Type::builtin(BuiltinTypeId::I32));
     match value_ptr.value().unwrap() {
         Value::I32(v) => assert_eq!(v, 2),

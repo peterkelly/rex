@@ -18,24 +18,20 @@ async fn compile_err(code: &str) -> EngineError {
     if let Err(e) = builder.inject_module(module) {
         return e;
     }
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     // Preserve declaration-injected body diagnostics here.
     let body_program = CompilationUnit {
         decls: Vec::new(),
         body: program.body.clone(),
     };
-    let compiled = match compiler
+    let (compiled, evaluator) = match compiler
         .compile_program(&body_program, Default::default())
         .await
     {
         Ok(compiled) => compiled,
         Err(e) => return e,
     };
-    match compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-    {
+    match evaluator.run(compiled, Default::default()).await {
         Ok(v) => {
             let value_type = v.type_name().unwrap_or("<invalid handle>");
             panic!("expected error, got value type: {value_type}\ncode:\n{code}");

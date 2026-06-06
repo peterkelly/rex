@@ -23,9 +23,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
   - `Builder::with_prelude(state)?` to inject runtime constructors and builtin implementations (`state` can be `()`).
   - `standard_type_system()?` to create a typing environment with the `rex-engine` standard prelude.
   - `Builder::build_compiler()` to consume the prepared builder into a compilation view.
-  - `Compiler::into_evaluator()` to consume preparation state into an evaluator.
-  - `Compiler::compile_program` to prepare a parsed program entry point into `CompiledProgram`;
-    `Compiler::infer_*` for type-only checks.
+  - `Compiler::compile_program` to consume the compiler and prepare a parsed program entry
+    point into `(CompiledProgram, Evaluator)`. `Compiler::infer_*` consumes the compiler for
+    type-only checks.
   - `Evaluator::run(compiled, inputs).await` to execute one prepared program. `inputs` is a
     `BTreeMap<String, Handle>` for the program's external `main` interface; `run` consumes the
     evaluator, compiled program, and input map.

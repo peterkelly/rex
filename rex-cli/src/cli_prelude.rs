@@ -284,17 +284,13 @@ mod tests {
         let mut builder = Builder::with_prelude(()).unwrap();
 
         inject_cli_prelude_builder(&mut builder).unwrap();
-        let mut compiler = builder.build_compiler();
+        let compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
-        let program = compiler
+        let (program, evaluator) = compiler
             .compile_program(&parsed, Default::default())
             .await
             .unwrap();
-        compiler
-            .into_evaluator()
-            .run(program, Default::default())
-            .await
-            .unwrap();
+        evaluator.run(program, Default::default()).await.unwrap();
     }
 
     #[tokio::test]
@@ -308,18 +304,14 @@ mod tests {
         let mut builder = Builder::with_prelude(()).unwrap();
 
         inject_cli_prelude_builder(&mut builder).unwrap();
-        let mut compiler = builder.build_compiler();
+        let compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
-        let program = compiler
+        let (program, evaluator) = compiler
             .compile_program(&parsed, Default::default())
             .await
             .unwrap();
         let ty = program.result_type().clone();
-        let value = compiler
-            .into_evaluator()
-            .run(program, Default::default())
-            .await
-            .unwrap();
+        let value = evaluator.run(program, Default::default()).await.unwrap();
         assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
         assert_eq!(value.to_rust::<String>().unwrap(), "hello");
     }
@@ -339,18 +331,14 @@ mod tests {
         let mut builder = Builder::with_prelude(()).unwrap();
 
         inject_cli_prelude_builder(&mut builder).unwrap();
-        let mut compiler = builder.build_compiler();
+        let compiler = builder.build_compiler();
         let parsed = parse_rex(code).unwrap();
-        let program = compiler
+        let (program, evaluator) = compiler
             .compile_program(&parsed, Default::default())
             .await
             .unwrap();
         let ty = program.result_type().clone();
-        let value = compiler
-            .into_evaluator()
-            .run(program, Default::default())
-            .await
-            .unwrap();
+        let value = evaluator.run(program, Default::default()).await.unwrap();
         assert_eq!(
             ty,
             Type::tuple(vec![

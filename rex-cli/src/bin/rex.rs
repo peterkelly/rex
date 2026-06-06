@@ -11,7 +11,7 @@ use clap::{Args, Parser};
 use rex::{
     ast::CompilationUnit,
     engine::{
-        Builder, CompileOptions, CompiledProgram, Compiler, Importer, MainInputSpec, Manifest,
+        Builder, CompileOptions, CompiledProgram, Evaluator, Importer, MainInputSpec, Manifest,
         ModuleId, type_has_vars,
     },
     json::{json_to_main_inputs, rex_to_json},
@@ -219,7 +219,7 @@ async fn eval_result_json(
     file: Option<&str>,
     inputs_path: Option<&str>,
 ) -> Result<serde_json::Value, String> {
-    let (compiler, compiled) = compile_cli_program(program, file).await?;
+    let (evaluator, compiled) = compile_cli_program(program, file).await?;
     let signature = compiled.main_signature().clone();
     ensure_concrete_inputs(signature.inputs())?;
     let input_value = match inputs_path {
@@ -235,7 +235,6 @@ async fn eval_result_json(
         None => serde_json::json!({}),
     };
     let result_type = compiled.result_type().clone();
-    let evaluator = compiler.into_evaluator();
     let type_system = evaluator.type_system();
     let inputs = json_to_main_inputs(
         evaluator.heap(),
@@ -254,10 +253,10 @@ async fn eval_result_json(
 }
 
 async fn main_manifest(program: &CompilationUnit, file: Option<&str>) -> Result<Manifest, String> {
-    let (compiler, compiled) = compile_cli_program(program, file).await?;
+    let (evaluator, compiled) = compile_cli_program(program, file).await?;
     compiled
         .main_signature()
-        .manifest(compiler.type_system())
+        .manifest(evaluator.type_system().as_ref())
         .map_err(|e| format!("{e}"))
 }
 
@@ -276,15 +275,15 @@ fn ensure_concrete_inputs(inputs: &[MainInputSpec]) -> Result<(), String> {
 async fn compile_cli_program(
     program: &CompilationUnit,
     file: Option<&str>,
-) -> Result<(Compiler, CompiledProgram), String> {
+) -> Result<(Evaluator, CompiledProgram), String> {
     let (builder, _importer) = init_builder()?;
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let importer_path = file.map(PathBuf::from);
-    let compiled = compiler
+    let (compiled, evaluator) = compiler
         .compile_program(program, compile_options(importer_path))
         .await
         .map_err(|e| format!("{e}"))?;
-    Ok((compiler, compiled))
+    Ok((evaluator, compiled))
 }
 
 fn snippet_prefix_source(importer_path: Option<&PathBuf>) -> ModuleId {

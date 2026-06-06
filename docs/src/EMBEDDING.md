@@ -44,14 +44,13 @@ use rex::{
 };
 
 let builder = Builder::with_prelude(())?;
-let mut compiler = builder.build_compiler();
+let compiler = builder.build_compiler();
 
 let parsed = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
-let program = compiler
+let (program, evaluator) = compiler
     .compile_program(&parsed, CompileOptions::default())
     .await?;
 assert_eq!(program.result_type().to_string(), "i32");
-let evaluator = compiler.into_evaluator();
 let value = evaluator.run(program, Default::default()).await?;
 ```
 
@@ -97,9 +96,8 @@ use rex::{
 let program = parse("let x = 1 + 2 in x * 3").map_err(|errs| format!("{errs:?}"))?;
 
 let builder = Builder::with_prelude(())?;
-let mut compiler = builder.build_compiler();
-let program = compiler.compile_program(&program, Default::default()).await?;
-let evaluator = compiler.into_evaluator();
+let compiler = builder.build_compiler();
+let (program, evaluator) = compiler.compile_program(&program, Default::default()).await?;
 let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
 ```
@@ -212,12 +210,12 @@ impl Importer for MapImporter {
 }
 
 builder.add_importer("host-map", Arc::new(MapImporter { modules }));
-let mut compiler = builder.build_compiler();
+let compiler = builder.build_compiler();
 let parsed = parse("import acme.main (main);\nmain").map_err(|errs| format!("{errs:?}"))?;
-let program = compiler
+let (program, evaluator) = compiler
     .compile_program(&parsed, CompileOptions::default())
     .await?;
-let value = compiler.into_evaluator().run(program, Default::default()).await?;
+let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
 ```
 
@@ -261,13 +259,13 @@ let mut math = Module::new("acme.math");
 math.export("inc", |_state: &(), x: i32| { Ok(x + 1) })?;
 math.export_async("double_async", |_state: &(), x: i32| async move { Ok(x * 2) })?;
 builder.inject_module(math)?;
-let mut compiler = builder.build_compiler();
+let compiler = builder.build_compiler();
 let parsed = parse("import acme.math (inc, double_async as d);\ninc (d 20)")
     .map_err(|errs| format!("{errs:?}"))?;
-let program = compiler
+let (program, evaluator) = compiler
     .compile_program(&parsed, CompileOptions::default())
     .await?;
-let value = compiler.into_evaluator().run(program, Default::default()).await?;
+let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
 ```
 
@@ -358,7 +356,7 @@ m.export("render_label", |_state: &(), label: Label| {
     Ok::<String, EngineError>(render_label(label))
 })?;
 builder.inject_module(m)?;
-let mut compiler = builder.build_compiler();
+let compiler = builder.build_compiler();
 let parsed = parse(
     r#"
     import sample (Label, Left, Right, render_label);
@@ -369,10 +367,10 @@ let parsed = parse(
     "#,
 )
 .map_err(|errs| format!("{errs:?}"))?;
-let program = compiler
+let (program, evaluator) = compiler
     .compile_program(&parsed, CompileOptions::default())
     .await?;
-let value = compiler.into_evaluator().run(program, Default::default()).await?;
+let value = evaluator.run(program, Default::default()).await?;
 println!("{value}"); // ("left        ", "       right")
 ```
 
@@ -450,17 +448,17 @@ use rex::{
 };
 
 let builder = Builder::with_prelude(())?;
-let mut compiler = builder.build_compiler();
+let compiler = builder.build_compiler();
 let parsed = parse("import foo.bar as Bar;\nBar.add 1 2")
     .map_err(|errs| format!("{errs:?}"))?;
-let program = compiler
+let (program, evaluator) = compiler
     .compile_program(
         &parsed,
         CompileOptions::default()
             .with_importer_path(std::path::Path::new("/tmp/workflow/_snippet.rex")),
     )
     .await?;
-let value = compiler.into_evaluator().run(program, Default::default()).await?;
+let value = evaluator.run(program, Default::default()).await?;
 ```
 
 ## Builder State
@@ -662,10 +660,10 @@ instance<t> Size (List t) where {
 let program = parse(code).map_err(|errs| format!("{errs:?}"))?;
 
 let builder = Builder::with_prelude(())?;
-let mut compiler = builder.build_compiler();
-let compiled = compiler.compile_program(&program, Default::default()).await?;
+let compiler = builder.build_compiler();
+let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
-let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
+let value = evaluator.run(compiled, Default::default()).await?;
 println!("{value}");
 ```
 
@@ -707,10 +705,10 @@ for code in [
     builder.inject_module(globals)?;
 
     let program = parse(code).map_err(|errs| format!("parse error: {errs:?}"))?;
-    let mut compiler = builder.build_compiler();
-    let compiled = compiler.compile_program(&program, Default::default()).await?;
+    let compiler = builder.build_compiler();
+    let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
     let _ty = compiled.result_type().clone();
-    let value = compiler.into_evaluator().run(compiled, Default::default()).await?;
+    let value = evaluator.run(compiled, Default::default()).await?;
     println!("{value}");
 }
 ```
@@ -737,10 +735,10 @@ globals.export_async("inc", |_state, x: i32| async move { Ok(x + 1) })?;
 builder.inject_module(globals)?;
 
 let program = parse("inc 1").map_err(|errs| format!("parse error: {errs:?}"))?;
-let mut compiler = builder.build_compiler();
-let compiled = compiler.compile_program(&program, Default::default()).await?;
+let compiler = builder.build_compiler();
+let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
-let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
+let v = evaluator.run(compiled, Default::default()).await?;
 println!("{v}");
 ```
 
@@ -878,10 +876,10 @@ let mut builder = Builder::with_prelude(())?;
 Maybe::<i32>::inject_rex(&mut builder)?;
 
 let program = parse("Just 1").map_err(|errs| format!("parse error: {errs:?}"))?;
-let mut compiler = builder.build_compiler();
-let compiled = compiler.compile_program(&program, Default::default()).await?;
+let compiler = builder.build_compiler();
+let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
 let _ty = compiled.result_type().clone();
-let v = compiler.into_evaluator().run(compiled, Default::default()).await?;
+let v = evaluator.run(compiled, Default::default()).await?;
 assert_eq!(Maybe::<i32>::from_rex(&v)?, Maybe::Just(1));
 ```
 

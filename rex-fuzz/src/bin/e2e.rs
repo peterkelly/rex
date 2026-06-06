@@ -35,19 +35,16 @@ async fn run_one(input: &[u8]) {
     if builder.inject_module(module).is_err() {
         return;
     }
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let body_program = CompilationUnit {
         decls: Vec::new(),
         body: Some(body.clone()),
     };
-    if let Ok(compiled) = compiler
+    if let Ok((compiled, evaluator)) = compiler
         .compile_program(&body_program, Default::default())
         .await
     {
-        let _ = compiler
-            .into_evaluator()
-            .run(compiled, Default::default())
-            .await;
+        let _ = evaluator.run(compiled, Default::default()).await;
     }
 }
 

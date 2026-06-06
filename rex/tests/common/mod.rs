@@ -30,15 +30,12 @@ pub async fn run_program<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut compiler = builder.build_compiler();
-    let compiled = compiler
+    let compiler = builder.build_compiler();
+    let (compiled, evaluator) = compiler
         .compile_program(program, Default::default())
         .await?;
     let ty = compiled.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await?;
+    let value = evaluator.run(compiled, Default::default()).await?;
     Ok((value, ty))
 }
 

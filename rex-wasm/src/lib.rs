@@ -141,13 +141,12 @@ pub async fn eval_to_string(source: &str) -> Result<String, String> {
     // Match CLI semantics by evaluating snippets through module/snippet rewriting.
     // This avoids behavior differences between the native CLI and wasm playground.
     let parsed = parse_program(source.as_ref())?;
-    let mut compiler = builder.build_compiler();
-    let program = compiler
+    let compiler = builder.build_compiler();
+    let (program, evaluator) = compiler
         .compile_program(&parsed, CompileOptions::default())
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
-    let value = compiler
-        .into_evaluator()
+    let value = evaluator
         .run(program, Default::default())
         .await
         .map_err(|e| format!("runtime error: {e}"))?;
@@ -245,13 +244,12 @@ pub fn wasm_eval_to_json(source: &str) -> Result<String, JsValue> {
     let fut = async move {
         let builder = Builder::with_prelude(()).map_err(|e| format!("engine init error: {e}"))?;
         let parsed = parse_program(source.as_ref())?;
-        let mut compiler = builder.build_compiler();
-        let program = compiler
+        let compiler = builder.build_compiler();
+        let (program, evaluator) = compiler
             .compile_program(&parsed, CompileOptions::default())
             .await
             .map_err(|e| format!("runtime error: {e}"))?;
-        let value = compiler
-            .into_evaluator()
+        let value = evaluator
             .run(program, Default::default())
             .await
             .map_err(|e| format!("runtime error: {e}"))?;

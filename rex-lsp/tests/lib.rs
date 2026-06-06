@@ -90,18 +90,17 @@ async fn eval_source_to_display(code: &str) -> (String, String) {
     let mut module = Module::global();
     module.add_decls(program.decls.clone());
     builder.inject_module(module).expect("inject decls");
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let body_program = CompilationUnit {
         decls: Vec::new(),
         body: program.body.clone(),
     };
-    let compiled = compiler
+    let (compiled, evaluator) = compiler
         .compile_program(&body_program, Default::default())
         .await
         .expect("compile source");
     let ty = compiled.result_type().clone();
-    let handle = compiler
-        .into_evaluator()
+    let handle = evaluator
         .run(compiled, Default::default())
         .await
         .expect("evaluate source");

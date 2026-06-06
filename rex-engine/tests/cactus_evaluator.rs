@@ -20,16 +20,13 @@ async fn eval_value<State>(
 where
     State: Clone + Send + Sync + 'static,
 {
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(source).unwrap();
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await?;
     let typ = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await?;
+    let value = evaluator.run(program, Default::default()).await?;
     Ok((value, typ))
 }
 

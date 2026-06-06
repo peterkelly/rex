@@ -42,16 +42,15 @@ async fn eval_demo(name: &str, markdown: &str) -> (Heap, Handle, Type) {
                 .block_on(async move {
                     let builder = Builder::with_prelude(()).unwrap();
                     let heap = builder.heap().clone();
-                    let mut compiler = builder.build_compiler();
+                    let compiler = builder.build_compiler();
                     let parsed = parse_rex(&source)
                         .unwrap_or_else(|errs| panic!("{name}: parse error before eval: {errs:?}"));
-                    let program = compiler
+                    let (program, evaluator) = compiler
                         .compile_program(&parsed, Default::default())
                         .await
                         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));
                     let ty = program.result_type().clone();
-                    let value = compiler
-                        .into_evaluator()
+                    let value = evaluator
                         .run(program, Default::default())
                         .await
                         .unwrap_or_else(|err| panic!("{name}: eval error: {err}"));

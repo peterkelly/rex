@@ -24,9 +24,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let program = parse("inc answer").map_err(|errs| {
         std::io::Error::new(std::io::ErrorKind::InvalidData, format!("parse error: {errs:?}"))
     })?;
-    let mut compiler = builder.build_compiler();
-    let compiled = compiler.compile_program(&program, Default::default()).await?;
-    let evaluator = compiler.into_evaluator();
+    let compiler = builder.build_compiler();
+    let (compiled, evaluator) = compiler.compile_program(&program, Default::default()).await?;
     let value = evaluator.run(compiled, Default::default()).await?;
 
     assert_eq!(value.as_i32()?, 43);

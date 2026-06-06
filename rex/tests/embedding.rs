@@ -51,7 +51,7 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
         })
         .unwrap();
     builder.inject_module(module).unwrap();
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(
         r#"
             import sample (Label, Left, Right, Wrong, render_label);
@@ -65,16 +65,12 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
             "#,
     )
     .unwrap();
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
     let ty = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .unwrap();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
 
     // `Side` and `Correctness` both provide a `Right` constructor in the same module.
     // This ensures Rex keeps them distinct via explicit type ascription (`is Side` vs `is Sample.Correctness`).
@@ -126,7 +122,7 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
         })
         .unwrap();
     builder.inject_module(module).unwrap();
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(
         r#"
             import sample (Label, Left, render_label);
@@ -134,16 +130,12 @@ async fn module_inject_rex_adt_registers_acyclic_dependency_closure() {
         "#,
     )
     .unwrap();
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
     let ty = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .unwrap();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
 
     assert_eq!(ty, Type::builtin(BuiltinTypeId::String));
     assert_eq!(
@@ -164,7 +156,7 @@ async fn match_ascribed_module_type_with_overlapping_constructor_is_ambiguous_re
     module.add_rex_adt::<Side>().unwrap();
     module.add_rex_adt::<Correctness>().unwrap();
     builder.inject_module(module).unwrap();
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_rex(
         r#"
             import sample (Right, Wrong);
@@ -674,17 +666,14 @@ async fn overloaded_exports_types_and_values() {
     "#;
 
     let body_program = parse_rex(expr).unwrap();
-    let mut compiler = builder.build_compiler();
-    let compiled = compiler
+    let compiler = builder.build_compiler();
+    let (compiled, evaluator) = compiler
         .compile_program(&body_program, Default::default())
         .await
         .unwrap();
     let ty = compiled.result_type().clone();
     assert_overload_tuple_type_shape(&ty);
-    let value = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await;
+    let value = evaluator.run(compiled, Default::default()).await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let value = value.unwrap();
 
@@ -746,17 +735,14 @@ async fn overloaded_async_exports_types_and_values() {
     "#;
 
     let body_program = parse_rex(expr).unwrap();
-    let mut compiler = builder.build_compiler();
-    let compiled = compiler
+    let compiler = builder.build_compiler();
+    let (compiled, evaluator) = compiler
         .compile_program(&body_program, Default::default())
         .await
         .unwrap();
     let ty = compiled.result_type().clone();
     assert_overload_tuple_type_shape(&ty);
-    let value = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await;
+    let value = evaluator.run(compiled, Default::default()).await;
     assert!(value.is_ok(), "evaluation failed: {value:?}");
     let value = value.unwrap();
 

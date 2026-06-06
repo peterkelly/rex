@@ -54,8 +54,8 @@ impl CompileOptions {
 /// Compile-time view of a prepared Rex engine.
 ///
 /// A compiler owns the engine state needed for import rewriting, declaration
-/// injection, and typechecking. Convert it into an [`Evaluator`] once all
-/// programs you need from that preparation state have been compiled.
+/// injection, and typechecking. It is single-use: compiling a program consumes
+/// the compiler and returns the evaluator built from that preparation state.
 pub struct Compiler<State = ()>
 where
     State: Clone + Send + Sync + 'static,
@@ -85,8 +85,7 @@ where
         }
     }
 
-    /// Consume this compiler and build a single-shot evaluator.
-    pub fn into_evaluator(self) -> Evaluator<State> {
+    fn into_evaluator(self) -> Evaluator<State> {
         Evaluator::new(RuntimeCore {
             state: Arc::clone(&self.state),
             natives: Arc::new(self.runtime.natives.clone()),
@@ -153,10 +152,10 @@ where
     /// with `fn main ...` exposes that function's parameters as runtime inputs;
     /// otherwise a final expression is treated as an implicit zero-input main.
     pub async fn compile_program(
-        &mut self,
+        mut self,
         program: &CompilationUnit,
         options: CompileOptions,
-    ) -> Result<CompiledProgram, EngineError> {
+    ) -> Result<(CompiledProgram, Evaluator<State>), EngineError> {
         let entry = main_entry_program(program)?;
         let importer = options.importer_path.map(|p| ModuleId::Local { path: p });
         let prefix = options
@@ -181,11 +180,13 @@ where
             .ok_or(EngineError::MissingBody { context: "program" })?;
         let typed = self.type_check(body.as_ref())?;
         let main_signature = main_signature_for_type(entry.param_names, &typed.typ)?;
-        Ok(self.compile_typed_expr(typed, main_signature))
+        let compiled = self.compile_typed_expr(typed, main_signature);
+        let evaluator = self.into_evaluator();
+        Ok((compiled, evaluator))
     }
 
     pub async fn infer_snippet(
-        &mut self,
+        mut self,
         source: &str,
         importer_path: Option<&Path>,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
@@ -214,7 +215,7 @@ where
     }
 
     pub async fn infer_module_with_importer(
-        &mut self,
+        mut self,
         request: ImportRequest,
         importer: Arc<dyn Importer>,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {

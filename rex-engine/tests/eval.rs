@@ -77,50 +77,42 @@ fn inject_global_type_decls(builder: &mut Builder, decls: &[Decl]) {
 }
 
 async fn eval_expr(builder: Builder, expr: &Expr) -> Result<Handle, EngineError> {
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let program = CompilationUnit {
         decls: Vec::new(),
         body: Some(Arc::new(expr.clone())),
     };
-    let compiled = compiler
+    let (compiled, evaluator) = compiler
         .compile_program(&program, Default::default())
         .await?;
-    compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
+    evaluator.run(compiled, Default::default()).await
 }
 
 #[tokio::test]
-async fn engine_consumes_into_evaluator() {
+async fn compile_program_returns_evaluator() {
     let builder = Builder::with_prelude(()).unwrap();
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_program("1 + 2");
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
     let ty = program.result_type().clone();
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .unwrap();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
 
     assert_eq!(ty.to_string(), "i32");
     assert_eq!(value.as_i32().unwrap(), 3);
 }
 
 #[tokio::test]
-async fn compiler_consumes_into_evaluator() {
+async fn compiler_is_consumed_by_compile_program() {
     let builder = Builder::with_prelude(()).unwrap();
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let parsed = parse_program("let answer = 40 + 2 in answer");
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
-    let evaluator = compiler.into_evaluator();
     let value = evaluator.run(program, Default::default()).await.unwrap();
 
     assert_eq!(value.as_i32().unwrap(), 42);
@@ -301,19 +293,17 @@ async fn eval_sync_native_injection_supports_arities_0_to_8() {
 async fn compiled_program_captures_rex_declarations_in_env_snapshot() {
     let compile_builder = Builder::with_prelude(()).unwrap();
 
-    let mut compiler = compile_builder.build_compiler();
+    let compiler = compile_builder.build_compiler();
     let parsed = parse_program(
         r#"
             let answer = 41 in
                 answer
             "#,
     );
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
-
-    let evaluator = compiler.into_evaluator();
     let value = evaluator.run(program, Default::default()).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 41);
 }
@@ -325,18 +315,13 @@ async fn exported_value_resolves_at_runtime() {
         module.export_value("answer", 41i32)
     });
 
-    let mut compiler = compile_builder.build_compiler();
+    let compiler = compile_builder.build_compiler();
     let parsed = parse_program("answer + 1");
-    let program = compiler
+    let (program, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
-
-    let value = compiler
-        .into_evaluator()
-        .run(program, Default::default())
-        .await
-        .unwrap();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
     assert_eq!(value.as_i32().unwrap(), 42);
 }
 
@@ -615,21 +600,17 @@ async fn typed_native_injection_uses_handle_conversions() {
     });
 
     let expr = parse("(bump_handle_only 41, shift_handle_only_array (to_array [1, 2, 3]))");
-    let mut compiler = builder.build_compiler();
+    let compiler = builder.build_compiler();
     let program = CompilationUnit {
         decls: Vec::new(),
         body: Some(expr),
     };
-    let compiled = compiler
+    let (compiled, evaluator) = compiler
         .compile_program(&program, Default::default())
         .await
         .unwrap();
     let ty = compiled.result_type().clone();
-    let ptr = compiler
-        .into_evaluator()
-        .run(compiled, Default::default())
-        .await
-        .unwrap();
+    let ptr = evaluator.run(compiled, Default::default()).await.unwrap();
 
     assert_eq!(
         ty,

@@ -15,17 +15,16 @@ struct Prepared {
 
 async fn prepare(source: &str) -> Prepared {
     let parsed = parse_rex(source).unwrap();
-    let mut compiler = Builder::with_prelude(()).unwrap().build_compiler();
-    let compiled = compiler
+    let compiler = Builder::with_prelude(()).unwrap().build_compiler();
+    let (compiled, evaluator) = compiler
         .compile_program(&parsed, Default::default())
         .await
         .unwrap();
     let manifest = compiled
         .main_signature()
-        .manifest(compiler.type_system())
+        .manifest(evaluator.type_system().as_ref())
         .unwrap();
     let manifest = serde_json::to_value(manifest).unwrap();
-    let evaluator = compiler.into_evaluator();
     Prepared {
         compiled,
         evaluator,

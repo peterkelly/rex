@@ -151,10 +151,10 @@ pub(crate) fn push_type_diagnostics(
 
     let result = if let Some(path) = uri_to_file_path(uri) {
         builder.add_importer("lsp-modules", Arc::new(session.module_service()));
-        let mut compiler = builder.build_compiler();
+        let compiler = builder.build_compiler();
         futures::executor::block_on(compiler.infer_snippet(text, Some(path.as_path())))
     } else {
-        let mut compiler = builder.build_compiler();
+        let compiler = builder.build_compiler();
         futures::executor::block_on(compiler.infer_snippet(text, None))
     };
 

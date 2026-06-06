@@ -72,7 +72,8 @@ Internal runtime reads/writes go through heap methods. Public construction uses
 
 `Builder` constructs the initial `Heap` during preparation (`Builder::new`, `Builder::with_prelude`).
 `Builder::build_compiler()` moves that heap handle into the `Compiler`, and
-`Compiler::into_evaluator()` then moves it into the evaluator runtime core.
+`Compiler::compile_program()` then moves it into the evaluator runtime core returned with the
+compiled program.
 
 - Evaluation returns `Handle`, not `Value`.
 - Callers can inspect via the returned handle or allocate more values from native callbacks through
