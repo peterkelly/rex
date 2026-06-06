@@ -45,11 +45,14 @@ impl TestFilesystemImporter {
     }
 }
 
-impl Importer for TestFilesystemImporter {
+impl<State> Importer<State> for TestFilesystemImporter
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn import<'a>(
         &'a self,
         req: ImportRequest,
-    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule<State>>, EngineError>> {
         Box::pin(async move {
             let module_id = match req.importer.as_ref().and_then(ModuleId::parent) {
                 Some(parent) => parent.join(&req.module_id),
@@ -88,11 +91,14 @@ impl CountingImporter {
     }
 }
 
-impl Importer for CountingImporter {
+impl<State> Importer<State> for CountingImporter
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn import<'a>(
         &'a self,
         req: ImportRequest,
-    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule<State>>, EngineError>> {
         Box::pin(async move {
             if req.module_id != self.module_id {
                 return Ok(None);
@@ -108,11 +114,112 @@ impl Importer for CountingImporter {
     }
 }
 
-fn resolve_rex_file(
+#[derive(Clone)]
+struct LazyRustImporter {
+    calls: Arc<AtomicUsize>,
+    module_id: ModuleId,
+    returned_name: String,
+}
+
+impl LazyRustImporter {
+    fn new(calls: Arc<AtomicUsize>, module_name: &str) -> Self {
+        Self {
+            calls,
+            module_id: ModuleId::parse(module_name).unwrap(),
+            returned_name: module_name.to_string(),
+        }
+    }
+
+    fn with_returned_name(
+        calls: Arc<AtomicUsize>,
+        requested_name: &str,
+        returned_name: &str,
+    ) -> Self {
+        Self {
+            calls,
+            module_id: ModuleId::parse(requested_name).unwrap(),
+            returned_name: returned_name.to_string(),
+        }
+    }
+}
+
+impl Importer for LazyRustImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            if req.module_id != self.module_id {
+                return Ok(None);
+            }
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut module = Module::new(self.returned_name.clone());
+            module
+                .export("inc", |_state: &(), value: i32| {
+                    Ok::<i32, EngineError>(value + 1)
+                })
+                .unwrap();
+            Ok(Some(ResolvedModule {
+                id: req.module_id,
+                content: ResolvedModuleContent::module(module),
+            }))
+        })
+    }
+}
+
+#[derive(Clone)]
+struct SelectiveLazyRustImporter {
+    used_calls: Arc<AtomicUsize>,
+    unused_calls: Arc<AtomicUsize>,
+    used_id: ModuleId,
+    unused_id: ModuleId,
+}
+
+impl SelectiveLazyRustImporter {
+    fn new(used_calls: Arc<AtomicUsize>, unused_calls: Arc<AtomicUsize>) -> Self {
+        Self {
+            used_calls,
+            unused_calls,
+            used_id: ModuleId::parse("lazy.used").unwrap(),
+            unused_id: ModuleId::parse("lazy.unused").unwrap(),
+        }
+    }
+}
+
+impl Importer for SelectiveLazyRustImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            let (calls, module_name) = if req.module_id == self.used_id {
+                (&self.used_calls, "lazy.used")
+            } else if req.module_id == self.unused_id {
+                (&self.unused_calls, "lazy.unused")
+            } else {
+                return Ok(None);
+            };
+            calls.fetch_add(1, Ordering::SeqCst);
+            let mut module = Module::new(module_name);
+            module
+                .export("value", |_state: &()| Ok::<i32, EngineError>(42))
+                .unwrap();
+            Ok(Some(ResolvedModule {
+                id: req.module_id,
+                content: ResolvedModuleContent::module(module),
+            }))
+        })
+    }
+}
+
+fn resolve_rex_file<State>(
     id: ModuleId,
     path: PathBuf,
     kind: &'static str,
-) -> Result<Option<ResolvedModule>, EngineError> {
+) -> Result<Option<ResolvedModule<State>>, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
     let Ok(canon) = path.canonicalize() else {
         return Ok(None);
     };
@@ -214,6 +321,146 @@ async fn engine_options_can_disable_prelude() {
     assert!(msg.contains("map"), "unexpected error: {msg}");
 }
 
+#[tokio::test]
+async fn importer_can_return_lazy_rust_module() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut builder = builder_with_prelude();
+    builder.add_importer(
+        "lazy",
+        Arc::new(LazyRustImporter::new(Arc::clone(&calls), "lazy.math")),
+    );
+
+    let (value, typ) = run_snippet(
+        builder,
+        r#"
+        import lazy.math;
+        math.inc 41
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(typ, i32_type());
+    assert_eq!(value.to_rust::<i32>().unwrap(), 42);
+}
+
+#[tokio::test]
+async fn lazy_rust_importer_only_builds_requested_module() {
+    let used_calls = Arc::new(AtomicUsize::new(0));
+    let unused_calls = Arc::new(AtomicUsize::new(0));
+    let mut builder = builder_with_prelude();
+    builder.add_importer(
+        "lazy",
+        Arc::new(SelectiveLazyRustImporter::new(
+            Arc::clone(&used_calls),
+            Arc::clone(&unused_calls),
+        )),
+    );
+
+    let (value, _) = run_snippet(
+        builder,
+        r#"
+        import lazy.used;
+        used.value
+        "#,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(value.to_rust::<i32>().unwrap(), 42);
+    assert_eq!(used_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(unused_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn duplicate_lazy_rust_import_uses_resolved_module_cache() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut builder = builder_with_prelude();
+    builder.add_importer(
+        "lazy",
+        Arc::new(LazyRustImporter::new(Arc::clone(&calls), "lazy.math")),
+    );
+
+    let (value, _) = run_snippet(
+        builder,
+        r#"
+        import lazy.math as A;
+        import lazy.math as B;
+        (A.inc 1, B.inc 2)
+        "#,
+    )
+    .await
+    .unwrap();
+
+    let Value::Tuple(items) = value.value().unwrap() else {
+        panic!("expected tuple");
+    };
+    assert_eq!(items[0].to_rust::<i32>().unwrap(), 2);
+    assert_eq!(items[1].to_rust::<i32>().unwrap(), 3);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn lazy_rust_module_rejects_name_mismatch() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut builder = builder_with_prelude();
+    builder.add_importer(
+        "lazy",
+        Arc::new(LazyRustImporter::with_returned_name(
+            Arc::clone(&calls),
+            "lazy.math",
+            "lazy.other",
+        )),
+    );
+
+    let err = run_snippet(
+        builder,
+        r#"
+        import lazy.math;
+        ()
+        "#,
+    )
+    .await
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("returned Rust module `lazy.other` for requested module `lazy.math`"),
+        "unexpected error: {msg}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn lazy_rust_module_rejects_root_module() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut builder = builder_with_prelude();
+    builder.add_importer(
+        "lazy",
+        Arc::new(LazyRustImporter::with_returned_name(
+            Arc::clone(&calls),
+            "lazy.math",
+            "__root__",
+        )),
+    );
+
+    let err = run_snippet(
+        builder,
+        r#"
+        import lazy.math;
+        ()
+        "#,
+    )
+    .await
+    .unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("importers cannot return the root module"),
+        "unexpected error: {msg}"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
 async fn eval_module_via_fs<State: Clone + Send + Sync + 'static>(
     builder: Builder<State>,
     path: &Path,
@@ -228,7 +475,7 @@ async fn eval_module_via_fs<State: Clone + Send + Sync + 'static>(
 async fn eval_module_via_importer<State: Clone + Send + Sync + 'static>(
     builder: Builder<State>,
     path: &Path,
-    importer: Arc<dyn Importer>,
+    importer: Arc<dyn Importer<State>>,
 ) -> Result<(Handle, Type), EngineError> {
     let source = fs::read_to_string(path).map_err(|err| {
         EngineError::Internal(format!("failed to read {}: {err}", path.display()))

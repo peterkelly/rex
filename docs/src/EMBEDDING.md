@@ -32,10 +32,12 @@ Evaluation API:
 - `Compiler` prepares user code into a `CompiledProgram`.
 - `Evaluator` owns the runtime core and runs one prepared program with runtime inputs for `main`.
 
-`Evaluator` is single-shot: `Evaluator::run` consumes the evaluator, the compiled program, and a
-`BTreeMap<String, Handle>` of inputs. Programs are compiled with Rex's singular external interface
-semantics: an explicit `fn main ...` defines named runtime inputs, while a final expression without
-`main` is treated as an implicit zero-input `main`.
+The whole builder/compiler/evaluator lineage is single-use. `Builder::build_compiler()` consumes
+the builder, `Compiler::compile_program` and `Compiler::infer_*` consume the compiler, and
+`Evaluator::run` consumes the evaluator, the compiled program, and a `BTreeMap<String, Handle>` of
+inputs. Programs are compiled with Rex's singular external interface semantics: an explicit
+`fn main ...` defines named runtime inputs, while a final expression without `main` is treated as
+an implicit zero-input `main`.
 
 ```rust,ignore
 use rex::{
@@ -104,8 +106,8 @@ let value = evaluator.run(program, Default::default()).await?;
 println!("{value}");
 ```
 
-Module sources loaded via importers must be declaration-only. To run an
-expression, use snippet or program entry points.
+Rex source modules loaded via importers must be declaration-only. To run an expression, use snippet
+or program entry points.
 Qualified alias members used in type/class positions (annotations, `where` constraints, instance
 headers, superclass clauses) are validated against module exports during module processing; missing
 exports fail early with module errors.
@@ -137,8 +139,9 @@ let mut builder = Builder::with_options(
 
 This is fully supported in `rex-engine`. You can compose module loading from:
 
-- bundled stdlib imports (`std.*`)
+- bundled stdlib imports (`std.prelude` and other `std.*` modules)
 - modules injected with `Builder::inject_module`
+- Rust modules returned lazily by importers
 - custom async importers (for DB/object-store/in-memory modules)
 
 ### 1) Use an Explicit Importer
@@ -151,9 +154,14 @@ request.
 
 Notes:
 
-- importers receive an `ImportRequest` with the requested `ModuleId` and the importing module id.
-- snippets and parsed programs load declaration-only modules through the compiler's import
-  rewriting path; module source itself remains declaration-only.
+- importers receive an `ImportRequest` with the requested `ModuleId` and optional importing
+  module id.
+- a `ModuleId` is a qualified namespace name, not a filesystem path; the CLI's filesystem mapping
+  is one importer policy, not a core engine rule.
+- snippets and parsed programs load Rex source modules through the compiler's import rewriting
+  path; source-backed modules remain declaration-only.
+- importer results are cached for one compile, so the same request is not sent through the importer
+  chain repeatedly.
 - import clauses (`(*)` / item lists) import exported names into unqualified scope.
 - unqualified imports are context-sensitive: expression positions use values, type positions use
   types, and class/constraint positions use classes.
@@ -163,7 +171,7 @@ Notes:
 ### 2) Inject In-Memory Rex Modules
 
 For host-managed modules, either call `Builder::inject_module` or add an importer that maps
-module IDs to source text.
+module IDs to source text or prebuilt compilation units.
 
 ```rust,ignore
 use futures::future::BoxFuture;
@@ -423,9 +431,77 @@ builder.inject_module(m)?;
 `Scheme` and arity must agree. Registration returns an error if the type does not accept the
 provided number of arguments.
 
+### 3b) Lazy Rust Modules From Importers
+
+If many Rust modules are available but most programs import only a few, an importer can build and
+return a `Module<State>` on demand. This keeps `Builder::inject_module` as the eager path, while
+letting embedders defer expensive module construction until Rex code actually imports that module.
+
+```rust,ignore
+use futures::future::BoxFuture;
+use rex::{
+    engine::{
+        Builder, CompileOptions, EngineError, ImportRequest, Importer, Module, ModuleId,
+        ResolvedModule, ResolvedModuleContent,
+    },
+    parser::parse,
+};
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct ToolImporter {
+    tools_id: ModuleId,
+}
+
+impl Importer for ToolImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+        Box::pin(async move {
+            if req.module_id != self.tools_id {
+                return Ok(None);
+            }
+
+            let mut tools = Module::new(self.tools_id.to_string());
+            tools.export("inc", |_state: &(), x: i32| Ok(x + 1))?;
+
+            Ok(Some(ResolvedModule {
+                id: self.tools_id.clone(),
+                content: ResolvedModuleContent::module(tools),
+            }))
+        })
+    }
+}
+
+let mut builder = Builder::with_prelude(())?;
+let tools_id = ModuleId::parse("workflow.tools")?;
+builder.add_importer("lazy-tools", Arc::new(ToolImporter { tools_id }));
+
+let compiler = builder.build_compiler();
+let parsed = parse("import workflow.tools (inc);\ninc 41")
+    .map_err(|errs| format!("{errs:?}"))?;
+let (program, evaluator) = compiler
+    .compile_program(&parsed, CompileOptions::for_module("workflow.main")?)
+    .await?;
+let value = evaluator.run(program, Default::default()).await?;
+println!("{value}");
+```
+
+Lazy Rust-module rules:
+
+- the returned `Module<State>` must use the same `State` type as the builder/compiler.
+- the module must be a named module, not `Module::global()`.
+- the module's qualified name must match the returned `ResolvedModule.id`.
+- lazy Rust modules are installed through the same internal path as eager named
+  `Builder::inject_module`, so exports, module-local ADTs, type declarations, caches, and native
+  runtime registrations behave the same.
+- a lazy Rust module is self-contained host code; the engine does not run the Rex source SCC loader
+  over imports inside it.
+
 ### 4) Custom Importer Contract (Advanced)
 
-If you need dynamic/nonstandard module loading behavior, implement `Importer`.
+If you need dynamic/nonstandard module loading behavior, implement `Importer<State>`.
 
 Importer contract:
 
@@ -433,15 +509,19 @@ Importer contract:
 - return `Ok(None)` to let the next importer try.
 - return `Err(...)` for hard failures (invalid module payload, policy violations, etc.).
 
-`ResolvedModule` can carry either `ResolvedModuleContent::Source(...)` for real Rex source or
-`ResolvedModuleContent::CompilationUnit(...)` for preconstructed structured modules.
+`ResolvedModule<State>` can carry:
+
+- `ResolvedModuleContent::Source(...)` for Rex source text.
+- `ResolvedModuleContent::CompilationUnit(...)` for preconstructed structured Rex modules.
+- `ResolvedModuleContent::module(...)` for a Rust-backed `Module<State>` installed lazily.
 
 ### 5) Snippets That Import Relative Modules
 
 If you evaluate ad-hoc Rex snippets that contain imports, give the snippet an
 explicit module name in `CompileOptions`. Importers receive that name as
-`ImportRequest::importer` and decide how relative module names map to files,
-databases, in-memory source, or any other backing store.
+`ImportRequest::importer` and decide how requested module IDs map to files, databases, in-memory
+source, Rust modules, or any other backing store. The core engine treats module IDs as names in an
+abstract namespace; filesystem-relative behavior is an importer policy.
 
 ```rust,ignore
 use rex::{

@@ -23,7 +23,7 @@ pub use system::Importer;
 pub use types::virtual_export_name;
 pub use types::{
     CanonicalSymbol, ImportRequest, ModuleExports, ModuleInstance, ModuleKey, ResolvedModule,
-    ResolvedModuleContent, SymbolKind, VirtualModule,
+    ResolvedModuleContent, ResolvedRustModule, SymbolKind, VirtualModule,
 };
 
 pub(crate) use system::{ImportChain, ModuleSystem, ResolvedModuleCache};
@@ -403,7 +403,12 @@ pub fn parse_program_from_source(
     Ok(program)
 }
 
-pub fn program_from_resolved(resolved: &ResolvedModule) -> Result<CompilationUnit, EngineError> {
+pub fn program_from_resolved<State>(
+    resolved: &ResolvedModule<State>,
+) -> Result<CompilationUnit, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
     match &resolved.content {
         ResolvedModuleContent::Source(source) => {
             parse_program_from_source(source, Some(&resolved.id))
@@ -417,5 +422,9 @@ pub fn program_from_resolved(resolved: &ResolvedModule) -> Result<CompilationUni
             }
             Ok(program.clone())
         }
+        ResolvedModuleContent::Module(_) => Err(EngineError::Internal(format!(
+            "Rust module `{}` must be installed before extracting a program",
+            resolved.id
+        ))),
     }
 }

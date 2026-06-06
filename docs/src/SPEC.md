@@ -67,10 +67,11 @@ the empty input object `{}`.
 Rex distinguishes between:
 
 - program entry-point execution, and
-- module files used by the import system (declaration-only).
+- modules loaded by the import system.
 
-When a `.rex` file is loaded as a module via the module system, it must not contain a top-level
-expression result.
+When Rex source is loaded as a module via the module system, it must not contain a top-level
+expression result. Host-backed Rust modules may also be returned by importers; they expose their
+declared interface and native implementations without a Rex source body.
 
 ### Syntax
 
@@ -91,6 +92,11 @@ Rules:
 - `import <module> (x, y as z)` imports selected exported values, types, and classes into
   unqualified scope.
 - `as <Alias>` on the module and `(...)` import clauses are mutually exclusive.
+- A module identity is a validated qualified name with one or more segments. Each segment starts
+  with a letter or `_` and then contains only letters, digits, or `_`.
+- The engine treats module identities as names in an abstract namespace. Mapping those names to
+  `.rex` files, generated source, parsed ASTs, databases, or Rust host modules is importer policy.
+- Imports are module names, not URLs, filesystem paths owned by the engine, or content hashes.
 
 ### Visibility and Exports
 
@@ -124,7 +130,11 @@ Type/class rewrites run with declaration ordering semantics:
 - Importing a module does not execute arbitrary top-level expressions.
 - Module initialization is declaration-driven: exported values/types/classes are registered from
   declarations, and import resolution rewrites references to canonical internal symbols.
-- Cyclic imports are supported via strongly connected component (SCC) loading of module interfaces.
+- Source and prebuilt-`CompilationUnit` imports are loaded through strongly connected component
+  (SCC) loading of module interfaces, so cyclic source imports are supported.
+- Rust modules returned by importers are installed lazily through the same named-module machinery as
+  eager `Builder::inject_module`. They must be named modules matching the resolved module identity,
+  not root/global modules, and they do not run nested Rex import graph loading.
 
 ## Let Rec Bindings
 

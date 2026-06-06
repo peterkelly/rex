@@ -36,8 +36,8 @@ pub async fn load_import_for_tooling<State>(
     builder: &mut Builder<State>,
     import_decl: &ImportDecl,
     importer: Option<ModuleId>,
-    extra_importer: Option<Arc<dyn Importer>>,
-    load_state: &mut ModuleLoadState,
+    extra_importer: Option<Arc<dyn Importer<State>>>,
+    load_state: &mut ModuleLoadState<State>,
 ) -> Result<ToolingLoadedImport, EngineError>
 where
     State: Clone + Send + Sync + 'static,
@@ -60,10 +60,9 @@ where
             },
         )
         .await?;
-    let program = program_from_resolved(&resolved)?;
     let source = match &resolved.content {
         ResolvedModuleContent::Source(source) => Some(source.clone()),
-        ResolvedModuleContent::CompilationUnit(_) => None,
+        ResolvedModuleContent::CompilationUnit(_) | ResolvedModuleContent::Module(_) => None,
     };
     let exports = if let Some(exports) = builder
         .module_loader
@@ -75,6 +74,28 @@ where
         exports
     } else {
         load_module_types_from_resolved(builder, resolved.clone(), &chain, load_state).await?
+    };
+    let program = match &resolved.content {
+        ResolvedModuleContent::Source(_) | ResolvedModuleContent::CompilationUnit(_) => {
+            program_from_resolved(&resolved)?
+        }
+        ResolvedModuleContent::Module(_) => {
+            let module_name = resolved.id.to_string();
+            let module = builder
+                .module_loader
+                .virtual_modules
+                .get(&module_name)
+                .ok_or_else(|| {
+                    EngineError::Internal(format!(
+                        "missing virtual module metadata for Rust module `{}`",
+                        resolved.id
+                    ))
+                })?;
+            CompilationUnit {
+                decls: module.decls.clone(),
+                body: None,
+            }
+        }
     };
 
     Ok(ToolingLoadedImport {

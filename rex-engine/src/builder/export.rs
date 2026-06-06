@@ -1,5 +1,5 @@
 use crate::{
-    builder::core::{Builder, NativeRegistration},
+    builder::core::NativeRegistration,
     error::EngineError,
     evaluator::{
         context::Context,
@@ -15,8 +15,17 @@ use rex_ast::DeclareFnDecl;
 use rex_typesystem::types::{RexType, Scheme, Type};
 use std::sync::Arc;
 
+pub trait ExportTarget<State: Clone + Send + Sync + 'static> {
+    fn register_native_registration(
+        &mut self,
+        module_name: &str,
+        export_name: &str,
+        registration: NativeRegistration<State>,
+    ) -> Result<(), EngineError>;
+}
+
 type ExportInjector<State> =
-    Box<dyn FnOnce(&mut Builder<State>, &str) -> Result<(), EngineError> + Send + 'static>;
+    Box<dyn FnOnce(&mut dyn ExportTarget<State>, &str) -> Result<(), EngineError> + Send + 'static>;
 
 pub struct Export<State: Clone + Send + Sync + 'static> {
     pub name: String,
@@ -166,7 +175,11 @@ pub trait HostFnSync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + '
     fn interface_decl_for(&self, export_name: &str) -> DeclareFnDecl {
         Self::interface_decl(export_name)
     }
-    fn inject(self, engine: &mut Builder<State>, export_name: &str) -> Result<(), EngineError>;
+    fn inject(
+        self,
+        engine: &mut dyn ExportTarget<State>,
+        export_name: &str,
+    ) -> Result<(), EngineError>;
 }
 
 pub trait HostFnAsync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 'static {
@@ -176,7 +189,7 @@ pub trait HostFnAsync<State: Clone + Send + Sync + 'static, Sig>: Send + Sync + 
     }
     fn inject_async(
         self,
-        engine: &mut Builder<State>,
+        engine: &mut dyn ExportTarget<State>,
         export_name: &str,
     ) -> Result<(), EngineError>;
 }

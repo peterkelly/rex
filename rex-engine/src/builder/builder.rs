@@ -1,6 +1,6 @@
 use crate::{
     builder::{
-        export::{Export, HostFnSync},
+        export::{Export, ExportTarget, HostFnSync},
         qualify::qualify_program,
         registry::{NativeRegistry, TypeclassRegistry},
     },
@@ -58,7 +58,7 @@ where
     pub(crate) env: RootedEnvironment,
     pub(crate) type_system: TypeSystem,
     pub(crate) runtime: RuntimeRegistry<State>,
-    pub(crate) module_loader: ModuleLoaderState,
+    pub(crate) module_loader: ModuleLoaderState<State>,
     pub(crate) policy: RuntimePolicy,
     pub(crate) heap: Heap,
 }
@@ -213,55 +213,18 @@ where
         }
 
         let module_id = ModuleId::parse(&module_name)?;
-
-        let mut decls = module.decls.clone();
-        decls.extend(
-            module
-                .exports
-                .iter()
-                .map(|export| Decl::DeclareFn(export.interface.clone())),
-        );
-        let local_type_names = module_local_type_names_from_decls(&decls);
-        self.module_loader
-            .module_local_type_names
-            .insert(module_name.clone(), local_type_names);
-
-        let compilation_unit = CompilationUnit { decls, body: None };
-        let prefix = prefix_for_module(&module_id);
-        let exports = crate::modules::exports_from_program(&compilation_unit, &prefix, &module_id);
-        let qualified = qualify_program(&compilation_unit, &prefix);
-        let interfaces = interface_decls_from_program(&qualified);
-        self.module_loader
-            .module_exports_cache
-            .insert(module_id.clone(), exports.clone());
-        self.module_loader
-            .module_interface_cache
-            .insert(module_id.clone(), interfaces.clone());
-        self.module_loader.virtual_modules.insert(
-            module_name.clone(),
-            VirtualModule {
-                exports,
-                decls: compilation_unit.decls.clone(),
-                source: None,
-            },
-        );
-
-        for export in module.exports {
-            self.inject_module_export(&module_name, export)?;
-        }
-
-        self.inject_decls(&qualified.decls)?;
+        let installed = install_named_rust_module(self, &module_id, module)?;
         self.module_loader
             .system
             .prepend_importer(Arc::new(StaticModuleImporter {
-                module_id: module_id.clone(),
+                module_id: installed.id.clone(),
                 resolved: ResolvedModule {
-                    id: module_id,
-                    content: ResolvedModuleContent::CompilationUnit(compilation_unit.clone()),
+                    id: installed.id,
+                    content: ResolvedModuleContent::CompilationUnit(
+                        installed.compilation_unit.clone(),
+                    ),
                 },
             }));
-
-        self.module_loader.injected_modules.insert(module_name);
         Ok(())
     }
 
@@ -398,7 +361,7 @@ where
         self.type_system.register_instance(class, inst);
     }
 
-    pub fn add_importer(&mut self, name: impl Into<String>, importer: Arc<dyn Importer>) {
+    pub fn add_importer(&mut self, name: impl Into<String>, importer: Arc<dyn Importer<State>>) {
         self.module_loader.system.append_importer(name, importer);
     }
 
@@ -424,8 +387,8 @@ where
     pub(crate) typeclass_cache: Arc<Mutex<BTreeMap<(Symbol, Type), Pointer>>>,
 }
 
-pub(crate) struct ModuleLoaderState {
-    pub(crate) system: ModuleSystem,
+pub(crate) struct ModuleLoaderState<State: Clone + Send + Sync + 'static> {
+    pub(crate) system: ModuleSystem<State>,
     pub(crate) injected_modules: BTreeSet<String>,
     pub(crate) module_exports_cache: BTreeMap<ModuleId, ModuleExports>,
     pub(crate) module_interface_cache: BTreeMap<ModuleId, Vec<Decl>>,
@@ -443,7 +406,30 @@ pub(crate) struct RuntimePolicy {
     pub(crate) parallelism_controller: Arc<dyn ParallelismController>,
 }
 
-impl ModuleLoaderState {
+pub(crate) struct InstalledRustModule {
+    pub(crate) id: ModuleId,
+    pub(crate) exports: ModuleExports,
+    pub(crate) compilation_unit: CompilationUnit,
+}
+
+pub(crate) trait RustModuleInstallContext<State>: ExportTarget<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn module_loader(&self) -> &ModuleLoaderState<State>;
+    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState<State>;
+    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError>;
+    fn inject_module_export(
+        &mut self,
+        module_name: &str,
+        export: Export<State>,
+    ) -> Result<(), EngineError>;
+}
+
+impl<State> ModuleLoaderState<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn new(default_imports: Vec<String>) -> Self {
         Self {
             system: ModuleSystem::default(),
@@ -471,18 +457,128 @@ impl Default for RuntimePolicy {
     }
 }
 
+fn module_export_symbol(module_name: &str, export_name: &str) -> String {
+    if module_name == ROOT_MODULE_NAME {
+        normalize_name(export_name).to_string()
+    } else {
+        virtual_export_name(module_name, export_name)
+    }
+}
+
+fn register_native_registration_parts<State>(
+    module_loader: &ModuleLoaderState<State>,
+    type_system: &mut TypeSystem,
+    runtime: &mut RuntimeRegistry<State>,
+    module_name: &str,
+    export_name: &str,
+    registration: NativeRegistration<State>,
+) -> Result<(), EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    let NativeRegistration {
+        mut scheme,
+        arity,
+        callable,
+    } = registration;
+    let scheme_module = if module_name == ROOT_MODULE_NAME {
+        module_loader
+            .registration_module_context
+            .as_deref()
+            .unwrap_or(ROOT_MODULE_NAME)
+    } else {
+        module_name
+    };
+    if scheme_module != ROOT_MODULE_NAME
+        && let Some(local_type_names) = module_loader.module_local_type_names.get(scheme_module)
+    {
+        scheme = qualify_module_scheme_refs(&scheme, scheme_module, local_type_names);
+    }
+    let name = normalize_name(&module_export_symbol(module_name, export_name));
+    register_native_parts(type_system, runtime, name, scheme, arity, callable)
+}
+
+pub(crate) fn install_named_rust_module<State, C>(
+    engine: &mut C,
+    expected_id: &ModuleId,
+    module: Module<State>,
+) -> Result<InstalledRustModule, EngineError>
+where
+    State: Clone + Send + Sync + 'static,
+    C: RustModuleInstallContext<State>,
+{
+    let module_name = module.name.trim().to_string();
+    if module_name.is_empty() {
+        return Err(EngineError::Internal("module name cannot be empty".into()));
+    }
+    if module_name == ROOT_MODULE_NAME {
+        return Err(EngineError::Internal(
+            "importers cannot return the root module".into(),
+        ));
+    }
+
+    let module_id = ModuleId::parse(&module_name)?;
+    if &module_id != expected_id {
+        return Err(EngineError::Internal(format!(
+            "importer returned Rust module `{module_id}` for requested module `{expected_id}`"
+        )));
+    }
+
+    let mut decls = module.decls.clone();
+    decls.extend(
+        module
+            .exports
+            .iter()
+            .map(|export| Decl::DeclareFn(export.interface.clone())),
+    );
+    let local_type_names = module_local_type_names_from_decls(&decls);
+    engine
+        .module_loader_mut()
+        .module_local_type_names
+        .insert(module_name.clone(), local_type_names);
+
+    let compilation_unit = CompilationUnit { decls, body: None };
+    let prefix = prefix_for_module(&module_id);
+    let exports = crate::modules::exports_from_program(&compilation_unit, &prefix, &module_id);
+    let qualified = qualify_program(&compilation_unit, &prefix);
+    let interfaces = interface_decls_from_program(&qualified);
+    engine
+        .module_loader_mut()
+        .module_exports_cache
+        .insert(module_id.clone(), exports.clone());
+    engine
+        .module_loader_mut()
+        .module_interface_cache
+        .insert(module_id.clone(), interfaces);
+    engine.module_loader_mut().virtual_modules.insert(
+        module_name.clone(),
+        VirtualModule {
+            exports: exports.clone(),
+            decls: compilation_unit.decls.clone(),
+            source: None,
+        },
+    );
+
+    for export in module.exports {
+        engine.inject_module_export(&module_name, export)?;
+    }
+
+    engine.inject_decls(&qualified.decls)?;
+    engine
+        .module_loader_mut()
+        .injected_modules
+        .insert(module_name);
+    Ok(InstalledRustModule {
+        id: module_id,
+        exports,
+        compilation_unit,
+    })
+}
+
 impl<State> Builder<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn module_export_symbol(module_name: &str, export_name: &str) -> String {
-        if module_name == ROOT_MODULE_NAME {
-            normalize_name(export_name).to_string()
-        } else {
-            virtual_export_name(module_name, export_name)
-        }
-    }
-
     fn inject_module_export(
         &mut self,
         module_name: &str,
@@ -493,7 +589,7 @@ where
             interface: _,
             injector,
         } = export;
-        let qualified_name = Self::module_export_symbol(module_name, &name);
+        let qualified_name = module_export_symbol(module_name, &name);
         let previous_context = self.module_loader.registration_module_context.clone();
         self.module_loader.registration_module_context = if module_name == ROOT_MODULE_NAME {
             None
@@ -515,29 +611,14 @@ where
         export_name: &str,
         registration: NativeRegistration<State>,
     ) -> Result<(), EngineError> {
-        let NativeRegistration {
-            mut scheme,
-            arity,
-            callable,
-        } = registration;
-        let scheme_module = if module_name == ROOT_MODULE_NAME {
-            self.module_loader
-                .registration_module_context
-                .as_deref()
-                .unwrap_or(ROOT_MODULE_NAME)
-        } else {
-            module_name
-        };
-        if scheme_module != ROOT_MODULE_NAME
-            && let Some(local_type_names) = self
-                .module_loader
-                .module_local_type_names
-                .get(scheme_module)
-        {
-            scheme = qualify_module_scheme_refs(&scheme, scheme_module, local_type_names);
-        }
-        let name = normalize_name(&Self::module_export_symbol(module_name, export_name));
-        self.register_native(name, scheme, arity, callable)
+        register_native_registration_parts(
+            &self.module_loader,
+            &mut self.type_system,
+            &mut self.runtime,
+            module_name,
+            export_name,
+            registration,
+        )
     }
 
     pub(crate) fn export<Sig, H>(
@@ -633,23 +714,6 @@ where
         )
     }
 
-    fn register_native(
-        &mut self,
-        name: Symbol,
-        scheme: Scheme,
-        arity: usize,
-        func: NativeCallable<State>,
-    ) -> Result<(), EngineError> {
-        register_native_parts(
-            &mut self.type_system,
-            &mut self.runtime,
-            name,
-            scheme,
-            arity,
-            func,
-        )
-    }
-
     pub(crate) fn register_typeclass_instance(
         &mut self,
         decl: &InstanceDecl,
@@ -691,10 +755,71 @@ where
     }
 }
 
+impl<State> ExportTarget<State> for Builder<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn register_native_registration(
+        &mut self,
+        module_name: &str,
+        export_name: &str,
+        registration: NativeRegistration<State>,
+    ) -> Result<(), EngineError> {
+        Builder::register_native_registration(self, module_name, export_name, registration)
+    }
+}
+
+impl<State> RustModuleInstallContext<State> for Builder<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn module_loader(&self) -> &ModuleLoaderState<State> {
+        &self.module_loader
+    }
+
+    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState<State> {
+        &mut self.module_loader
+    }
+
+    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+        Builder::inject_decls(self, decls)
+    }
+
+    fn inject_module_export(
+        &mut self,
+        module_name: &str,
+        export: Export<State>,
+    ) -> Result<(), EngineError> {
+        Builder::inject_module_export(self, module_name, export)
+    }
+}
+
 impl<State> Compiler<State>
 where
     State: Clone + Send + Sync + 'static,
 {
+    fn inject_module_export(
+        &mut self,
+        module_name: &str,
+        export: Export<State>,
+    ) -> Result<(), EngineError> {
+        let Export {
+            name,
+            interface: _,
+            injector,
+        } = export;
+        let qualified_name = module_export_symbol(module_name, &name);
+        let previous_context = self.module_loader.registration_module_context.clone();
+        self.module_loader.registration_module_context = if module_name == ROOT_MODULE_NAME {
+            None
+        } else {
+            Some(module_name.to_string())
+        };
+        let result = injector(self, &qualified_name);
+        self.module_loader.registration_module_context = previous_context;
+        result
+    }
+
     pub(crate) fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
         inject_decls_parts(
             &mut self.env,
@@ -727,17 +852,66 @@ where
     }
 }
 
-#[derive(Clone)]
-pub(crate) struct StaticModuleImporter {
-    pub(crate) module_id: ModuleId,
-    pub(crate) resolved: ResolvedModule,
+impl<State> ExportTarget<State> for Compiler<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn register_native_registration(
+        &mut self,
+        module_name: &str,
+        export_name: &str,
+        registration: NativeRegistration<State>,
+    ) -> Result<(), EngineError> {
+        register_native_registration_parts(
+            &self.module_loader,
+            &mut self.type_system,
+            &mut self.runtime,
+            module_name,
+            export_name,
+            registration,
+        )
+    }
 }
 
-impl Importer for StaticModuleImporter {
+impl<State> RustModuleInstallContext<State> for Compiler<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn module_loader(&self) -> &ModuleLoaderState<State> {
+        &self.module_loader
+    }
+
+    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState<State> {
+        &mut self.module_loader
+    }
+
+    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
+        Compiler::inject_decls(self, decls)
+    }
+
+    fn inject_module_export(
+        &mut self,
+        module_name: &str,
+        export: Export<State>,
+    ) -> Result<(), EngineError> {
+        Compiler::inject_module_export(self, module_name, export)
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct StaticModuleImporter<State: Clone + Send + Sync + 'static> {
+    pub(crate) module_id: ModuleId,
+    pub(crate) resolved: ResolvedModule<State>,
+}
+
+impl<State> Importer<State> for StaticModuleImporter<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn import<'a>(
         &'a self,
         req: ImportRequest,
-    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule<State>>, EngineError>> {
         Box::pin(async move {
             if req.module_id != self.module_id {
                 return Ok(None);
@@ -747,7 +921,7 @@ impl Importer for StaticModuleImporter {
     }
 }
 
-pub(crate) struct NativeRegistration<State: Clone + Send + Sync + 'static> {
+pub struct NativeRegistration<State: Clone + Send + Sync + 'static> {
     scheme: Scheme,
     arity: usize,
     callable: NativeCallable<State>,
@@ -1121,7 +1295,7 @@ where
 }
 
 fn ensure_cycle_interfaces_published_parts<State>(
-    module_loader: &mut ModuleLoaderState,
+    module_loader: &mut ModuleLoaderState<State>,
     env: &mut RootedEnvironment,
     type_system: &mut TypeSystem,
     runtime: &mut RuntimeRegistry<State>,

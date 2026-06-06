@@ -62,9 +62,13 @@ shape is `{}`.
 
 ## Modules and Imports
 
-Rex modules are `.rex` files. Imports are semicolon-terminated top-level declarations.
-Module files are declaration-only: they do not have a top-level expression result. To evaluate an
-expression, run a source as a program entry point.
+Rex modules are named entries in an abstract module namespace. Imports are semicolon-terminated
+top-level declarations. Source-backed modules are declaration-only: they do not have a top-level
+expression result. To evaluate an expression, run a source as a program entry point.
+
+In embedded applications, the host decides how module names are resolved. An importer can map a
+module name to Rex source, a prebuilt compilation unit, a database row, hard-coded strings, or a
+Rust-backed module. The core language does not require a module to be a file.
 
 Supported forms:
 
@@ -72,6 +76,8 @@ Supported forms:
 import foo.bar as Bar;
 import foo.bar (*);
 import foo.bar (x, y as z);
+import ./foo/bar (x);
+import ../../foo/bar as FB;
 ```
 
 Semantics:
@@ -124,9 +130,15 @@ named `Status`.
 
 Path resolution:
 
-- `foo.bar` resolves to `foo/bar.rex`.
-- Local module paths resolve relative to the importing file.
-- Leading `super` path segments walk up directories (for example `super.core.calc`).
+- Module IDs are qualified names such as `foo.bar`, `std.prelude`, or
+  `ffmpeg.formats.av1`.
+- Each module-name segment must start with a letter or `_`, followed by letters, digits, or `_`.
+- `foo.bar` requests module ID `foo.bar`; it does not inherently mean `foo/bar.rex`.
+- The CLI installs a filesystem importer that maps module IDs to `.rex` files. Other embedders can
+  resolve the same module ID from any backing store.
+- Relative-looking import spellings such as `./foo/bar` and `../../foo/bar` are parsed into module
+  path segments and resolved by importer policy using the importing module as context.
+- Imports name modules only; URL imports and content-hash suffixes are not part of the syntax.
 
 ## Lexical Structure
 

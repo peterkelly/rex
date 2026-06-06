@@ -94,7 +94,8 @@ This repo is a Cargo workspace. The key crates are:
 - `rex-proc-macro`: `#[derive(Rex)]` for bridging Rust types ↔ Rex ADTs/values
 - `rex-cli`: CLI crate providing the `rex` binary (`cargo run -p rex-cli --bin rex -- ...`)
 - `rex-fuzz`: stdin-driven fuzz harness binaries
-- `rex-util`: small shared helpers (e.g. module hashing, bundled `std.*` module sources)
+- `rex-util`: small shared helpers (e.g. LSP content hashing, CLI import-path helpers,
+  bundled `std.*` module sources)
 - `rex-lsp` / `rex-vscode`: language tooling (LSP + VS Code extension)
 
 ## CLI

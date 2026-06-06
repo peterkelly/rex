@@ -36,7 +36,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
     (`export_native*`) receive `Context<State>`.
   - compile and evaluation APIs return `EngineError`; convenience entry
     points that cross phases return `ExecutionError`.
-  - Host module injection API: `Module` + `Export` + `Builder::inject_module`.
+  - Host module injection API: `Module` + `Export` + `Builder::inject_module` for eager
+    registration, or `Importer<State>` returning `ResolvedModuleContent::module(...)` for lazy
+    Rust-backed modules.
 - `rex-proc-macro`: `#[derive(Rex)]` bridge for Rust types ↔ Rex ADTs/values.
 - `rex`: CLI front-end around the pipeline.
 - `rex-lsp` / `rex-vscode`: editor tooling.
@@ -57,6 +59,9 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - **Single-shot execution**: evaluation is intentionally one-shot. `CompiledProgram` is moved into
   `Evaluator::run` with its runtime input map, consuming the evaluator as well. Prepare all
   required declarations/modules before constructing or consuming the evaluator.
+- **Single-use preparation**: `Builder::build_compiler()`, `Compiler::compile_program`, and the
+  `Compiler::infer_*` APIs consume their receivers. Each program run should create a fresh
+  builder/compiler/evaluator lineage.
 - **Same-lineage runtime model**: a `CompiledProgram` is intended to run on the evaluator produced
   from the same compiler. Rex programs are supplied as source and compiled per run, so Rex does
   not expose a portable compiled-artifact or cross-runtime linking model.
@@ -75,6 +80,16 @@ The crates are designed so you can use them independently (e.g. parser-only tool
 - **Import-use rewrite/validation**: module processing resolves import aliases across expression
   vars, constructor patterns, type references, and class references; unresolved qualified alias
   members are rejected as module errors before runtime.
+- **Abstract module namespace**: a `ModuleId` is a validated qualified Rex name such as
+  `std.prelude` or `ffmpeg.formats.av1`. It does not encode a filesystem path, origin kind, URL,
+  or content hash. Importers decide whether a module name maps to a file, database row, in-memory
+  string, open editor buffer, generated AST, or Rust host module.
+- **Importer payloads and caching**: importers are generic over host state and can return Rex
+  source, a prebuilt `CompilationUnit`, or a Rust-backed `Module<State>`. Source and
+  `CompilationUnit` modules are loaded through the SCC module graph path. Rust-backed modules are
+  installed lazily through the same internal module installer used by eager `inject_module`, and
+  are self-contained host modules rather than Rex source modules with nested import loading.
+  Importer results are cached for one compile so the same request is not resolved repeatedly.
 
 ## Intentional String Boundaries
 
@@ -87,8 +102,8 @@ rewrite paths. Remaining string usage is intentional in these boundary layers:
   output stringify symbols/types for readability.
 - **Protocol/serialization boundaries**: JSON/LSP payloads are string-based and convert structured
   internal symbols/types at the edge.
-- **Module specifiers**: parsed import names are textual before being resolved into structured
-  `ModuleId` values.
+- **Module specifiers**: parsed import names are textual before being resolved into validated
+  `ModuleId` values and handed to importer policy.
 
 Non-goal for this pass:
 

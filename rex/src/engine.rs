@@ -69,6 +69,9 @@ pub use rex_engine::ExecutionError;
 /// A staged Rust-backed function export before it is injected into a [`Builder`].
 pub use rex_engine::Export;
 
+/// Internal target used by exported Rust handlers to register native functions.
+pub use rex_engine::ExportTarget;
+
 /// Convert a Rex runtime value into a Rust value.
 pub use rex_engine::FromRex;
 
@@ -83,6 +86,9 @@ pub use rex_engine::HostFnAsync;
 
 /// Trait implemented by typed synchronous Rust functions that can be exported to Rex.
 pub use rex_engine::HostFnSync;
+
+/// Native registration payload used by exported Rust handlers.
+pub use rex_engine::NativeRegistration;
 
 /// Convert a Rust value into a Rex runtime value.
 pub use rex_engine::IntoRex;
@@ -125,6 +131,9 @@ pub use rex_engine::ResolvedModule;
 
 /// Source or pre-parsed AST content returned by an importer.
 pub use rex_engine::ResolvedModuleContent;
+
+/// Take-once Rust module payload returned by an importer.
+pub use rex_engine::ResolvedRustModule;
 
 /// Trait for producing a Rex default value for a Rust-facing type.
 pub use rex_engine::RexDefault;

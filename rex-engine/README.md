@@ -3,7 +3,8 @@
 This crate prepares and evaluates Rex programs and supports host-native injection of functions and
 values. The API exposes an explicit preparation boundary: `Builder` builds the host environment,
 `Compiler` prepares Rex code into `CompiledProgram`, and a single-shot `Evaluator` runs one
-prepared program with a map of runtime inputs for `main`. The runtime stores values in the heap and
+prepared program with a map of runtime inputs for `main`. Builder/compiler/evaluator lineages are
+single-use; create a new lineage for each program run. The runtime stores values in the heap and
 returns rooted `Handle`s; `Handle::value()` exposes safe public `Value` views for inspection. It
 supports closures, application, let-in, if-then-else, tuples/lists/dicts, and `match` expressions.
 
@@ -64,6 +65,8 @@ live beside those phase directories.
 - Add constant values with `export_value`.
 - Add ADTs with `add_adt_decl` or `add_rex_adt::<T>()`.
 - Materialize the staged module with `Builder::inject_module(...)`.
+- For many available Rust modules where most programs import only a few, an `Importer<State>` can
+  return `ResolvedModuleContent::module(module)` to install a named `Module<State>` lazily.
 
 `Module::add_rex_adt::<T>()` collects `T`'s Rex family via `RexType::collect_rex_family` and
 stages the reachable acyclic ADT family automatically. Ordinary leaf types inherit the default

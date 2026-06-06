@@ -1,11 +1,21 @@
 mod common;
 
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+
 use rex::{
     Rex,
     ast::Symbol,
     engine::{
-        Builder, CompileOptions, Context, EngineError, FromRex, Handle, IntoRex, Module,
-        RexDefault, Value, virtual_export_name,
+        Builder, CompileOptions, Context, EngineError, FromRex, Handle, ImportRequest, Importer,
+        IntoRex, Module, ModuleId, ResolvedModule, ResolvedModuleContent, RexDefault, Value,
+        virtual_export_name,
     },
     parser::parse as parse_rex,
     typesystem::{BuiltinTypeId, Scheme, Type, TypeError, TypeKind},
@@ -34,6 +44,39 @@ fn render_label(label: Label) -> String {
     match label.side {
         Side::Left => format!("{:<12}", label.text),
         Side::Right => format!("{:>12}", label.text),
+    }
+}
+
+#[derive(Clone)]
+struct LazySampleImporter {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Importer for LazySampleImporter {
+    fn import<'a>(
+        &'a self,
+        req: ImportRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<Option<ResolvedModule>, EngineError>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            if req.module_id != ModuleId::parse("sample").unwrap() {
+                return Ok(None);
+            }
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let mut module = Module::new("sample");
+            module.add_rex_adt::<Side>().unwrap();
+            module.add_rex_adt::<Correctness>().unwrap();
+            module.add_rex_adt::<Label>().unwrap();
+            module
+                .export("render_label", |_: &(), label: Label| {
+                    Ok::<String, EngineError>(render_label(label))
+                })
+                .unwrap();
+            Ok(Some(ResolvedModule {
+                id: req.module_id,
+                content: ResolvedModuleContent::module(module),
+            }))
+        })
     }
 }
 
@@ -108,6 +151,54 @@ async fn module_render_label_with_module_scoped_adts_left_and_right() {
         }
         _ => panic!("expected ADT value for Correctness.Wrong"),
     }
+}
+
+#[tokio::test]
+async fn importer_rust_module_preserves_module_scoped_adts() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut builder: Builder<()> = Builder::with_prelude(()).unwrap();
+    builder.add_importer(
+        "lazy-sample",
+        Arc::new(LazySampleImporter {
+            calls: Arc::clone(&calls),
+        }),
+    );
+    let compiler = builder.build_compiler();
+    let parsed = parse_rex(
+        r#"
+            import sample (Label, Left, Right, Wrong, render_label);
+            import sample as Sample;
+            (
+                render_label (Label { text = "left", side = Left }),
+                render_label (Label { text = "right", side = (Right is Sample.Side) }),
+                (Right is Sample.Correctness),
+                (Wrong is Sample.Correctness)
+            )
+            "#,
+    )
+    .unwrap();
+    let (program, evaluator) = compiler
+        .compile_program(&parsed, CompileOptions::for_module("test.main").unwrap())
+        .await
+        .unwrap();
+    let ty = program.result_type().clone();
+    let value = evaluator.run(program, Default::default()).await.unwrap();
+
+    let correctness_ty = Type::con(virtual_export_name("sample", "Correctness"), 0);
+    assert_eq!(
+        ty,
+        Type::tuple(vec![
+            Type::builtin(BuiltinTypeId::String),
+            Type::builtin(BuiltinTypeId::String),
+            correctness_ty.clone(),
+            correctness_ty,
+        ])
+    );
+    let items = common::tuple_items(&value);
+    assert_eq!(items.len(), 4);
+    assert_eq!(items[0].to_rust::<String>().unwrap(), "left        ");
+    assert_eq!(items[1].to_rust::<String>().unwrap(), "       right");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

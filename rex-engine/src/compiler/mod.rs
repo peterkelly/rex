@@ -10,6 +10,7 @@ use crate::{
     EngineError, Evaluator,
     builder::{
         core::{Builder, ModuleLoaderState, RuntimePolicy, RuntimeRegistry},
+        rewrite::load_module_types_from_resolved,
         rewrite::{ModuleLoadState, rewrite_program_with_imports},
     },
     compiler::{program::CompiledProgram, type_check::type_check_engine},
@@ -17,8 +18,8 @@ use crate::{
     evaluator::runtime_core::RuntimeCore,
     manifest::{MainInputSpec, MainSignature},
     modules::{
-        ImportChain, ImportRequest, Importer, ModuleId, exports_from_program,
-        parse_program_from_source, prefix_for_module, program_from_resolved,
+        ImportChain, ImportRequest, Importer, ModuleId, ResolvedModuleContent,
+        exports_from_program, parse_program_from_source, prefix_for_module, program_from_resolved,
     },
     value::Heap,
 };
@@ -57,7 +58,7 @@ where
     pub(crate) env: RootedEnvironment,
     pub(crate) type_system: TypeSystem,
     pub(crate) runtime: RuntimeRegistry<State>,
-    pub(crate) module_loader: ModuleLoaderState,
+    pub(crate) module_loader: ModuleLoaderState<State>,
     pub(crate) policy: RuntimePolicy,
     pub(crate) heap: Heap,
 }
@@ -119,8 +120,8 @@ where
         compilation_unit: &'a CompilationUnit,
         importer: Option<ModuleId>,
         prefix: &'a str,
-        chain: &'a ImportChain,
-        load_state: &'a mut ModuleLoadState,
+        chain: &'a ImportChain<State>,
+        load_state: &'a mut ModuleLoadState<State>,
     ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>> {
         Box::pin(async move {
             let rewritten = rewrite_program_with_imports(
@@ -192,7 +193,7 @@ where
     pub async fn infer_module_with_importer(
         mut self,
         request: ImportRequest,
-        importer: Arc<dyn Importer>,
+        importer: Arc<dyn Importer<State>>,
     ) -> Result<(Vec<Predicate>, Type), EngineError> {
         let chain = self
             .module_loader
@@ -201,6 +202,11 @@ where
             .with_importer(importer);
         let mut load_state = ModuleLoadState::default();
         let resolved = load_state.import(&chain, request).await?;
+
+        if matches!(&resolved.content, ResolvedModuleContent::Module(_)) {
+            load_module_types_from_resolved(&mut self, resolved, &chain, &mut load_state).await?;
+            return Ok((Vec::new(), Type::tuple(Vec::<Type>::new())));
+        }
 
         load_state.loading_mut().insert(resolved.id.clone());
 

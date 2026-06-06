@@ -1,6 +1,6 @@
 use crate::{
     builder::{
-        core::{Builder, ModuleLoaderState},
+        core::{Builder, RustModuleInstallContext, install_named_rust_module},
         qualify::qualify_program,
     },
     compiler::Compiler,
@@ -54,81 +54,74 @@ impl fmt::Display for ImportUseError {
     }
 }
 
-pub(crate) trait ModuleRewriteContext: Send {
-    fn module_loader(&self) -> &ModuleLoaderState;
-    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState;
+pub(crate) trait ModuleRewriteContext<State>:
+    RustModuleInstallContext<State> + Send
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn ensure_cycle_interfaces_published(
         &mut self,
         module_id: &ModuleId,
     ) -> Result<(), EngineError>;
-    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError>;
 
     fn default_imports(&self) -> &[String] {
         &self.module_loader().default_imports
     }
 }
 
-impl<State> ModuleRewriteContext for Builder<State>
+impl<State> ModuleRewriteContext<State> for Builder<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn module_loader(&self) -> &ModuleLoaderState {
-        &self.module_loader
-    }
-
-    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState {
-        &mut self.module_loader
-    }
-
     fn ensure_cycle_interfaces_published(
         &mut self,
         module_id: &ModuleId,
     ) -> Result<(), EngineError> {
         Builder::ensure_cycle_interfaces_published(self, module_id)
     }
-
-    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
-        Builder::inject_decls(self, decls)
-    }
 }
 
-impl<State> ModuleRewriteContext for Compiler<State>
+impl<State> ModuleRewriteContext<State> for Compiler<State>
 where
     State: Clone + Send + Sync + 'static,
 {
-    fn module_loader(&self) -> &ModuleLoaderState {
-        &self.module_loader
-    }
-
-    fn module_loader_mut(&mut self) -> &mut ModuleLoaderState {
-        &mut self.module_loader
-    }
-
     fn ensure_cycle_interfaces_published(
         &mut self,
         module_id: &ModuleId,
     ) -> Result<(), EngineError> {
         Compiler::ensure_cycle_interfaces_published(self, module_id)
     }
-
-    fn inject_decls(&mut self, decls: &[Decl]) -> Result<(), EngineError> {
-        Compiler::inject_decls(self, decls)
-    }
 }
 
-#[derive(Debug, Default)]
-pub struct ModuleLoadState {
-    resolved_modules: ResolvedModuleCache,
+#[derive(Debug)]
+pub struct ModuleLoadState<State: Clone + Send + Sync + 'static = ()> {
+    resolved_modules: ResolvedModuleCache<State>,
     loaded: BTreeMap<ModuleId, ModuleExports>,
     loading: BTreeSet<ModuleId>,
 }
 
-impl ModuleLoadState {
+impl<State> Default for ModuleLoadState<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self {
+            resolved_modules: ResolvedModuleCache::default(),
+            loaded: BTreeMap::new(),
+            loading: BTreeSet::new(),
+        }
+    }
+}
+
+impl<State> ModuleLoadState<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     pub(crate) async fn import(
         &mut self,
-        chain: &ImportChain,
+        chain: &ImportChain<State>,
         request: ImportRequest,
-    ) -> Result<ResolvedModule, EngineError> {
+    ) -> Result<ResolvedModule<State>, EngineError> {
         self.resolved_modules.import(chain, request).await
     }
 
@@ -141,16 +134,17 @@ impl ModuleLoadState {
     }
 }
 
-pub(crate) fn rewrite_program_with_imports<'a, C>(
+pub(crate) fn rewrite_program_with_imports<'a, State, C>(
     engine: &'a mut C,
     compilation_unit: &'a CompilationUnit,
     importer: Option<ModuleId>,
     prefix: &'a str,
-    chain: &'a ImportChain,
-    load_state: &'a mut ModuleLoadState,
+    chain: &'a ImportChain<State>,
+    load_state: &'a mut ModuleLoadState<State>,
 ) -> BoxFuture<'a, Result<CompilationUnit, EngineError>>
 where
-    C: ModuleRewriteContext + 'a,
+    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext<State> + 'a,
 {
     Box::pin(async move {
         let mut bindings = ImportBindings::default();
@@ -1296,15 +1290,16 @@ fn rewrite_import_uses_type_expr(
     }
 }
 
-fn resolve_module_exports_for_rewrite<'a, C>(
+fn resolve_module_exports_for_rewrite<'a, State, C>(
     engine: &'a mut C,
     import_decl: &'a ImportDecl,
     importer: Option<ModuleId>,
-    chain: &'a ImportChain,
-    load_state: &'a mut ModuleLoadState,
+    chain: &'a ImportChain<State>,
+    load_state: &'a mut ModuleLoadState<State>,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
-    C: ModuleRewriteContext + 'a,
+    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext<State> + 'a,
 {
     Box::pin(async move {
         let module_id = import_specifier(&import_decl.path)?;
@@ -1331,14 +1326,15 @@ where
     })
 }
 
-pub(crate) fn load_module_types_from_resolved<'a, C>(
+pub(crate) fn load_module_types_from_resolved<'a, State, C>(
     engine: &'a mut C,
-    resolved: ResolvedModule,
-    chain: &'a ImportChain,
-    load_state: &'a mut ModuleLoadState,
+    resolved: ResolvedModule<State>,
+    chain: &'a ImportChain<State>,
+    load_state: &'a mut ModuleLoadState<State>,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
-    C: ModuleRewriteContext + 'a,
+    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext<State> + 'a,
 {
     Box::pin(async move {
         if let Some(exports) = load_state.loaded.get(&resolved.id) {
@@ -1350,23 +1346,33 @@ where
         {
             return Ok(exports.clone());
         }
+
+        if let ResolvedModuleContent::Module(module) = &resolved.content {
+            let installed = install_named_rust_module(engine, &resolved.id, module.take()?)?;
+            load_state
+                .loaded
+                .insert(installed.id.clone(), installed.exports.clone());
+            return Ok(installed.exports);
+        }
+
         load_module_types_via_scc(engine, resolved, chain, load_state).await
     })
 }
 
-fn load_module_types_via_scc<'a, C>(
+fn load_module_types_via_scc<'a, State, C>(
     engine: &'a mut C,
-    root: ResolvedModule,
-    chain: &'a ImportChain,
-    load_state: &'a mut ModuleLoadState,
+    root: ResolvedModule<State>,
+    chain: &'a ImportChain<State>,
+    load_state: &'a mut ModuleLoadState<State>,
 ) -> BoxFuture<'a, Result<ModuleExports, EngineError>>
 where
-    C: ModuleRewriteContext + 'a,
+    State: Clone + Send + Sync + 'static,
+    C: ModuleRewriteContext<State> + 'a,
 {
     Box::pin(async move {
         #[derive(Clone)]
-        struct PendingModule {
-            resolved: ResolvedModule,
+        struct PendingModule<State: Clone + Send + Sync + 'static> {
+            resolved: ResolvedModule<State>,
             program: CompilationUnit,
             prefix: String,
         }
@@ -1377,7 +1383,7 @@ where
             return Ok(exports.clone());
         }
 
-        let mut pending: BTreeMap<ModuleId, PendingModule> = BTreeMap::new();
+        let mut pending: BTreeMap<ModuleId, PendingModule<State>> = BTreeMap::new();
         let mut edges: BTreeMap<ModuleId, Vec<ModuleId>> = BTreeMap::new();
         let mut stack = vec![root.clone()];
 
@@ -1422,6 +1428,10 @@ where
                         },
                     )
                     .await?;
+                if matches!(&imported.content, ResolvedModuleContent::Module(_)) {
+                    load_module_types_from_resolved(engine, imported, chain, load_state).await?;
+                    continue;
+                }
                 edges
                     .entry(resolved.id.clone())
                     .or_default()

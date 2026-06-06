@@ -8,11 +8,14 @@ use super::{ImportRequest, Importer, ResolvedModule, ResolvedModuleContent};
 #[derive(Clone, Default)]
 pub struct StdlibImporter;
 
-impl Importer for StdlibImporter {
+impl<State> Importer<State> for StdlibImporter
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn import<'a>(
         &'a self,
         req: ImportRequest,
-    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, crate::EngineError>> {
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule<State>>, crate::EngineError>> {
         Box::pin(async move {
             let base = req.module_id.to_string();
 
@@ -31,11 +34,14 @@ impl Importer for StdlibImporter {
 #[derive(Clone, Default)]
 pub struct DenyImporter;
 
-impl Importer for DenyImporter {
+impl<State> Importer<State> for DenyImporter
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn import<'a>(
         &'a self,
         request: ImportRequest,
-    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>> {
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule<State>>, EngineError>> {
         Box::pin(async move {
             Err(ModuleError::ImportsDisabled {
                 module_name: request.module_id.to_string(),

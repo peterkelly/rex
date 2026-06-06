@@ -1,9 +1,15 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use rex_ast::{CompilationUnit, Decl, Symbol};
 use rex_typesystem::types::Type;
 
-use crate::{Handle, modules::ModuleId};
+use crate::{EngineError, Handle, modules::ModuleId};
+
+use super::Module;
 
 /// Request passed from the module system to importers when Rex code imports a module.
 ///
@@ -35,12 +41,77 @@ impl ImportRequest {
 ///
 /// Importers may return raw Rex source for the engine to parse or a prebuilt
 /// compilation unit when the caller has already parsed or synthesized the AST.
+/// They may also return a Rust-backed module that will be installed lazily by
+/// the compiler when the import is actually needed.
 #[derive(Clone, Debug)]
-pub enum ResolvedModuleContent {
+pub enum ResolvedModuleContent<State: Clone + Send + Sync + 'static = ()> {
     /// Raw Rex source text.
     Source(String),
     /// Parsed or synthesized module declarations.
     CompilationUnit(CompilationUnit),
+    /// Rust-backed host module to install into the engine.
+    Module(ResolvedRustModule<State>),
+}
+
+impl<State> ResolvedModuleContent<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub fn module(module: Module<State>) -> Self {
+        Self::Module(ResolvedRustModule::new(module))
+    }
+}
+
+pub struct ResolvedRustModule<State: Clone + Send + Sync + 'static = ()> {
+    module: Arc<Mutex<Option<Module<State>>>>,
+}
+
+impl<State> ResolvedRustModule<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub fn new(module: Module<State>) -> Self {
+        Self {
+            module: Arc::new(Mutex::new(Some(module))),
+        }
+    }
+
+    pub(crate) fn take(&self) -> Result<Module<State>, EngineError> {
+        let mut module = self
+            .module
+            .lock()
+            .map_err(|_| EngineError::Internal("lazy Rust module lock was poisoned".to_string()))?;
+        module
+            .take()
+            .ok_or_else(|| EngineError::Internal("lazy Rust module was already installed".into()))
+    }
+}
+
+impl<State> Clone for ResolvedRustModule<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            module: Arc::clone(&self.module),
+        }
+    }
+}
+
+impl<State> fmt::Debug for ResolvedRustModule<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = match self.module.lock() {
+            Ok(module) if module.is_some() => "available",
+            Ok(_) => "installed",
+            Err(_) => "poisoned",
+        };
+        f.debug_struct("ResolvedRustModule")
+            .field("state", &state)
+            .finish()
+    }
 }
 
 /// Fully resolved module identity and contents produced by an importer.
@@ -49,9 +120,9 @@ pub enum ResolvedModuleContent {
 /// the content is the source or AST that will be parsed, qualified, and loaded
 /// into the module system.
 #[derive(Clone, Debug)]
-pub struct ResolvedModule {
+pub struct ResolvedModule<State: Clone + Send + Sync + 'static = ()> {
     pub id: ModuleId,
-    pub content: ResolvedModuleContent,
+    pub content: ResolvedModuleContent<State>,
 }
 
 /// Deterministic compact key derived from a [`ModuleId`].

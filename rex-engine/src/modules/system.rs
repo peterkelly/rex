@@ -9,31 +9,51 @@ use super::{
     types::{ImportRequest, ResolvedModule},
 };
 
-pub trait Importer: Send + Sync {
+pub trait Importer<State = ()>: Send + Sync
+where
+    State: Clone + Send + Sync + 'static,
+{
     fn import<'a>(
         &'a self,
         request: ImportRequest,
-    ) -> BoxFuture<'a, Result<Option<ResolvedModule>, EngineError>>;
+    ) -> BoxFuture<'a, Result<Option<ResolvedModule<State>>, EngineError>>;
 }
 
 #[derive(Clone)]
-struct ImporterEntry {
-    importer: Arc<dyn Importer>,
+struct ImporterEntry<State: Clone + Send + Sync + 'static> {
+    importer: Arc<dyn Importer<State>>,
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct ImportChain {
-    entries: Vec<ImporterEntry>,
+#[derive(Clone)]
+pub(crate) struct ImportChain<State: Clone + Send + Sync + 'static = ()> {
+    entries: Vec<ImporterEntry<State>>,
 }
 
-impl ImportChain {
-    pub(crate) fn with_importer(&self, importer: Arc<dyn Importer>) -> Self {
+impl<State> Default for ImportChain<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+}
+
+impl<State> ImportChain<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    pub(crate) fn with_importer(&self, importer: Arc<dyn Importer<State>>) -> Self {
         let mut entries = self.entries.clone();
         entries.push(ImporterEntry { importer });
         Self { entries }
     }
 
-    pub(crate) async fn import(&self, req: ImportRequest) -> Result<ResolvedModule, EngineError> {
+    pub(crate) async fn import(
+        &self,
+        req: ImportRequest,
+    ) -> Result<ResolvedModule<State>, EngineError> {
         for entry in &self.entries {
             let resolved = entry
                 .importer
@@ -55,18 +75,33 @@ impl ImportChain {
 }
 
 /// Per-compile importer result cache.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ResolvedModuleCache {
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedModuleCache<State: Clone + Send + Sync + 'static = ()> {
     requests: BTreeMap<ImportRequestKey, ModuleId>,
-    modules: BTreeMap<ModuleId, ResolvedModule>,
+    modules: BTreeMap<ModuleId, ResolvedModule<State>>,
 }
 
-impl ResolvedModuleCache {
+impl<State> Default for ResolvedModuleCache<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self {
+            requests: BTreeMap::new(),
+            modules: BTreeMap::new(),
+        }
+    }
+}
+
+impl<State> ResolvedModuleCache<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     pub(crate) async fn import(
         &mut self,
-        chain: &ImportChain,
+        chain: &ImportChain<State>,
         request: ImportRequest,
-    ) -> Result<ResolvedModule, EngineError> {
+    ) -> Result<ResolvedModule<State>, EngineError> {
         let key = ImportRequestKey::from_request(&request);
         if let Some(module_id) = self.requests.get(&key) {
             let resolved = self.modules.get(module_id).cloned().ok_or_else(|| {
@@ -111,27 +146,41 @@ impl ImportRequestKey {
     }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct ModuleSystem {
-    import_chain: ImportChain,
+#[derive(Clone)]
+pub(crate) struct ModuleSystem<State: Clone + Send + Sync + 'static = ()> {
+    import_chain: ImportChain<State>,
 }
 
-impl ModuleSystem {
+impl<State> Default for ModuleSystem<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
+    fn default() -> Self {
+        Self {
+            import_chain: ImportChain::default(),
+        }
+    }
+}
+
+impl<State> ModuleSystem<State>
+where
+    State: Clone + Send + Sync + 'static,
+{
     pub(crate) fn append_importer(
         &mut self,
         _name: impl Into<String>,
-        importer: Arc<dyn Importer>,
+        importer: Arc<dyn Importer<State>>,
     ) {
         self.import_chain.entries.push(ImporterEntry { importer });
     }
 
-    pub(crate) fn prepend_importer(&mut self, importer: Arc<dyn Importer>) {
+    pub(crate) fn prepend_importer(&mut self, importer: Arc<dyn Importer<State>>) {
         self.import_chain
             .entries
             .insert(0, ImporterEntry { importer });
     }
 
-    pub(crate) fn import_chain(&self) -> ImportChain {
+    pub(crate) fn import_chain(&self) -> ImportChain<State> {
         self.import_chain.clone()
     }
 }

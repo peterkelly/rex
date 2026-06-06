@@ -27,7 +27,8 @@ mod value;
 
 pub use builder::{
     core::Builder,
-    export::{Export, HostFnAsync, HostFnSync, NativeFuture},
+    core::NativeRegistration,
+    export::{Export, ExportTarget, HostFnAsync, HostFnSync, NativeFuture},
     markdown::registry_markdown,
 };
 pub use compiler::{CompileOptions, Compiler, program::CompiledProgram};
@@ -43,7 +44,7 @@ pub use manifest::{MainInputSpec, MainSignature, Manifest, build_manifest, type_
 pub use modules::{
     CanonicalSymbol, DenyImporter, ImportRequest, Importer, Module, ModuleExports, ModuleId,
     ModuleInstance, ModuleKey, PRELUDE_MODULE_NAME, ROOT_MODULE_NAME, ResolvedModule,
-    ResolvedModuleContent, StdlibImporter, SymbolKind, virtual_export_name,
+    ResolvedModuleContent, ResolvedRustModule, StdlibImporter, SymbolKind, virtual_export_name,
 };
 pub use prelude::{prelude_typeclasses_program, standard_type_system};
 pub use util::collect_adts_error_to_engine;
